@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
@@ -33,7 +33,7 @@ export function closeUnterminatedFences(src: string): string {
  * segment and renders as a synthetic-closed code block until its real ``` lands,
  * at which point it flips to a diagram — no streaming flags needed.
  */
-export function StreamingMarkdown({
+export const StreamingMarkdown = memo(function StreamingMarkdown({
   source,
   api = null,
   worktreeId = null,
@@ -58,4 +58,4 @@ export function StreamingMarkdown({
       )}
     </div>
   );
-}
+});

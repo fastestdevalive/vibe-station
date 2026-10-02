@@ -42,6 +42,25 @@ function ev(id: string, extra: Partial<NormalizedEvent>): NormalizedEvent {
   return { id, sessionId: "s1", ts: "", provider: "claude", kind: "text", ...extra };
 }
 
+/** Build `count` live events with ascending ids/logSeqs; every `userEvery`-th
+ *  is a `user` turn so trims have a stable turn boundary to cut at. */
+function makeLiveEvents(count: number, startId = 1, userEvery = 3): NormalizedEvent[] {
+  const out: NormalizedEvent[] = [];
+  for (let i = 0; i < count; i++) {
+    const id = startId + i;
+    const isUser = i % userEvery === 0;
+    out.push(
+      ev(`e${id}`, {
+        kind: isUser ? "user" : "text",
+        role: isUser ? "user" : "assistant",
+        ...(isUser ? { turnId: `t${id}` } : {}),
+        logSeq: id,
+      }),
+    );
+  }
+  return out;
+}
+
 // Prevent snapshot bleed between tests.
 beforeEach(() => {
   chatSnapshotCache.clear();
@@ -401,6 +420,91 @@ describe("useChat snapshot cache", () => {
     // Correct order: e3 < e5 < e6
     expect(ids.indexOf("e3")).toBeLessThan(ids.indexOf("e5"));
     expect(ids.indexOf("e5")).toBeLessThan(ids.indexOf("e6"));
+  });
+});
+
+describe("useChat live-event cap (4.T1)", () => {
+  const MAX = 5000;
+  const TRIM_TO = 4000;
+
+  /** Mount a fresh hook and seed an empty bounded tail (hasMore false, cursor 0)
+   *  so live messages accumulate from a clean baseline. */
+  function mountHook() {
+    const api = makeApi();
+    const hook = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "chat:replay", sessionId: "s1", events: [], oldestSeq: 0, hasMore: false });
+    });
+    return { api, hook };
+  }
+
+  it("trims live events once the window exceeds MAX_LIVE_EVENTS, and enables hasMore", async () => {
+    const { api, hook } = mountHook();
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    act(() => {
+      for (const e of makeLiveEvents(5100)) {
+        api.emit({ type: "session:message", sessionId: "s1", event: e });
+      }
+    });
+
+    const events = hook.result.current.events;
+    // Trimmed back toward TRIM_TO, never above MAX.
+    expect(events.length).toBeLessThanOrEqual(MAX);
+    expect(events.length).toBeGreaterThan(TRIM_TO);
+    // Trimmed-out history is recoverable via loadEarlier.
+    expect(hook.result.current.hasMore).toBe(true);
+  });
+
+  it("never splits a turn — the first surviving event after a trim is a `user` event", async () => {
+    const { api, hook } = mountHook();
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    act(() => {
+      for (const e of makeLiveEvents(5100)) {
+        api.emit({ type: "session:message", sessionId: "s1", event: e });
+      }
+    });
+
+    const events = hook.result.current.events;
+    expect(events.length).toBeLessThan(5100);
+    expect(events[0]!.kind).toBe("user");
+  });
+
+  it("skips trimming after loadAll (full history held in memory)", async () => {
+    const { api, hook } = mountHook();
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    api.getTranscriptAll.mockResolvedValueOnce({ events: makeLiveEvents(6000) });
+    await act(async () => {
+      await hook.result.current.loadAll();
+    });
+    expect(hook.result.current.events.length).toBe(6000);
+
+    // Even more live messages on top → still no trim.
+    act(() => {
+      for (const e of makeLiveEvents(200, 10_000)) {
+        api.emit({ type: "session:message", sessionId: "s1", event: e });
+      }
+    });
+    expect(hook.result.current.events.length).toBe(6200);
+  });
+
+  it("skips trimming when scrolled up (setCanTrim(false))", async () => {
+    const { api, hook } = mountHook();
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    act(() => {
+      hook.result.current.setCanTrim(false);
+    });
+    act(() => {
+      for (const e of makeLiveEvents(5100)) {
+        api.emit({ type: "session:message", sessionId: "s1", event: e });
+      }
+    });
+
+    // No trim happened — all events retained.
+    expect(hook.result.current.events.length).toBe(5100);
   });
 });
 

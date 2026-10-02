@@ -11,7 +11,7 @@ import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
-import { CodeView } from "@/components/preview/CodeView";
+import { CodeView, type CodeViewHandle } from "@/components/preview/CodeView";
 import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
 import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
@@ -331,6 +331,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const scrollKey = worktreeId && path ? `${worktreeId}:${path}` : null;
   const pinchCleanupRef = useRef<(() => void) | null>(null);
 
+  // Phase 3 — virtual-mode scroll element + CodeView imperative handle.
+  // `scrollEl` is held in STATE (not a ref) so that when the body element
+  // attaches, FilePreviewPane re-renders and CodeView re-initialises its
+  // virtualizer with a non-null scroller immediately (Decision 9). The
+  // `scrollElRef` object identity changes with the element, which is what
+  // triggers CodeView's re-render.
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  const scrollElRef = useMemo(() => ({ current: scrollEl }), [scrollEl]);
+  const codeViewRef = useRef<CodeViewHandle | null>(null);
+  // Bumped by CodeView's `onRevealReady` once a jump-to-line target row is
+  // mounted + scrolled in virtual mode, so the jump effect below re-runs and
+  // finds (and highlights) the row that is now guaranteed in the DOM.
+  const [revealKey, setRevealKey] = useState(0);
+
   // Line-jump highlight: briefly marks the target row so a jump to a line
   // already on screen (no visible scroll) still reads as "something
   // happened", and a jump that does scroll still shows exactly which row is
@@ -407,9 +421,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       pinchCleanupRef.current?.();
       pinchCleanupRef.current = null;
       bodyRef.current = el;
+      setScrollEl(el);
       if (el && scrollKey && lineIsConsumed) {
         const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
-        if (saved != null) el.scrollTop = saved;
+        // Virtual mode restores via scrollToLine ({lineIndex,offsetInRow}); the
+        // content-load effect below handles it after rows are measured.
+        const isVirtual = codeViewRef.current?.isVirtualized?.() ?? false;
+        if (saved != null && !isVirtual && typeof saved === "number") el.scrollTop = saved;
       }
       if (el) {
         pinchCleanupRef.current = attachPinchZoom(el, (delta) => {
@@ -431,9 +449,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       if (worktreeId && path && bodyRef.current) {
-        useWorkspaceStore
-          .getState()
-          .setFileScroll(worktreeId, path, bodyRef.current.scrollTop);
+        const cv = codeViewRef.current;
+        // In virtual mode, persist {lineIndex, offsetInRow} so sub-row scroll
+        // precision survives a remount (Decision 8 / B6).
+        const firstVisible = cv?.getFirstVisibleLine?.();
+        const value = firstVisible ?? bodyRef.current.scrollTop;
+        useWorkspaceStore.getState().setFileScroll(worktreeId, path, value);
       }
     });
   }, [worktreeId, path]);
@@ -455,8 +476,22 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   useEffect(() => {
     if (!bodyRef.current || !scrollKey || !lineIsConsumed) return;
     const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
-    if (saved != null) bodyRef.current.scrollTop = saved;
-  }, [fileBody, diffBody, scrollKey, lineIsConsumed]);
+    if (saved == null) return;
+    const cv = codeViewRef.current;
+    if (cv?.isVirtualized?.()) {
+      // Virtual mode: saved is {lineIndex, offsetInRow}; fall back to line 0 for
+      // old persisted plain-number values.
+      if (typeof saved === "object") {
+        cv.scrollToLine(saved.lineIndex, saved.offsetInRow);
+      } else {
+        cv.scrollToLine(0, 0);
+      }
+    } else if (typeof saved === "number") {
+      bodyRef.current.scrollTop = saved;
+    }
+  // `scrollEl` so a virtual CodeView mounted from a cached body (scroller not
+  // yet resolved when this first ran) gets its restore once the scroller exists.
+  }, [fileBody, diffBody, scrollKey, lineIsConsumed, scrollEl]);
 
   // Scroll to the effective line once its target line element exists, then
   // mark it consumed. Deliberately does NOT clear on a "not found YET"
@@ -485,11 +520,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (!fileBody) return; // still loading this file's content
     const targetElement = bodyRef.current.querySelector<HTMLElement>(`[data-line="${effectiveLine}"]`);
     if (targetElement) {
-      // `block: "center"` measures against the pane's own current scroll
-      // container, so it already centers relative to whatever height is
-      // available right now (a resized pane, a collapsed panel, etc. all
-      // just work — no fixed pixel math needed here).
-      targetElement.scrollIntoView({ block: "center" });
+      // Virtual mode: CodeView's `onRevealReady`/`scrollToIndex` is the sole
+      // scroller (pixels are meaningless before rows are measured), so this
+      // effect only adds the highlight class and persists position — it does
+      // NOT call `scrollIntoView`. `revealKey` re-runs this effect after the
+      // target row is mounted and scrolled into view.
+      const isVirtual = codeViewRef.current?.isVirtualized?.() ?? false;
+      if (!isVirtual) {
+        // `block: "center"` measures against the pane's own current scroll
+        // container, so it already centers relative to whatever height is
+        // available right now (a resized pane, a collapsed panel, etc. all
+        // just work — no fixed pixel math needed here).
+        targetElement.scrollIntoView({ block: "center" });
+      }
       clearHighlight();
       targetElement.classList.add("workspace-line-highlight");
       highlightedElRef.current = targetElement;
@@ -503,7 +546,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       // happened. `handleScroll`'s own rAF-throttled save would fix this too,
       // but only a frame late — after that effect has already stomped it.
       if (worktreeId && scrollKey && path) {
-        useWorkspaceStore.getState().setFileScroll(worktreeId, path, bodyRef.current.scrollTop);
+        const value = isVirtual
+          ? (codeViewRef.current?.getFirstVisibleLine?.() ?? bodyRef.current.scrollTop)
+          : (bodyRef.current.scrollTop as number);
+        useWorkspaceStore.getState().setFileScroll(worktreeId, path, value);
       }
       lastScrolledKeyRef.current = effectiveLineKey;
     }
@@ -516,7 +562,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     // re-render, so listing it below would not change when this effect
     // fires — only `effectiveLineKey` changing (already listed) can.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight, hunksVersion]);
+  }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight, hunksVersion, revealKey]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -686,6 +732,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       : { kind: "workspace", path: path! };
     return (
       <CodeView
+        ref={codeViewRef}
         api={api}
         worktreeId={worktreeId}
         scope={fileScope}
@@ -697,6 +744,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         gutterMarks={gutterMarks ?? undefined}
         highlightLine={effectiveLine}
         highlightMatchText={effectiveMatchText}
+        scrollElRef={scrollElRef}
+        onRevealReady={() => setRevealKey((k) => k + 1)}
       />
     );
   })();

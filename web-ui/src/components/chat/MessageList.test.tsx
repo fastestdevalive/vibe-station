@@ -1073,3 +1073,213 @@ describe("MessageList repo-image prop forwarding (2.T2)", () => {
   });
 });
 
+// ── Phase 2 — virtual list (2.T1/2.T8/2.T10) ────────────────────────────────
+// jsdom has no layout, so the virtualizer needs stubbed scroller geometry to
+// compute a real viewport. The scroller is `listRef.current.parentElement`,
+// which is the mount div RTL renders into.
+function stubScroller(container: HTMLElement, viewportHeight = 500, scrollHeight = 200000) {
+  container.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, right: 800, bottom: viewportHeight, width: 800, height: viewportHeight, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  Object.defineProperty(container, "clientHeight", { value: viewportHeight, configurable: true });
+  Object.defineProperty(container, "offsetHeight", { value: viewportHeight, configurable: true });
+  Object.defineProperty(container, "offsetTop", { value: 0, configurable: true });
+  // jsdom doesn't lay out the virtualized sizer, so scrollHeight would be 0 —
+  // that clamps the virtualizer's scroll offset math to 0. Give it a plausible
+  // total so `getOffsetForIndex` returns real starts.
+  Object.defineProperty(container, "scrollHeight", { value: scrollHeight, configurable: true });
+}
+
+function bulkAssistantEvents(count: number, startIndex = 0): NormalizedEvent[] {
+  const events: NormalizedEvent[] = [];
+  for (let i = startIndex; i < startIndex + count; i++) {
+    events.push({ id: `a${i}`, sessionId: "s1", ts: "", provider: "claude", kind: "text", role: "assistant", text: `reply ${i}`, turnId: `t${i}` });
+  }
+  return events;
+}
+
+describe("MessageList virtual list (Phase 2)", () => {
+  it("2.T1 — with 5,000 events, mounted .chat-vrow rows stay < 60 (windowed)", async () => {
+    const mountDiv = document.createElement("div");
+    document.body.appendChild(mountDiv);
+    stubScroller(mountDiv);
+    try {
+      const { container } = render(<MessageList events={bulkAssistantEvents(5000)} pending={[]} />, {
+        container: mountDiv,
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const rows = container.querySelectorAll(".chat-vrow");
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBeLessThan(60);
+      // Above threshold → the sizer drives the virtual layout.
+      expect(container.querySelector(".chat-vrow-sizer")).toBeTruthy();
+    } finally {
+      document.body.removeChild(mountDiv);
+    }
+  });
+
+  it("2.T10 — below VIRTUALIZE_MIN_ITEMS every row renders (no windowing)", () => {
+    const { container } = render(<MessageList events={bulkAssistantEvents(10)} pending={[]} />);
+    const rows = container.querySelectorAll(".chat-vrow");
+    expect(rows.length).toBe(10);
+    expect(container.querySelector(".chat-vrow-sizer")).toBeNull();
+  });
+
+  it("2.T8 — a hidden (unclosed/empty) thinking item produces no row; live is computed on the filtered list", () => {
+    // A still-open thinking group while the turn is active renders nothing.
+    const live: NormalizedEvent[] = [
+      userEvent("t1", "do the thing"),
+      thinkingEvent("th1", "t1", "reasoning", "2024-01-01T00:00:00.000Z"),
+    ];
+    const { container } = render(<MessageList events={live} pending={[]} turnActive />);
+    // No empty row for the hidden thinking group.
+    expect(container.querySelector(".chat-thinking")).toBeNull();
+    // The list has exactly ONE row (the user bubble) — the hidden thinking
+    // group produced no `.chat-vrow`.
+    expect(container.querySelectorAll(".chat-vrow")).toHaveLength(1);
+  });
+
+  it("2.T7-pre — mount with 500 events: the last item's row is in the DOM after the first commit (no blank frame)", async () => {
+    const mountDiv = document.createElement("div");
+    document.body.appendChild(mountDiv);
+    stubScroller(mountDiv);
+    try {
+      const events = bulkAssistantEvents(500);
+      const { container } = render(<MessageList events={events} pending={[]} />, { container: mountDiv });
+      // initialOffset opens at the bottom, so the trailing row is mounted on
+      // the very first commit (before any scroll/measure settle).
+      const lastText = `reply 499`;
+      expect(container.textContent).toContain(lastText);
+      const rows = container.querySelectorAll(".chat-vrow");
+      expect(rows.length).toBeLessThan(60);
+      expect(rows.length).toBeGreaterThan(0);
+    } finally {
+      document.body.removeChild(mountDiv);
+    }
+  });
+
+  it("2.T2 — bottom pin: append while at bottom pins; scrolled up keeps position and shows the jump button", () => {
+    const mountDiv = document.createElement("div");
+    document.body.appendChild(mountDiv);
+    Object.defineProperty(mountDiv, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(mountDiv, "clientHeight", { value: 300, configurable: true });
+    try {
+      const { rerender } = render(<MessageList events={[userEvent("t1", "a")]} pending={[]} />, {
+        container: mountDiv,
+      });
+      // Fresh mount: atBottom defaults true → primary effect pins to the bottom.
+      expect(mountDiv.scrollTop).toBe(1000);
+      // Append while still at bottom → re-pinned to the new max.
+      Object.defineProperty(mountDiv, "scrollHeight", { value: 1400, configurable: true });
+      rerender(<MessageList events={[userEvent("t1", "a"), userEvent("t2", "b")]} pending={[]} />);
+      expect(mountDiv.scrollTop).toBe(1400);
+      // Scroll away → jump button appears.
+      mountDiv.scrollTop = 0;
+      fireEvent.scroll(mountDiv);
+      expect(screen.getByRole("button", { name: "Jump to latest message" })).toBeTruthy();
+      // Append while scrolled up → scrollTop unchanged.
+      mountDiv.scrollTop = 123;
+      Object.defineProperty(mountDiv, "scrollHeight", { value: 1800, configurable: true });
+      rerender(
+        <MessageList events={[userEvent("t1", "a"), userEvent("t2", "b"), userEvent("t3", "c")]} pending={[]} />,
+      );
+      expect(mountDiv.scrollTop).toBe(123);
+    } finally {
+      document.body.removeChild(mountDiv);
+    }
+  });
+
+  it("2.T5 — prepend + same-batch append keeps the read position (key anchor shifts the view, not a no-op)", async () => {
+    let resolveLoad: (() => void) | undefined;
+    const onLoadEarlier = vi.fn(() => new Promise<void>((res) => { resolveLoad = res; }));
+    const mountDiv = document.createElement("div");
+    document.body.appendChild(mountDiv);
+    stubScroller(mountDiv);
+    try {
+      // A large list so the key-anchor path (not the height-delta fallback) is
+      // what restores the read position.
+      const before = bulkAssistantEvents(500);
+      const { rerender } = render(
+        <MessageList events={before} pending={[]} hasMore onLoadEarlier={onLoadEarlier} />,
+        { container: mountDiv },
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      // Scroll up near the top and trigger a load-earlier. The scroll listener
+      // captures the key anchor from the virtualizer's visible items (the load
+      // stays pending until we resolve it).
+      mountDiv.scrollTop = 20;
+      fireEvent.scroll(mountDiv);
+      expect(onLoadEarlier).toHaveBeenCalledTimes(1);
+
+      // The fetch renders as in-flight → sawLoading set, pre-prepend height captured.
+      rerender(<MessageList events={before} pending={[]} hasMore loadingEarlier onLoadEarlier={onLoadEarlier} />);
+
+      // Prepend a page AND append a new event in the same commit, then release.
+      // (Unique id ranges so the key-anchor resolves the ORIGINAL a1, which
+      // shifts from index 1 to index 600 after the prepend.)
+      const after = [...bulkAssistantEvents(600, 5000), ...before, ...bulkAssistantEvents(1, 9000)];
+      const scrollTopBefore = mountDiv.scrollTop;
+      rerender(
+        <MessageList events={after} pending={[]} hasMore loadingEarlier={false} onLoadEarlier={onLoadEarlier} />,
+      );
+      resolveLoad?.();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      // The key anchor applied: scrollTop moved DOWN by ~the prepended page so
+      // the previously-visible content stays on screen — it must NOT stay at the
+      // old (pre-prepend) position (20) nor reset to the very top.
+      expect(mountDiv.scrollTop).toBeGreaterThan(scrollTopBefore + 1000);
+      // And it must not have overshot past the new max.
+      expect(mountDiv.scrollTop).toBeLessThan(100000);
+    } finally {
+      document.body.removeChild(mountDiv);
+    }
+  });
+
+  it("2.T4 — a fork editor opened on a turn stays mounted (rangeExtractor pins it) after scrolling away", async () => {
+    const mountDiv = document.createElement("div");
+    document.body.appendChild(mountDiv);
+    stubScroller(mountDiv);
+    try {
+      // A forkable answered user turn as the LAST item — mounted when the list
+      // opens at the bottom (initialOffset), so its edit button is clickable.
+      const events: NormalizedEvent[] = [
+        ...bulkAssistantEvents(499, 1000),
+        { id: "u-fork", sessionId: "s1", ts: "", provider: "claude", kind: "user", text: "edit me", turnId: "tfork" },
+      ];
+      const { container } = render(
+        <MessageList
+          events={events}
+          pending={[]}
+          api={createMockApi()}
+          sessionId="s1"
+          onForkTurn={vi.fn()}
+        />,
+        { container: mountDiv },
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      fireEvent.click(screen.getByLabelText("Edit message (fork)"));
+      expect(container.querySelector(".chat-msg--forking")).toBeTruthy();
+
+      // Scroll to the very top — the fork-edited row (near the bottom) would
+      // normally unmount, but `rangeExtractor` pins the fork-editing index so it
+      // stays mounted with its draft.
+      mountDiv.scrollTop = 0;
+      fireEvent.scroll(mountDiv);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(container.querySelector(".chat-msg--forking")).toBeTruthy();
+    } finally {
+      document.body.removeChild(mountDiv);
+    }
+  });
+});
+

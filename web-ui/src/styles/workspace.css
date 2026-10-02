@@ -3267,6 +3267,37 @@
   min-height: 100%;
 }
 
+/* Phase 3 — virtualized code viewer. The `<pre>` gets this class above
+ * `VIRTUALIZE_MIN_LINES`; it windows rows through a sizer. `overflow-anchor:
+ * none` stops Chrome's native scroll anchoring from compounding with the
+ * manual scroll-restore corrections on font/resize changes. */
+.workspace-code-viewer--virtual {
+  overflow-anchor: none;
+}
+
+.workspace-code-viewer--virtual .workspace-code-sizer {
+  position: relative;
+  min-width: 100%;
+}
+
+.workspace-code-viewer--virtual .workspace-code-vrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+/* Hidden one-line measure span used to read the effective line-height and
+ * monospace character width (survives font-scale changes). Rendered but kept
+ * invisible/out-of-flow so it doesn't affect layout or scroll metrics. */
+.workspace-code-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font: inherit;
+}
+
 .workspace-code-line {
   display: flex;
   align-items: flex-start;
@@ -4413,6 +4444,15 @@
   font-size: inherit;
   line-height: 1.45;
   padding: 0 16px;
+}
+
+/* rich-chat-perf Phase 1 (Decision 10): off-screen file-preview diff lines
+ * skip layout. Scoped to the file preview body ONLY — chat diffs sit inside
+ * virtual rows where placeholder sizes would corrupt measured height, so they
+ * are explicitly excluded. Line-height matches the 1.45 above. */
+.preview-body .diff-line {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 1.45em;
 }
 
 .diff-marker {

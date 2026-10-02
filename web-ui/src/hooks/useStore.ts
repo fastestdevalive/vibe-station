@@ -258,8 +258,9 @@ export interface WorkspaceState {
   vcsSidebarVisibleByWorktree: Record<string, boolean>;
   /** Last opened file path per worktree (persisted). */
   lastFileByWorktree: Record<string, string>;
-  /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted). */
-  fileScrollByKey: Record<string, number>;
+  /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted).
+   *  Virtual mode saves `{lineIndex, offsetInRow}`; non-virtual saves a pixel scrollTop. */
+  fileScrollByKey: Record<string, number | { lineIndex: number; offsetInRow: number }>;
   showDotFiles: boolean;
   /** Live session.state mirror for WS + list payloads */
   sessionStates: Record<string, SessionState>;
@@ -422,7 +423,7 @@ export interface WorkspaceState {
   setVcsSelectedCommit: (worktreeId: string, sha: string | null) => void;
   /** Set whether the VCS commit view's changed-file sidebar is visible for a worktree. */
   setVcsSidebarVisible: (worktreeId: string, visible: boolean) => void;
-  setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
+  setFileScroll: (worktreeId: string, filePath: string, scrollTop: number | { lineIndex: number; offsetInRow: number }) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   /** Session-only inline/side-by-side diff layout preference (Decision 1). */
   setDiffLayoutMode: (mode: "inline" | "side-by-side") => void;
@@ -798,7 +799,7 @@ const initial = {
   vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
   vcsSidebarVisibleByWorktree: {} as Record<string, boolean>,
   lastFileByWorktree: {} as Record<string, string>,
-  fileScrollByKey: {} as Record<string, number>,
+  fileScrollByKey: {} as Record<string, number | { lineIndex: number; offsetInRow: number }>,
   showDotFiles: true,
   sessionStates: {} as Record<string, SessionState>,
   lastSessionByWorktree: {} as Record<string, string>,

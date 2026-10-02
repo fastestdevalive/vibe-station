@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CodeView } from "./CodeView";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -956,4 +956,140 @@ describe("CodeView", () => {
       expect(screen.queryByTestId("lsp-hover-tooltip")).toBeNull();
     });
   });
+
+  // ── Phase 3 — virtual mode (3.T2/3.T3/3.T5/3.T5b) ─────────────────────────
+  // jsdom has no layout, so the virtualizer needs stubbed scroller geometry to
+  // compute a real viewport (same mechanism as MessageList.test.tsx's
+  // `stubScroller`).
+  function makeScroller() {
+    const el = document.createElement("div");
+    el.getBoundingClientRect = () =>
+      ({ top: 0, left: 0, right: 800, bottom: 500, width: 800, height: 500, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(el, "clientWidth", { value: 800, configurable: true });
+    Object.defineProperty(el, "offsetHeight", { value: 500, configurable: true });
+    Object.defineProperty(el, "offsetTop", { value: 0, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { value: 2_000_000, configurable: true });
+    return el;
+  }
+
+  function bigCode(lines: number): string {
+    return Array.from({ length: lines }, (_, i) => `const line${i} = ${i};`).join("\n");
+  }
+
+  describe("Phase 3 — virtual mode", () => {
+    const W1 = "wt-1";
+
+    it("3.T2 — with 50,000 lines and no language, mounted .workspace-code-line rows stay < 200 (windowed)", async () => {
+      const scroller = makeScroller();
+      const { container } = render(
+        <CodeView code={bigCode(50_000)} scrollElRef={{ current: scroller }} />,
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      // Sizer present + rows windowed.
+      expect(container.querySelector(".workspace-code-sizer")).toBeTruthy();
+      expect(container.querySelector(".workspace-code-viewer--virtual")).toBeTruthy();
+      const rows = container.querySelectorAll(".workspace-code-line");
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.length).toBeLessThan(200);
+    });
+
+    it("3.T3 — highlightLine=31204: row is mounted after first commit and onRevealReady fires (scrollToIndex path)", async () => {
+      const scroller = makeScroller();
+      const onRevealReady = vi.fn();
+      const { container } = render(
+        <CodeView
+          code={bigCode(40_000)}
+          scrollElRef={{ current: scroller }}
+          highlightLine={31204}
+          onRevealReady={onRevealReady}
+        />,
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const target = container.querySelector('[data-line="31204"]');
+      expect(target).toBeTruthy();
+      expect(target).toHaveClass("workspace-code-line--target");
+      // `onRevealReady` is called by CodeView right after `scrollToIndex(...,
+      // { align: "center" })`, so this asserts the scroll-to-line path ran.
+      expect(onRevealReady).toHaveBeenCalled();
+    });
+
+    it("3.T5 — LSP ctrl-click on a mounted row in virtual mode resolves the correct 0-indexed line", async () => {
+      const scroller = makeScroller();
+      const defSpy = vi.spyOn(lspApi, "getDefinition").mockResolvedValue({
+        locations: [
+          { external: false, path: "/def.ts", line: 0, character: 0, preview: "fn", confidence: "lsp" },
+        ],
+      });
+      useWorkspaceStore.setState({
+        activeWorktreeId: W1,
+        activeFilePath: "/big.ts",
+        openFileTabsByWorktree: { [W1]: ["/big.ts"] },
+        activeFileTabIdxByWorktree: { [W1]: 0 },
+        peekFile: null,
+        backStack: {},
+        forwardStack: {},
+        pendingLineTarget: null,
+      });
+      const code = bigCode(50_000);
+      const { container } = render(
+        <CodeView
+          code={code}
+          scrollElRef={{ current: scroller }}
+          filePath="/big.ts"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/big.ts" }}
+        />,
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const row = container.querySelector<HTMLElement>('[data-line="5"]');
+      expect(row).toBeTruthy();
+      const content = row!.querySelector<HTMLElement>(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 10, clientY: 10, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 10, clientY: 10, ctrlKey: true });
+      fireEvent.click(content, { clientX: 10, clientY: 10, ctrlKey: true });
+      await waitFor(() => {
+        expect(defSpy).toHaveBeenCalled();
+      }, { timeout: 8000 });
+      // data-line=5 → 0-indexed line 4.
+      expect(defSpy).toHaveBeenCalledWith(expect.anything(), "worktree", W1, { kind: "workspace", path: "/big.ts" }, 4, expect.any(Number));
+    }, 15_000);
+
+    it("3.T5b — Ctrl+A then copy in virtual mode puts the full code on the clipboard", async () => {
+      const scroller = makeScroller();
+      const code = bigCode(50_000);
+      const { container } = render(
+        <CodeView code={code} scrollElRef={{ current: scroller }} />,
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const pre = container.querySelector("pre.workspace-code-viewer")!;
+      // Pointer enters so the viewer counts as "inside" for Ctrl+A.
+      fireEvent.pointerEnter(pre);
+      fireEvent.keyDown(window, { key: "a", ctrlKey: true });
+
+      const clipData: Record<string, string> = {};
+      const copyEvent = new Event("copy", { bubbles: true, cancelable: true }) as Event & {
+        clipboardData: { setData: (type: string, val: string) => void };
+      };
+      copyEvent.clipboardData = {
+        setData: (type: string, val: string) => {
+          clipData[type] = val;
+        },
+      };
+      pre.dispatchEvent(copyEvent);
+
+      expect(copyEvent.defaultPrevented).toBe(true);
+      expect(clipData["text/plain"]).toBe(code);
+    });
+  });
 });
+
