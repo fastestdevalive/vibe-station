@@ -369,7 +369,7 @@ There are two separate docker setups in this repo. They look similar (both boot 
 
 There are three different "skill" concepts in this repo, two of which share a file name pattern (`SKILL.md`):
 
-1. **`skill/SKILL.md` at the repo root** is the **`vst` agent skill this repo publishes** — a Claude-Code-style skill (frontmatter `name: vst`) documenting how an *external* agent drives the vst daemon. It is not loaded by the daemon at all; it is shipped for other agents to install.
+1. **`skill/SKILL.md` at the repo root** is the **`vst` agent skill this repo publishes** — a Claude-Code-style skill (frontmatter `name: vst`) documenting how an *external* agent drives the vst daemon. It is compiled into the daemon binary (`include_str!` in `rust/vst-daemon/src/env_setup.rs`) and written to `~/.vibe-station/skill/vst/SKILL.md` on every boot, which the `~/.claude`/`~/.gemini` skill dirs symlink to.
 2. **`daemon/src/assets/agent-system-prompt.md`** is vibe-station's **own L1 system prompt asset** — loaded once at daemon boot by `promptBuilder.ts` (`loadSkillMd()`, whose stale `skill/skill.md` header comment is what invites confusion #1) and sent to every spawned agent as the base of its system prompt. Not user-configurable, nothing to do with per-user "skills".
 3. **User skill directories** (`UserSettings.skillPaths`, default `~/.claude/skills`) are scanned by `userSkillCatalog.ts` for `<dir>/<name>/SKILL.md` files — these are the skills a user can invoke with `/name` in Rich Chat (skill-invocation-in-chat).
 

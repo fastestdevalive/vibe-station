@@ -189,12 +189,16 @@ case "$CMD" in
       # target-docker/ tree back to the host UID/GID before the container
       # exits, so the copied binaries (and the build cache for next time)
       # are normal user-owned files.
+      #
+      # The whole repo is mounted at /repo (build cwd /repo/rust) — not just
+      # rust/ — because the daemon embeds skill/SKILL.md via include_str! and
+      # needs the repo root on hand to compile.
       docker run --rm \
-        -v "$(pwd)/rust:/work" -w /work \
-        -e CARGO_TARGET_DIR=/work/target-docker/build \
+        -v "$(pwd):/repo" -w /repo/rust \
+        -e CARGO_TARGET_DIR=/repo/rust/target-docker/build \
         -v vst-dev-sandbox-cargo-registry:/usr/local/cargo/registry \
         "rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm" \
-        sh -c "cargo build -p vst-daemon -p vst-cli --features vst-daemon/insecure-no-auth,vst-cli/insecure-no-auth && chown -R $(id -u):$(id -g) /work/target-docker"
+        sh -c "cargo build -p vst-daemon -p vst-cli --features vst-daemon/insecure-no-auth,vst-cli/insecure-no-auth && chown -R $(id -u):$(id -g) /repo/rust/target-docker"
       mkdir -p ./rust/target-docker/debug
       # Atomic replace (cp to temp + mv), not an in-place overwrite: the old
       # binary may be the running daemon's executable (in-place write fails
