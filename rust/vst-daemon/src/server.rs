@@ -1900,20 +1900,22 @@ async fn handle_project_get_file(
         .await
         .map_err(project_err_to_response)?;
     match resp {
-        FileResponse::Text { etag, content } => Ok((
-            [
-                (header::ETAG, etag),
-                (
-                    header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8".to_string(),
-                ),
-            ],
-            content,
-        )
-            .into_response()),
-        FileResponse::Image { mime, content } => {
-            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
-        }
+        FileResponse::Text { etag, content } => Ok(harden_raw_file_response(
+            (
+                [
+                    (header::ETAG, etag),
+                    (
+                        header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                ],
+                content,
+            )
+                .into_response(),
+        )),
+        FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
+            ([(header::CONTENT_TYPE, mime)], content).into_response(),
+        )),
     }
 }
 
@@ -1952,17 +1954,19 @@ async fn handle_project_diff(
         .diff(&id, &file_path, q.scope.as_deref(), q.sha.as_deref())
         .await
         .map_err(project_err_to_response)?;
-    Ok((
-        [
-            (header::ETAG, etag),
-            (
-                header::CONTENT_TYPE,
-                "text/plain; charset=utf-8".to_string(),
-            ),
-        ],
-        content,
-    )
-        .into_response())
+    Ok(harden_raw_file_response(
+        (
+            [
+                (header::ETAG, etag),
+                (
+                    header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8".to_string(),
+                ),
+            ],
+            content,
+        )
+            .into_response(),
+    ))
 }
 
 async fn handle_project_commits(
@@ -2316,20 +2320,22 @@ async fn handle_worktree_get_file(
         .await
         .map_err(worktree_err_to_response)?;
     match resp {
-        FileResponse::Text { etag, content } => Ok((
-            [
-                (header::ETAG, etag),
-                (
-                    header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8".to_string(),
-                ),
-            ],
-            content,
-        )
-            .into_response()),
-        FileResponse::Image { mime, content } => {
-            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
-        }
+        FileResponse::Text { etag, content } => Ok(harden_raw_file_response(
+            (
+                [
+                    (header::ETAG, etag),
+                    (
+                        header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                ],
+                content,
+            )
+                .into_response(),
+        )),
+        FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
+            ([(header::CONTENT_TYPE, mime)], content).into_response(),
+        )),
     }
 }
 
@@ -2371,17 +2377,19 @@ async fn handle_worktree_diff(
         .diff(&id, &file_path, q.scope.as_deref(), q.sha.as_deref())
         .await
         .map_err(worktree_err_to_response)?;
-    Ok((
-        [
-            (header::ETAG, etag),
-            (
-                header::CONTENT_TYPE,
-                "text/plain; charset=utf-8".to_string(),
-            ),
-        ],
-        content,
-    )
-        .into_response())
+    Ok(harden_raw_file_response(
+        (
+            [
+                (header::ETAG, etag),
+                (
+                    header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8".to_string(),
+                ),
+            ],
+            content,
+        )
+            .into_response(),
+    ))
 }
 
 async fn handle_worktree_changed_paths(
@@ -2730,20 +2738,22 @@ async fn handle_worktree_lsp_external_file(
         .map_err(lsp_err_to_response)?;
 
     match resp {
-        FileResponse::Text { etag, content } => Ok((
-            [
-                (header::ETAG, etag),
-                (
-                    header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8".to_string(),
-                ),
-            ],
-            content,
-        )
-            .into_response()),
-        FileResponse::Image { mime, content } => {
-            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
-        }
+        FileResponse::Text { etag, content } => Ok(harden_raw_file_response(
+            (
+                [
+                    (header::ETAG, etag),
+                    (
+                        header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                ],
+                content,
+            )
+                .into_response(),
+        )),
+        FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
+            ([(header::CONTENT_TYPE, mime)], content).into_response(),
+        )),
     }
 }
 
@@ -2758,20 +2768,22 @@ async fn handle_project_lsp_external_file(
         .map_err(lsp_err_to_response)?;
 
     match resp {
-        FileResponse::Text { etag, content } => Ok((
-            [
-                (header::ETAG, etag),
-                (
-                    header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8".to_string(),
-                ),
-            ],
-            content,
-        )
-            .into_response()),
-        FileResponse::Image { mime, content } => {
-            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
-        }
+        FileResponse::Text { etag, content } => Ok(harden_raw_file_response(
+            (
+                [
+                    (header::ETAG, etag),
+                    (
+                        header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                ],
+                content,
+            )
+                .into_response(),
+        )),
+        FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
+            ([(header::CONTENT_TYPE, mime)], content).into_response(),
+        )),
     }
 }
 
@@ -4487,6 +4499,34 @@ struct WebUiAssets;
 /// embedded `web-ui/dist` copy, falling back to embedded `index.html` for
 /// SPA client-side routes — same shape as the disk-backed branch below, for
 /// a curl-only daemon with no `dist_path` on disk at all.
+pub const RAW_FILE_CSP: &str =
+    "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:";
+pub const SPA_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; \
+img-src 'self' blob: data: https: http:; connect-src 'self' ws: wss:; worker-src 'self' blob:; \
+object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+
+pub fn harden_raw_file_response(mut resp: Response) -> Response {
+    let h = resp.headers_mut();
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(RAW_FILE_CSP),
+    );
+    resp
+}
+
+pub fn with_spa_csp(mut resp: Response) -> Response {
+    resp.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(SPA_CSP),
+    );
+    resp
+}
+
 #[cfg(feature = "embed-ui")]
 fn serve_embedded_asset(path: &str) -> Response {
     if let Some(file) = WebUiAssets::get(path) {
@@ -4505,7 +4545,7 @@ fn serve_embedded_asset(path: &str) -> Response {
     (StatusCode::NOT_FOUND, "Not found").into_response()
 }
 
-async fn handle_fallback(State(state): State<AppState>, req: Request) -> Response {
+async fn handle_fallback_inner(State(state): State<AppState>, req: Request) -> Response {
     let Some(ref dist) = state.dist_path else {
         #[cfg(feature = "embed-ui")]
         {
@@ -4567,6 +4607,10 @@ async fn handle_fallback(State(state): State<AppState>, req: Request) -> Respons
     }
 
     (StatusCode::NOT_FOUND, "Not found").into_response()
+}
+
+async fn handle_fallback(State(state): State<AppState>, req: Request) -> Response {
+    with_spa_csp(handle_fallback_inner(State(state), req).await)
 }
 
 mod mime_guess {

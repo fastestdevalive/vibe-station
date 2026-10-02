@@ -1,6 +1,17 @@
 import { useEffect, useId, useRef, useState } from "react";
+import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import { ImageZoomOverlay } from "./ImageZoomOverlay";
+
+// Same options mermaid itself passes, so foreignObject labels and
+// dominant-baseline survive; DOMPurify's defaults already drop script/iframe/object/embed and on* attrs.
+export function sanitizeSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, {
+    ADD_TAGS: ["foreignobject"],
+    ADD_ATTR: ["dominant-baseline"],
+    HTML_INTEGRATION_POINTS: { foreignobject: true },
+  });
+}
 
 interface MermaidViewProps {
   chart: string;
@@ -52,8 +63,9 @@ export function MermaidView({ chart, theme }: MermaidViewProps) {
       try {
         const { svg } = await mermaid.render(`mmd-${uid}`, sanitized);
         if (cancelled) return;
-        el.innerHTML = svg;
-        setSvgString(svg);
+        const clean = sanitizeSvg(svg);
+        el.innerHTML = clean;
+        setSvgString(clean);
       } catch {
         if (cancelled) return;
         setFailed(true);
