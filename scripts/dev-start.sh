@@ -18,8 +18,7 @@
 #    so the daemon writes the shim on first boot.
 #    The daemon ALWAYS authenticates (no loopback trust). The Tauri window gets its
 #    token injected, so it just works; a plain browser pointed at Vite shows the
-#    login screen — sign in with the "Browser login password" the daemon prints at
-#    startup, or mint a one-time link: POST /api/auth/continue/mint with the
+#    login screen — mint a one-time link: POST /api/auth/continue/mint with the
 #    cliToken from ~/.vibe-station/config.json, then open /continue?code=<code>.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.

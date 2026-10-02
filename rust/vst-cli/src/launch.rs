@@ -447,8 +447,10 @@ async fn present_login_url(base_url: &str, open_locally: bool) {
                  replace 127.0.0.1 with this machine's real hostname/IP, or forward the port, \
                  e.g. `ssh -L <port>:localhost:<port> ...` -- if that takes longer than 30s and \
                  this link expires before you can use it, re-running this command won't mint a \
-                 new one since the daemon is now up; instead log in with the password vst printed \
-                 to ~/.vibe-station/logs/daemon.log at startup)"
+                 new one since the daemon is now up; instead mint a fresh link with \
+                 `curl -X POST -H \"Authorization: Bearer <cliToken from \
+                 ~/.vibe-station/config.json>\" <daemon url>/api/auth/continue/mint` and open \
+                 `/continue?code=<code>`)"
             );
         }
     }

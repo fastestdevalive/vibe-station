@@ -385,7 +385,7 @@ The daemon mints a fresh master `daemonToken` in memory at every startup. **It i
 | `tauriToken` | The desktop app's webview — this is why there's no login screen |
 | `browserEpoch` | Not a token: a persisted counter; bumping it revokes every outstanding browser session |
 
-Browser logins use the `daemonToken` printed to the daemon log as a one-time password, then hold a scoped browser token. Restarting the daemon rotates `daemonToken` and invalidates them.
+Browser logins redeem a one-time link (`/continue?code=…`, minted with the CLI token — the `vst` CLI opens it for you), then hold a scoped browser token. Restarting the daemon rotates `daemonToken` and invalidates them.
 
 ---
 

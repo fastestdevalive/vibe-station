@@ -100,8 +100,9 @@ several agents at once without them colliding.
 
 The daemon mints an in-memory master `daemonToken` at boot (never written to
 disk). Two scoped tokens derive from it and persist to `config.json`:
-`cliToken` and `tauriToken`. Browser logins exchange the daemon-log-printed
-token for a scoped browser token. A daemon restart rotates everything.
+`cliToken` and `tauriToken`. Browser logins redeem a one-time continue-flow
+code (minted with the `cliToken`) for a scoped browser token. A daemon restart
+rotates everything.
 
 ## Build & run modes
 

@@ -371,20 +371,11 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Fresh daemonToken in memory on every startup — NEVER persisted.
     // All existing browser/CLI/Tauri sessions become invalid on restart.
     let daemon_token = gen_daemon_token().context("generate daemon token")?;
-    let auth_state = AuthState::new(daemon_token.clone(), browser_epoch);
+    let auth_state = AuthState::new(daemon_token, browser_epoch);
 
-    // Print the browser login password so the operator can authenticate.
-    // R42 (never print this for a headless/self-heal-spawned daemon) was
-    // considered and deliberately CUT, not silently dropped — found stale in
-    // review (it had bounced between two parts' plans and landed in neither):
-    // `daemon.log` is 0600, the same protection config.json's own `cliToken`
-    // already has (and that token is equally powerful — it can mint fresh
-    // login links on its own), and this printed password is currently the
-    // ONLY way back in once a self-heal-minted continue-flow login link
-    // expires (30s) with nobody around to have read it in time. Suppressing
-    // it would remove the one fallback the headless self-heal flow has.
-    tracing::info!("[vst] Browser login password: {daemon_token}");
-    println!("[vst] Browser login password: {daemon_token}");
+    // `daemon_token` is the HMAC signing key for every token: never log or print
+    // it. A plain browser signs in through the continue flow instead
+    // (`POST /api/auth/continue/mint` with the `cliToken`, then `/continue?code=`).
 
     // Pre-mint CLI + Tauri tokens and write to config.json.
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
