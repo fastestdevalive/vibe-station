@@ -33,6 +33,20 @@ pub async fn rg_search(
     glob: Option<&str>,
     limit: usize,
 ) -> Result<Vec<RgRawMatch>, RgSearchError> {
+    let globs: Vec<&str> = glob.into_iter().collect();
+    rg_search_with_globs(root, q, re, case, word, &globs, limit).await
+}
+
+/// [`rg_search`] with any number of `--glob` arguments (e.g. `!node_modules`).
+pub async fn rg_search_with_globs(
+    root: &Path,
+    q: &str,
+    re: bool,
+    case: bool,
+    word: bool,
+    globs: &[&str],
+    limit: usize,
+) -> Result<Vec<RgRawMatch>, RgSearchError> {
     let mut argv = vec![
         "--json".to_string(),
         "--hidden".to_string(),
@@ -53,7 +67,7 @@ pub async fn rg_search(
     if word {
         argv.push("--word-regexp".into());
     }
-    if let Some(g) = glob {
+    for g in globs {
         argv.push("--glob".into());
         argv.push(g.to_string());
     }

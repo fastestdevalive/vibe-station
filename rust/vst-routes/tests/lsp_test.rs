@@ -286,6 +286,7 @@ async fn test_4_t1_token_minting() {
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
     lsp_manager
         .insert_server_handle(ws.clone(), "rust".to_string(), handle)
@@ -706,6 +707,7 @@ async fn test_5_t1_references_pagination() {
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
     lsp_manager
         .insert_server_handle(ws.clone(), "rust".to_string(), handle)
@@ -884,6 +886,7 @@ async fn test_5_hover_signature_and_doc() {
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
     lsp_manager
         .insert_server_handle(ws.clone(), "rust".to_string(), handle)
@@ -1058,6 +1061,11 @@ fn test_parse_outline_response_hierarchical() {
             assert_eq!(symbols[0].name, "MyClass");
             assert_eq!(symbols[0].kind, "class");
             assert_eq!(symbols[0].line, 0);
+            assert_eq!(
+                symbols[0].character, 6,
+                "name column comes from selectionRange"
+            );
+            assert_eq!(symbols[0].range_start_line, 0);
             assert_eq!(symbols[0].end_line, 50);
             assert_eq!(symbols[0].children.len(), 1);
             assert_eq!(symbols[0].children[0].name, "my_method");
@@ -1284,6 +1292,7 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
     lsp_manager
         .insert_server_handle(ws.clone(), "rust".to_string(), handle)
@@ -1346,6 +1355,10 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
     assert_eq!(resp1.locations.len(), 1);
     assert_eq!(resp1.locations[0].confidence, "text");
     assert_eq!(resp1.locations[0].path.as_deref(), Some("lib.rs"));
+    assert_eq!(
+        resp1.fallback.as_ref().map(|f| f.reason),
+        Some(vst_types::rest::lsp::LspFallbackReason::Starting)
+    );
 
     // 2. Transition status to Ready
     {
@@ -1368,6 +1381,7 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
     assert_eq!(resp2.locations.len(), 1);
     assert_eq!(resp2.locations[0].confidence, "lsp");
     assert_eq!(resp2.locations[0].path.as_deref(), Some("lib.rs"));
+    assert_eq!(resp2.fallback, None, "real LSP answers carry no fallback");
 }
 
 #[tokio::test]
@@ -1438,6 +1452,87 @@ async fn test_3_t4_definition_fallback_when_disabled() {
     assert_eq!(resp.locations.len(), 1);
     assert_eq!(resp.locations[0].confidence, "text");
     assert_eq!(resp.locations[0].path.as_deref(), Some("lib.rs"));
+    assert_eq!(
+        resp.fallback.as_ref().map(|f| f.reason),
+        Some(vst_types::rest::lsp::LspFallbackReason::Disabled)
+    );
+
+    // Clicking a USAGE: the clicked occurrence is dropped, the declaration
+    // ranks first, and dependency dirs are excluded even without .gitignore.
+    std::fs::write(wt_path.join("main.rs"), "fn main() {\n    internal();\n}\n").unwrap();
+    std::fs::create_dir_all(wt_path.join("node_modules/dep")).unwrap();
+    std::fs::write(wt_path.join("node_modules/dep/x.rs"), "fn internal() {}\n").unwrap();
+    std::fs::create_dir_all(wt_path.join("target/debug")).unwrap();
+    std::fs::write(wt_path.join("target/debug/y.rs"), "fn internal() {}\n").unwrap();
+    let resp = lsp_routes
+        .definition(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "main.rs".to_string(),
+            },
+            1,
+            6,
+        )
+        .await
+        .expect("fallback definition from a usage");
+    let got: Vec<(Option<&str>, u32, u32, Option<u32>)> = resp
+        .locations
+        .iter()
+        .map(|l| (l.path.as_deref(), l.line, l.character, l.end_character))
+        .collect();
+    assert_eq!(got, [(Some("lib.rs"), 0, 7, Some(15))]);
+    assert_eq!(resp.locations[0].preview, "pub fn internal() {}");
+
+    // References fallback keeps every hit (including the clicked one), reports
+    // the reason, and returns raw untrimmed previews.
+    let refs = lsp_routes
+        .references(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "main.rs".to_string(),
+            },
+            1,
+            6,
+            None,
+        )
+        .await
+        .expect("fallback references");
+    assert_eq!(
+        refs.fallback.as_ref().map(|f| f.reason),
+        Some(vst_types::rest::lsp::LspFallbackReason::Disabled)
+    );
+    let mut ref_rows: Vec<(String, String, u32, Option<u32>)> = refs
+        .references
+        .iter()
+        .flat_map(|g| {
+            g.entries.iter().map(move |e| {
+                (
+                    g.path.clone().unwrap_or_default(),
+                    e.preview.clone(),
+                    e.character,
+                    e.end_character,
+                )
+            })
+        })
+        .collect();
+    ref_rows.sort();
+    assert_eq!(
+        ref_rows,
+        [
+            (
+                "lib.rs".to_string(),
+                "pub fn internal() {}".to_string(),
+                7,
+                Some(15)
+            ),
+            (
+                "main.rs".to_string(),
+                "    internal();".to_string(),
+                4,
+                Some(12)
+            ),
+        ]
+    );
 
     // has_ever_been_ready remains false
     assert!(!lsp_manager.has_ever_been_ready(&ws, "rust").await);
@@ -1528,6 +1623,7 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
             file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             language: language.to_string(),
             initialized: tokio::sync::watch::channel(true).1,
+            health: Default::default(),
         }
     };
 

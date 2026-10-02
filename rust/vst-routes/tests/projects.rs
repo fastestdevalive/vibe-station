@@ -1257,6 +1257,227 @@ async fn test_gutter_project_scope() {
 }
 
 #[tokio::test]
+async fn test_gutter_project_scope_staged() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("gutter-staged-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "gutter-staged-proj", &proj_dir).await;
+
+    let file_path = proj_dir.join("file.rs");
+    std::fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+    Command::new("git")
+        .args(["add", "file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Modify file and stage it
+    std::fs::write(&file_path, "changed line 1\nline 2\nline 3\n").unwrap();
+    Command::new("git")
+        .args(["add", "file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Gutter should reflect staged modification against HEAD
+    let result = routes
+        .gutter("gutter-staged-proj", "file.rs")
+        .await
+        .unwrap();
+    assert_eq!(result.modified, vec![1]);
+    assert!(result.added.is_empty());
+    assert!(result.deleted.is_empty());
+}
+
+#[tokio::test]
+async fn test_gutter_project_scope_rename() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("gutter-rename-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "gutter-rename-proj", &proj_dir).await;
+
+    // Create a multi-line file and commit it
+    let old_file = proj_dir.join("old.rs");
+    let content =
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n";
+    std::fs::write(&old_file, content).unwrap();
+    Command::new("git")
+        .args(["add", "old.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Add old.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Rename old.rs to new.rs and stage the rename
+    Command::new("git")
+        .args(["mv", "old.rs", "new.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Modify one line in new.rs
+    let new_file = proj_dir.join("new.rs");
+    let modified =
+        "line 1\nchanged line 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n";
+    std::fs::write(&new_file, modified).unwrap();
+
+    // Gutter on new.rs should detect the rename and report modified: [2], NOT treat all lines as added
+    let result = routes.gutter("gutter-rename-proj", "new.rs").await.unwrap();
+    assert_eq!(result.modified, vec![2]);
+    assert!(result.added.is_empty());
+    assert!(result.deleted.is_empty());
+}
+
+/// A rename edited below git's similarity threshold: `git diff --find-renames`
+/// can't pair the files, so the diff contains the old file's full deletion
+/// plus the new file's full addition — the gutter carries a noisy mix of
+/// deleted and added marks. Documents the known behavior (treating it as
+/// all-added would hide the deletion).
+#[tokio::test]
+async fn test_gutter_project_scope_heavily_edited_rename() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("gutter-heavy-rename-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "gutter-heavy-rename-proj", &proj_dir).await;
+
+    let old_file = proj_dir.join("old.rs");
+    let content =
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n";
+    std::fs::write(&old_file, content).unwrap();
+    Command::new("git")
+        .args(["add", "old.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Add old.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Rename, then rewrite every line so git's rename detection (default 50%
+    // similarity) can't pair old.rs with new.rs.
+    Command::new("git")
+        .args(["mv", "old.rs", "new.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    let new_file = proj_dir.join("new.rs");
+    let rewritten = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\niota\nkappa\n";
+    std::fs::write(&new_file, rewritten).unwrap();
+
+    let result = routes
+        .gutter("gutter-heavy-rename-proj", "new.rs")
+        .await
+        .unwrap();
+    assert!(
+        !result.deleted.is_empty(),
+        "heavily edited rename should still show the old file's deletions"
+    );
+    assert!(
+        !result.added.is_empty(),
+        "heavily edited rename should show the new file's additions"
+    );
+}
+
+#[tokio::test]
+async fn test_gutter_unborn_repo_exit_128_all_added() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("unborn-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    // git init without any commit => unborn HEAD
+    Command::new("git")
+        .args(["init"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    register_git_project(&store, "unborn-proj", &proj_dir).await;
+
+    // Create a 3-line file
+    let file = proj_dir.join("hello.txt");
+    std::fs::write(&file, "first\nsecond\nthird\n").unwrap();
+
+    let result = routes.gutter("unborn-proj", "hello.txt").await.unwrap();
+    assert_eq!(result.added, vec![1, 2, 3]);
+    assert!(result.modified.is_empty());
+    assert!(result.deleted.is_empty());
+}
+
+/// Negative test for the explicit `rev-parse --verify HEAD` unborn check: a
+/// corrupt index makes `git diff` exit 128 even though HEAD exists — the
+/// gutter must surface an error, not paint the whole file as added (the old
+/// "exit 128 = unborn" heuristic did exactly that).
+#[tokio::test]
+async fn test_gutter_corrupt_index_is_not_unborn_all_added() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("corrupt-index-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "corrupt-index-proj", &proj_dir).await;
+
+    let file = proj_dir.join("hello.txt");
+    std::fs::write(&file, "first\nsecond\nthird\n").unwrap();
+    Command::new("git")
+        .args(["add", "hello.txt"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Add hello.txt"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+
+    // Corrupt the index: `git rev-parse --verify -q HEAD` still succeeds
+    // (it reads the ref, not the index), but `git diff HEAD` exits 128.
+    std::fs::write(proj_dir.join(".git").join("index"), "garbage").unwrap();
+
+    let err = routes
+        .gutter("corrupt-index-proj", "hello.txt")
+        .await
+        .expect_err("corrupt index must not be treated as an unborn repo");
+    assert!(
+        matches!(err, ProjectRouteError::Internal(_)),
+        "expected Internal error, got {err:?}"
+    );
+}
+
+/// A failed `rev-parse --verify HEAD` only means "unborn" inside a readable
+/// repo — outside one (or under dubious ownership) the gutter must error, not
+/// paint the whole file as added.
+#[tokio::test]
+async fn test_gutter_non_repo_is_not_unborn_all_added() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hello.txt");
+    std::fs::write(&file, "first\nsecond\n").unwrap();
+    let err =
+        vst_routes::worktrees::compute_git_gutter(dir.path(), "hello.txt", &file, "hello.txt")
+            .await
+            .expect_err("a non-repo must not be treated as an unborn repo");
+    assert!(
+        matches!(err, vst_routes::worktrees::GutterError::Internal(_)),
+        "expected Internal error"
+    );
+}
+
+#[tokio::test]
 async fn test_diff_project_scope() {
     let (dir, store, _broadcaster, routes) = test_env();
 

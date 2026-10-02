@@ -1,6 +1,8 @@
 use serde_json::json;
 use std::sync::OnceLock;
 
+use crate::deps::{self, DependencyModel};
+
 #[derive(Debug, Clone)]
 pub struct LanguageServerConfig {
     pub language: &'static str,
@@ -12,6 +14,9 @@ pub struct LanguageServerConfig {
     pub extra_env: Vec<(String, String)>,
     pub install_command: Option<&'static str>,
     pub install_note: Option<&'static str>,
+    /// Optional pre-spawn dependency model (probe + init-error hints). `None`
+    /// = the server needs nothing beyond its own binary.
+    pub dependency: Option<DependencyModel>,
 }
 
 pub fn all() -> &'static [LanguageServerConfig] {
@@ -37,6 +42,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("rustup component add rust-analyzer"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "typescript",
@@ -46,8 +52,9 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extensions: &["ts", "tsx", "js", "jsx", "mjs", "cjs"],
                 init_options: None,
                 extra_env: vec![],
-                install_command: Some("npm install -g typescript-language-server typescript"),
+                install_command: Some("npm install -g typescript-language-server \"typescript@<7\""),
                 install_note: None,
+                dependency: Some(deps::typescript::MODEL),
             },
             LanguageServerConfig {
                 language: "python",
@@ -59,6 +66,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("npm install -g pyright"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "go",
@@ -70,6 +78,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("go install golang.org/x/tools/gopls@latest"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "cpp",
@@ -81,6 +90,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("Debian/Ubuntu: apt install clangd — macOS: brew install llvm (adds clangd to PATH via llvm/bin)"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "zig",
@@ -92,6 +102,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("See https://github.com/zigtools/zls#installation"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "lua",
@@ -103,6 +114,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("macOS: brew install lua-language-server — Linux: see https://github.com/LuaLS/lua-language-server#installation"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "ruby",
@@ -114,6 +126,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("gem install solargraph"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "java",
@@ -125,6 +138,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("brew install jdtls, or see https://github.com/eclipse-jdtls/eclipse.jdt.ls"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "csharp",
@@ -136,6 +150,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("brew install omnisharp, or see https://github.com/OmniSharp/omnisharp-roslyn#installation"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "latex",
@@ -147,6 +162,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("cargo install texlab"),
                 install_note: Some("macOS alternative: brew install texlab"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "html",
@@ -158,6 +174,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("npm install -g vscode-langservers-extracted"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "css",
@@ -169,6 +186,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("npm install -g vscode-langservers-extracted"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "json",
@@ -180,6 +198,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("npm install -g vscode-langservers-extracted"),
                 install_note: None,
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "kotlin",
@@ -191,6 +210,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: None,
                 install_note: Some("brew install kotlin-language-server, or see https://github.com/fwcd/kotlin-language-server#installation"),
+                dependency: None,
             },
             LanguageServerConfig {
                 language: "bash",
@@ -202,6 +222,7 @@ fn get_configs() -> &'static [LanguageServerConfig] {
                 extra_env: vec![],
                 install_command: Some("npm install -g bash-language-server"),
                 install_note: None,
+                dependency: None,
             },
         ]
     })

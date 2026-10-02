@@ -4,10 +4,12 @@
 //! The TS mocks `tmux.js`'s `hasSession` and the `paths.js` module; in Rust we
 //! inject a fake [`SessionLiveness`] implementation and a temp [`Paths`].
 
+#[path = "common/script.rs"]
+mod script;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use tempfile::tempdir;
 use vst_git::paths::Paths;
@@ -432,10 +434,7 @@ fn wait_for_comm(pid: i32, expected: &str) {
 fn script_named(name: &str) -> PathBuf {
     let tmp = tempdir().unwrap();
     let path = tmp.path().join(name);
-    std::fs::write(&path, "#!/bin/sh\nsleep 5\n").unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
+    script::install_executable_script(&path, "#!/bin/sh\nsleep 5\n");
     // Leak the TempDir so the script stays alive for the child process.
     std::mem::forget(tmp);
     path

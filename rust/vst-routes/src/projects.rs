@@ -1756,75 +1756,15 @@ impl ProjectRoutes {
             .to_string_lossy()
             .to_string();
 
-        let diff_output = Command::new("git")
-            .current_dir(&root)
-            .args([
-                "-c",
-                "color.diff=false",
-                "-c",
-                "core.quotepath=false",
-                "diff",
-                "--no-color",
-                "HEAD",
-                "--",
-                &rel_path,
-            ])
-            .output()
+        crate::worktrees::compute_git_gutter(&root, &rel_path, &abs_path, file_path)
             .await
-            .map_err(|e| ProjectRouteError::Internal(format!("Failed to run git diff: {e}")))?;
-
-        if !diff_output.status.success() && diff_output.status.code() != Some(1) {
-            return Err(ProjectRouteError::Internal("git diff failed".to_string()));
-        }
-
-        let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
-        if stdout_for_ambiguity_check.trim().is_empty() {
-            let check_tracked = Command::new("git")
-                .args(["ls-files", "--error-unmatch", "--", &rel_path])
-                .current_dir(&root)
-                .output()
-                .await
-                .map_err(|e| {
-                    ProjectRouteError::Internal(format!("Failed to run git ls-files: {e}"))
-                })?;
-
-            if !check_tracked.status.success() {
-                return match tokio::fs::read(&abs_path).await {
-                    Ok(content) => {
-                        if let Ok(text) = String::from_utf8(content) {
-                            let line_count = text.lines().count() as u32;
-                            if line_count > 0 {
-                                let capped = line_count.min(crate::worktrees::GUTTER_MAX_LINES);
-                                let added = (1..=capped).collect();
-                                Ok(GutterResult {
-                                    added,
-                                    deleted: vec![],
-                                    modified: vec![],
-                                })
-                            } else {
-                                Ok(GutterResult::default())
-                            }
-                        } else {
-                            Ok(GutterResult::default())
-                        }
-                    }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::NotFound {
-                            Err(ProjectRouteError::NotFound(format!(
-                                "File not found: {file_path}"
-                            )))
-                        } else {
-                            Err(ProjectRouteError::unprocessable(e.to_string(), None))
-                        }
-                    }
-                };
-            }
-            return Ok(GutterResult::default());
-        }
-
-        Ok(crate::worktrees::parse_diff_hunk(
-            &stdout_for_ambiguity_check,
-        ))
+            .map_err(|e| match e {
+                crate::worktrees::GutterError::NotFound(msg) => ProjectRouteError::NotFound(msg),
+                crate::worktrees::GutterError::Unprocessable(msg) => {
+                    ProjectRouteError::unprocessable(msg, None)
+                }
+                crate::worktrees::GutterError::Internal(msg) => ProjectRouteError::Internal(msg),
+            })
     }
 
     // ── 12. GET /projects/:projectId/diff/*path ───────────────────────────

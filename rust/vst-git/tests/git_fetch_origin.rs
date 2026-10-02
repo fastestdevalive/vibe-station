@@ -7,13 +7,13 @@
 //! `GitService`.
 
 mod common;
+#[path = "common/script.rs"]
+mod script;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use std::os::unix::fs::PermissionsExt;
 
 use common::{git, git_fixture, rm_git_fixture};
 use vst_git::git::{Clock, GitService};
@@ -38,10 +38,7 @@ impl FakeGit {
     fn install_script(body: &str) -> FakeGit {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("git");
-        std::fs::write(&script, body).unwrap();
-        let mut perms = std::fs::metadata(&script).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script, perms).unwrap();
+        script::install_executable_script(&script, body);
         FakeGit { _dir: dir, script }
     }
 }
