@@ -40,7 +40,7 @@ describe("demoRuntime", () => {
     expect(APP_STORES.length).toBe(n);
   });
 
-  it("resetAppSingletons returns all six stores to getInitialState()", () => {
+  it("resetAppSingletons returns every app store to getInitialState()", () => {
     const initial = APP_STORES.map((s) => plain((s as { getInitialState(): unknown }).getInitialState()));
     useWorkspaceStore.setState({ activeWorktreeId: "wt-x", activeSessionId: "s-x" });
     useServerStore.getState().replaceAll({ projects: [], worktrees: [], sessions: [] });

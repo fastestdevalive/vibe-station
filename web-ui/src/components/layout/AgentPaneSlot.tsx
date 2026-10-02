@@ -5,6 +5,7 @@ import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
+import { ResetProgressOverlay } from "./ResetProgressOverlay";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
@@ -166,6 +167,9 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
         ) : null}
       </div>
       <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} focusOnMount={!canvasMode} />
+      {/* Last sibling, conditionally rendered inside: never shifts the (permanently
+          mounted) TerminalPane/ChatPane tree positions above. */}
+      <ResetProgressOverlay sessionId={sessionId} />
     </div>
   );
 }

@@ -10,6 +10,43 @@
   box-sizing: border-box;
   transition: border-color 0.2s ease;
   container-type: inline-size;
+  position: relative;
+  /* Own stacking context so the reset overlay's z-index is confined to this pane. */
+  isolation: isolate;
+}
+
+/* Per-agent "Reset with handoff" progress — covers only this pane. */
+.reset-progress-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-primary, #0f0f0f) 78%, transparent);
+  backdrop-filter: blur(2px);
+}
+.reset-progress-overlay__card {
+  max-width: 360px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-secondary, #181818);
+  border: 1px solid var(--border-default, #333);
+  border-radius: 8px;
+}
+.reset-progress-overlay__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.reset-progress-overlay__text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
 }
 
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
