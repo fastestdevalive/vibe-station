@@ -291,7 +291,7 @@ export interface Attachment {
   mime: string;
 }
 
-export type NormalizedEventProvider = "claude" | "cursor" | "opencode";
+export type NormalizedEventProvider = "claude" | "cursor" | "opencode" | "codex";
 
 export type NormalizedEventKind =
   | "session_init"

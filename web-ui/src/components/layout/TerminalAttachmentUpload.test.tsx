@@ -37,6 +37,16 @@ describe("TerminalAttachmentUpload (item 3, Decision 5 hard-gate)", () => {
     expect(screen.queryByLabelText(/attach files/i)).toBeNull();
   });
 
+  it("2.T4 — renders the attach control for a terminal-channel codex session", async () => {
+    const api = createMockApi({
+      modes: [
+        { id: "mode-codex", name: "Codex", cli: "codex", context: "", icon: "codex" },
+      ],
+    });
+    render(<TerminalAttachmentUpload api={api} session={session({ modeId: "mode-codex" })} />);
+    expect(await screen.findByRole("button", { name: /attach files/i })).toBeTruthy();
+  });
+
   it("hides for a plain (non-agent) terminal session", () => {
     render(
       <TerminalAttachmentUpload

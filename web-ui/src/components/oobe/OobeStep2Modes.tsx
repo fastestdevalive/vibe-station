@@ -7,6 +7,7 @@ import { ModeIcon } from "@/components/agent/ModeIcon";
 import { CliDetectionPanel } from "@/components/agent/CliDetectionPanel";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
 import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
+import { cliDisplayName } from "@/lib/cliNames";
 
 interface OobeStep2ModesProps {
   api: ApiInstance;
@@ -233,7 +234,7 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
                     border: "var(--border-width) solid var(--border-default)",
                   }}
                 >
-                  {m.cli}
+                  {cliDisplayName(m.cli)}
                 </span>
                 {m.model ? (
                   <span

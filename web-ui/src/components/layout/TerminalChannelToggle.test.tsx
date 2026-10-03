@@ -51,6 +51,17 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json"));
   });
 
+  it("hides for a CLI without Rich Chat support (pi: supportsJson false)", async () => {
+    const api = createMockApi({
+      modes: [{ id: "mode-pi", name: "Pi", cli: "pi", context: "", icon: "pi" }],
+    });
+    const listSpy = vi.spyOn(api, "getSupportedClis");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: "mode-pi" })} />);
+    await waitFor(() => expect(listSpy).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
+  });
+
   it("hides for a plain (non-agent) terminal session", () => {
     render(
       <TerminalChannelToggle

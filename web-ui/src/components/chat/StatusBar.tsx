@@ -4,6 +4,7 @@ import type { SessionMeta, TurnState } from "@/api/types";
 import { ModelSwitch } from "./ModelSwitch";
 import { ChannelToggleButton } from "./ChannelToggleButton";
 import { WorkingDots } from "./WorkingDots";
+import { cliDisplayName } from "@/lib/cliNames";
 
 interface StatusBarProps {
   meta: SessionMeta | null;
@@ -212,10 +213,10 @@ export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sess
               {...(() => {
                 const warnings = [
                   supportsResume === false
-                    ? `⚠ ${cli} can't resume in the terminal — this switch starts a FRESH terminal conversation instead of continuing this one. Your Rich Chat history stays intact and untouched.`
+                    ? `⚠ ${cliDisplayName(cli ?? "")} can't resume in the terminal — this switch starts a FRESH terminal conversation instead of continuing this one. Your Rich Chat history stays intact and untouched.`
                     : null,
                   importsHistory === false
-                    ? `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`
+                    ? `⚠ ${cliDisplayName(cli ?? "")} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`
                     : null,
                 ].filter((w): w is string => w !== null);
                 return warnings.length > 0 ? { warning: warnings.join("\n\n") } : {};

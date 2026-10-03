@@ -5,22 +5,26 @@ import agySvg from "@/assets/mode-icons/agy.svg?raw";
 import opencodeSvg from "@/assets/mode-icons/opencode.svg?raw";
 import deepseekSvg from "@/assets/mode-icons/deepseek.svg?raw";
 import cursorSvg from "@/assets/mode-icons/cursor.svg?raw";
+import codexSvg from "@/assets/mode-icons/codex.svg?raw";
+import piSvg from "@/assets/mode-icons/pi.svg?raw";
 import "@/styles/mode-icon.css";
 
 /** Trusted repo assets, imported as raw SVG strings and inlined so glyphs that
- *  use `currentColor` (opencode, cursor) inherit the theme colour. */
+ *  use `currentColor` (opencode, cursor, pi) inherit the theme colour. */
 const ICONS: Record<string, string> = {
   claude: claudeSvg,
   agy: agySvg,
   opencode: opencodeSvg,
   deepseek: deepseekSvg,
   cursor: cursorSvg,
+  codex: codexSvg,
+  pi: piSvg,
 };
 
 const FALLBACK_GLYPH = "◈";
 
 interface ModeIconProps {
-  /** Icon key (`claude|agy|opencode|deepseek|cursor`); unknown/null → generic fallback. */
+  /** Icon key (`claude|agy|opencode|deepseek|cursor|codex|pi`); unknown/null → generic fallback. */
   iconKey?: string | null;
   /** Execution channel. `json` (Rich Chat) renders the icon bare; terminal
    *  channels (`tmux`/`pty`/undefined) wrap it in a rounded terminal frame. */

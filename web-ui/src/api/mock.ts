@@ -1362,6 +1362,30 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultChannel: "tmux",
           defaultChannelOverridden: false,
         },
+        {
+          id: "codex",
+          defaultModel: "",
+          supportsJson: true,
+          importsNativeHistory: true,
+          supportsJsonToTerminalResume: true,
+          detected: false,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: false,
+          defaultChannel: "json",
+          defaultChannelOverridden: false,
+        },
+        {
+          id: "pi",
+          defaultModel: "",
+          supportsJson: false,
+          importsNativeHistory: false,
+          supportsJsonToTerminalResume: false,
+          detected: false,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: false,
+          defaultChannel: "tmux",
+          defaultChannelOverridden: false,
+        },
       ];
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
       // override-aware default_channel / default_channel_overridden). A Json
@@ -1393,6 +1417,14 @@ export function createMockApi(seed: MockSeed = {}) {
       if (cli === "agy") {
         return {
           models: ["Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Low)", "Claude Sonnet 4.6 (Thinking)"],
+        };
+      }
+      if (cli === "codex") {
+        return { models: ["gpt-5-codex", "gpt-5"] };
+      }
+      if (cli === "pi") {
+        return {
+          models: ["anthropic/claude-opus-4", "anthropic/claude-sonnet-4", "openai/gpt-5", "google/gemini-3-pro"],
         };
       }
       return { models: ["opencode/big-pickle", "opencode/other"] };
