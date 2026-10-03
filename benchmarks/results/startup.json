@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "timestamp": "2026-10-02T21:19:28-0700",
-  "commit": "52ef1413f3ef18be830cb97544bda7f7a7b230d1",
+  "timestamp": "2026-10-03T00:32:47-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
   "dirty": true,
-  "binary_sha256": "d1cb03f95c3d81d8",
+  "binary_sha256": "9f3229ce7f6e59fd",
   "preliminary": true,
   "part": "startup",
   "machine": {
@@ -12,55 +12,58 @@
     "cores": 32,
     "ram_gb": 60.5,
     "loadavg": [
-      12.9736328125,
-      10.72802734375,
-      10.52294921875
+      12.009765625,
+      11.3974609375,
+      8.77587890625
     ],
-    "other_vst_daemons": 18
+    "mem_available_mb": 41042,
+    "swap_used_mb": 22612,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
   },
   "note": "ready = exec -> /health 200 measured externally; process_up = exec -> first daemon log line; in_process_to_listen = 'starting daemon' -> 'listening' from the daemon's own log. before/after alternate per iteration on the same machine; empty $HOME so boot-recovery and migration costs of a populated store are not included.",
   "before": {
     "ready_ms": {
-      "median": 66.05,
-      "min": 61.34,
-      "p90": 70.3,
-      "max": 76.73
+      "median": 14.24,
+      "min": 11.56,
+      "p90": 16.96,
+      "max": 19.32
     },
     "process_up_ms": {
-      "median": 2.04,
-      "min": 1.56,
-      "p90": 3.21,
-      "max": 7.37
+      "median": 2.4,
+      "min": 1.72,
+      "p90": 4.3,
+      "max": 7.76
     },
     "in_process_to_listen_ms": {
-      "median": 62.22,
-      "min": 57.82,
-      "p90": 66.13,
-      "max": 70.22
+      "median": 8.15,
+      "min": 7.03,
+      "p90": 9.67,
+      "max": 12.64
     },
     "runs": 30,
-    "binary": "target-before"
+    "binary": "target"
   },
   "after": {
     "ready_ms": {
-      "median": 11.07,
-      "min": 9.69,
-      "p90": 12.99,
-      "max": 29.15
+      "median": 14.52,
+      "min": 9.36,
+      "p90": 17.35,
+      "max": 19.06
     },
     "process_up_ms": {
-      "median": 2.06,
-      "min": 1.51,
-      "p90": 3.28,
-      "max": 14.92
+      "median": 2.31,
+      "min": 1.7,
+      "p90": 3.27,
+      "max": 5.33
     },
     "in_process_to_listen_ms": {
-      "median": 7.02,
-      "min": 6.49,
-      "p90": 8.5,
-      "max": 13.3
+      "median": 8.58,
+      "min": 6.35,
+      "p90": 10.63,
+      "max": 12.17
     },
     "runs": 30,
-    "binary": "target-after"
+    "binary": "target"
   }
 }

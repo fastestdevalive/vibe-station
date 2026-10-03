@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "timestamp": "2026-10-02T21:50:47-0700",
-  "commit": "52ef1413f3ef18be830cb97544bda7f7a7b230d1",
+  "timestamp": "2026-10-03T00:37:17-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
   "dirty": true,
-  "binary_sha256": "d1cb03f95c3d81d8",
+  "binary_sha256": "9f3229ce7f6e59fd",
   "preliminary": true,
   "part": "E",
   "machine": {
@@ -12,34 +12,37 @@
     "cores": 32,
     "ram_gb": 60.5,
     "loadavg": [
-      4.3603515625,
-      6.67724609375,
-      8.1904296875
+      20.6083984375,
+      15.81494140625,
+      11.25537109375
     ],
-    "other_vst_daemons": 18
+    "mem_available_mb": 41611,
+    "swap_used_mb": 22619,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
   },
   "rows": [
     {
       "phase": "fresh",
       "procs": 1,
       "rss_mb": 18.2,
-      "pss_mb": 16.0
+      "pss_mb": 15.9
     },
     {
       "phase": "after 200 reqs",
       "procs": 1,
-      "rss_mb": 18.4,
-      "pss_mb": 16.2
+      "rss_mb": 18.3,
+      "pss_mb": 16.1
     },
     {
       "phase": "peak during 10-worker burst",
-      "rss_mb": 19.6
+      "rss_mb": 19.5
     },
     {
       "phase": "idle 30s after burst",
       "procs": 1,
-      "rss_mb": 19.6,
-      "pss_mb": 17.4
+      "rss_mb": 19.5,
+      "pss_mb": 17.3
     }
   ]
 }

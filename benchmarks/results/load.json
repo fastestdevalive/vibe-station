@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "timestamp": "2026-10-02T21:23:04-0700",
-  "commit": "52ef1413f3ef18be830cb97544bda7f7a7b230d1",
+  "timestamp": "2026-10-03T00:36:06-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
   "dirty": true,
-  "binary_sha256": "d1cb03f95c3d81d8",
+  "binary_sha256": "9f3229ce7f6e59fd",
   "preliminary": true,
   "part": "C",
   "machine": {
@@ -12,38 +12,41 @@
     "cores": 32,
     "ram_gb": 60.5,
     "loadavg": [
-      10.6708984375,
-      12.16650390625,
-      11.2841796875
+      18.74072265625,
+      14.892578125,
+      10.65234375
     ],
-    "other_vst_daemons": 18
+    "mem_available_mb": 41688,
+    "swap_used_mb": 22621,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
   },
   "rows": [
     {
       "endpoint": "GET /health",
-      "requests": 135004,
-      "req_s": 8999.9,
-      "p50_ms": 1.01,
-      "p95_ms": 1.99,
-      "p99_ms": 2.6,
+      "requests": 102964,
+      "req_s": 6863.8,
+      "p50_ms": 1.16,
+      "p95_ms": 3.96,
+      "p99_ms": 5.94,
       "errors": 0
     },
     {
       "endpoint": "GET /api/projects",
-      "requests": 137153,
-      "req_s": 9143.1,
-      "p50_ms": 1.0,
-      "p95_ms": 1.96,
-      "p99_ms": 2.56,
+      "requests": 101629,
+      "req_s": 6774.9,
+      "p50_ms": 1.19,
+      "p95_ms": 3.93,
+      "p99_ms": 5.76,
       "errors": 0
     },
     {
       "endpoint": "GET /api/modes",
-      "requests": 138158,
-      "req_s": 9209.8,
-      "p50_ms": 0.99,
-      "p95_ms": 1.95,
-      "p99_ms": 2.53,
+      "requests": 102633,
+      "req_s": 6841.8,
+      "p50_ms": 1.2,
+      "p95_ms": 3.52,
+      "p99_ms": 5.49,
       "errors": 0
     }
   ]
