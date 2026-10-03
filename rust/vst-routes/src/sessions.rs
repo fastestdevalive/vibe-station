@@ -59,6 +59,7 @@ use vst_agents::plugin::{CaptureArgs, RestoreArgs};
 use vst_agents::prompt_builder::{
     build_direct_prompt, build_prompt, BuildDirectPromptInput, BuildPromptInput,
 };
+use vst_agents::registry::ensure_binary_on_path;
 use vst_agents::session_runtime::{release_session_runtime, ReleaseOpts};
 use vst_agents::{resolve_plugin, AgentPlugin, LaunchConfig, PluginContext};
 use vst_git::direct_pty::PtyKill;
@@ -2779,6 +2780,7 @@ impl SessionRoutes {
                 for (k, v) in plugin.get_environment(&launch_cfg) {
                     env.insert(k, v);
                 }
+                ensure_binary_on_path(plugin.as_ref(), &env)?;
                 let fallback_ms = plugin.get_ready_signal().fallback_ms;
                 self.spawn_session_from_argv(
                     session,
@@ -2809,9 +2811,21 @@ impl SessionRoutes {
             }
 
             // Fresh launch path: re-deliver the original create prompt ONLY
-            // when no conversation was ever established (`agentChatId` absent).
-            let replay_initial_prompt =
-                session.agent_chat_id.is_none() && session.initial_prompt.is_some();
+            // when no conversation was ever established (`agentChatId` absent,
+            // or the stored id has no real conversation — Decision 5).
+            let mut established = true;
+            if session.agent_chat_id.is_some() {
+                established = plugin
+                    .chat_established(RestoreArgs {
+                        session,
+                        project,
+                        cwd,
+                        model: mode.model.as_deref(),
+                    })
+                    .await;
+            }
+            let replay_initial_prompt = session.initial_prompt.is_some()
+                && (session.agent_chat_id.is_none() || !established);
             let user_prompt = if replay_initial_prompt {
                 session.initial_prompt.clone()
             } else {
@@ -3834,6 +3848,7 @@ impl SessionRoutes {
             for (k, v) in plugin.get_environment(&launch_cfg) {
                 env.insert(k, v);
             }
+            ensure_binary_on_path(plugin, &env)?;
             let fallback_ms = plugin.get_ready_signal().fallback_ms;
             self.spawn_session_from_argv(
                 session,
@@ -4560,6 +4575,17 @@ pub struct SpawnSessionOpts<'a> {
     pub direct_ptys: &'a std::sync::RwLock<HashMap<String, PtyHandle>>,
 }
 
+/// Build the argv for shell-launched plugins: `sh -c "exec <line>"`.
+///
+/// `-c`, not `-lc`: a login shell re-runs `/etc/profile` and overwrites the
+/// PATH the daemon built (see cli-launch-hardening Decision 1). `exec` makes
+/// the pane process the agent itself (clean exit status, no lingering wrapper
+/// sh). Every plugin's `shell_line` starts with the binary name, so `exec` is
+/// safe (plan Research).
+fn shell_command_parts(line: &str) -> Vec<String> {
+    vec!["sh".into(), "-c".into(), format!("exec {line}")]
+}
+
 /// `spawnSession` / `spawnDirectSession` orchestration from `services/spawn.ts`.
 /// Branches on `session.use_tmux`. Shared by worktree and direct sessions.
 ///
@@ -4628,13 +4654,10 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     for (k, v) in opts.plugin.get_environment(&launch_cfg) {
         base_env.insert(k, v);
     }
+    ensure_binary_on_path(opts.plugin, &base_env)?;
 
     let command_parts: Vec<String> = if composed.use_shell && composed.shell_line.is_some() {
-        vec![
-            "sh".to_string(),
-            "-lc".to_string(),
-            composed.shell_line.clone().unwrap(),
-        ]
+        shell_command_parts(&composed.shell_line.clone().unwrap())
     } else {
         let mut parts = opts.plugin.get_launch_command(&launch_cfg);
         if let Some(args) = &composed.launch_args {
@@ -5356,4 +5379,23 @@ pub fn group_json_output(events: &[vst_types::NormalizedEvent]) -> String {
         turns.push(buf);
     }
     turns.join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_command_parts;
+
+    #[test]
+    fn shell_command_parts_uses_c_not_lc_and_execs() {
+        let parts = shell_command_parts("pi --x");
+        assert_eq!(
+            parts,
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "exec pi --x".to_string()
+            ]
+        );
+        assert!(parts.iter().all(|p| p != "-lc"));
+    }
 }

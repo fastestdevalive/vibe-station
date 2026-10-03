@@ -315,8 +315,29 @@ pub trait AgentPlugin: Send + Sync {
     }
 
     /// Return argv for resuming a prior session, or null for fresh launch.
+    ///
+    /// CONTRACT: MUST return `None` for a session with no stored id and no
+    /// conversation of its own, so the caller falls back to a fresh launch that
+    /// re-delivers the initial prompt. SHOULD also verify ≥1 user turn exists
+    /// before returning `Some` — consult [`AgentPlugin::chat_established`].
+    /// Known deviations: claude/cursor/opencode/agy return `Some` for any stored
+    /// id, and claude/cursor/agy additionally fall back to the latest chat in cwd
+    /// when no id is stored (`native_chat_id.rs`); pi gates on a real user turn.
     fn get_restore_command(&self, _args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
         Box::pin(async { None })
+    }
+
+    /// Whether the session id in `agent_chat_id` corresponds to an actually
+    /// established conversation, consulted by `resume_spawn`'s replay gate
+    /// (Decision 5): `resume_spawn` re-delivers the initial prompt when
+    /// `initial_prompt.is_some() && (agent_chat_id.is_none() || !chat_established)`.
+    ///
+    /// Default `true`: a stored id is assumed to have a conversation (the
+    /// behaviour for claude/cursor/opencode/agy/codex). Plugins whose id can be
+    /// recorded up front before any user turn (pi) override this to consult
+    /// their native store.
+    fn chat_established(&self, _args: RestoreArgs<'_>) -> AsyncResult<bool> {
+        Box::pin(async { true })
     }
 
     /// Whether this plugin can run in the JSON (Rich Chat) channel.

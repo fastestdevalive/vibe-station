@@ -1,0 +1,23 @@
+feature: cli-launch-hardening
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-231
+created: 2026-10-02T00:00:00Z
+
+master:
+  prd: skipped   # no new user-facing behavior; investigation notes at docs/CLI-LAUNCH-PITFALLS.md
+  plan: complete # reviewed once by opus (4 blocking + 9 non-blocking, all folded in; no re-review per user)
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: planning
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, turn-implement]   # user extended: single opus review, deepseek turns, quick verify, PR
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
