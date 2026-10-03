@@ -51,6 +51,15 @@
 //   FAKE_ACP_MODE=model_options — session/new AND session/load results carry a
 //     `category: "model"` select in `configOptions` (ids m-a, m-b; currentValue
 //     m-b) so a test can assert both calls report the model list + current model.
+//   FAKE_ACP_MODE=replay_on_load — before answering `session/load`, send 2
+//     `session/update` agent_message_chunk notifications (modelling the adapter
+//     replaying history as part of load). The out-of-band sink is attached only
+//     AFTER load, so these must NOT be delivered to it (2.T1).
+//   FAKE_ACP_MODE=out_of_band — session/prompt behaves like normal mode, but
+//     AFTER resolving it sends one more `session/update` agent_message_chunk
+//     notification 200ms later. Models an agent that keeps working after its
+//     prompt ended, so the update arrives with no prompt in flight and must be
+//     routed to the out-of-band sink (2.T2).
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 
@@ -141,6 +150,17 @@ rl.on("line", (line) => {
       write({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such session" } });
     } else {
       recordMeta(msg.params);
+      // replay_on_load: replay the history as notifications BEFORE answering
+      // the load request — the sink is attached only after load returns.
+      if (mode === "replay_on_load") {
+        for (let i = 0; i < 2; i++) {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `replay ${i}` } } },
+          });
+        }
+      }
       write({ jsonrpc: "2.0", id: msg.id, result: { configOptions: modelConfigOptions() } });
     }
     return;
@@ -277,6 +297,17 @@ rl.on("line", (line) => {
           usage: { totalTokens: 12, inputTokens: 10, outputTokens: 2 },
         },
       });
+      // out_of_band: keep working after the prompt resolved — emit one more
+      // update with no prompt in flight.
+      if (mode === "out_of_band") {
+        setTimeout(() => {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "late autonomous chunk" } } },
+          });
+        }, 200);
+      }
     }, 20);
     return;
   }

@@ -329,7 +329,7 @@ pub fn normalize_session_update(
         let mut ev = extra;
         ev.id = event_id();
         ev.session_id = session_id.to_string();
-        ev.ts = iso_now();
+        ev.ts = crate::util::now_iso_8601();
         ev.provider = provider;
         ev.kind = kind;
         ev
@@ -512,16 +512,4 @@ fn map_available_command(command: &AvailableCommand) -> vst_types::Command {
         description: command.description.clone(),
         argument_hint,
     }
-}
-
-/// ISO8601 timestamp (the daemon stamps events itself; normalize only needs a
-/// well-formed value).
-fn iso_now() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs() as i64;
-    let millis = (now.subsec_millis()) as i64;
-    // Naive UTC ISO8601 with millis — sufficient for a stamped value.
-    format!("{secs}.{millis:03}Z")
 }

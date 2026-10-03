@@ -188,7 +188,8 @@ fn claude_adapter_prompt_filtering_and_multi_block() {
         serde_json::json!({ "type": "user", "uuid": "u3", "promptSource": "queued", "origin": { "kind": "human" }, "message": { "role": "user", "content": "queued prompt" } }),
         serde_json::json!({ "type": "user", "uuid": "x1", "promptSource": "system", "origin": { "kind": "task-notification" }, "message": { "role": "user", "content": "<task-notification>…" } }),
         serde_json::json!({ "type": "user", "uuid": "x2", "promptSource": "sdk", "origin": { "kind": "task-notification" }, "message": { "role": "user", "content": "<task-notification>…" } }),
-        serde_json::json!({ "type": "user", "uuid": "u4", "promptSource": "sdk", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "# Injected system prompt" }, { "type": "text", "text": "the real message" } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "u4", "promptSource": "sdk", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "the real message" }, { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "u5", "promptSource": "sdk", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." }, { "type": "text", "text": "the real message 2" } ] } }),
     ];
     write_claude_store(&projects, "-home-u--wt-proj", CHAT_ID, &lines);
 
@@ -206,9 +207,145 @@ fn claude_adapter_prompt_filtering_and_multi_block() {
             "typed prompt",
             "sdk prompt",
             "queued prompt",
-            "the real message"
+            "the real message",
+            "the real message 2"
         ]
     );
+}
+
+#[test]
+fn claude_first_block_used_for_user_text() {
+    // (a) — the user's real prompt is the first text block that does NOT start
+    // with the vst system-prompt marker, in BOTH block orders.
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let lines = vec![
+        serde_json::json!({ "type": "user", "uuid": "a", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." }, { "type": "text", "text": "the real prompt" } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "b", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "the real prompt 2" }, { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." } ] } }),
+    ];
+    write_claude_store(&projects, "-home-u--wt-proj", CHAT_ID, &lines);
+
+    let importer = create_claude_history_importer(Some(projects.display().to_string()));
+    let r = importer.import(&req(CHAT_ID, CWD));
+    let users: Vec<_> = r
+        .events
+        .iter()
+        .filter(|e| e.kind == vst_types::NormalizedEventKind::User)
+        .map(|e| e.text.clone().unwrap())
+        .collect();
+    assert_eq!(users, ["the real prompt", "the real prompt 2"]);
+}
+
+#[test]
+fn claude_autonomous_lines_start_own_groups() {
+    // (b) — task-notification / scheduled user lines start their OWN turn group
+    // (a Status marker, no user event), evaluated before the isMeta/harness skips.
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let lines = vec![
+        // Main prompt turn p1.
+        serde_json::json!({ "type": "user", "uuid": "p1", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "build it" }, { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." } ] } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_A", "name": "Read", "input": { "path": "a" } } ] } }),
+        serde_json::json!({ "type": "user", "message": { "role": "user", "content": [ { "type": "tool_result", "tool_use_id": "toolu_A", "content": "ok" } ] } }),
+        // Autonomous task-notification wake n1 (string content, origin.kind).
+        serde_json::json!({ "type": "user", "uuid": "n1", "origin": { "kind": "task-notification" }, "message": { "role": "user", "content": "<task-notification>…" } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_B", "name": "Read", "input": { "path": "b" } } ] } }),
+        // Autonomous scheduled wake n2 (isMeta + turnOrigin, array content).
+        serde_json::json!({ "type": "user", "uuid": "n2", "isMeta": true, "turnOrigin": "scheduled", "message": { "role": "user", "content": [ { "type": "text", "text": "scheduled check" } ] } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_C", "name": "Read", "input": { "path": "c" } } ] } }),
+        // Human status check q1.
+        serde_json::json!({ "type": "user", "uuid": "q1", "origin": { "kind": "human" }, "message": { "role": "user", "content": "status?" } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "text", "text": "all good" } ] } }),
+        // Repeated "yes" prompts.
+        serde_json::json!({ "type": "user", "uuid": "y1", "origin": { "kind": "human" }, "message": { "role": "user", "content": "yes" } }),
+        serde_json::json!({ "type": "user", "uuid": "y2", "origin": { "kind": "human" }, "message": { "role": "user", "content": "yes" } }),
+        // Compaction summary — yields nothing.
+        serde_json::json!({ "type": "user", "uuid": "cs", "isCompactSummary": true, "message": { "role": "user", "content": [ { "type": "text", "text": "[compacted history]" } ] } }),
+    ];
+    write_claude_store(&projects, "-home-u--wt-proj", CHAT_ID, &lines);
+
+    let importer = create_claude_history_importer(Some(projects.display().to_string()));
+    let r = importer.import(&req(CHAT_ID, CWD));
+
+    // Distinct non-null turn ids BEFORE the status check (q1): p1, n1, n2.
+    let mut seen: Vec<String> = Vec::new();
+    for e in &r.events {
+        if e.turn_id.is_none() {
+            continue;
+        }
+        if e.kind == vst_types::NormalizedEventKind::User && e.text.as_deref() == Some("status?") {
+            break;
+        }
+        if let Some(t) = &e.turn_id {
+            if !seen.contains(t) {
+                seen.push(t.clone());
+            }
+        }
+    }
+    assert_eq!(seen, ["p1", "n1", "n2"]);
+
+    // The autonomous groups start with a Status marker and hold the recovered
+    // tool work; neither has a User event.
+    let n1: Vec<_> = r
+        .events
+        .iter()
+        .filter(|e| e.turn_id.as_deref() == Some("n1"))
+        .collect();
+    assert_eq!(n1[0].kind, vst_types::NormalizedEventKind::Status);
+    assert_eq!(
+        n1.iter()
+            .filter(|e| e.kind == vst_types::NormalizedEventKind::ToolUse)
+            .map(|e| e.tool_id.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["toolu_B"]
+    );
+    assert!(!n1
+        .iter()
+        .any(|e| e.kind == vst_types::NormalizedEventKind::User));
+
+    let n2: Vec<_> = r
+        .events
+        .iter()
+        .filter(|e| e.turn_id.as_deref() == Some("n2"))
+        .collect();
+    assert_eq!(n2[0].kind, vst_types::NormalizedEventKind::Status);
+    assert_eq!(
+        n2.iter()
+            .filter(|e| e.kind == vst_types::NormalizedEventKind::ToolUse)
+            .map(|e| e.tool_id.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["toolu_C"]
+    );
+    assert!(!n2
+        .iter()
+        .any(|e| e.kind == vst_types::NormalizedEventKind::User));
+
+    // The main prompt turn uses the real prompt, not the system-prompt block.
+    let p1_user = r
+        .events
+        .iter()
+        .find(|e| {
+            e.turn_id.as_deref() == Some("p1") && e.kind == vst_types::NormalizedEventKind::User
+        })
+        .unwrap();
+    assert_eq!(p1_user.text.as_deref(), Some("build it"));
+
+    // Repeated human "yes" prompts are both imported (their own groups).
+    let yes: Vec<_> = r
+        .events
+        .iter()
+        .filter(|e| e.kind == vst_types::NormalizedEventKind::User)
+        .filter(|e| e.text.as_deref() == Some("yes"))
+        .collect();
+    assert_eq!(yes.len(), 2);
+
+    // Compaction summary yields nothing.
+    assert!(!r
+        .events
+        .iter()
+        .any(|e| e.text.as_deref() == Some("[compacted history]")));
 }
 
 #[test]
@@ -526,4 +663,112 @@ fn importer_registry_gate() {
 fn opencode_store_path_default() {
     let p = opencode_native_store_path();
     assert!(p.ends_with(".local/share/opencode/opencode.db"));
+}
+
+// ---------------------------------------------------------------------------
+// 3.T6 — end-to-end: claude importer → transcript store
+// ---------------------------------------------------------------------------
+
+fn store_ev(
+    kind: vst_types::NormalizedEventKind,
+    extra: serde_json::Value,
+    session_id: &str,
+) -> vst_types::NormalizedEvent {
+    let mut e: vst_types::NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": format!("e-{}", std::process::id()),
+        "sessionId": session_id,
+        "ts": "2026-01-01T00:00:00Z",
+        "provider": "claude",
+        "kind": serde_json::to_value(&kind).unwrap(),
+    }))
+    .unwrap();
+    if let Some(text) = extra.get("text") {
+        e.text = text.as_str().map(str::to_string);
+    }
+    if let Some(turn_id) = extra.get("turnId") {
+        e.turn_id = turn_id.as_str().map(str::to_string);
+    }
+    if let Some(tool_id) = extra.get("toolId") {
+        e.tool_id = tool_id.as_str().map(str::to_string);
+    }
+    e
+}
+
+/// End-to-end tty→json toggle: live log already holds turn-1 (prompt + toolu_A);
+/// the importer parses the native fixture from watermark 0; the store must not
+/// duplicate turn 1 (tool-id dedupe), import the recovered autonomous groups
+/// (toolu_B/toolu_C) once, and not duplicate the status-check turns.
+#[test]
+fn end_to_end_tty_json_toggle_imports_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+
+    // Live log: turn-1 prompt-only, toolu_A (the same tool id the native turn 1 has).
+    let mut store = vst_store::transcript::open_transcript_store(tmp.path(), SESSION_ID);
+    store.append(&mut store_ev(
+        vst_types::NormalizedEventKind::User,
+        serde_json::json!({"text": "build it", "turnId": "live-1"}),
+        SESSION_ID,
+    ));
+    store.append(&mut store_ev(
+        vst_types::NormalizedEventKind::ToolUse,
+        serde_json::json!({"toolId": "toolu_A", "turnId": "live-1"}),
+        SESSION_ID,
+    ));
+
+    // Native fixture from watermark 0 (same shape as 3.9).
+    let lines = vec![
+        serde_json::json!({ "type": "user", "uuid": "p1", "origin": { "kind": "human" }, "message": { "role": "user", "content": [ { "type": "text", "text": "build it" }, { "type": "text", "text": "# vibe-station Agent Skill\nYou are a coding agent." } ] } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_A", "name": "Read", "input": { "path": "a" } } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "n1", "origin": { "kind": "task-notification" }, "message": { "role": "user", "content": "<task-notification>…" } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_B", "name": "Read", "input": { "path": "b" } } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "n2", "isMeta": true, "turnOrigin": "scheduled", "message": { "role": "user", "content": [ { "type": "text", "text": "scheduled check" } ] } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "tool_use", "id": "toolu_C", "name": "Read", "input": { "path": "c" } } ] } }),
+        serde_json::json!({ "type": "user", "uuid": "q1", "origin": { "kind": "human" }, "message": { "role": "user", "content": "status?" } }),
+        serde_json::json!({ "type": "assistant", "message": { "content": [ { "type": "text", "text": "all good" } ] } }),
+    ];
+    write_claude_store(&projects, "-home-u--wt-proj", CHAT_ID, &lines);
+
+    let importer = create_claude_history_importer(Some(projects.display().to_string()));
+    let r = importer.import(&req(CHAT_ID, CWD));
+    let outcome = store.import_transaction(
+        r.events,
+        vst_store::transcript::ImportOptions {
+            cli: "claude".into(),
+            cursor: r.next_watermark,
+        },
+    );
+
+    // Re-importing the same native events is a no-op.
+    let again = importer.import(&req(CHAT_ID, CWD));
+    let outcome2 = store.import_transaction(
+        again.events,
+        vst_store::transcript::ImportOptions {
+            cli: "claude".into(),
+            cursor: again.next_watermark,
+        },
+    );
+    assert_eq!(outcome2.imported, 0);
+
+    // turn-1 (p1) skipped via tool-id dedupe; the autonomous groups (n1, n2) and
+    // the status-check turn (q1) are all new and imported.
+    assert_eq!(outcome.turns_imported, 3);
+    assert_eq!(outcome.turns_skipped, 1);
+
+    // The final log has toolu_A exactly once (the live one), toolu_B/toolu_C once.
+    let all = store.read_all();
+    let tool_ids: Vec<_> = all
+        .iter()
+        .filter(|e| e.kind == vst_types::NormalizedEventKind::ToolUse)
+        .filter_map(|e| e.tool_id.clone())
+        .collect();
+    assert_eq!(tool_ids, ["toolu_A", "toolu_B", "toolu_C"]);
+    // The status-check turn is present exactly once.
+    let status_checks = all
+        .iter()
+        .filter(|e| e.kind == vst_types::NormalizedEventKind::User)
+        .filter(|e| e.text.as_deref() == Some("status?"))
+        .count();
+    assert_eq!(status_checks, 1);
 }

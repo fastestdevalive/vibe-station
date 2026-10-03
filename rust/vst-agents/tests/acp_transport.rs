@@ -471,6 +471,113 @@ async fn new_and_load_session_report_current_model_and_list() {
     conn.dispose().await;
 }
 
+// --- Phase 2 — out-of-band (autonomous) update routing ---
+
+/// `session/load` replays the whole history as `session/update` notifications.
+/// The out-of-band sink is attached only AFTER load completes, so a late sink
+/// must receive ZERO of those replayed updates (Decision 2 ordering trap).
+#[tokio::test]
+async fn replay_on_load_is_not_delivered_to_late_sink() {
+    let conn = make_connection("replay_on_load");
+    conn.initialize().await.expect("initialize");
+    // Load sends 2 replay notifications BEFORE answering; the sink is not yet
+    // attached, so they must be dropped by the notif handler.
+    conn.load_session(&PathBuf::from("/tmp"), "prior", None)
+        .await
+        .expect("load_session");
+
+    // Attach the sink only now, after load has fully returned.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SessionUpdate>();
+    conn.set_out_of_band_sink(Some(tx));
+
+    let got = tokio::time::timeout(Duration::from_millis(400), rx.recv()).await;
+    assert!(
+        got.is_err() || matches!(got, Ok(None)),
+        "replay notifications must not reach a late out-of-band sink, got {got:?}"
+    );
+    conn.dispose().await;
+}
+
+/// An update that arrives after its prompt resolved (agent kept working) must
+/// reach the out-of-band sink — exactly one late chunk — while the prompt's
+/// own `updates` receiver must NOT see it. A connection with no sink attached
+/// drops the late update without error.
+#[tokio::test]
+async fn out_of_band_update_after_prompt_reaches_sink() {
+    let conn = make_connection("out_of_band");
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SessionUpdate>();
+    conn.set_out_of_band_sink(Some(tx));
+
+    let turn = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("hi"))],
+    );
+    let mut updates = turn.updates;
+    let stop = turn
+        .result
+        .await
+        .expect("result resolves")
+        .expect("prompt succeeds");
+    assert_eq!(stop.stop_reason, StopReason::EndTurn);
+
+    // The prompt's own updates receiver sees only the in-band chunk, never the
+    // late autonomous one. (Once the result resolves the sink is cleared and
+    // the channel closes, so recv() returns None — no indefinite wait.)
+    let mut prompt_seen = Vec::new();
+    while let Ok(Some(u)) = tokio::time::timeout(Duration::from_secs(5), updates.recv()).await {
+        prompt_seen.push(u);
+    }
+    assert!(
+        prompt_seen.iter().all(|u| !matches!(
+            u,
+            SessionUpdate::AgentMessageChunk(c)
+                if matches!(&c.content, ContentBlock::Text(t) if t.text.contains("late autonomous chunk"))
+        )),
+        "the late out-of-band chunk must not land on the prompt's own updates receiver: {prompt_seen:?}"
+    );
+
+    // The OOB receiver gets exactly the one late chunk within 2s.
+    let mut oob = Vec::new();
+    while let Ok(Some(u)) = tokio::time::timeout(Duration::from_millis(2000), rx.recv()).await {
+        oob.push(u);
+    }
+    assert_eq!(
+        oob.len(),
+        1,
+        "exactly one late update should reach the OOB sink, got {oob:?}"
+    );
+    assert!(matches!(&oob[0], SessionUpdate::AgentMessageChunk(_)));
+
+    conn.dispose().await;
+
+    // A connection with NO sink attached drops the late update without error:
+    // the prompt still resolves normally.
+    let conn2 = make_connection("out_of_band");
+    conn2.initialize().await.expect("initialize");
+    let session_id2 = conn2
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+    let turn2 = conn2.send_prompt(
+        &session_id2,
+        vec![ContentBlock::Text(TextContent::new("hi"))],
+    );
+    let stop2 = turn2
+        .result
+        .await
+        .expect("result resolves")
+        .expect("prompt without an OOB sink succeeds");
+    assert_eq!(stop2.stop_reason, StopReason::EndTurn);
+    conn2.dispose().await;
+}
+
 #[cfg(target_os = "linux")]
 fn proc_running(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))

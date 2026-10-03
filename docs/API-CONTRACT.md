@@ -215,7 +215,7 @@ Backpressure: if the server's WS write buffer exceeds ~1 MB queued (slow consume
 | `file:unwatch` | `{ worktreeId, path }` | |
 | `tree:watch` | `{ worktreeId, path? }` | Watch tree under `path` (default = worktree root). |
 | `tree:unwatch` | `{ worktreeId, path? }` | |
-| `chat:open` | `{ sessionId }` | Subscribe to a JSON session's normalized event stream → triggers a `chat:replay` + initial `session:meta`. |
+| `chat:open` | `{ sessionId, sinceSeq? }` | Subscribe to a JSON session's normalized event stream → triggers a `chat:replay` + initial `session:meta`. |
 | `chat:close` | `{ sessionId }` | Unsubscribe from the JSON event stream. |
 | `ping` | — | Server replies `pong`. |
 
@@ -231,7 +231,7 @@ Backpressure: if the server's WS write buffer exceeds ~1 MB queued (slow consume
 | `session:resumed` | `{ sessionId, restoredFromHistory }` | Emitted after `POST /sessions/:id/resume`. |
 | `session:deleted` | `{ sessionId }` | |
 | `session:error` | `{ sessionId, message }` | Attach / stream failure. |
-| `chat:replay` | `{ sessionId, events: NormalizedEvent[] }` | Full JSON transcript on `chat:open`. |
+| `chat:replay` | `{ sessionId, events: NormalizedEvent[], oldestSeq?, hasMore?, nextSeq? }` | Tail frame (`hasMore`/`oldestSeq` set) on `chat:open`, or a delta (≤200 rows, no `hasMore`) when `sinceSeq` was given; an overflowing delta is answered with a tail frame. |
 | `session:message` | `{ sessionId, event: NormalizedEvent }` | One live normalized JSON-chat event (user/thinking/text/tool_use/tool_result/result/error). |
 | `session:meta` | `{ sessionId, meta: SessionMeta }` | JSON-chat usage/model/turn-state/queueDepth update. Also fires on a `commands_update` (and only on that event kind, including out-of-band before turn 1) so the composer's skill catalog stays current. |
 

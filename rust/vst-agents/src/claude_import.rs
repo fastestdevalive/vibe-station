@@ -27,6 +27,26 @@ const SKIP_TYPES: &[&str] = &[
 ];
 const DIFF_TOOL_NAMES: &[&str] = &["Edit", "MultiEdit", "Write"];
 
+/// The marker that heads the vst L1 system prompt block injected into the
+/// native user message. The importer must sign the user's REAL prompt (the
+/// first text block that does NOT start with this marker), not the injected
+/// system-prompt block, so a tty→json toggle matches the live log's user text.
+const SYSTEM_PROMPT_MARKER: &str = "# vibe-station Agent Skill";
+
+/// The status marker emitted as a `Status` event at the start of each imported
+/// autonomous turn group (task-notification / scheduled wake-up).
+const AUTONOMOUS_STATUS_TEXT: &str = "Agent resumed work on its own";
+
+/// Pick the user's real prompt text from a user message's text blocks: the
+/// first block that does not start with the vst system-prompt marker, else the
+/// first block. Handles both `[real, system]` and `[system, real]` orders.
+fn user_prompt_text(text_parts: &[String]) -> &String {
+    text_parts
+        .iter()
+        .find(|t| !t.starts_with(SYSTEM_PROMPT_MARKER))
+        .unwrap_or(&text_parts[0])
+}
+
 /// `input.file_path ?? input.path` — some claude tool-input shapes use
 /// `path` instead of `file_path`; check both in that order.
 fn file_path_from(obj: &Map<String, Value>) -> Option<&str> {
@@ -132,9 +152,8 @@ pub fn parse_claude_native_history(
         if ty != "user" && ty != "assistant" {
             continue;
         }
-        if d.get("isMeta").and_then(|v| v.as_bool()) == Some(true)
-            || d.get("isSidechain").and_then(|v| v.as_bool()) == Some(true)
-        {
+        // Sidechain lines are never imported.
+        if d.get("isSidechain").and_then(|v| v.as_bool()) == Some(true) {
             continue;
         }
         let ts = d
@@ -149,6 +168,45 @@ pub fn parse_claude_native_history(
         let content = msg.get("content").cloned();
 
         if ty == "user" {
+            // Autonomous-line detection MUST run BEFORE the `isMeta` skip and
+            // the harness gate: a task-notification / scheduled / auto-continuation
+            // line starts its OWN turn group (Decision 4b), emitting only a
+            // Status marker, not a user event.
+            let turn_origin = d.get("turnOrigin").and_then(|t| t.as_str());
+            let origin_kind_str = d
+                .get("origin")
+                .and_then(|o| o.get("kind"))
+                .and_then(|k| k.as_str());
+            let autonomous = matches!(
+                turn_origin,
+                Some("task_notification" | "scheduled" | "auto_continuation")
+            ) || matches!(
+                origin_kind_str,
+                Some("task-notification" | "auto-continuation")
+            );
+            if autonomous {
+                current_turn_id = d
+                    .get("uuid")
+                    .and_then(|u| u.as_str())
+                    .map(|s| s.to_string())
+                    .or_else(|| Some(new_uuid_v4()));
+                let mut extra = Map::new();
+                extra.insert("text".into(), serde_json::json!(AUTONOMOUS_STATUS_TEXT));
+                events.push(mk_event(
+                    session_id,
+                    &ts,
+                    &current_turn_id,
+                    NormalizedEventKind::Status,
+                    extra,
+                ));
+                continue;
+            }
+            // Meta / compaction-summary user lines are dropped (no group).
+            if d.get("isMeta").and_then(|v| v.as_bool()) == Some(true)
+                || d.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
+            {
+                continue;
+            }
             // Harness-injected gate BEFORE branching.
             let origin_kind = d.get("origin").and_then(|o| o.get("kind")).cloned();
             let harness_injected = d.get("promptSource").and_then(|p| p.as_str()) == Some("system")
@@ -202,7 +260,7 @@ pub fn parse_claude_native_history(
                         extra.insert("role".into(), serde_json::json!("user"));
                         extra.insert(
                             "text".into(),
-                            Value::String(text_parts.last().unwrap().clone()),
+                            Value::String(user_prompt_text(&text_parts).clone()),
                         );
                         events.push(mk_event(
                             session_id,
@@ -334,6 +392,11 @@ pub fn parse_claude_native_history(
             }
         } else {
             // assistant
+            if d.get("isMeta").and_then(|v| v.as_bool()) == Some(true)
+                || d.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true)
+            {
+                continue;
+            }
             if let Some(Value::Array(blocks)) = content {
                 for block in &blocks {
                     let b = match block {

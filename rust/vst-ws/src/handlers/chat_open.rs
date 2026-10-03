@@ -20,6 +20,7 @@ use vst_agents::json_agent_chat::{
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
+use vst_store::transcript::{SincePage, TranscriptPage};
 use vst_store::StoreHandle;
 use vst_types::domain::LifecycleState;
 use vst_types::events::Broadcaster;
@@ -150,24 +151,114 @@ fn send_snapshot(
     session_id: &str,
     since_seq: Option<i64>,
 ) {
-    if let Some(since) = since_seq {
+    let msg = if let Some(since) = since_seq {
         let page = read_session_since(ctx, registry, since);
-        conn.send(ServerMessage::ChatReplay {
-            session_id: session_id.to_string(),
-            events: page.events,
-            oldest_seq: None,
-            has_more: None,
-            next_seq: page.next_seq,
-        });
+        since_or_tail_frame(session_id, page, || {
+            read_session_tail(ctx, registry, TAIL_TURNS)
+        })
     } else {
         let page = read_session_tail(ctx, registry, TAIL_TURNS);
-        conn.send(ServerMessage::ChatReplay {
+        ServerMessage::ChatReplay {
             session_id: session_id.to_string(),
             events: page.events,
             oldest_seq: page.oldest_seq,
             has_more: Some(page.has_more),
             next_seq: None,
+        }
+    };
+    conn.send(msg);
+}
+
+/// A reconnect delta that fits in the bounded window is served as a delta
+/// frame; one that overflows (`page.has_more`) is served as the normal tail
+/// frame so the client's existing gap detection drops its stale cache instead
+/// of silently paging forever (Decision 5).
+fn since_or_tail_frame(
+    session_id: &str,
+    page: SincePage,
+    tail: impl FnOnce() -> TranscriptPage,
+) -> ServerMessage {
+    if page.has_more {
+        let tail = tail();
+        ServerMessage::ChatReplay {
+            session_id: session_id.to_string(),
+            events: tail.events,
+            oldest_seq: tail.oldest_seq,
+            has_more: Some(tail.has_more),
+            next_seq: None,
+        }
+    } else {
+        ServerMessage::ChatReplay {
+            session_id: session_id.to_string(),
+            events: page.events,
+            oldest_seq: None,
+            has_more: None,
+            next_seq: page.next_seq,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vst_types::ws::ServerMessage;
+
+    fn since_page(has_more: bool) -> SincePage {
+        SincePage {
+            events: vec![],
+            next_seq: Some(123),
+            has_more,
+        }
+    }
+
+    fn tail_page() -> TranscriptPage {
+        TranscriptPage {
+            events: vec![],
+            oldest_seq: Some(50),
+            has_more: true,
+        }
+    }
+
+    #[test]
+    fn overflowing_since_page_answers_with_tail_frame() {
+        let msg = since_or_tail_frame("s1", since_page(true), tail_page);
+        match msg {
+            ServerMessage::ChatReplay {
+                session_id,
+                has_more,
+                oldest_seq,
+                next_seq,
+                ..
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(has_more, Some(true));
+                assert_eq!(oldest_seq, Some(50));
+                assert_eq!(next_seq, None);
+            }
+            other => panic!("expected ChatReplay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fitting_since_page_stays_delta() {
+        let msg = since_or_tail_frame("s1", since_page(false), || {
+            panic!("tail closure must not be called for a fitting delta")
         });
+        match msg {
+            ServerMessage::ChatReplay {
+                session_id,
+                has_more,
+                oldest_seq,
+                next_seq,
+                ..
+            } => {
+                assert_eq!(session_id, "s1");
+                assert_eq!(has_more, None);
+                assert_eq!(oldest_seq, None);
+                assert_eq!(next_seq, Some(123));
+            }
+            other => panic!("expected ChatReplay, got {other:?}"),
+        }
     }
 }
 

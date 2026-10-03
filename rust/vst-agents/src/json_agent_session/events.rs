@@ -52,37 +52,7 @@ impl JsonAgentSession {
 
         // Update usage only for turns that actually made a model call (hasRealUsage gate).
         if has_real_usage(ev.usage.as_ref()) {
-            let mut usage = ev.usage.clone();
-            let mut s = self.0.state.lock().unwrap();
-            if let (Some(new), Some(old)) = (usage.as_mut(), s.usage.as_ref()) {
-                if new.context_window.is_none() && old.context_window.is_some() {
-                    if old.total_tokens > 0 {
-                        // A real mid-turn window snapshot exists. The
-                        // end-of-turn `totalTokens` is accumulated across ALL
-                        // API calls in the turn (inflated: 500k on a 50k
-                        // context reads "250%"). Keep the window fill from
-                        // the snapshot and copy only the input/output/cache
-                        // breakdown.
-                        new.total_tokens = old.total_tokens;
-                        new.context_window = old.context_window;
-                        new.cost_usd = new.cost_usd.or(old.cost_usd);
-                    }
-                    // old.total_tokens == 0 (compaction/zero snapshot): don't
-                    // pair the end-of-turn total with a window it wasn't
-                    // measured against — skip window inheritance entirely.
-                } else {
-                    // No window conflict — safely inherit window/cost from the
-                    // stored snapshot.
-                    new.context_window = new.context_window.or(old.context_window);
-                    new.cost_usd = new.cost_usd.or(old.cost_usd);
-                }
-            }
-            s.usage = usage.clone();
-            // The merged usage (with context_window/cost preserved) must be
-            // what gets persisted and broadcast — otherwise the restart
-            // paths (build_meta_from_transcript, TranscriptStore::last_meta)
-            // rebuild from the unmerged event and lose window/cost.
-            ev.usage = usage;
+            self.merge_usage_into_state(ev);
         }
 
         // commands_update: full-replace (never merge).
@@ -99,8 +69,55 @@ impl JsonAgentSession {
         self.emit_meta();
     }
 
+    /// Merge a usage-bearing event into `state.usage`, preserving the
+    /// context-window/cost snapshot across the end-of-turn merge. Shared by
+    /// `handle_event` (in-band) and `ingest_out_of_band_update` (out-of-band).
+    /// Mutates `ev.usage` so the merged value is what gets persisted/broadcast.
+    pub(super) fn merge_usage_into_state(&self, ev: &mut NormalizedEvent) {
+        let mut usage = ev.usage.clone();
+        let mut s = self.0.state.lock().unwrap();
+        if let (Some(new), Some(old)) = (usage.as_mut(), s.usage.as_ref()) {
+            if new.context_window.is_none() && old.context_window.is_some() {
+                if old.total_tokens > 0 {
+                    // A real mid-turn window snapshot exists. The
+                    // end-of-turn `totalTokens` is accumulated across ALL
+                    // API calls in the turn (inflated: 500k on a 50k
+                    // context reads "250%"). Keep the window fill from
+                    // the snapshot and copy only the input/output/cache
+                    // breakdown.
+                    new.total_tokens = old.total_tokens;
+                    new.context_window = old.context_window;
+                    new.cost_usd = new.cost_usd.or(old.cost_usd);
+                }
+                // old.total_tokens == 0 (compaction/zero snapshot): don't
+                // pair the end-of-turn total with a window it wasn't
+                // measured against — skip window inheritance entirely.
+            } else {
+                // No window conflict — safely inherit window/cost from the
+                // stored snapshot.
+                new.context_window = new.context_window.or(old.context_window);
+                new.cost_usd = new.cost_usd.or(old.cost_usd);
+            }
+        }
+        s.usage = usage.clone();
+        // The merged usage (with context_window/cost preserved) must be
+        // what gets persisted and broadcast — otherwise the restart
+        // paths (build_meta_from_transcript, TranscriptStore::last_meta)
+        // rebuild from the unmerged event and lose window/cost.
+        ev.usage = usage;
+    }
+
     /// Handle an out-of-band (subagent task-notification) event. Does NOT call
     /// `update_turn_state` — no lifecycle transitions for notifications.
+    ///
+    /// Content kinds (Text/Thinking/ToolUse/ToolResult/Status-from-Plan) land
+    /// here; usage and commands updates are classified in
+    /// `ingest_out_of_band_update` (Decision 3) and never reach this method.
+    ///
+    /// **Deadlock trap:** `new_event` locks `self.0.state`, so the burst-id
+    /// decision (`is_new_burst` + the turn id) is computed under the existing
+    /// lock block, the lock is dropped, and ONLY THEN is the burst-start
+    /// status event built and persisted.
     pub fn handle_out_of_band_event(&self, mut ev: NormalizedEvent) {
         if self.is_released() {
             return;
@@ -110,29 +127,33 @@ impl JsonAgentSession {
         // within OUT_OF_BAND_BURST_GAP_MS of each other. A real turn starting
         // clears the id (in run_one_turn).
         let now = now_ms();
-        {
+        let (is_new_burst, turn_id) = {
             let mut s = self.0.state.lock().unwrap();
-            if s.out_of_band_turn_id.is_none()
-                || now.saturating_sub(s.out_of_band_last_at_ms) > super::OUT_OF_BAND_BURST_GAP_MS
-            {
+            let new_burst = s.out_of_band_turn_id.is_none()
+                || now.saturating_sub(s.out_of_band_last_at_ms) > super::OUT_OF_BAND_BURST_GAP_MS;
+            if new_burst {
                 s.out_of_band_turn_id = Some(format!("notif-{}", crate::util::new_uuid_v4()));
             }
             s.out_of_band_last_at_ms = now;
-            ev.turn_id = s.out_of_band_turn_id.clone();
+            (new_burst, s.out_of_band_turn_id.clone())
+        };
+
+        // First event of a new burst: persist + emit a visible Status marker so
+        // the autonomous block is identifiable in Rich Chat. Built AFTER the
+        // lock block above (new_event takes the state lock).
+        if is_new_burst {
+            let mut status_ev = NormalizedEvent::default();
+            status_ev.turn_id = turn_id.clone();
+            status_ev.text = Some("Agent resumed work on its own".to_string());
+            let mut status_ev = self.new_event(NormalizedEventKind::Status, &mut status_ev);
+            self.persist_event(&mut status_ev);
+            self.0.stream.emit_message(&status_ev);
         }
 
+        ev.turn_id = turn_id;
         cap_tool_result_content(&mut ev);
         self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
-
-        // commands_update can arrive out-of-band — capture + broadcast.
-        if ev.kind == NormalizedEventKind::CommandsUpdate {
-            {
-                let mut s = self.0.state.lock().unwrap();
-                s.commands = ev.commands.clone();
-            }
-            self.emit_meta();
-        }
     }
 
     /// Create a new `NormalizedEvent` stamped with the session's id, cli, and

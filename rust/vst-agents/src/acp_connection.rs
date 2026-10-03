@@ -27,8 +27,9 @@
 //! - `AcpAgentConfig` (the spawn transport) has no `cwd` field, so the child
 //!   is spawned in the daemon's working directory. `spec.cwd` is still used
 //!   for the ACP `fs/*` path scoping. See the report for this known gap.
-//! - The `outOfBandSink` (updates outside an active turn) is not surfaced by
-//!   the frozen trait and is not ported.
+//! - The `outOfBandSink` (updates outside an active turn) is surfaced via the
+//!   inherent `set_out_of_band_sink` method (the frozen trait doesn't expose
+//!   it); the session layer attaches it after `session/load` completes.
 //! - `steer()`/`supports_steering` are part of the trait (added by the 04c
 //!   amendment); the `_session/steering` request is a custom JSON-RPC method,
 //!   implemented here via the crate's derive macros (not a built-in schema
@@ -133,6 +134,10 @@ struct SteeringResponse {
 struct Shared {
     /// Routes `session/update` notifications to the current in-flight prompt.
     active_update: Mutex<Option<mpsc::UnboundedSender<SessionUpdate>>>,
+    /// Routes `session/update` notifications that arrive when NO prompt is in
+    /// flight (autonomous/out-of-band work) to the session layer, which
+    /// persists + broadcasts them. Cleared on dispose.
+    out_of_band: Mutex<Option<mpsc::UnboundedSender<SessionUpdate>>>,
     session_id: Mutex<Option<String>>,
     load_session_supported: AtomicBool,
     /// True iff the `initialize` response's `_meta.steering.supported === true`.
@@ -156,6 +161,7 @@ impl Shared {
     fn new() -> Self {
         Self {
             active_update: Mutex::new(None),
+            out_of_band: Mutex::new(None),
             session_id: Mutex::new(None),
             load_session_supported: AtomicBool::new(false),
             steering_supported: AtomicBool::new(false),
@@ -254,6 +260,15 @@ impl AcpConnection {
 
     fn send(&self, cmd: Command) -> bool {
         self.0.cmd_tx.send(cmd).is_ok()
+    }
+
+    /// Set (or clear) the out-of-band sink — the receiver of `session/update`
+    /// notifications that arrive when no prompt is in flight (autonomous /
+    /// subagent work). The session layer attaches it AFTER `session/load`
+    /// completes, because `session/load` replays the whole history as
+    /// `session/update` notifications which must not reach this sink.
+    pub fn set_out_of_band_sink(&self, tx: Option<mpsc::UnboundedSender<SessionUpdate>>) {
+        *self.0.shared.out_of_band.lock().unwrap() = tx;
     }
 }
 
@@ -424,6 +439,7 @@ impl AcpTransport for AcpConnection {
         }
         // Clear any active sink so late notifications are dropped.
         self.0.shared.active_update.lock().unwrap().take();
+        self.0.shared.out_of_band.lock().unwrap().take();
         // Ask the actor to stop its loop, which lets the `connect_with` closure
         // return, closing the connection and terminating the child process.
         let (tx, _rx) = oneshot::channel::<()>();
@@ -479,6 +495,19 @@ fn spawn_actor(
             if let Some(tx) = guard.as_ref() {
                 *notif_shared.last_activity.lock().unwrap() = Instant::now();
                 let _ = tx.send(notification.update);
+                return Ok(());
+            }
+            // No prompt in flight. If an out-of-band sink is set and the
+            // notification names the CURRENT ACP session, forward the update so
+            // the session layer can persist + broadcast autonomous work. Release
+            // the `active_update` guard before touching `out_of_band` (lock order).
+            drop(guard);
+            if let Some(tx) = notif_shared.out_of_band.lock().unwrap().as_ref() {
+                let current = notif_shared.session_id.lock().unwrap().clone();
+                let nid = notification.session_id.to_string();
+                if current.as_deref() == Some(nid.as_str()) {
+                    let _ = tx.send(notification.update);
+                }
             }
             Ok(())
         };
@@ -660,6 +689,7 @@ fn spawn_actor(
         // any late commands fail fast.
         shared_after.disposed.store(true, Ordering::SeqCst);
         shared_after.active_update.lock().unwrap().take();
+        shared_after.out_of_band.lock().unwrap().take();
 
         // `AcpAgent` has already SIGKILLed the child's process group. Finish
         // the job for descendants that left it (snapshotted at close).

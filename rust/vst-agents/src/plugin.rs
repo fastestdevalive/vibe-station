@@ -453,31 +453,57 @@ pub trait AgentPlugin: Send + Sync {
     }
 }
 
-/// A short ISO8601-ish timestamp for event `ts`/`id` fields. Exact values are
-/// not part of the wire contract (the TS stamps `new Date().toISOString()`),
-/// so a monotonic system-clock string is sufficient for the parser tests.
-pub(crate) fn now_iso() -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    format!("{millis}")
-}
-
 /// Build a [`vst_types::NormalizedEvent`] with the shared stamping fields set,
-/// ready for the per-plugin parsers to fill in kind-specific fields.
+/// ready for the per-plugin parsers to fill in kind-specific fields. `ts` is
+/// ISO-8601 via [`crate::util::now_iso_8601`]; `id` is a fresh uuid v4 via
+/// [`crate::util::new_uuid_v4`] so same-millisecond events never collide.
 pub(crate) fn base_event(
     session_id: &str,
     provider: vst_types::NormalizedEventProvider,
     kind: vst_types::NormalizedEventKind,
 ) -> vst_types::NormalizedEvent {
-    let ts = now_iso();
     vst_types::NormalizedEvent {
-        id: ts.clone(),
+        id: crate::util::new_uuid_v4(),
         session_id: session_id.to_string(),
-        ts,
+        ts: crate::util::now_iso_8601(),
         provider,
         kind,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base_event;
+    use std::collections::HashSet;
+    use vst_types::{NormalizedEventKind, NormalizedEventProvider};
+
+    #[test]
+    fn base_event_ids_unique_for_same_ms() {
+        let mut ids = HashSet::new();
+        for _ in 0..1000 {
+            let ev = base_event(
+                "s",
+                NormalizedEventProvider::Claude,
+                NormalizedEventKind::Text,
+            );
+            assert!(ids.insert(ev.id.clone()), "duplicate id: {}", ev.id);
+            assert_ne!(ev.id, ev.ts, "id must not equal ts");
+        }
+    }
+
+    #[test]
+    fn base_event_ts_is_iso8601() {
+        let ev = base_event(
+            "s",
+            NormalizedEventProvider::Claude,
+            NormalizedEventKind::Text,
+        );
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&ev.ts).is_ok(),
+            "ts not ISO8601: {}",
+            ev.ts
+        );
+        assert!(ev.ts.ends_with('Z'), "ts must end with Z: {}", ev.ts);
     }
 }

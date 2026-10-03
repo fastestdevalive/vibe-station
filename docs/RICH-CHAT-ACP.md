@@ -109,6 +109,45 @@ sequenceDiagram
     J->>J: backfill via native-history importer (claude/opencode)
 ```
 
+### 3.1 History across the toggle (native import)
+
+On terminal → json the daemon imports native-transcript turns Rich Chat does
+not have yet (claude/opencode/codex importers; cursor/agy have none). Rules:
+
+- User text is the first text block that is not the vst system-prompt marker
+  (`# vibe-station Agent Skill`) — claude appends the system prompt as a 2nd
+  block of the first prompt.
+- Harness-injected autonomous user lines (`turnOrigin` task_notification /
+  scheduled, `origin.kind: task-notification`) start their own turn group (with
+  a status row); compaction summaries are skipped.
+- Skip rule (the import is idempotent and safe to re-run). A group containing
+  tool use is skipped iff its turn id or any of its tool-use ids already exists.
+  A tool-less group is skipped iff its turn id exists or its content fingerprint
+  (`u:` + user text, or `a:` + concatenated assistant text for user-less
+  autonomous groups) matches an existing turn; turns with a cancelled/silent
+  user row never contribute a fingerprint, so a re-typed prompt is imported.
+  Identical text-only groups therefore dedupe.
+- Known limitation: live out-of-band bursts split on a 30 s gap while the importer
+  splits per autonomous native line, so two wake-ups within 30 s can import a
+  duplicate text-only group.
+
+### 3.2 Out-of-turn updates
+
+Claude Code can keep working after a prompt resolves (task-notification and
+scheduled wake-ups). Those `session/update`s arrive with no prompt in flight; the
+connection routes them to an out-of-band sink (attached only after
+`session/load`, so the adapter's history replay is not persisted again). They are
+persisted under synthetic `notif-*` turns (a status row opens each burst) and
+broadcast like normal events. Usage and command-list updates only touch session
+meta. Lifecycle state is deliberately **not** changed by these updates.
+
+### 3.3 Replay on open / reconnect
+
+`chat:open` with `sinceSeq` returns a delta (max 200 rows). If the delta
+overflows, the daemon answers with the normal tail frame instead, and the client
+drops its stale cache via gap detection; on WS reconnect the client re-arms gap
+detection from its last seen seq.
+
 ## 4. Context delivery at spawn
 
 Three layers compose the system prompt: **L1** base `vst` instructions
