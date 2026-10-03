@@ -35,6 +35,34 @@ pub type CloudflaredResult<T> = Result<T, CloudflaredError>;
 const TUNNEL_URL_RE: &str = r"https://[a-z0-9\-]+\.trycloudflare\.com";
 const SPAWN_TIMEOUT_MS: u64 = 10_000;
 
+/// Serialises everything that spawns or kills cloudflared processes
+/// (`enable`, `disable`, `sweep_orphans`, `restore_on_boot`). The boot-time
+/// orphan sweep kills *every* cloudflared on the machine, so it must never
+/// interleave with an `enable` — otherwise a tunnel the user turns on while the
+/// (post-bind, background) restore is still sweeping would be killed.
+/// `shutdown_kill` does not take it (it must not wait out a 10s `enable`);
+/// shutdown instead aborts and awaits the boot restore task first.
+static TUNNEL_OP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Kills a freshly spawned child if the `enable` future is dropped (e.g. the
+/// boot task is aborted mid-scrape on shutdown) or fails before the tunnel is
+/// recorded, so we never leak an untracked cloudflared. Disarmed on success.
+struct SpawnGuard(Option<tokio::process::Child>);
+
+impl SpawnGuard {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for SpawnGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CloudflaredState {
     pub enabled: bool,
@@ -48,6 +76,11 @@ pub struct CloudflaredState {
 /// named by `VST_CLOUDFLARED_BIN`) as a long-lived background process and
 /// scrapes the public URL from its output within 10s.
 pub async fn enable(port: u16, store: &StoreHandle) -> CloudflaredResult<String> {
+    let _op = TUNNEL_OP.lock().await;
+    enable_locked(port, store).await
+}
+
+async fn enable_locked(port: u16, store: &StoreHandle) -> CloudflaredResult<String> {
     // Check if already enabled.
     let current = store.get_tunnel_state().await;
     if current.enabled {
@@ -68,6 +101,7 @@ pub async fn enable(port: u16, store: &StoreHandle) -> CloudflaredResult<String>
     let pid = child.id();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let mut guard = SpawnGuard(Some(child));
 
     // Scrape URL from output within SPAWN_TIMEOUT_MS.
     let url_re =
@@ -118,6 +152,9 @@ pub async fn enable(port: u16, store: &StoreHandle) -> CloudflaredResult<String>
     .flatten()
     .ok_or(CloudflaredError::Timeout)?;
 
+    // `set_tunnel_state` below is the last await that could be cancelled; a
+    // drop between the scrape and it would leave an untracked process, so
+    // keep the guard armed until the state is recorded.
     store
         .set_tunnel_state(TunnelStateRow {
             enabled: true,
@@ -132,12 +169,14 @@ pub async fn enable(port: u16, store: &StoreHandle) -> CloudflaredResult<String>
             port: Some(port as i64),
         })
         .await;
+    guard.disarm();
 
     Ok(url)
 }
 
 /// Disable the cloudflared tunnel, killing the process if any.
 pub async fn disable(store: &StoreHandle) -> CloudflaredResult<()> {
+    let _op = TUNNEL_OP.lock().await;
     let state = store.get_tunnel_state().await;
     if let Some(pid) = state.current_pid {
         let _ = kill_pid(pid as u32, false).await;
@@ -168,14 +207,43 @@ pub async fn shutdown_kill(store: &StoreHandle) -> CloudflaredResult<()> {
 
 /// Sweep orphaned cloudflared processes via pgrep.
 pub async fn sweep_orphans() -> CloudflaredResult<()> {
-    let output = tokio::task::spawn_blocking(|| {
-        std::process::Command::new("pgrep")
-            .args(["-x", "cloudflared"])
-            .output()
-    })
-    .await
-    .map_err(|e| CloudflaredError::Process(e.to_string()))?
-    .map_err(|e| CloudflaredError::Process(e.to_string()))?;
+    let _op = TUNNEL_OP.lock().await;
+    sweep_orphans_locked().await
+}
+
+/// Boot-time restore: sweep orphans, then re-enable the tunnel if the store
+/// says it was `enabled`. Sweep and enable run under ONE hold of the tunnel
+/// lock, so an API `enable`/`disable` issued while this runs (it is spawned
+/// after the listener binds) waits for it instead of racing the sweep.
+/// Errors are logged, never returned — boot must not fail on tunnel trouble.
+pub async fn restore_on_boot(port: u16, store: &StoreHandle) {
+    let _op = TUNNEL_OP.lock().await;
+    if let Err(e) = sweep_orphans_locked().await {
+        tracing::warn!("[vst] cloudflared sweep_orphans failed (non-fatal): {e}");
+    }
+    match get_state(store).await {
+        Ok(state) if state.enabled => {
+            tracing::info!("[vst] cloudflared was enabled — restoring tunnel on port {port}");
+            match enable_locked(port, store).await {
+                Ok(url) => tracing::info!("[vst] cloudflared tunnel restored: {url}"),
+                Err(e) => tracing::warn!("[vst] cloudflared restore failed (non-fatal): {e}"),
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("[vst] cloudflared get_state failed (non-fatal): {e}"),
+    }
+}
+
+async fn sweep_orphans_locked() -> CloudflaredResult<()> {
+    // `kill_on_drop`: the sweep runs as an abortable post-bind task, and a
+    // `spawn_blocking` pgrep can't be cancelled (runtime shutdown would wait
+    // for it); an async child is killed when the aborted future drops.
+    let output = tokio::process::Command::new("pgrep")
+        .args(["-x", "cloudflared"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| CloudflaredError::Process(e.to_string()))?;
 
     if !output.status.success() {
         return Ok(()); // no processes found
@@ -228,4 +296,34 @@ async fn kill_pid(pid: u32, force: bool) -> CloudflaredResult<()> {
     .await
     .ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `enable`/`disable`/`sweep_orphans` all wait on the tunnel lock, which
+    /// `restore_on_boot` holds across sweep + enable.
+    #[tokio::test]
+    async fn tunnel_ops_wait_for_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StoreHandle::open(&dir.path().join("t.db")).unwrap();
+
+        let held = TUNNEL_OP.lock().await;
+        let s = store.clone();
+        let mut disable = tokio::spawn(async move { disable(&s).await });
+        let sweep = tokio::spawn(async { sweep_orphans().await });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!disable.is_finished() && !sweep.is_finished());
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(5), &mut disable)
+            .await
+            .expect("op proceeds once the lock is released")
+            .unwrap()
+            .unwrap();
+        // sweep may legitimately find (and kill) real cloudflared; only
+        // assert it was unblocked, not that it finished quickly.
+        sweep.abort();
+    }
 }

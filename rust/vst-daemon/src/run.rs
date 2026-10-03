@@ -15,9 +15,9 @@
 //! 7. Generate fresh `daemonToken` (ring CSPRNG, never persisted).
 //! 8. Build `AuthState`, mint `cliToken` + `tauriToken`.
 //! 9. Write `config.json` (mode 0o600).
-//! 10. Best-effort: initialize user skill catalog from persisted settings.
-//! 11. Best-effort: cloudflared restore-on-boot (sweep orphans + re-enable if was enabled).
-//! 12. Tailscale port-drift check.
+//! 10. (post-bind, background) user skill catalog init.
+//! 11. (post-bind, background) cloudflared sweep + restore-on-boot.
+//! 12. (post-bind, background) Tailscale port-drift check.
 //! 13. Start lifecycle + PR pollers.
 //! 14. Register SIGINT/SIGTERM handlers.
 //! 15. Bind and serve.
@@ -259,34 +259,86 @@ fn gen_daemon_token() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-// ─── Cloudflared restore-on-boot ─────────────────────────────────────────────
+// ─── Post-bind background tasks ───────────────────────────────────────────────
 
-/// Ports `cloudflared.restoreOnBoot(tunnelPort)` from TS.
-///
-/// The Rust `cloudflared` module documents `restore_on_boot` in its module
-/// comment but the function was not implemented yet at this dispatch.
-/// We implement the equivalent inline here:
-/// - Sweep any orphaned `cloudflared` processes.
-/// - If the store says the tunnel was `enabled`, re-launch it on `tunnel_port`.
-async fn cloudflared_restore_on_boot(tunnel_port: u16, store: &StoreHandle) {
-    // Sweep orphan processes unconditionally.
-    if let Err(e) = cloudflared::sweep_orphans().await {
-        tracing::warn!("[vst] cloudflared sweep_orphans failed (non-fatal): {e}");
+/// Handles to best-effort boot work spawned *after* the listener binds
+/// (cloudflared sweep/restore, tailscale drift check, skill catalog init). Shutdown takes the
+/// list and aborts it before killing cloudflared, so an in-flight restore
+/// can't spawn a tunnel after cleanup ran; once taken, `spawn` is a no-op, so
+/// a signal that lands between "shutdown task registered" and "bind" can't be
+/// followed by a late task either.
+#[derive(Clone)]
+struct BackgroundBoot(Arc<std::sync::Mutex<Option<Vec<tokio::task::JoinHandle<()>>>>>);
+
+impl BackgroundBoot {
+    fn new() -> Self {
+        Self(Arc::new(std::sync::Mutex::new(Some(Vec::new()))))
     }
 
-    // Re-enable if it was previously enabled.
-    match cloudflared::get_state(store).await {
-        Ok(state) if state.enabled => {
-            tracing::info!(
-                "[vst] cloudflared was enabled — restoring tunnel on port {tunnel_port}"
+    fn spawn(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
+        let mut guard = self.0.lock().unwrap();
+        if let Some(handles) = guard.as_mut() {
+            handles.push(tokio::spawn(fut));
+        }
+    }
+
+    /// Abort everything, wait until the tasks have actually dropped (so
+    /// locks and spawn guards are released before cleanup proceeds), and
+    /// refuse further spawns.
+    async fn abort_all(&self) {
+        let handles = self.0.lock().unwrap().take();
+        for h in handles.into_iter().flatten() {
+            h.abort();
+            let _ = h.await;
+        }
+    }
+}
+
+/// Cloudflared sweep + restore (one task, one tunnel-lock hold — see
+/// `cloudflared::restore_on_boot`). `tunnel_port` = daemon_port + 1, overridable
+/// via `VST_TUNNEL_PORT` (same as mobile_auth.rs).
+async fn cloudflared_boot_task(port: u16, store: StoreHandle) {
+    let tunnel_port: u16 = std::env::var("VST_TUNNEL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| port.saturating_add(1));
+    cloudflared::restore_on_boot(tunnel_port, &store).await;
+}
+
+/// Initialize the user skill catalog from persisted settings so it is
+/// populated on a fresh install without opening Skills settings first.
+/// Re-reads `config.json` here (not the boot snapshot) so a `PATCH /settings`
+/// that landed before this task ran isn't overwritten with stale paths.
+async fn skill_catalog_boot_task(config_path: PathBuf, vst_home: PathBuf) {
+    let config = read_raw_config(&config_path).await;
+    let custom: Vec<String> = config
+        .get("skillPaths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Same effective-path computation `PATCH /settings` uses.
+    skill_resolution::set_skill_paths(&effective_skill_paths(&custom, &vst_home)).await;
+}
+
+/// Log a warning if a tailscale serve rule exists but targets a different
+/// port. Does NOT auto-fix — the UI surfaces the same condition as `port_mismatch`.
+async fn tailscale_drift_check_task(port: u16) {
+    match tailscale_serve::get_status(port).await {
+        Ok(vst_lifecycle::tailscale_serve::TailscaleStatus::PortMismatch { expected, actual }) => {
+            tracing::warn!(
+                "[vst] Tailscale serve rule points at port {expected}, \
+                 but this daemon is on {actual}. \
+                 Enable will repair it, or set VST_PORT={expected} to match."
             );
-            match cloudflared::enable(tunnel_port, store).await {
-                Ok(url) => tracing::info!("[vst] cloudflared tunnel restored: {url}"),
-                Err(e) => tracing::warn!("[vst] cloudflared restore failed (non-fatal): {e}"),
-            }
         }
         Ok(_) => {}
-        Err(e) => tracing::warn!("[vst] cloudflared get_state failed (non-fatal): {e}"),
+        Err(e) => {
+            tracing::warn!("[vst] Tailscale serve status unavailable at boot (non-fatal): {e}");
+        }
     }
 }
 
@@ -402,61 +454,6 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         tracing::info!("CLI token written to {}", config_path.display());
     }
 
-    // ── Skill catalog ─────────────────────────────────────────────────────────
-    // Initialize from persisted settings so the catalog is populated on a
-    // fresh install without requiring the user to open Skills settings first.
-    // Best-effort: never abort startup on failure.
-    {
-        if let Err(e) = async {
-            // Read skillPaths from persisted config if present.
-            let custom: Vec<String> = existing_config
-                .get("skillPaths")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            // Same effective-path computation `PATCH /settings` uses for its
-            // live refresh — kept in one place (`vst_routes::settings`) so
-            // the two can't silently diverge.
-            let all_paths = effective_skill_paths(&custom, &vst_home);
-            skill_resolution::set_skill_paths(&all_paths).await;
-            Ok::<_, anyhow::Error>(())
-        }
-        .await
-        {
-            tracing::error!("Failed to initialize skill catalog (non-fatal): {e}");
-        }
-    }
-
-    // ── Cloudflared restore-on-boot ───────────────────────────────────────────
-    // tunnel_port = daemon_port + 1 (mirrors resolveTunnelPort in TS).
-    // Overridable via VST_TUNNEL_PORT env var (same as mobile_auth.rs).
-    let tunnel_port: u16 = std::env::var("VST_TUNNEL_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| port.saturating_add(1));
-    cloudflared_restore_on_boot(tunnel_port, &store).await;
-
-    // ── Tailscale port-drift check ────────────────────────────────────────────
-    // Log a warning if a serve rule exists but targets a different port.
-    // Does NOT auto-fix — the UI surfaces the same condition as `port_mismatch`.
-    match tailscale_serve::get_status(port).await {
-        Ok(vst_lifecycle::tailscale_serve::TailscaleStatus::PortMismatch { expected, actual }) => {
-            tracing::warn!(
-                "[vst] Tailscale serve rule points at port {expected}, \
-                 but this daemon is on {actual}. \
-                 Enable will repair it, or set VST_PORT={expected} to match."
-            );
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!("[vst] Tailscale serve status unavailable at boot (non-fatal): {e}");
-        }
-    }
-
     // ── Build Axum router ─────────────────────────────────────────────────────
     let broadcaster = Broadcaster::new(256);
     let json_registry = Arc::new(vst_agents::json_agent_registry::JsonAgentRegistry::<
@@ -554,6 +551,8 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let store_for_shutdown = store.clone();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let shutdown_tx_for_signal = shutdown_tx.clone();
+    let background_boot = BackgroundBoot::new();
+    let background_boot_for_shutdown = background_boot.clone();
 
     // Register SIGINT + SIGTERM + the API-triggered stop signal. `lock_file`
     // moves into this task — it MUST stay alive until cleanup releases it
@@ -568,9 +567,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
                 tracing::info!("[vst] Stop requested via API; shutting down…");
             }
         }
-        // Abort pollers.
+        // Abort pollers and any still-running post-bind boot work.
         lifecycle_handle.abort();
         pr_handle.abort();
+        background_boot_for_shutdown.abort_all().await;
         // Kill cloudflared but preserve `enabled` flag so restore_on_boot
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).
         let _ = cloudflared::shutdown_kill(&store_for_shutdown).await;
@@ -595,6 +595,17 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
 
     tracing::info!("vst daemon listening on http://{bind_host}:{port}");
     println!("vst daemon listening on http://{bind_host}:{port}");
+
+    // ── Post-bind background boot work ────────────────────────────────────────
+    // None of these gate serving: the orphan sweep forks `pgrep` (tens of ms on
+    // a busy box), the tailscale check forks `tailscale`, the skill scan walks
+    // the skill dirs. Errors are logged, never fatal.
+    background_boot.spawn(cloudflared_boot_task(port, store.clone()));
+    background_boot.spawn(tailscale_drift_check_task(port));
+    background_boot.spawn(skill_catalog_boot_task(
+        config_path.clone(),
+        vst_home.clone(),
+    ));
 
     // ── agy-acp availability (non-fatal safety net) ──────────────────────────
     // The openab agy-acp adapter binary is required for Rich Chat with the agy
