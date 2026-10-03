@@ -900,6 +900,35 @@
   pointer-events: auto;
 }
 
+/* Ensure the expand/collapse button covers the entire area to the left of the
+   project label text (including the row's left/top/bottom padding and the space
+   up to the label text). This ensures tapping anywhere on the left of the project
+   label only toggles expand/collapse without selecting the project. */
+.tree-row--project:not(.draft-row) .tree-row__project-main {
+  align-self: stretch;
+  height: 100%;
+}
+
+.left-sidebar:not(.left-sidebar--collapsed) .tree-row--project:not(.draft-row) .tree-row__project-main {
+  gap: 0;
+}
+
+.left-sidebar:not(.left-sidebar--collapsed) .tree-row--project .tree-row__project-expand {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  margin: calc(-1 * var(--space-1)) 0 calc(-1 * var(--space-1)) calc(-1 * (var(--space-2) - 2px));
+  padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) - 2px);
+}
+
+.left-sidebar:not(.left-sidebar--collapsed) .tree-row--project:not(.draft-row) .wt-row__stretch-link {
+  left: calc(var(--space-2) - 2px + 14px + var(--space-2));
+}
+
+.tree-row--project .tree-row__project-expand:focus-visible {
+  outline-offset: -2px;
+}
+
 .tree-row--project .tree-row__action {
   position: relative;
   z-index: 2;

@@ -43,6 +43,7 @@ import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
+import { clampPopupPosition } from "@/lib/popupPosition";
 
 /**
  * Drag-reorder wrapper for a sidebar row (worktree or direct-session).
@@ -2192,7 +2193,11 @@ export function LeftSidebar({
                       ? `${p.name} — ${openProj.has(p.id) ? "Click to hide worktrees" : "Click to show worktrees"}`
                       : undefined
                   }
-                  onClick={() => toggleProj(p.id)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleProj(p.id);
+                  }}
                 >
                   <span className="tree-row__chevron tree-row__project-chevron" aria-hidden>
                     {openProj.has(p.id) ? <FolderOpen size={14} /> : <Folder size={14} />}
@@ -3029,279 +3034,353 @@ export function LeftSidebar({
       />
 
       {wtMenu
-        ? createPortal(
-            <div
-              className="menu-pop wt-menu-pop--portal"
-              data-wt-menu-panel
-              role="menu"
-              aria-label="Worktree actions"
-              style={{
-                position: "fixed",
-                top: wtMenu.rect.bottom + 6,
-                left: Math.max(
-                  8,
-                  Math.min(
-                    wtMenu.rect.right - 176,
-                    envWidth - 184,
-                  ),
-                ),
-                minWidth: 140,
-                zIndex: 4000,
-              }}
-            >
-              <div className="wt-menu__info-row">
-                <span className="wt-menu__info-label">ID</span>
-                <span className="wt-menu__info-value">{wtMenu.worktree.id}</span>
-              </div>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const wtId = wtMenu.worktree.id;
-                  const wasPinned = wtMenu.worktree.pinnedAt != null;
-                  setWtMenu(null);
-                  void (async () => {
-                    try {
-                      if (wasPinned) await api.unpinWorktree(wtId);
-                      else await api.pinWorktree(wtId);
-                      // Store stays current via the `worktree:updated` WS event.
-                    } catch {
-                      /* surface errors later */
-                    }
-                  })();
+        ? (() => {
+            const popupWidth = 160;
+            const popupHeight = 165;
+            const { top, left } = clampPopupPosition(
+              wtMenu.rect,
+              popupWidth,
+              popupHeight,
+              envWidth,
+              envHeight,
+            );
+            return createPortal(
+              <div
+                ref={(node) => {
+                  if (!node) return;
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    const adjusted = clampPopupPosition(
+                      wtMenu.rect,
+                      rect.width,
+                      rect.height,
+                      envWidth,
+                      envHeight,
+                    );
+                    node.style.top = `${adjusted.top}px`;
+                    node.style.left = `${adjusted.left}px`;
+                  }
+                }}
+                className="menu-pop wt-menu-pop--portal"
+                data-wt-menu-panel
+                role="menu"
+                aria-label="Worktree actions"
+                style={{
+                  position: "fixed",
+                  top,
+                  left,
+                  minWidth: 140,
+                  maxHeight: Math.max(80, envHeight - 16),
+                  overflowY: "auto",
+                  zIndex: 4000,
                 }}
               >
-                <Pin
-                  size={13}
-                  aria-hidden
-                  fill={wtMenu.worktree.pinnedAt != null ? "currentColor" : "none"}
-                />
-                {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const wtId = wtMenu.worktree.id;
-                  setWtMenu(null);
-                  void (async () => {
-                    try {
-                      await api.hideWorktree(wtId);
-                      // Store stays current via the `worktree:updated` WS event.
-                    } catch {
-                      /* surface errors later */
-                    }
-                  })();
-                }}
-              >
-                <EyeOff size={13} aria-hidden />
-                Hide
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void (async () => {
-                    try {
-                      await api.markWorktreeDone(wtMenu.worktree.id);
-                      // Store stays current via per-session `session:state`
-                      // events emitted by the daemon when marking done.
-                    } catch {
-                      /* surface errors later */
-                    }
-                    setWtMenu(null);
-                  })();
-                }}
-              >
-                Mark as done
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item--danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingDelete(wtMenu.worktree);
-                  setWtMenu(null);
-                }}
-              >
-                Delete worktree…
-              </button>
-            </div>,
-            portalRoot,
-          )
-        : null}
-      {sessMenu
-        ? createPortal(
-            <div
-              className="menu-pop wt-menu-pop--portal"
-              data-sess-menu-panel
-              role="menu"
-              aria-label="Session actions"
-              style={{
-                position: "fixed",
-                top: sessMenu.rect.bottom + 6,
-                left: Math.max(
-                  8,
-                  Math.min(
-                    sessMenu.rect.right - 176,
-                    envWidth - 184,
-                  ),
-                ),
-                minWidth: 150,
-                zIndex: 4000,
-              }}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const sid = sessMenu.session.id;
-                  const wasPinned = sessMenu.session.pinnedAt != null;
-                  setSessMenu(null);
-                  void (async () => {
-                    try {
-                      await api.pinSession(sid, !wasPinned);
-                      // Store stays current via the `session:updated` WS event.
-                    } catch {
-                      /* surface errors later */
-                    }
-                  })();
-                }}
-              >
-                <Pin
-                  size={13}
-                  aria-hidden
-                  fill={sessMenu.session.pinnedAt != null ? "currentColor" : "none"}
-                />
-                {sessMenu.session.pinnedAt != null ? "Unpin" : "Pin to top"}
-              </button>
-              {sessMenu.session.type === "agent" ? (
+                <div className="wt-menu__info-row">
+                  <span className="wt-menu__info-label">ID</span>
+                  <span className="wt-menu__info-value">{wtMenu.worktree.id}</span>
+                </div>
                 <button
                   type="button"
                   role="menuitem"
-                  className="menu-pop__item"
+                  className="menu-pop__item menu-pop__item--icon"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const sid = sessMenu.session.id;
-                    setSessMenu(null);
+                    const wtId = wtMenu.worktree.id;
+                    const wasPinned = wtMenu.worktree.pinnedAt != null;
+                    setWtMenu(null);
                     void (async () => {
                       try {
-                        await api.markSessionDone(sid);
-                        // Store stays current via the `session:state` WS event.
+                        if (wasPinned) await api.unpinWorktree(wtId);
+                        else await api.pinWorktree(wtId);
+                        // Store stays current via the `worktree:updated` WS event.
                       } catch {
                         /* surface errors later */
                       }
                     })();
                   }}
                 >
+                  <Pin
+                    size={13}
+                    aria-hidden
+                    fill={wtMenu.worktree.pinnedAt != null ? "currentColor" : "none"}
+                  />
+                  {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item menu-pop__item--icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const wtId = wtMenu.worktree.id;
+                    setWtMenu(null);
+                    void (async () => {
+                      try {
+                        await api.hideWorktree(wtId);
+                        // Store stays current via the `worktree:updated` WS event.
+                      } catch {
+                        /* surface errors later */
+                      }
+                    })();
+                  }}
+                >
+                  <EyeOff size={13} aria-hidden />
+                  Hide
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void (async () => {
+                      try {
+                        await api.markWorktreeDone(wtMenu.worktree.id);
+                        // Store stays current via per-session `session:state`
+                        // events emitted by the daemon when marking done.
+                      } catch {
+                        /* surface errors later */
+                      }
+                      setWtMenu(null);
+                    })();
+                  }}
+                >
                   Mark as done
                 </button>
-              ) : null}
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingTerminateSession(sessMenu.session);
-                  setSessMenu(null);
-                }}
-              >
-                Terminate
-              </button>
-            </div>,
-            portalRoot,
-          )
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item--danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPendingDelete(wtMenu.worktree);
+                    setWtMenu(null);
+                  }}
+                >
+                  Delete worktree…
+                </button>
+              </div>,
+              portalRoot,
+            );
+          })()
         : null}
-      {projMenu
-        ? createPortal(
-            <div
-              className="menu-pop wt-menu-pop--portal"
-              data-proj-menu-panel
-              role="menu"
-              aria-label="Project actions"
-              style={{
-                position: "fixed",
-                top: projMenu.rect.bottom + 6,
-                left: Math.max(
-                  8,
-                  Math.min(
-                    projMenu.rect.right - 176,
-                    envWidth - 184,
-                  ),
-                ),
-                minWidth: 160,
-                zIndex: 4000,
-              }}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const project = projMenu.project;
-                  const rect = projMenu.rect;
-                  setProjMenu(null);
-                  setPendingHideProject({ project, rect });
+      {sessMenu
+        ? (() => {
+            const popupWidth = 160;
+            const popupHeight = sessMenu.session.type === "agent" ? 120 : 85;
+            const { top, left } = clampPopupPosition(
+              sessMenu.rect,
+              popupWidth,
+              popupHeight,
+              envWidth,
+              envHeight,
+            );
+            return createPortal(
+              <div
+                ref={(node) => {
+                  if (!node) return;
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    const adjusted = clampPopupPosition(
+                      sessMenu.rect,
+                      rect.width,
+                      rect.height,
+                      envWidth,
+                      envHeight,
+                    );
+                    node.style.top = `${adjusted.top}px`;
+                    node.style.left = `${adjusted.left}px`;
+                  }
+                }}
+                className="menu-pop wt-menu-pop--portal"
+                data-sess-menu-panel
+                role="menu"
+                aria-label="Session actions"
+                style={{
+                  position: "fixed",
+                  top,
+                  left,
+                  minWidth: 150,
+                  maxHeight: Math.max(80, envHeight - 16),
+                  overflowY: "auto",
+                  zIndex: 4000,
                 }}
               >
-                <EyeOff size={13} aria-hidden />
-                Hide project
-              </button>
-              {(() => {
-                const hiddenCount = hiddenWorktreeMap[projMenu.project.id]?.length ?? 0;
-                if (hiddenCount === 0) return null;
-                return (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item menu-pop__item--icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const sid = sessMenu.session.id;
+                    const wasPinned = sessMenu.session.pinnedAt != null;
+                    setSessMenu(null);
+                    void (async () => {
+                      try {
+                        await api.pinSession(sid, !wasPinned);
+                        // Store stays current via the `session:updated` WS event.
+                      } catch {
+                        /* surface errors later */
+                      }
+                    })();
+                  }}
+                >
+                  <Pin
+                    size={13}
+                    aria-hidden
+                    fill={sessMenu.session.pinnedAt != null ? "currentColor" : "none"}
+                  />
+                  {sessMenu.session.pinnedAt != null ? "Unpin" : "Pin to top"}
+                </button>
+                {sessMenu.session.type === "agent" ? (
                   <button
                     type="button"
                     role="menuitem"
-                    className="menu-pop__item menu-pop__item--icon"
+                    className="menu-pop__item"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setHiddenWtDialogProjectId(projMenu.project.id);
-                      setProjMenu(null);
+                      const sid = sessMenu.session.id;
+                      setSessMenu(null);
+                      void (async () => {
+                        try {
+                          await api.markSessionDone(sid);
+                          // Store stays current via the `session:state` WS event.
+                        } catch {
+                          /* surface errors later */
+                        }
+                      })();
                     }}
                   >
-                    <Eye size={13} aria-hidden />
-                    {`Hidden worktrees (${hiddenCount})`}
+                    Mark as done
                   </button>
-                );
-              })()}
-            </div>,
-            portalRoot,
-          )
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPendingTerminateSession(sessMenu.session);
+                    setSessMenu(null);
+                  }}
+                >
+                  Terminate
+                </button>
+              </div>,
+              portalRoot,
+            );
+          })()
+        : null}
+      {projMenu
+        ? (() => {
+            const hiddenCount = hiddenWorktreeMap[projMenu.project.id]?.length ?? 0;
+            const popupWidth = 160;
+            const popupHeight = hiddenCount > 0 ? 80 : 45;
+            const { top, left } = clampPopupPosition(
+              projMenu.rect,
+              popupWidth,
+              popupHeight,
+              envWidth,
+              envHeight,
+            );
+            return createPortal(
+              <div
+                ref={(node) => {
+                  if (!node) return;
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    const adjusted = clampPopupPosition(
+                      projMenu.rect,
+                      rect.width,
+                      rect.height,
+                      envWidth,
+                      envHeight,
+                    );
+                    node.style.top = `${adjusted.top}px`;
+                    node.style.left = `${adjusted.left}px`;
+                  }
+                }}
+                className="menu-pop wt-menu-pop--portal"
+                data-proj-menu-panel
+                role="menu"
+                aria-label="Project actions"
+                style={{
+                  position: "fixed",
+                  top,
+                  left,
+                  minWidth: 160,
+                  maxHeight: Math.max(80, envHeight - 16),
+                  overflowY: "auto",
+                  zIndex: 4000,
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item menu-pop__item--icon"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const project = projMenu.project;
+                    const rect = projMenu.rect;
+                    setProjMenu(null);
+                    setPendingHideProject({ project, rect });
+                  }}
+                >
+                  <EyeOff size={13} aria-hidden />
+                  Hide project
+                </button>
+                {(() => {
+                  if (hiddenCount === 0) return null;
+                  return (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-pop__item menu-pop__item--icon"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setHiddenWtDialogProjectId(projMenu.project.id);
+                        setProjMenu(null);
+                      }}
+                    >
+                      <Eye size={13} aria-hidden />
+                      {`Hidden worktrees (${hiddenCount})`}
+                    </button>
+                  );
+                })()}
+              </div>,
+              portalRoot,
+            );
+          })()
         : null}
       {pendingHideProject
         ? (() => {
             const popupWidth = 240;
             const popupHeight = 135;
-            // Screen boundaries check: ensure it does not overflow viewport horizontally
-            let left = pendingHideProject.rect.right - popupWidth;
-            if (left + popupWidth > envWidth - 8) {
-              left = envWidth - popupWidth - 8;
-            }
-            if (left < 8) {
-              left = 8;
-            }
-
-            // Screen boundaries check: ensure it does not overflow viewport vertically
-            let top = pendingHideProject.rect.bottom + 6;
-            if (top + popupHeight > envHeight - 8) {
-              top = Math.max(8, pendingHideProject.rect.top - popupHeight - 6);
-            }
+            const { top, left } = clampPopupPosition(
+              pendingHideProject.rect,
+              popupWidth,
+              popupHeight,
+              envWidth,
+              envHeight,
+            );
 
             return createPortal(
               <div
+                ref={(node) => {
+                  if (!node) return;
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    const adjusted = clampPopupPosition(
+                      pendingHideProject.rect,
+                      rect.width,
+                      rect.height,
+                      envWidth,
+                      envHeight,
+                    );
+                    node.style.top = `${adjusted.top}px`;
+                    node.style.left = `${adjusted.left}px`;
+                  }
+                }}
                 className="menu-pop"
                 data-hide-project-popup
                 role="dialog"
@@ -3312,6 +3391,8 @@ export function LeftSidebar({
                   top,
                   left,
                   width: popupWidth,
+                  maxHeight: Math.max(80, envHeight - 16),
+                  overflowY: "auto",
                   padding: "var(--space-3)",
                   zIndex: 4000,
                   display: "flex",
@@ -3393,41 +3474,63 @@ export function LeftSidebar({
           })()
         : null}
       {filterMenuRect
-        ? createPortal(
-            <div
-              className="menu-pop wt-menu-pop--portal"
-              data-filter-menu-panel
-              role="menu"
-              aria-label="Filter options"
-              style={{
-                position: "fixed",
-                top: filterMenuRect.bottom + 6,
-                left: Math.max(
-                  8,
-                  Math.min(
-                    filterMenuRect.right - 140,
-                    envWidth - 148,
-                  ),
-                ),
-                minWidth: 140,
-                zIndex: 4000,
-              }}
-            >
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={hideInactiveWorktrees}
-                className={`menu-pop__item menu-pop__item--check${hideInactiveWorktrees ? " menu-pop__item--active" : ""}`}
-                onClick={() => { toggleInactiveWorktreesFilter(); setFilterMenuRect(null); }}
+        ? (() => {
+            const popupWidth = 140;
+            const popupHeight = 45;
+            const { top, left } = clampPopupPosition(
+              filterMenuRect,
+              popupWidth,
+              popupHeight,
+              envWidth,
+              envHeight,
+            );
+            return createPortal(
+              <div
+                ref={(node) => {
+                  if (!node) return;
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    const adjusted = clampPopupPosition(
+                      filterMenuRect,
+                      rect.width,
+                      rect.height,
+                      envWidth,
+                      envHeight,
+                    );
+                    node.style.top = `${adjusted.top}px`;
+                    node.style.left = `${adjusted.left}px`;
+                  }
+                }}
+                className="menu-pop wt-menu-pop--portal"
+                data-filter-menu-panel
+                role="menu"
+                aria-label="Filter options"
+                style={{
+                  position: "fixed",
+                  top,
+                  left,
+                  minWidth: 140,
+                  maxHeight: Math.max(80, envHeight - 16),
+                  overflowY: "auto",
+                  zIndex: 4000,
+                }}
               >
-                <span className="menu-pop__check" aria-hidden>
-                  {hideInactiveWorktrees ? <Check size={13} strokeWidth={2.5} /> : null}
-                </span>
-                Hide done
-              </button>
-            </div>,
-            portalRoot,
-          )
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={hideInactiveWorktrees}
+                  className={`menu-pop__item menu-pop__item--check${hideInactiveWorktrees ? " menu-pop__item--active" : ""}`}
+                  onClick={() => { toggleInactiveWorktreesFilter(); setFilterMenuRect(null); }}
+                >
+                  <span className="menu-pop__check" aria-hidden>
+                    {hideInactiveWorktrees ? <Check size={13} strokeWidth={2.5} /> : null}
+                  </span>
+                  Hide done
+                </button>
+              </div>,
+              portalRoot,
+            );
+          })()
         : null}
     </div>
   );

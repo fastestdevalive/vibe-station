@@ -2621,8 +2621,15 @@ describe("LeftSidebar - global Workspaces section", () => {
 
       // Tapping folder icon toggles open/close without selecting
       const folderBtn = screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i });
+      const pointerDownEvent = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+      const stopSpy = vi.spyOn(pointerDownEvent, "stopPropagation");
+      folderBtn.dispatchEvent(pointerDownEvent);
+      expect(stopSpy).toHaveBeenCalled();
+
       await user.click(folderBtn);
       expect(screen.queryByRole("link", { name: /^Open worktree wt-1$/i })).toBeNull();
+      // Still on /project/proj-a (not altered or re-navigated)
+      expect(screen.getByTestId("loc").textContent).toBe("/project/proj-a");
     });
 
     it("Requirement 4 — clicking an agent row inside a worktree selects the worktree and session", async () => {
@@ -2646,6 +2653,50 @@ describe("LeftSidebar - global Workspaces section", () => {
 
       expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
       expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+    });
+
+    it("tapping 3 dots for an agent item near the bottom of the window positions the popup above the trigger without overflowing", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      // Expand wt-1's agents
+      const wt1Link = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      await user.click(wt1Link);
+
+      const agent2Link = await screen.findByRole("link", { name: /Open session agent-2/i });
+      const row = agent2Link.closest(".tree-row") as HTMLElement;
+      const trigger = row.querySelector("[data-sess-menu-trigger]") as HTMLElement;
+      expect(trigger).toBeTruthy();
+
+      // Mock trigger bounding rect near the bottom (window height 800, trigger top 750, bottom 778)
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+        top: 750,
+        bottom: 778,
+        left: 200,
+        right: 228,
+        width: 28,
+        height: 28,
+        x: 200,
+        y: 750,
+        toJSON: () => {},
+      });
+
+      await user.click(trigger);
+
+      const menu = await screen.findByRole("menu", { name: /Session actions/i });
+      expect(menu).toBeInTheDocument();
+      // Since it's near the bottom (750), top should be flipped above 750, not below 778
+      const top = parseInt(menu.style.top, 10);
+      expect(top).toBeLessThan(750);
+      expect(top).toBeGreaterThanOrEqual(8);
     });
   });
 
