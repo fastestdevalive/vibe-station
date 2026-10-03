@@ -16,7 +16,8 @@
  *   PLAYWRIGHT_MODULE  module to import Playwright from (default "@playwright/test")
  *   CHROMIUM_PATH      optional explicit chromium / headless-shell executable
  *   KEEP_RAW=1         keep raw (unframed) captures in /tmp/vst-readme-raw
- *   WALLPAPER          mist (default) | midnight | aurora | peach | mist | meadow | frost | slate | steel
+ *   LIVE_URL           running dev sandbox / daemon UI used for the `live` shots (default http://localhost:5174)
+ *   WALLPAPER          mist (default) | dusk | midnight | aurora | peach | mist | meadow | frost | slate | steel
  *   SHOTS_OUT_DIR          output directory (default docs/screenshots)
  *   ONLY               comma-separated output file names to produce (default: all)
  *   REFRAME_ONLY=1     skip capture; re-composite the kept raw captures (implies KEEP_RAW)
@@ -46,6 +47,81 @@ const RAW = [
   { id: "markdown", demo: 2, at: 33000 },
 ];
 
+/** Shots taken from the real web-ui on a running daemon (demo dataset), not from the website demos. */
+const LIVE = [
+  {
+    id: "files-light",
+    worktree: "napi-1",
+    theme: "vibestation-light",
+    files: ["docs/API.md", "README.md", "docs/PLAN.md"],
+    // The worktree's main session is a terminal in the seed data; present it as Rich Chat with this history.
+    chatSession: "napi-1-m",
+    chat: [
+      { kind: "user", role: "user", text: "Phase 3 is done — tick it off in docs/PLAN.md and add a rollout note." },
+      { kind: "text", role: "assistant", text: "On it. Let me read the plan first." },
+      { kind: "tool_use", toolId: "t-read", toolName: "read", toolKind: "read", toolInput: { filePath: "docs/PLAN.md" }, toolStatus: "in_progress" },
+      { kind: "tool_result", toolId: "t-read", toolName: "read", toolResult: { content: "66 lines" }, toolStatus: "completed" },
+      {
+        kind: "tool_use", toolId: "t-edit", toolName: "edit", toolKind: "edit",
+        toolInput: { filePath: "docs/PLAN.md" }, toolStatus: "in_progress",
+      },
+      {
+        kind: "tool_result", toolId: "t-edit", toolName: "edit", toolStatus: "completed",
+        toolDiffs: [{ path: "docs/PLAN.md", oldText: "### Phase 3 — Role-based access (in progress) ⏳\n", newText: "### Phase 3 — Role-based access ✅\n" }],
+      },
+      { kind: "text", role: "assistant", text: "Phase 3 is marked complete and I added a **Rollout** section: ship behind `AUTH_V2`, then enable per tenant." },
+      { kind: "user", role: "user", text: "Nice. Does the plan mention the refresh-token TTL?" },
+      { kind: "text", role: "assistant", text: "Yes — Phase 1 covers `JWT_ACCESS_TTL` and `JWT_REFRESH_TTL`, both configurable via env." },
+    ],
+  },
+];
+
+/** Rewrite session records for `id` to the json channel, anywhere they appear in a JSON body. */
+function asJsonChannel(node, id) {
+  if (Array.isArray(node)) return node.map((n) => asJsonChannel(n, id));
+  if (node && typeof node === "object") {
+    const out = Object.fromEntries(Object.entries(node).map(([k, v]) => [k, asJsonChannel(v, id)]));
+    return out.id === id && "channel" in out ? { ...out, channel: "json" } : out;
+  }
+  return node;
+}
+
+/** Click a file-tree row by name: the match right of the chat pane and below the tab strip (names repeat in chat/tabs). */
+async function clickTreeRow(page, name) {
+  for (let i = 0; i < 40; i += 1) {
+    for (const m of await page.getByText(name, { exact: true }).all()) {
+      const box = await m.boundingBox();
+      if (box && box.x > 700 && box.y > 40) return m.click();
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`file tree row "${name}" not found`);
+}
+
+/** Make `l.chatSession` a Rich Chat agent for this browser only: patch REST, and answer chat:open over the WS. */
+async function mockRichChat(page, l) {
+  const events = l.chat.map((e, i) => ({
+    id: `demo-${i}`, sessionId: l.chatSession, provider: "claude", turnId: `demo-t${e.kind === "user" ? i : i - 1}`,
+    ts: Date.now() - (l.chat.length - i) * 60_000, logSeq: i + 1, ...e,
+  }));
+  await page.route("**/api/**", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    if (!(res.headers()["content-type"] ?? "").includes("json")) return route.fulfill({ response: res });
+    await route.fulfill({ response: res, json: asJsonChannel(await res.json(), l.chatSession) });
+  });
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer();
+    server.onMessage((m) => ws.send(m));
+    ws.onMessage((m) => {
+      const msg = typeof m === "string" ? JSON.parse(m.startsWith("{") ? m : "{}") : {};
+      if (msg.type === "chat:open" && msg.sessionId === l.chatSession) {
+        ws.send(JSON.stringify({ type: "chat:replay", sessionId: l.chatSession, events, hasMore: false, oldestSeq: 1 }));
+      } else server.send(m);
+    });
+  });
+}
+
 /** Final images: a window on the wallpaper, or phones on the wallpaper. */
 const OUT = [
   { file: "01-dashboard.png", window: "dashboard" },
@@ -54,11 +130,18 @@ const OUT = [
   { file: "04-remote-access-qr.png", window: "qr" },
   { file: "05-mobile.png", phones: ["phone-list", "phone-chat"] },
   { file: "06-markdown-customization.png", window: "markdown" },
+  // Light-mode app on a dark wallpaper; `lights` draws the traffic lights (live shots have no demo chrome).
+  { file: "07-markdown-file-tree.png", window: "files-light", wallpaper: "dusk", lights: true },
 ];
 
 // Phone shell geometry in the 1120x630 stage (website demo.css `.pf-*`).
 const PHONE = { x: 415.5, y: 11.6, w: 289, h: 606.8, r: 46.6 };
 const CANVAS = { w: 1440, h: 860 };
+const LIVE_URL = process.env.LIVE_URL ?? "http://localhost:5174";
+
+// Raw captures needed by the selected outputs (ONLY unset = all).
+const only = process.env.ONLY?.split(",");
+const needed = new Set(OUT.filter((o) => !only || only.includes(o.file)).flatMap((o) => (o.window ? [o.window] : o.phones)));
 
 const launchOpts = process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {};
 const browser = await chromium.launch(launchOpts);
@@ -69,7 +152,7 @@ await mkdir(RAW_DIR, { recursive: true });
 
 async function captureRaw() {
   const byDemo = new Map();
-  for (const r of RAW) byDemo.set(r.demo, [...(byDemo.get(r.demo) ?? []), r].sort((a, b) => a.at - b.at));
+  for (const r of RAW.filter((r) => needed.has(r.id))) byDemo.set(r.demo, [...(byDemo.get(r.demo) ?? []), r].sort((a, b) => a.at - b.at));
   for (const [demo, shots] of byDemo) {
     const ctx = await browser.newContext({ viewport: { width: 1800, height: 1100 }, deviceScaleFactor: DSF });
     const page = await ctx.newPage();
@@ -93,8 +176,65 @@ async function captureRaw() {
   }
 }
 
+/** Open markdown files in the real UI (light theme, collapsed rail, agent pane narrowed) and grab the frame. */
+async function captureLive() {
+  for (const l of LIVE.filter((l) => needed.has(l.id))) {
+    // 1440x779 scales by 1120/1440 into the 1120x606 area under the frame's 24px title bar (1120x630 total).
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 779 }, deviceScaleFactor: 1.6 });
+    await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), l.theme);
+    const page = await ctx.newPage();
+    if (l.chat) await mockRichChat(page, l); // before the settings route below: later routes win
+    // The daemon's saved themeId wins over the localStorage hint; override it for this browser only.
+    await page.route("**/api/settings", async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { ...(await res.json()), themeId: l.theme } });
+    });
+    await page.goto(`${LIVE_URL}/worktree/${l.worktree}`);
+    await page.waitForSelector('button[aria-label="Hide projects sidebar"]');
+    await page.waitForTimeout(2500);
+    const opened = new Set(); // tree folders are toggles: expand each once
+    for (const f of l.files) {
+      for (const dir of f.split("/").slice(0, -1)) {
+        if (opened.has(dir)) continue;
+        opened.add(dir);
+        await clickTreeRow(page, dir);
+      }
+      await page.waitForTimeout(400);
+      await clickTreeRow(page, f.split("/").pop());
+      await page.waitForTimeout(700);
+    }
+    await page.locator('button[aria-label="Hide projects sidebar"]').click();
+    await page.waitForTimeout(800);
+    const sep = await page.locator('[role="separator"]').first().boundingBox();
+    await page.mouse.move(sep.x + sep.width / 2, 400);
+    await page.mouse.down();
+    await page.mouse.move(560, 400, { steps: 8 });
+    await page.mouse.move(500, 400, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(1000);
+    // Chat pane (left of x=700): show the latest messages.
+    await page.evaluate(() => {
+      for (const el of document.querySelectorAll("*")) {
+        if (el.scrollHeight > el.clientHeight + 20 && el.getBoundingClientRect().x < 700 && /auto|scroll/.test(getComputedStyle(el).overflowY)) el.scrollTop = el.scrollHeight;
+      }
+    });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: join(RAW_DIR, `${l.id}.png`) });
+    console.log(`captured ${l.id}`);
+    await ctx.close();
+  }
+}
+
 /** Named wallpapers (CSS backgrounds). `mist` is the one the README ships with. */
 const WALLPAPERS = {
+  // Dark, muted blue-grey: makes a light-mode window pop.
+  dusk: `
+    radial-gradient(1000px 700px at 12% 8%, #34415f 0%, transparent 62%),
+    radial-gradient(900px 700px at 92% 18%, #3b3360 0%, transparent 62%),
+    radial-gradient(1000px 800px at 78% 100%, #1f4a52 0%, transparent 60%),
+    radial-gradient(900px 700px at 0% 100%, #2a3a55 0%, transparent 60%),
+    linear-gradient(135deg, #161a26 0%, #1b2033 50%, #131d26 100%)`,
   midnight: `
     radial-gradient(1100px 700px at 12% 8%, rgba(99,102,241,.55), transparent 60%),
     radial-gradient(900px 700px at 92% 18%, rgba(168,85,247,.42), transparent 62%),
@@ -147,21 +287,29 @@ const WALLPAPERS = {
     linear-gradient(135deg, #cfd9e6 0%, #b6c3d5 50%, #a3b2c8 100%)`,
 };
 const WALLPAPER_NAME = process.env.WALLPAPER ?? "mist";
-const WALLPAPER = WALLPAPERS[WALLPAPER_NAME] ?? (() => { throw new Error(`unknown WALLPAPER "${WALLPAPER_NAME}" (${Object.keys(WALLPAPERS).join(", ")})`); })();
+const wallpaper = (name) => WALLPAPERS[name] ?? (() => { throw new Error(`unknown wallpaper "${name}" (${Object.keys(WALLPAPERS).join(", ")})`); })();
+const WALLPAPER = wallpaper(WALLPAPER_NAME);
 
 const WINDOW_CHROME = `border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.08);background:#0a0a09;
   box-shadow:0 40px 100px -30px rgba(0,0,0,.9),0 12px 30px -10px rgba(0,0,0,.5);`;
 
-function page_(inner) {
+function page_(inner, bg = WALLPAPER) {
   return `<!doctype html><meta charset="utf-8"><body style="margin:0;width:${CANVAS.w}px;height:${CANVAS.h}px;
-    background:${WALLPAPER};position:relative;overflow:hidden">${inner}</body>`;
+    background:${bg};position:relative;overflow:hidden">${inner}</body>`;
 }
 
-function windowHtml(id) {
+const LIGHTS = ["#ff5f57", "#febc2e", "#28c840"]
+  .map((c, i) => `<i style="position:absolute;left:${12 + i * 18}px;top:6px;width:12px;height:12px;border-radius:50%;background:${c}"></i>`)
+  .join("");
+
+const TITLEBAR = 24; // light shots: title bar with the traffic lights, app underneath
+
+function windowHtml(id, { bg, lights } = {}) {
   const w = 1120;
   const h = 630;
+  const bar = lights ? TITLEBAR : 0;
   return page_(`<div style="position:absolute;left:${(CANVAS.w - w) / 2}px;top:${(CANVAS.h - h) / 2 - 8}px;width:${w}px;height:${h}px;${WINDOW_CHROME}">
-    <img src="file://${join(RAW_DIR, id + ".png")}" style="display:block;width:${w}px;height:${h}px"></div>`);
+    ${lights ? `<div style="position:relative;height:${bar}px;background:#ececec;border-bottom:1px solid rgba(0,0,0,.08);box-sizing:border-box">${LIGHTS}</div>` : ""}<img src="file://${join(RAW_DIR, id + ".png")}" style="display:block;width:${w}px;height:${h - bar}px"></div>`, bg);
 }
 
 function phonesHtml(ids) {
@@ -187,10 +335,9 @@ function phonesHtml(ids) {
 async function frame() {
   const ctx = await browser.newContext({ viewport: { width: CANVAS.w, height: CANVAS.h }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
-  const only = process.env.ONLY?.split(",");
   for (const o of OUT) {
     if (only && !only.includes(o.file)) continue;
-    const html = o.window ? windowHtml(o.window) : phonesHtml(o.phones);
+    const html = o.window ? windowHtml(o.window, { bg: o.wallpaper && wallpaper(o.wallpaper), lights: o.lights }) : phonesHtml(o.phones);
     const htmlPath = join(RAW_DIR, `${o.file}.html`);
     await writeFile(htmlPath, html);
     await page.goto(pathToFileURL(htmlPath).href);
@@ -202,7 +349,10 @@ async function frame() {
 }
 
 try {
-  if (!process.env.REFRAME_ONLY) await captureRaw();
+  if (!process.env.REFRAME_ONLY) {
+    await captureLive();
+    await captureRaw();
+  }
   await frame();
 } finally {
   await browser.close();

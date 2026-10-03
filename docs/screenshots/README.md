@@ -22,6 +22,12 @@ cd ../vibe-station-website && npm run dev -- --port 5391
 SITE_URL=http://localhost:5391 node scripts/capture-readme-screenshots.mjs
 ```
 
+`07` is the one image that is *not* from the website demos: it drives the real web-ui on a running dev sandbox seeded
+with the demo dataset (`LIVE_URL=http://localhost:<port>`, `worktree napi-1`), forces `vibestation-light` for that
+browser only (the chat history is scripted in the capture script and fed to that browser over a proxied WebSocket;
+the sandbox itself is never modified), and frames it with a light title bar on the dark `dusk` wallpaper. Use `ONLY=07-markdown-file-tree.png`
+to produce just it (no website server needed).
+
 `WALLPAPER` picks a preset (default `mist`), `SHOTS_OUT_DIR` redirects output, `PLAYWRIGHT_MODULE` points at a Playwright install (default `@playwright/test`), `CHROMIUM_PATH` at a browser
 binary, `KEEP_RAW=1` keeps the unframed captures in `/tmp/vst-readme-raw`, and `REFRAME_ONLY=1` re-composites
 them without recapturing. Scene times and the wallpaper live at the top of the script.
@@ -36,3 +42,4 @@ them without recapturing. Scene times and the wallpaper live at the top of the s
 | `04-remote-access-qr.png` | Settings → Remote Access, pairing a phone with a QR code |
 | `05-mobile.png` | Phone: dashboard list and a Rich Chat session |
 | `06-markdown-customization.png` | Settings → Markdown with live preview |
+| `07-markdown-file-tree.png` | Light-mode workspace: Rich Chat agent with history, file tree, file tabs, rendered `.md` — captured from a running sandbox (`LIVE_URL`), on the dark `dusk` wallpaper |
