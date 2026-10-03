@@ -3736,6 +3736,8 @@ async fn handle_cli_models(
         Some("cursor") => vst_types::CliId::Cursor,
         Some("opencode") => vst_types::CliId::Opencode,
         Some("agy") => vst_types::CliId::Agy,
+        Some("codex") => vst_types::CliId::Codex,
+        Some("pi") => vst_types::CliId::Pi,
         _ => vst_types::CliId::Claude,
     };
     Ok(Json(state.mode_routes.resolve_cli_models(cli_id).await))

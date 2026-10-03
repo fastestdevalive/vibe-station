@@ -34,6 +34,14 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Whether a test override is active (production never sets one).
+pub(crate) fn is_overridden() -> bool {
+    home_override()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some()
+}
+
 /// Guard returned by [`with_home`]; resets the override on drop.
 pub struct HomeGuard {
     _lock: std::sync::MutexGuard<'static, ()>,

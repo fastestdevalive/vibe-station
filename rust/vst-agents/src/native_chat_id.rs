@@ -123,3 +123,20 @@ pub async fn read_latest_agy_conversation_id(cwd: &str) -> Option<String> {
 pub async fn read_agy_acp_session_conversation_id(acp_session_id: &str) -> Option<String> {
     vst_agy_acp::conversation_id_for_acp_session(acp_session_id)
 }
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+pub(crate) fn extract_codex_thread_id(filename: &str) -> Option<String> {
+    let stem = filename.strip_suffix(".jsonl")?;
+    if stem.len() >= 36 {
+        // `get`, not slicing: a non-ASCII filename must not panic on a char boundary.
+        if let Some(candidate) = stem.get(stem.len() - 36..) {
+            if is_uuid(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}

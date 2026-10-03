@@ -107,6 +107,19 @@ case "$CMD" in
     export VST_SANDBOX_PROJECTS_VOLUME="vst-dev-projects-${WORKTREE}"
     export VST_SEED_MODE="$SEED_MODE"
 
+    # codex / pi are npm-installed globally; mount their real package dirs when
+    # present (see the codex/pi blocks in docker-compose.dev.yml and
+    # scripts/dev-entrypoint.sh). Override with CODEX_PLATFORM_DIR / PI_BUNDLE_DIR.
+    NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"
+    if [ -z "${CODEX_PLATFORM_DIR:-}" ] && [ -n "$NPM_GLOBAL_ROOT" ]; then
+      for d in "$NPM_GLOBAL_ROOT"/@openai/codex/node_modules/@openai/codex-linux-*/vendor/*; do
+        [ -f "$d/bin/codex" ] && export CODEX_PLATFORM_DIR="$d" && break
+      done
+    fi
+    if [ -z "${PI_BUNDLE_DIR:-}" ] && [ -f "$NPM_GLOBAL_ROOT/@earendil-works/pi-coding-agent/dist/bundle/cli.js" ]; then
+      export PI_BUNDLE_DIR="$NPM_GLOBAL_ROOT/@earendil-works/pi-coding-agent/dist/bundle"
+    fi
+
     # Claude auth for the sandbox: a long-lived token from `claude setup-token`
     # (run once on the host, then save the printed token to the file below,
     # mode 600). Copying the host's ~/.claude/.credentials.json instead (the

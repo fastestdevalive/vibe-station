@@ -1061,6 +1061,8 @@ pub(crate) fn provider_str(p: NormalizedEventProvider) -> String {
         NormalizedEventProvider::Cursor => "cursor".to_string(),
         NormalizedEventProvider::Opencode => "opencode".to_string(),
         NormalizedEventProvider::Agy => "agy".to_string(),
+        NormalizedEventProvider::Codex => "codex".to_string(),
+        NormalizedEventProvider::Pi => "pi".to_string(),
     }
 }
 

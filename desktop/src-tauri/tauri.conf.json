@@ -40,7 +40,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/cloudflared", "binaries/vst", "binaries/agy-acp"],
+    "externalBin": ["binaries/cloudflared", "binaries/vst", "binaries/agy-acp", "binaries/codex-acp"],
     "resources": {
       "../../vendor/claude-acp/node_modules": "claude-acp-vendor/node_modules"
     },

@@ -4928,17 +4928,21 @@ fn cli_name(cli: vst_types::CliId) -> &'static str {
         vst_types::CliId::Cursor => "cursor",
         vst_types::CliId::Opencode => "opencode",
         vst_types::CliId::Agy => "agy",
+        vst_types::CliId::Codex => "codex",
+        vst_types::CliId::Pi => "pi",
     }
 }
 
 /// Map a live JSON agent's `NormalizedEventProvider` back to a `CliId` for the
-/// resume mode-fallback (the two enums share the same four variants).
+/// resume mode-fallback (the two enums share the same six variants).
 fn provider_to_cli(p: NormalizedEventProvider) -> CliId {
     match p {
         NormalizedEventProvider::Claude => CliId::Claude,
         NormalizedEventProvider::Cursor => CliId::Cursor,
         NormalizedEventProvider::Opencode => CliId::Opencode,
         NormalizedEventProvider::Agy => CliId::Agy,
+        NormalizedEventProvider::Codex => CliId::Codex,
+        NormalizedEventProvider::Pi => CliId::Pi,
     }
 }
 

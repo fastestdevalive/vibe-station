@@ -10,11 +10,13 @@ mod common;
 
 use vst_agents::agy::create_agy_plugin;
 use vst_agents::claude::create_claude_plugin;
+use vst_agents::codex::create_codex_plugin;
 use vst_agents::cursor::create_cursor_plugin;
 use vst_agents::home::with_home;
 use vst_agents::opencode::create_opencode_plugin;
 use vst_agents::paths::Paths;
-use vst_agents::plugin::{CaptureArgs, ComposePromptInput, RestoreArgs};
+use vst_agents::pi::create_pi_plugin;
+use vst_agents::plugin::{CaptureArgs, CaptureNativeChatIdArgs, ComposePromptInput, RestoreArgs};
 use vst_agents::{resolve_plugin, AgentPlugin, CliId};
 use vst_types::Channel;
 
@@ -45,6 +47,8 @@ mod resolution {
         assert_eq!(resolve_plugin(CliId::Cursor).name(), "cursor");
         assert_eq!(resolve_plugin(CliId::Opencode).name(), "opencode");
         assert_eq!(resolve_plugin(CliId::Agy).name(), "agy");
+        assert_eq!(resolve_plugin(CliId::Codex).name(), "codex");
+        assert_eq!(resolve_plugin(CliId::Pi).name(), "pi");
     }
 
     #[test]
@@ -748,6 +752,748 @@ mod opencode_hooks {
             .filter(|l| l.trim() == ".opencode/")
             .count();
         assert_eq!(occurrences, 1);
+    }
+}
+
+mod codex_plugin {
+    use super::*;
+
+    const LIVE_ID: &str = "01a0ffb0-70ee-7ac0-86ea-d98c15c32eaf";
+    const T1: &str = "01a0ffb0-0000-7000-8000-000000000001";
+    const T2: &str = "01a0ffb0-0000-7000-8000-000000000002";
+    const STALE_ID: &str = "01a0ff4a-8b99-70d2-a7bb-272b461b37c1";
+
+    /// Create the rollout file codex would have written for `id` under `home`.
+    fn seed_rollout(home: &std::path::Path, id: &str) {
+        let day = home.join(".codex/sessions/2026/01/01");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join(format!("rollout-2026-01-01T00-00-00-{id}.jsonl")),
+            b"",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn launch_command_starts_with_codex() {
+        assert_eq!(
+            create_codex_plugin().get_launch_command(&launch_cfg_worktree())[0],
+            "codex"
+        );
+    }
+
+    #[test]
+    fn launch_command_resumes_with_agent_chat_id() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), LIVE_ID);
+        let mut cfg = launch_cfg_worktree();
+        cfg.session.agent_chat_id = Some(LIVE_ID.into());
+        let cmd = create_codex_plugin().get_launch_command(&cfg);
+        let resume_idx = cmd.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(cmd[resume_idx + 1], LIVE_ID);
+    }
+
+    #[test]
+    fn launch_command_and_prompt_skip_resume_when_the_rollout_is_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let mut cfg = launch_cfg_worktree();
+        cfg.session.agent_chat_id = Some(STALE_ID.into());
+        let cmd = create_codex_plugin().get_launch_command(&cfg);
+        assert!(!cmd.iter().any(|a| a == "resume"), "{cmd:?}");
+        let mut input = compose_input(Some("task"));
+        input.launch_cfg.session.agent_chat_id = Some(STALE_ID.into());
+        let line = create_codex_plugin()
+            .compose_launch_prompt(input)
+            .shell_line
+            .unwrap();
+        assert!(!line.contains("resume"), "{line}");
+    }
+
+    #[test]
+    fn launch_command_includes_hook_trust_fresh_and_resume() {
+        let fresh = create_codex_plugin().get_launch_command(&launch_cfg_worktree());
+        assert!(
+            fresh.iter().any(|a| a == "--dangerously-bypass-hook-trust"),
+            "fresh launch argv must include --dangerously-bypass-hook-trust: {fresh:?}"
+        );
+        let bypass_idx = fresh
+            .iter()
+            .position(|a| a == "--dangerously-bypass-approvals-and-sandbox")
+            .unwrap();
+        assert_eq!(
+            fresh.get(bypass_idx + 1).map(String::as_str),
+            Some("--dangerously-bypass-hook-trust"),
+            "hook-trust must immediately follow the sandbox-bypass flag"
+        );
+
+        let mut cfg = launch_cfg_worktree();
+        cfg.session.agent_chat_id = Some("uuid-abc".into());
+        let resume = create_codex_plugin().get_launch_command(&cfg);
+        assert!(
+            resume
+                .iter()
+                .any(|a| a == "--dangerously-bypass-hook-trust"),
+            "resume launch argv must include --dangerously-bypass-hook-trust: {resume:?}"
+        );
+    }
+
+    #[test]
+    fn compose_launch_prompt_shell_line_includes_hook_trust() {
+        let result =
+            create_codex_plugin().compose_launch_prompt(compose_input(Some("do the thing")));
+        let shell_line = result
+            .shell_line
+            .expect("task prompt must yield a shell line");
+        assert!(
+            shell_line.contains("--dangerously-bypass-hook-trust"),
+            "shell_line must include --dangerously-bypass-hook-trust: {shell_line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_command_uses_agent_chat_id_without_fs() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), LIVE_ID);
+        let plugin = create_codex_plugin();
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some(LIVE_ID.into());
+        let result = plugin
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/tmp/vst-test-cwd",
+                model: None,
+            })
+            .await;
+        let argv = result.expect("restore command must be Some");
+        let resume_idx = argv
+            .iter()
+            .position(|a| a == "resume")
+            .expect("must contain resume");
+        assert_eq!(argv.get(resume_idx + 1).map(String::as_str), Some(LIVE_ID));
+        assert_eq!(
+            argv,
+            vec![
+                "codex".to_string(),
+                "--no-daemon".to_string(),
+                "--no-alt-screen".to_string(),
+                "resume".to_string(),
+                LIVE_ID.to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "--dangerously-bypass-hook-trust".to_string(),
+                "-c".to_string(),
+                "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"/tmp/vst-test-cwd/.codex/vibe-recorder.sh\"}]}]".to_string(),
+                "-c".to_string(),
+                "hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"/tmp/vst-test-cwd/.codex/vibe-uploads.sh\"}]}]".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_command_null_without_agent_chat_id_or_fs_match() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let plugin = create_codex_plugin();
+        let session = make_session("s1");
+        let result = plugin
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/tmp/vst-test-cwd",
+                model: None,
+            })
+            .await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn capture_chat_id_reads_and_consumes_the_per_session_token_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), "thread-for-s1\n").unwrap();
+        std::fs::write(ids.join("s2"), "thread-for-s2").unwrap();
+
+        let plugin = create_codex_plugin();
+        let args = |sid: &str| (make_session(sid), make_project("p1"));
+        let (s1, p1) = args("s1");
+        let id = plugin
+            .capture_chat_id(CaptureArgs {
+                session: &s1,
+                project: &p1,
+                cwd,
+                worktree: None,
+            })
+            .await;
+        assert_eq!(id.as_deref(), Some("thread-for-s1"));
+        assert!(!ids.join("s1").exists(), "token file is consumed");
+        // The sibling session in the same worktree keeps ITS id.
+        assert!(ids.join("s2").exists());
+        let (s2, p2) = args("s2");
+        let id2 = plugin
+            .capture_chat_id(CaptureArgs {
+                session: &s2,
+                project: &p2,
+                cwd,
+                worktree: None,
+            })
+            .await;
+        assert_eq!(id2.as_deref(), Some("thread-for-s2"));
+        // No token file (hook not run yet) → None, never "the newest rollout".
+        let (s3, p3) = args("s3");
+        assert_eq!(
+            plugin
+                .capture_chat_id(CaptureArgs {
+                    session: &s3,
+                    project: &p3,
+                    cwd,
+                    worktree: None
+                })
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_command_heals_a_stale_stored_id_from_the_recorded_one() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), LIVE_ID);
+        let dir = tempfile::tempdir().unwrap();
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), LIVE_ID).unwrap();
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some(STALE_ID.into());
+        let argv = create_codex_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: dir.path().to_str().unwrap(),
+                model: None,
+            })
+            .await
+            .expect("resumes the recorded conversation");
+        let i = argv.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(argv[i + 1], LIVE_ID);
+    }
+
+    #[tokio::test]
+    async fn refresh_chat_id_on_toggle_replaces_only_a_stale_stored_id() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), LIVE_ID);
+        let dir = tempfile::tempdir().unwrap();
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), LIVE_ID).unwrap();
+        let refresh = |stored: Option<&str>| {
+            let mut session = make_session("s1");
+            session.agent_chat_id = stored.map(Into::into);
+            let cwd = dir.path().to_str().unwrap().to_string();
+            async move {
+                create_codex_plugin()
+                    .refresh_chat_id_on_toggle(CaptureArgs {
+                        session: &session,
+                        project: &make_project("p1"),
+                        cwd: &cwd,
+                        worktree: None,
+                    })
+                    .await
+            }
+        };
+        assert_eq!(refresh(Some(STALE_ID)).await.as_deref(), Some(LIVE_ID));
+        // live stored id (== recorded) or no stored id: leave it alone
+        assert_eq!(refresh(Some(LIVE_ID)).await, None);
+        assert_eq!(refresh(None).await, None);
+    }
+
+    #[tokio::test]
+    async fn restore_command_falls_back_to_fresh_when_the_rollout_is_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), "01a0ffb1-f666-7d93-8d91-513f4e92c16e");
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some(STALE_ID.into());
+        let result = create_codex_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/tmp/vst-test-cwd",
+                model: None,
+            })
+            .await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn restore_command_uses_the_recorded_thread_id_of_this_session_only() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_rollout(home.path(), T1);
+        seed_rollout(home.path(), T2);
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), T1).unwrap();
+        std::fs::write(ids.join("s2"), T2).unwrap();
+        let plugin = create_codex_plugin();
+        let resume_id = |sid: &'static str| {
+            let plugin = &plugin;
+            async move {
+                let session = make_session(sid);
+                plugin
+                    .get_restore_command(RestoreArgs {
+                        session: &session,
+                        project: &make_project("p1"),
+                        cwd,
+                        model: None,
+                    })
+                    .await
+                    .map(|argv| argv[argv.iter().position(|a| a == "resume").unwrap() + 1].clone())
+            }
+        };
+        assert_eq!(resume_id("s1").await.as_deref(), Some(T1));
+        assert_eq!(resume_id("s2").await.as_deref(), Some(T2));
+        // Not consumed by restore (capture_chat_id persists + deletes it later).
+        assert!(ids.join("s1").exists());
+        // No recorded id for this session → fresh launch, not "the newest thread".
+        assert_eq!(resume_id("s3").await, None);
+    }
+
+    #[tokio::test]
+    async fn recorder_script_writes_session_id_from_stdin_json_per_token() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        create_codex_plugin()
+            .setup_workspace_hooks(dir.path().to_str().unwrap())
+            .await;
+        let script = dir.path().join(".codex/vibe-recorder.sh");
+        assert!(script.exists());
+        let run = |token: Option<&str>, stdin: &str| {
+            let mut cmd = Command::new(&script);
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd.env_remove("VST_SPAWN_TOKEN");
+            if let Some(t) = token {
+                cmd.env("VST_SPAWN_TOKEN", t);
+            }
+            let mut child = cmd.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stdin.as_bytes())
+                .unwrap();
+            child.wait().unwrap().success()
+        };
+        let event = r#"{"session_id":"01a0ff7f-5c61-7740-bfd8-456e36b653c7","cwd":"/x","hook_event_name":"SessionStart","source":"startup"}"#;
+        assert!(run(Some("sess-a"), event));
+        let file = dir.path().join(".vibe-station/agent-chat-ids/sess-a");
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            "01a0ff7f-5c61-7740-bfd8-456e36b653c7"
+        );
+        // No token, or no session_id in the payload: exits 0 and writes nothing.
+        assert!(run(None, event));
+        assert!(run(Some("sess-b"), "{}"));
+        assert!(!dir
+            .path()
+            .join(".vibe-station/agent-chat-ids/sess-b")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn capture_native_chat_id_prefers_known_agent_chat_id() {
+        let plugin = create_codex_plugin();
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some("known".into());
+        let project = make_project("p1");
+        let result = plugin
+            .capture_native_chat_id(CaptureNativeChatIdArgs {
+                session: &session,
+                project: &project,
+                cwd: "/tmp/vst-test-cwd",
+                acp_session_id: "other-acp-id",
+            })
+            .await;
+        assert_eq!(result, Some("known".to_string()));
+    }
+
+    #[tokio::test]
+    async fn capture_native_chat_id_falls_back_to_acp_session_id() {
+        let plugin = create_codex_plugin();
+        let session = make_session("s1");
+        let project = make_project("p1");
+        let result = plugin
+            .capture_native_chat_id(CaptureNativeChatIdArgs {
+                session: &session,
+                project: &project,
+                cwd: "/tmp/vst-test-cwd",
+                acp_session_id: "acp-abc",
+            })
+            .await;
+        assert_eq!(result, Some("acp-abc".to_string()));
+    }
+
+    #[test]
+    fn acp_initial_config_option_returns_model_config_pair() {
+        assert_eq!(
+            create_codex_plugin().acp_initial_config_option("gpt-6-astra"),
+            Some(("model".to_string(), "gpt-6-astra".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn setup_workspace_hooks_writes_executable_upload_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        create_codex_plugin().setup_workspace_hooks(root).await;
+        let script = dir.path().join(".codex/vibe-uploads.sh");
+        assert!(script.exists(), ".codex/vibe-uploads.sh should exist");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&script).unwrap().permissions().mode();
+            assert_ne!(mode & 0o111, 0, "script should be executable");
+        }
+        let content = std::fs::read_to_string(&script).unwrap();
+        assert!(content.contains("VST_SPAWN_TOKEN"));
+        assert!(content.contains("pending-uploads"));
+    }
+
+    #[tokio::test]
+    async fn setup_workspace_hooks_gitignores_dirs_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let plugin = create_codex_plugin();
+        plugin.setup_workspace_hooks(root).await;
+        plugin.setup_workspace_hooks(root).await;
+        let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        let count = |s: &str| gi.lines().filter(|l| l.trim() == s).count();
+        assert_eq!(count(".codex/"), 1, ".codex/ ignored exactly once");
+        assert_eq!(
+            count(".vibe-station/"),
+            1,
+            ".vibe-station/ ignored exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn setup_workspace_hooks_does_not_write_hooks_json() {
+        // codex resolves the project .codex layer from the main repo root, so a
+        // hooks.json in a worktree checkout is dead weight; the hook is passed via -c.
+        let dir = tempfile::tempdir().unwrap();
+        create_codex_plugin()
+            .setup_workspace_hooks(dir.path().to_str().unwrap())
+            .await;
+        assert!(dir.path().join(".codex/vibe-uploads.sh").exists());
+        assert!(!dir.path().join(".codex/hooks.json").exists());
+    }
+
+    #[test]
+    fn launch_command_registers_recorder_and_upload_hooks_via_config_override() {
+        let cfg = launch_cfg_worktree();
+        let argv = create_codex_plugin().get_launch_command(&cfg);
+        let values: Vec<&String> = argv
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.as_str() == "-c")
+            .map(|(i, _)| &argv[i + 1])
+            .collect();
+        assert_eq!(values.len(), 2);
+        let cwd = cfg.ctx.cwd.to_str().unwrap();
+        assert!(values[0].starts_with("hooks.SessionStart=[{hooks=[{type=\"command\",command=\""));
+        assert!(values[0].contains(&format!("{cwd}/.codex/vibe-recorder.sh")));
+        assert!(
+            values[1].starts_with("hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"")
+        );
+        assert!(values[1].contains(&format!("{cwd}/.codex/vibe-uploads.sh")));
+    }
+
+    #[test]
+    fn compose_launch_prompt_passes_the_system_prompt_as_developer_instructions_not_user_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut input = compose_input(Some("fix the bug"));
+        input.system_prompt = "# Sys \"quoted\"\nline2".into();
+        input.system_prompt_file = dir.path().join("system-prompt.md").display().to_string();
+        let line = create_codex_plugin()
+            .compose_launch_prompt(input)
+            .shell_line
+            .expect("shell line");
+        // Out of band: JSON/TOML-escaped, single-quoted for the shell.
+        assert!(
+            line.contains(r#"-c "$(cat '"#) && line.contains("developer_instructions.txt"),
+            "{line}"
+        );
+        assert!(!line.contains("Sys"), "prompt must not be inlined: {line}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("developer_instructions.txt")).unwrap(),
+            r##"developer_instructions="# Sys \"quoted\"\nline2""##
+        );
+        // The positional prompt is ONLY the task.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("task_prompt.txt")).unwrap(),
+            "fix the bug"
+        );
+        assert!(!line.contains("combined_prompt"));
+    }
+
+    #[test]
+    fn compose_launch_prompt_without_a_task_still_installs_the_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut input = compose_input(None);
+        input.system_prompt_file = dir.path().join("system-prompt.md").display().to_string();
+        let line = create_codex_plugin()
+            .compose_launch_prompt(input)
+            .shell_line
+            .expect("shell line");
+        assert!(line.contains("developer_instructions.txt"), "{line}");
+        assert!(!line.contains("task_prompt"), "{line}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("developer_instructions.txt")).unwrap(),
+            "developer_instructions=\"You are helpful\""
+        );
+    }
+
+    #[test]
+    fn compose_launch_prompt_keeps_a_huge_system_prompt_off_the_command_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut input = compose_input(Some("task"));
+        input.system_prompt = "x".repeat(60_000);
+        input.system_prompt_file = dir.path().join("system-prompt.md").display().to_string();
+        let line = create_codex_plugin()
+            .compose_launch_prompt(input)
+            .shell_line
+            .unwrap();
+        // tmux rejects commands over ~16 KB; the line must stay small.
+        assert!(line.len() < 4_000, "line is {} bytes", line.len());
+    }
+
+    #[test]
+    fn compose_launch_prompt_shell_line_registers_upload_hook() {
+        let out = create_codex_plugin().compose_launch_prompt(compose_input(Some("do the thing")));
+        let line = out.shell_line.expect("shell line");
+        assert!(line.contains(" -c 'hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\""));
+        assert!(line.contains(".codex/vibe-uploads.sh"));
+        assert!(line.contains(".codex/vibe-recorder.sh"));
+    }
+
+    #[tokio::test]
+    async fn upload_script_prints_and_deletes_pointers() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        create_codex_plugin()
+            .setup_workspace_hooks(root.to_str().unwrap())
+            .await;
+        let script = root.join(".codex/vibe-uploads.sh");
+
+        std::fs::create_dir_all(root.join(".vibe-station/pending-uploads/tok")).unwrap();
+        let pointer = root.join(".vibe-station/pending-uploads/tok/u1-a.txt");
+        std::fs::write(&pointer, "/tmp/a.txt").unwrap();
+
+        let out = std::process::Command::new("bash")
+            .arg(&script)
+            .env("VST_SPAWN_TOKEN", "tok")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("- /tmp/a.txt"), "stdout: {stdout}");
+        assert!(
+            !pointer.exists(),
+            "pointer should be deleted after printing"
+        );
+
+        let pointer2 = root.join(".vibe-station/pending-uploads/tok/u2-b.txt");
+        std::fs::write(&pointer2, "/tmp/b.txt").unwrap();
+        let out2 = std::process::Command::new("bash")
+            .arg(&script)
+            .env_remove("VST_SPAWN_TOKEN")
+            .output()
+            .unwrap();
+        assert!(out2.status.success());
+        assert!(out2.stdout.is_empty(), "no-token run must print nothing");
+        assert!(pointer2.exists(), "no-token run must not delete pointers");
+    }
+}
+
+mod pi_plugin {
+    use super::*;
+
+    #[tokio::test]
+    async fn setup_workspace_hooks_gitignores_vibe_station_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        create_pi_plugin()
+            .setup_workspace_hooks(dir.path().to_str().unwrap())
+            .await;
+        create_pi_plugin()
+            .setup_workspace_hooks(dir.path().to_str().unwrap())
+            .await;
+        let gi = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(
+            gi.lines().filter(|l| l.trim() == ".vibe-station/").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn compose_launch_prompt_delivers_the_system_prompt_with_or_without_a_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = |task: Option<&str>| {
+            let mut input = compose_input(task);
+            input.system_prompt = "x".repeat(60_000);
+            input.system_prompt_file = dir.path().join("system-prompt.md").display().to_string();
+            input.launch_cfg.ctx.cwd = dir.path().to_path_buf();
+            create_pi_plugin()
+                .compose_launch_prompt(input)
+                .shell_line
+                .expect("shell line")
+        };
+        let prompt_file = dir
+            .path()
+            .join(".vibe-station/pi-system-prompt")
+            .join(&compose_input(None).launch_cfg.session.id);
+        for line in [mk(None), mk(Some("do it"))] {
+            assert!(line.contains("--append-system-prompt '"), "{line}");
+            assert!(line.contains(&*prompt_file.to_string_lossy()), "{line}");
+            assert!(line.len() < 4_000, "line is {} bytes", line.len());
+        }
+        assert_eq!(std::fs::read_to_string(&prompt_file).unwrap().len(), 60_000);
+        assert!(!mk(None).contains("task_prompt"));
+        assert!(mk(Some("do it")).contains("task_prompt.txt"));
+    }
+
+    #[tokio::test]
+    async fn restore_command_re_passes_the_system_prompt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let session = make_session("s1");
+        let restore = || async {
+            create_pi_plugin()
+                .get_restore_command(RestoreArgs {
+                    session: &session,
+                    project: &make_project("p1"),
+                    cwd,
+                    model: None,
+                })
+                .await
+                .unwrap()
+        };
+        // No prompt file written yet: nothing to pass.
+        assert!(!restore()
+            .await
+            .iter()
+            .any(|a| a == "--append-system-prompt"));
+        let file = dir.path().join(".vibe-station/pi-system-prompt/s1");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "sys").unwrap();
+        let argv = restore().await;
+        let i = argv
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(argv[i + 1], file.to_string_lossy());
+    }
+
+    #[test]
+    fn launch_command_starts_with_pi() {
+        assert_eq!(
+            create_pi_plugin().get_launch_command(&launch_cfg_worktree())[0],
+            "pi"
+        );
+    }
+
+    #[test]
+    fn pi_does_not_support_json() {
+        assert!(!create_pi_plugin().supports_json());
+    }
+
+    #[test]
+    fn launch_command_uses_the_vst_session_id_as_the_pi_session_id() {
+        let mut cfg = launch_cfg_worktree();
+        cfg.session = make_session("sess-own");
+        let argv = create_pi_plugin().get_launch_command(&cfg);
+        let idx = argv
+            .iter()
+            .position(|a| a == "--session-id")
+            .expect("--session-id");
+        assert_eq!(argv[idx + 1], "sess-own");
+        // An established chat id wins (same value for sessions created by this code).
+        cfg.session.agent_chat_id = Some("established".into());
+        let argv = create_pi_plugin().get_launch_command(&cfg);
+        let idx = argv.iter().position(|a| a == "--session-id").unwrap();
+        assert_eq!(argv[idx + 1], "established");
+    }
+
+    #[test]
+    fn two_sessions_in_one_worktree_get_distinct_pi_session_ids() {
+        let id = |sid: &str| {
+            let mut cfg = launch_cfg_worktree();
+            cfg.session = make_session(sid);
+            let argv = create_pi_plugin().get_launch_command(&cfg);
+            let idx = argv.iter().position(|a| a == "--session-id").unwrap();
+            argv[idx + 1].clone()
+        };
+        assert_ne!(id("s1"), id("s2"));
+    }
+
+    #[tokio::test]
+    async fn capture_chat_id_is_the_vst_session_id() {
+        let session = make_session("s1");
+        let id = create_pi_plugin()
+            .capture_chat_id(CaptureArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/tmp/vst-test-cwd",
+                worktree: None,
+            })
+            .await;
+        assert_eq!(id.as_deref(), Some("s1"));
+    }
+
+    #[tokio::test]
+    async fn restore_command_resumes_this_sessions_own_id() {
+        let plugin = create_pi_plugin();
+        let restore = |session: vst_types::SessionRecord, model: Option<&'static str>| {
+            let plugin = &plugin;
+            async move {
+                plugin
+                    .get_restore_command(RestoreArgs {
+                        session: &session,
+                        project: &make_project("p1"),
+                        cwd: "/tmp/vst-test-cwd",
+                        model,
+                    })
+                    .await
+                    .expect("restore command must be Some")
+            }
+        };
+        assert_eq!(
+            restore(make_session("s1"), Some("deepseek-local/m")).await,
+            vec![
+                "pi".to_string(),
+                "--tui-mode".to_string(),
+                "regular".to_string(),
+                "--session-id".to_string(),
+                "s1".to_string(),
+                "--approve".to_string(),
+                "--model".to_string(),
+                "deepseek-local/m".to_string(),
+            ]
+        );
+        let mut known = make_session("s2");
+        known.agent_chat_id = Some("established".into());
+        let argv = restore(known, None).await;
+        let idx = argv.iter().position(|a| a == "--session-id").unwrap();
+        assert_eq!(argv[idx + 1], "established");
     }
 }
 

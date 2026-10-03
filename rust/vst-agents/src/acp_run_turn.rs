@@ -310,6 +310,8 @@ fn provider_name(p: NormalizedEventProvider) -> &'static str {
         NormalizedEventProvider::Cursor => "cursor",
         NormalizedEventProvider::Opencode => "opencode",
         NormalizedEventProvider::Agy => "agy",
+        NormalizedEventProvider::Codex => "codex",
+        NormalizedEventProvider::Pi => "pi",
     }
 }
 

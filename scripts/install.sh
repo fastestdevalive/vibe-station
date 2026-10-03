@@ -22,8 +22,8 @@
 # Gatekeeper checks. Download the .dmg from the Releases page and install it
 # the normal way instead.
 #
-# The CLI tarball also carries agy-acp and claude-acp (self-contained ACP adapters for
-# Rich Chat, no bun/node needed), installed beside vst. claude-acp is skipped on musl.
+# The CLI tarball also carries agy-acp, claude-acp and codex-acp (self-contained ACP adapters for
+# Rich Chat, no bun/node needed), installed beside vst. claude-acp and codex-acp are skipped on musl.
 #
 # Release assets consumed (GitHub Release of fastestdevalive/vibe-station):
 #   vst-<triple>.tar.gz              + vst-<triple>.tar.gz.sha256
@@ -253,6 +253,10 @@ install_cli() {
 	if is_musl && [ -f "$TMP/cli/claude-acp" ]; then
 		rm -f "$TMP/cli/claude-acp"
 		warn "musl system: the bundled claude-acp (glibc) was skipped, so Rich Chat for Claude sessions is unavailable here"
+	fi
+	if is_musl && [ -f "$TMP/cli/codex-acp" ]; then
+		rm -f "$TMP/cli/codex-acp"
+		warn "musl system: the bundled codex-acp (glibc) was skipped, so Rich Chat for Codex sessions is unavailable here"
 	fi
 	_n=0
 	# Accept either a flat archive or one wrapping directory (cargo-dist style).

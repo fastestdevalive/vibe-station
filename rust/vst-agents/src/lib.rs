@@ -58,6 +58,8 @@ pub mod acp_transport;
 pub mod agy;
 pub mod claude;
 pub mod claude_import;
+pub mod codex;
+pub mod codex_import;
 pub mod context;
 pub mod cursor;
 pub mod home;
@@ -72,6 +74,7 @@ pub mod opencode;
 pub mod opencode_config;
 pub mod opencode_import;
 pub mod paths;
+pub mod pi;
 pub mod plugin;
 pub mod prompt_builder;
 pub mod registry;
@@ -82,8 +85,10 @@ pub mod util;
 
 pub use agy::{create_agy_plugin, parse_agy_stream_line, AgyStreamState};
 pub use claude::{create_claude_plugin, format_skill_directive};
+pub use codex::create_codex_plugin;
 pub use cursor::{create_cursor_plugin, parse_cursor_stream_line};
 pub use opencode::{create_opencode_plugin, parse_opencode_stream_line};
+pub use pi::create_pi_plugin;
 pub use plugin::{
     prompt_verification_needle, AgentPlugin, LaunchConfig, PluginContext, PromptDelivery,
     ReadySignal,

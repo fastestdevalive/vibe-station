@@ -3,7 +3,7 @@
 //! Covers:
 //! - Modes:
 //!   - `load_modes`, `resolve_mode_id`, `json_unsupported_cli`, `find_mode`
-//!   - `GET /supported-clis` (returns all 4 CLIs with defaults, capabilities, native history support)
+//!   - `GET /supported-clis` (returns all 6 CLIs with defaults, capabilities, native history support)
 //!   - `GET /cli-models?cli=` (caches results with TTL, deduplicates concurrent requests)
 //!   - `GET /modes` (lists all modes from file/cache)
 //!   - `POST /modes` (validation: name 1-64, context 1-10000, model <= 100, conflict 409, max 20 400, broadcasts `ModeCreated`)
@@ -109,7 +109,7 @@ async fn test_modes_supported_clis_and_models() {
     let routes = ModeRoutes::new(store, broadcaster);
 
     let supported = routes.list_supported_clis().await;
-    assert_eq!(supported.len(), 4);
+    assert_eq!(supported.len(), 6);
 
     let claude = supported.iter().find(|s| s.id == CliId::Claude).unwrap();
     // claude has no hardcoded default model (the adapter/account default applies).
@@ -133,6 +133,17 @@ async fn test_modes_supported_clis_and_models() {
     // are bridged — it must not support (or default to) the JSON channel.
     assert!(!agy.supports_json);
     assert_eq!(agy.default_channel, vst_types::Channel::Tmux);
+
+    let codex = supported.iter().find(|s| s.id == CliId::Codex).unwrap();
+    // Empty by design: codex has no fixed default; the account's default applies.
+    assert!(codex.default_model.is_empty());
+    assert!(codex.supports_json);
+    assert!(codex.imports_native_history);
+
+    let pi = supported.iter().find(|s| s.id == CliId::Pi).unwrap();
+    // Empty by design: pi is multi-provider, the user's own default applies.
+    assert!(pi.default_model.is_empty());
+    assert!(!pi.supports_json);
 
     // Test resolve_cli_models
     let models = routes.resolve_cli_models(CliId::Claude).await;

@@ -102,10 +102,21 @@ services:
       AGY_ACP_BIN: "/usr/local/bin/agy-acp"
     volumes:
       # Mount CLI binaries read-only so the daemon can shell out to them.
-      # Paths use $HOME — override with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN if yours differ.
+      # Paths use $HOME — override with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN, CODEX_PLATFORM_DIR, PI_BUNDLE_DIR if yours differ.
       - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
       - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
       - ${AGY_BIN:-${HOME}/.local/bin/agy}:/usr/local/bin/agy:ro
+      # codex — the real binary is the static-pie ELF inside the platform npm
+      # package (@openai/codex-linux-x64), NOT the Node.js launcher script.
+      # It needs siblings (codex-resources/ for bwrap/voice/zsh assets), so
+      # mount the whole x86_64-unknown-linux-musl/ vendor dir at /opt/codex-platform
+      # and let scripts/dev-entrypoint.sh symlink bin/codex into /usr/local/bin.
+      - ${CODEX_PLATFORM_DIR:-/var/empty}:/opt/codex-platform:ro
+      # pi — requires sibling files from its dist/bundle/ directory (cli-runtime.js,
+      # chunks/, etc.) so a single-file mount silently breaks it. Same pattern as
+      # cursor-agent: mount the whole bundle dir, symlink cli.js → /usr/local/bin/pi
+      # from inside the container where siblings are reachable.
+      - ${PI_BUNDLE_DIR:-/var/empty}:/opt/pi-bundle:ro
       # cursor-agent is NOT a single-file mount like the others — its own
       # launcher script does `realpath "$0"` and expects a bundled `node`
       # binary + numbered chunk `.js` files to sit in the SAME directory as
@@ -154,6 +165,17 @@ services:
       # own config/skills and is mounted in full.
       - ${OPENCODE_DATA_HOME:-${HOME}/.local/share/opencode}:/seed/opencode-data:ro
       - ${OPENCODE_CONFIG_HOME:-${HOME}/.config/opencode}:/seed/opencode-config:ro
+      # codex creds: `~/.codex/auth.json` holds the API key (OPENAI_API_KEY +
+      # tokens) codex needs to start. `~/.codex/config.toml` holds TUI prefs.
+      # Bulk runtime state (sessions/, sqlite DBs, cache/, tmp/, packages/,
+      # plugins/) is excluded — the sandbox doesn't need conversation history.
+      - ${CODEX_HOME:-${HOME}/.codex}:/seed/codex:ro
+      # pi creds/config (~/.pi/agent/{auth,models,settings}.json) so `pi --list-models` works.
+      - ${PI_AGENT_HOME:-${HOME}/.pi/agent}:/seed/pi-agent:ro
+      # codex-acp vendor: the ACP adapter for Codex Rich Chat, installed
+      # by scripts/install-codex-acp-vendor.sh into vendor/codex-acp/. Mount
+      # read-only so the daemon (running from /app) finds it by walking upward.
+      - ./vendor/codex-acp:/app/vendor/codex-acp:ro
 
       # Rust daemon/CLI binaries. Mount the host's pre-built DEBUG binaries
       # read-only (scripts/dev-sandbox.sh builds `cargo build -p vst-daemon -p

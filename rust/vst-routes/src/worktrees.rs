@@ -557,6 +557,8 @@ impl WorktreeRoutes {
                     vst_types::CliId::Cursor => "cursor",
                     vst_types::CliId::Opencode => "opencode",
                     vst_types::CliId::Agy => "agy",
+                    vst_types::CliId::Codex => "codex",
+                    vst_types::CliId::Pi => "pi",
                 };
                 return Err(WorktreeRouteError::Validation(format!(
                     "{name} does not support JSON chat mode"

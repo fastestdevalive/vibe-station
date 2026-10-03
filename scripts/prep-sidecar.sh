@@ -23,6 +23,8 @@
 #      claude-acp-vendor/node_modules, so it must exist before bundling.
 #   7. Build the agy-acp adapter (vendored openab submodule, built in
 #      isolation) → desktop/src-tauri/binaries/agy-acp-<triple>
+#   8. Compile the codex-acp adapter (bun build --compile) →
+#      desktop/src-tauri/binaries/codex-acp-<triple>
 #
 # Tauri resolves externalBin entries by appending the host triple, so the
 # triple suffix in the filename MUST match exactly what rustc reports.
@@ -140,7 +142,7 @@ bash "$SCRIPT_DIR/download-cloudflared.sh" --target "$TRIPLE"
 
 echo ""
 echo "==> Installing vendored claude-agent-acp adapter..."
-bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
+VST_VENDOR_FROZEN=1 bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
 
 # ── Step 7: build agy-acp adapter (vendored submodule) ───────────────────────
 # Delegate the build to the shared scripts/build-agy-acp.sh (which verifies the
@@ -159,6 +161,20 @@ echo "==> Copying agy-acp binary to binaries/..."
 cp "$SRC_AGY_ACP" "$DEST_AGY_ACP"
 chmod +x "$DEST_AGY_ACP"
 echo "    $(du -h "$DEST_AGY_ACP" | cut -f1)  $DEST_AGY_ACP"
+
+# ── Step 8: compile the codex-acp adapter (bun build --compile) ──────────────
+# Same sidecar shape as agy-acp: a self-contained executable staged as
+# binaries/codex-acp-<triple>, which Tauri places beside `vst` at runtime where
+# the daemon finds it (rust/vst-agents/src/codex.rs `codex_acp_bin`). Host
+# build — bun compiles for the machine it runs on.
+
+echo ""
+echo "==> Compiling codex-acp adapter (pinned, bun build --compile)..."
+SRC_CODEX_ACP="$(VST_VENDOR_FROZEN=1 bash "$SCRIPT_DIR/build-codex-acp.sh")"
+DEST_CODEX_ACP="$BINARIES_DIR/codex-acp-$TRIPLE$EXE_SUFFIX"
+cp "$SRC_CODEX_ACP" "$DEST_CODEX_ACP"
+chmod +x "$DEST_CODEX_ACP"
+echo "    $(du -h "$DEST_CODEX_ACP" | cut -f1)  $DEST_CODEX_ACP"
 
 echo ""
 echo "==> prep-sidecar done!"
