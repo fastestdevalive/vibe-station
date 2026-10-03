@@ -136,7 +136,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     saveEdit,
     discardEdit,
     sendNow,
-    forkTurn,
     setCanTrim,
   } = useChat(api, sessionId, enabled);
 
@@ -365,7 +364,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               worktreeId={contextId}
               scope={scope}
               {...(sessionId ? { sessionId } : {})}
-              onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
               onAtBottomChange={setAtBottom}
               {...(meta?.cwd ? { cwd: meta.cwd } : {})}
               commands={meta?.commands}

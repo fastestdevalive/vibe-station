@@ -8,6 +8,7 @@ import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
 import { SectionHeader } from "./SectionHeader";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { CliDetectionPanel } from "@/components/agent/CliDetectionPanel";
+import { cliDisplayName } from "@/lib/cliNames";
 
 interface ModesSettingProps {
   api: ApiInstance;
@@ -172,7 +173,7 @@ export function ModesSetting({ api }: ModesSettingProps) {
                     border: "var(--border-width) solid var(--border-default)",
                   }}
                 >
-                  {m.cli}
+                  {cliDisplayName(m.cli)}
                 </span>
                 {m.model ? (
                   <span

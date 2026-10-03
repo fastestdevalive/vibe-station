@@ -4,7 +4,7 @@ import { ModeIcon } from "./ModeIcon";
 
 describe("ModeIcon (2.T1 — keys, fallback, terminal frame)", () => {
   it("renders an inline SVG glyph for each known key", () => {
-    for (const key of ["claude", "agy", "opencode", "deepseek", "cursor"]) {
+    for (const key of ["claude", "agy", "opencode", "deepseek", "cursor", "codex", "pi"]) {
       const { container } = render(<ModeIcon iconKey={key} channel="json" />);
       expect(container.querySelector("svg")).toBeInTheDocument();
       expect(container.querySelector(".mode-icon__glyph--fallback")).toBeNull();

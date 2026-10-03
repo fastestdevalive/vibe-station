@@ -3,6 +3,7 @@ import type { ApiInstance } from "@/api";
 import type { Mode, SupportedCli } from "@/api/types";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { Select } from "@/components/ui/Select";
+import { cliDisplayName } from "@/lib/cliNames";
 
 interface CliDetectionPanelProps {
   api: ApiInstance;
@@ -142,7 +143,7 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <span style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{cli.id}</span>
+                  <span style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{cliDisplayName(cli.id)}</span>
                 </div>
                 {bundleErrors[cli.id] ? (
                   <div
@@ -224,7 +225,7 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                       Default channel
                     </span>
                     <Select
-                      aria-label={`Default channel for ${cli.id}`}
+                      aria-label={`Default channel for ${cliDisplayName(cli.id)}`}
                       value={current}
                       onChange={(e) => onChannelChange(e.target.value as "json" | "tmux")}
                       disabled={pendingChannelChanges.has(cli.id)}

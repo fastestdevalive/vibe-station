@@ -6,12 +6,12 @@ import { Paperclip } from "lucide-react";
 
 /**
  * CLIs with a `UserPromptSubmit` hook that consumes the pending-uploads
- * reference (json-mode-followups item 3, Decision 5). Claude-only at launch —
- * no fallback UX for cursor/opencode/agy, hard-gated: the control simply does
+ * reference (json-mode-followups item 3, Decision 5). claude + codex — no
+ * fallback UX for cursor/opencode/agy, hard-gated: the control simply does
  * not render for them (same shape as `TerminalChannelToggle`'s
  * `CHANNEL_TOGGLE_CLIS`).
  */
-const TERMINAL_UPLOAD_CLIS = new Set<CliId>(["claude"]);
+const TERMINAL_UPLOAD_CLIS = new Set<CliId>(["claude", "codex"]);
 
 interface TerminalAttachmentUploadProps {
   api: ApiInstance;

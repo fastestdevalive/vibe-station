@@ -1,7 +1,7 @@
 /* ModeIcon — glyph + optional terminal frame.
    Uses theme tokens (no bare hexes) so the frame/dots/font survive recolours.
-   Only the mode's own brand mark (claude/agy/deepseek) keeps its intrinsic
-   colour; currentColor glyphs (opencode/cursor) inherit `--fg-secondary`. */
+   Only the mode's own brand mark (claude/agy/deepseek/codex) keeps its intrinsic
+   colour; currentColor glyphs (opencode/cursor/pi) inherit `--fg-secondary`. */
 
 .mode-icon {
   display: inline-flex;

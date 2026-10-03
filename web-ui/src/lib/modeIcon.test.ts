@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import { deriveModeIcon, sessionModeId } from "./modeIcon";
 
 describe("deriveModeIcon (mirrors daemon default_mode_icon)", () => {
-  it("uses the CLI's own icon for claude/cursor/agy", () => {
+  it("uses the CLI's own icon for claude/cursor/agy/codex/pi", () => {
     expect(deriveModeIcon("claude", "opus")).toBe("claude");
     expect(deriveModeIcon("cursor", null)).toBe("cursor");
     expect(deriveModeIcon("agy", "Gemini 3.5 Flash")).toBe("agy");
+    expect(deriveModeIcon("codex", null)).toBe("codex");
+    expect(deriveModeIcon("pi", null)).toBe("pi");
   });
   it("opencode is model-aware: deepseek (case-insensitive) else opencode", () => {
     expect(deriveModeIcon("opencode", "deepseek-local/deepseek-v4-flash")).toBe("deepseek");
