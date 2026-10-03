@@ -711,4 +711,31 @@ describe("OOBE client methods (3.T1)", () => {
       alreadyComplete: false,
     });
   });
+
+  it.each(["claude", "codex", "pi", "cursor", "opencode", "agy"] as const)(
+    "createStarterBundle('%s') issues POST /api/modes/%s/starter-bundle",
+    async (cli) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          created: [{ id: `m-${cli}`, name: `${cli}-default`, cli, context: "" }],
+          alreadyPresent: [],
+          skipped: [],
+          usedFallback: false,
+          alreadyComplete: false,
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const api = createClientApi();
+      const result = await api.createStarterBundle(cli);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(`/api/modes/${cli}/starter-bundle`);
+      expect(init.method).toBe("POST");
+      expect(result.created).toEqual([
+        { id: `m-${cli}`, name: `${cli}-default`, cli, context: "" },
+      ]);
+    },
+  );
 });

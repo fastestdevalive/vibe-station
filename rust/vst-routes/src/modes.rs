@@ -413,14 +413,7 @@ impl ModeRoutes {
                 let plugin = (self.plugin_resolver)(cli);
                 let default_model = plugin.default_model().to_string();
                 let supports_json = plugin.supports_json();
-                let cli_name = match cli {
-                    CliId::Claude => "claude",
-                    CliId::Cursor => "cursor",
-                    CliId::Opencode => "opencode",
-                    CliId::Agy => "agy",
-                    CliId::Codex => "codex",
-                    CliId::Pi => "pi",
-                };
+                let cli_name = cli.as_str();
                 let imports_native_history = has_native_history_importer(cli_name);
                 let supports_json_to_terminal_resume = plugin.supports_json_to_terminal_resume();
                 let default_channel = resolve_effective_default_channel(&overrides, cli, &*plugin);
@@ -1171,6 +1164,54 @@ mod tests {
         assert!(out.created.iter().all(|m| m.name != "opus-planner"));
         // The other 2 entries are unaffected.
         assert_eq!(out.created.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_supported_for_all_clis() {
+        for &cli in &SUPPORTED_CLIS {
+            let dir = tempdir().unwrap();
+            let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+            let routes = ModeRoutes::new(store, Broadcaster::new(16))
+                .with_modes_file(dir.path().join("modes.json"))
+                .with_model_catalog(ModelCatalog::seeded(
+                    CliId::Claude,
+                    vec!["sonnet".into(), "opus".into(), "claude-fable-5-1".into()],
+                ));
+
+            let out = routes.ensure_starter_bundle(cli).await;
+            assert!(
+                out.models_error.is_none(),
+                "CLI {:?} failed with models_error: {:?}",
+                cli,
+                out.models_error
+            );
+            assert!(
+                !out.created.is_empty(),
+                "CLI {:?} created no starter modes",
+                cli
+            );
+            assert!(
+                out.primary_satisfied,
+                "CLI {:?} primary mode was not satisfied",
+                cli
+            );
+            for mode in &out.created {
+                assert_eq!(mode.cli, cli);
+                assert!(!mode.name.is_empty());
+                assert!(!mode.context.is_empty());
+                assert!(mode.icon.is_some());
+            }
+
+            // Second run: idempotency
+            let out2 = routes.ensure_starter_bundle(cli).await;
+            assert!(
+                out2.created.is_empty(),
+                "CLI {:?} re-created modes on second run",
+                cli
+            );
+            assert_eq!(out2.already_present.len(), out.created.len());
+            assert!(out2.primary_satisfied);
+        }
     }
 
     #[tokio::test]

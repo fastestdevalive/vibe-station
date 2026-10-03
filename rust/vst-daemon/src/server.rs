@@ -3812,12 +3812,9 @@ async fn handle_starter_bundle(
     State(state): State<AppState>,
     axum::extract::Path(cli): axum::extract::Path<String>,
 ) -> Result<Json<StarterBundleResult>, (StatusCode, Json<serde_json::Value>)> {
-    let cli_id = match cli.as_str() {
-        "claude" => vst_types::CliId::Claude,
-        "cursor" => vst_types::CliId::Cursor,
-        "opencode" => vst_types::CliId::Opencode,
-        "agy" => vst_types::CliId::Agy,
-        _ => {
+    let cli_id = match cli.parse::<vst_types::CliId>() {
+        Ok(c) => c,
+        Err(_) => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "unknown_cli" })),

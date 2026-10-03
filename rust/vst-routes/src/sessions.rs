@@ -4923,14 +4923,7 @@ fn session_type_str(t: SessionType) -> &'static str {
 }
 
 fn cli_name(cli: vst_types::CliId) -> &'static str {
-    match cli {
-        vst_types::CliId::Claude => "claude",
-        vst_types::CliId::Cursor => "cursor",
-        vst_types::CliId::Opencode => "opencode",
-        vst_types::CliId::Agy => "agy",
-        vst_types::CliId::Codex => "codex",
-        vst_types::CliId::Pi => "pi",
-    }
+    cli.as_str()
 }
 
 /// Map a live JSON agent's `NormalizedEventProvider` back to a `CliId` for the

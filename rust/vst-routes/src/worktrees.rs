@@ -552,14 +552,7 @@ impl WorktreeRoutes {
 
         if is_json {
             if let Some(cli) = json_unsupported_cli(&mode_id) {
-                let name = match cli {
-                    vst_types::CliId::Claude => "claude",
-                    vst_types::CliId::Cursor => "cursor",
-                    vst_types::CliId::Opencode => "opencode",
-                    vst_types::CliId::Agy => "agy",
-                    vst_types::CliId::Codex => "codex",
-                    vst_types::CliId::Pi => "pi",
-                };
+                let name = cli.as_str();
                 return Err(WorktreeRouteError::Validation(format!(
                     "{name} does not support JSON chat mode"
                 )));
