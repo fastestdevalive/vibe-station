@@ -121,6 +121,7 @@ impl JsonAgentSession {
                 prior_session_id: prior_acp_id.as_deref(),
                 acp_meta,
                 model_option,
+                extra_options: self.0.plugin.acp_session_config_options(),
                 on_first_retry: Some(&notify_retry),
             };
             let est = establish_with_recovery(

@@ -45,6 +45,8 @@ pub enum CliId {
     Cursor,
     Opencode,
     Agy,
+    Codex,
+    Pi,
 }
 
 id_newtype!(
@@ -171,6 +173,8 @@ pub enum NormalizedEventProvider {
     Cursor,
     Opencode,
     Agy,
+    Codex,
+    Pi,
 }
 
 /// Provider-agnostic chat event kind.

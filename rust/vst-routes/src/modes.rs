@@ -39,7 +39,9 @@ pub const MAX_MODES: usize = 20;
 pub const MAX_CONTEXT_LEN: usize = 10_000;
 pub const MAX_MODEL_LEN: usize = 100;
 /// Icon keys the web-ui ships an asset for; an explicit `icon` must be one of these.
-pub const KNOWN_MODE_ICONS: [&str; 5] = ["claude", "agy", "cursor", "opencode", "deepseek"];
+pub const KNOWN_MODE_ICONS: [&str; 7] = [
+    "claude", "agy", "cursor", "opencode", "deepseek", "codex", "pi",
+];
 
 fn validate_icon(icon: &str) -> Result<String, ModeRouteError> {
     let icon = icon.trim();
@@ -416,6 +418,8 @@ impl ModeRoutes {
                     CliId::Cursor => "cursor",
                     CliId::Opencode => "opencode",
                     CliId::Agy => "agy",
+                    CliId::Codex => "codex",
+                    CliId::Pi => "pi",
                 };
                 let imports_native_history = has_native_history_importer(cli_name);
                 let supports_json_to_terminal_resume = plugin.supports_json_to_terminal_resume();

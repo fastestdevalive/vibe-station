@@ -5,9 +5,10 @@
 //! P2.T3/T4/T5 and 1.T3/1.T5 exercise the transcript store's `importTransaction`
 //! (already ported in vst-store) and are out of scope for this crate.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use vst_agents::claude_import::{claude_native_store_path, create_claude_history_importer};
+use vst_agents::codex_import::create_codex_history_importer;
 use vst_agents::native_history_importer::{
     get_native_history_importer, has_native_history_importer, NativeHistoryImporter,
     NativeImportRequest,
@@ -425,18 +426,99 @@ fn opencode_adapter_golden() {
 }
 
 // ---------------------------------------------------------------------------
+// Codex (codex) at-rest adapter golden
+// ---------------------------------------------------------------------------
+const CODEX_CHAT_ID: &str = "01a0fe81-d235-7d23-a7f4-bc52ba3b91bf";
+const CODEX_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/codex/rollout-sample.jsonl"
+);
+
+/// Lay the fixture down under a store root as
+/// `2026/10/02/rollout-2026-10-02T21-25-15-<chat_id>.jsonl`, the real codex
+/// `YYYY/MM/DD/rollout-<ts>-<thread-uuid>.jsonl` layout.
+fn write_codex_store(store_root: &Path) -> PathBuf {
+    let d = store_root.join("2026").join("10").join("02");
+    std::fs::create_dir_all(&d).unwrap();
+    let content = std::fs::read_to_string(CODEX_FIXTURE).unwrap();
+    let file = d.join(format!("rollout-2026-10-02T21-25-15-{CODEX_CHAT_ID}.jsonl"));
+    std::fs::write(&file, content).unwrap();
+    file
+}
+
+#[test]
+fn codex_adapter_golden() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = tmp.path().join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    write_codex_store(&store);
+
+    let importer = create_codex_history_importer(Some(store.display().to_string()));
+    let r = importer.import(&req(CODEX_CHAT_ID, "/whatever"));
+
+    let kinds: Vec<_> = r.events.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            vst_types::NormalizedEventKind::User,
+            vst_types::NormalizedEventKind::ToolUse,
+            vst_types::NormalizedEventKind::ToolResult,
+            vst_types::NormalizedEventKind::Usage,
+            vst_types::NormalizedEventKind::Text,
+            vst_types::NormalizedEventKind::Usage,
+        ]
+    );
+    for e in &r.events {
+        assert_eq!(
+            e.turn_id.as_deref(),
+            Some("01a0fe81-d240-7ac0-817c-e84ac3fc941a")
+        );
+        assert_eq!(e.provider, vst_types::NormalizedEventProvider::Codex);
+    }
+    assert_eq!(r.next_watermark, "19");
+}
+
+#[test]
+fn codex_adapter_missing_store_echoes_watermark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = tmp.path().join("does-not-exist");
+    let importer = create_codex_history_importer(Some(store.display().to_string()));
+    let r = importer.import(&NativeImportRequest {
+        watermark: Some("7".into()),
+        ..req(CODEX_CHAT_ID, "/whatever")
+    });
+    assert!(r.events.is_empty());
+    assert_eq!(r.next_watermark, "7");
+}
+
+#[test]
+fn codex_adapter_ignores_nonmatching_thread_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = tmp.path().join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    write_codex_store(&store);
+    let importer = create_codex_history_importer(Some(store.display().to_string()));
+    // Different thread id -> no matching rollout file -> empty.
+    let r = importer.import(&req("ffffffff-0000-0000-0000-000000000000", "/whatever"));
+    assert!(r.events.is_empty());
+    assert_eq!(r.next_watermark, "");
+}
+
+// ---------------------------------------------------------------------------
 // Registry — P3 gate
 // ---------------------------------------------------------------------------
 #[test]
 fn importer_registry_gate() {
     assert!(has_native_history_importer("claude"));
     assert!(has_native_history_importer("opencode"));
+    assert!(has_native_history_importer("codex"));
     assert!(!has_native_history_importer("cursor"));
     assert!(!has_native_history_importer("agy"));
     assert_eq!(
         get_native_history_importer("claude").unwrap().cli(),
         "claude"
     );
+    assert_eq!(get_native_history_importer("codex").unwrap().cli(), "codex");
     assert!(get_native_history_importer("agy").is_none());
 }
 

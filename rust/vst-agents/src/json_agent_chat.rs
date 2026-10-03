@@ -46,6 +46,8 @@ fn cli_id_to_provider(id: CliId) -> NormalizedEventProvider {
         CliId::Cursor => NormalizedEventProvider::Cursor,
         CliId::Opencode => NormalizedEventProvider::Opencode,
         CliId::Agy => NormalizedEventProvider::Agy,
+        CliId::Codex => NormalizedEventProvider::Codex,
+        CliId::Pi => NormalizedEventProvider::Pi,
     }
 }
 
@@ -55,6 +57,8 @@ fn provider_to_cli_id(p: NormalizedEventProvider) -> CliId {
         NormalizedEventProvider::Cursor => CliId::Cursor,
         NormalizedEventProvider::Opencode => CliId::Opencode,
         NormalizedEventProvider::Agy => CliId::Agy,
+        NormalizedEventProvider::Codex => CliId::Codex,
+        NormalizedEventProvider::Pi => CliId::Pi,
     }
 }
 

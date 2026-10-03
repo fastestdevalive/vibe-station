@@ -135,6 +135,8 @@ pub(super) struct EstablishParams<'a> {
     pub acp_meta: Option<serde_json::Value>,
     /// `(config_id, value)` from the plugin; `None` = plugin doesn't care.
     pub model_option: Option<(String, String)>,
+    /// Best-effort `(config_id, value)` pairs from `acp_session_config_options`.
+    pub extra_options: Vec<(String, String)>,
     /// Called once, on the FIRST mismatch, only when a retry will actually
     /// follow: `(wanted, actual)`. Lets the caller tell the user why the chat
     /// is about to pause.
@@ -172,6 +174,13 @@ async fn establish_once<T: AcpTransport>(
             (o.session_id, false)
         }
     };
+
+    for (config_id, value) in &p.extra_options {
+        if let Err(e) = conn.set_config_option(config_id, value).await {
+            tracing::warn!(%config_id, %value, error = %e,
+                "acp_session_config_options entry not applied (non-fatal)");
+        }
+    }
 
     // True when retrying cannot help (see `refusal_is_final`).
     let mut hopeless = false;
@@ -431,6 +440,7 @@ mod tests {
             prior_session_id: sc.prior,
             acp_meta: None,
             model_option: sc.model.map(|m| ("model".to_string(), m.to_string())),
+            extra_options: Vec::new(),
             on_first_retry: sc
                 .on_first_retry
                 .as_ref()

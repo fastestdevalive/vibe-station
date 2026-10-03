@@ -250,7 +250,7 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
             .unwrap_or(false)
     }) && all_ok;
 
-    for bin in ["claude", "cursor", "opencode", "agy"] {
+    for bin in ["claude", "cursor", "opencode", "agy", "codex", "pi"] {
         check(&format!("{bin} is on PATH"), || which(bin));
     }
 

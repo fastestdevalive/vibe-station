@@ -127,6 +127,11 @@ jobs:
           VST_VENDOR_FROZEN: "1"
         run: bash scripts/build-claude-acp.sh --target ${{ matrix.claude_target }}
 
+      - name: Build codex-acp adapter (pinned, frozen, bun --compile)
+        env:
+          VST_VENDOR_FROZEN: "1"
+        run: bash scripts/build-codex-acp.sh --target ${{ matrix.claude_target }}
+
       - name: Build agy-acp adapter
         run: bash scripts/build-agy-acp.sh --target ${{ matrix.target }}
 
@@ -192,6 +197,12 @@ jobs:
           (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CLAUDE:/bin/claude-acp:ro" -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/claude-acp > /tmp/acp-init.out || true
           grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
 
+          echo "==> Verifying codex-acp answers ACP initialize on a glibc distro (debian bullseye)..."
+          CODEX="rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp"
+          test -x "$CODEX"
+          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CODEX:/bin/codex-acp:ro" -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/codex-acp > /tmp/codex-init.out || true
+          grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
+
           echo "==> Booting the actual daemon inside Alpine and hitting /health..."
           docker run --rm -d --name vst-alpine-boot-check \
             -v "$(pwd)/$BIN:/bin/vst:ro" \
@@ -238,11 +249,14 @@ jobs:
         run: |
           CLAUDE="rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp"
           AGY="rust/target/agy-acp/${{ matrix.target }}/release/agy-acp"
-          test -x "$CLAUDE" && test -x "$AGY"
+          CODEX="rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp"
+          test -x "$CLAUDE" && test -x "$AGY" && test -x "$CODEX"
           printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
           # macOS has no `timeout`: let the server end on stdin EOF after the reply.
           (cat /tmp/acp-init.json; sleep 8) | "$CLAUDE" > /tmp/acp-init.out || true
           grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
+          (cat /tmp/acp-init.json; sleep 8) | "$CODEX" > /tmp/codex-init.out || true
+          grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
           # agy-acp is a stdio server: EOF on stdin ends it; only an exec failure (126/127) is fatal.
           set +e; "$AGY" </dev/null; RC=$?; set -e
           echo "agy-acp exit code: $RC"
@@ -256,11 +270,12 @@ jobs:
           mkdir -p "$DIST_DIR"
 
           ASSET="vst-${{ matrix.target }}.tar.gz"
-          # vst + agy-acp + claude-acp (see scripts/package-cli-tarball.sh)
+          # vst + agy-acp + claude-acp + codex-acp (see scripts/package-cli-tarball.sh)
           bash scripts/package-cli-tarball.sh \
             "$BIN_DIR/vst" \
             "rust/target/agy-acp/${{ matrix.target }}/release/agy-acp" \
             "rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp" \
+            "rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp" \
             "$DIST_DIR/$ASSET"
 
           cd "$DIST_DIR"

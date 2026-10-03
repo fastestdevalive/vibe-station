@@ -145,6 +145,8 @@ each plugin declares it only by which optional methods it implements:
 | opencode | `identical` | Yes | not implemented | `true` (default) | Resumes correctly |
 | agy | `bridged` | No — but the `agy-acp` adapter persists an ACP-id-keyed mapping in `~/.vibe-station/agy-acp/sessions.json` | reads that file | `true` (default) | Resumes correctly; falls back to a cwd-keyed best effort only for sessions predating the store |
 | cursor | `unavailable` | No, and no bridge exists (`cursor-agent acp` stores sessions in `~/.cursor/acp-sessions/<id>/store.db`, separate from what `--resume` reads) | best-effort cwd-keyed guess | **`false`** (`cursor.rs`) | Starts a **fresh** terminal conversation (no crash, no bogus `--resume`); UI warns beforehand via `GET /supported-clis`. Rich Chat transcript is unaffected (lives in SQLite) |
+| codex | `bridged` | No — but `codex-acp`'s `session/new` sets `sessionId` directly to codex's native `thread_id`, so the native id is trivially recoverable with no separate lookup | `capture_native_chat_id` (trivial: adopts ACP session id verbatim) | `true` (default) | Resumes correctly via `codex resume <id>` |
+| pi | no ACP / no json channel | N/A — no ACP layer exists for pi | not implemented | `true` (default, but meaningless — json channel is never offered for pi) | N/A — terminal only |
 
 Per-CLI native-id resolvers live in `rust/vst-agents/src/native_chat_id.rs`; opencode's
 absence there is meaningful (its id never needs out-of-band discovery).
@@ -174,6 +176,8 @@ flowchart LR
 | cursor | **Yes** (`create-chat`) | N/A — known before spawn | Not needed | Not needed |
 | opencode | No | plugin `session.created` hook → session-scoped file, polled | Not needed | `capture_chat_id`, only if unset |
 | agy | No | none (no hook exists); polls per-session `--log-file` | **`refresh_chat_id_on_toggle`**, unconditional overwrite, single read | `capture_chat_id`, only if unset |
+| codex | No | `SessionStart` hook (`.codex/vibe-recorder.sh`) writes the thread id to `.vibe-station/agent-chat-ids/<sessionId>`; `capture_chat_id` / `get_restore_command` read it (per session, so two agents in one worktree never share a thread) | Not needed (ACP session id IS the native thread_id) | `capture_chat_id`, only if unset |
+| pi | No | Pre-assigned: launched with `--session-id <vst session id>` (pi creates it if missing, resumes it otherwise); `capture_chat_id` returns that id | N/A — no Rich Chat | `capture_chat_id`, only if unset |
 
 Rules that matter:
 - Every JSON turn's `session_init.agentChatId` is adopted **only if unset** (or
@@ -201,6 +205,8 @@ extension); otherwise the message is queued (cancel-and-resend is the ceiling).
 | opencode | **Disabled deliberately** | Advertises steering and replies `injected`, but the text never reaches the model (silently swallowed). Re-enable only after a fixed version is verified |
 | agy | Not supported | `agy-acp` has no `_session/steering`; handshake reports `false` |
 | cursor | Not supported | Closed binary, no steering surface; cancelling starts a fresh conversation |
+| codex | Not supported | `codex-acp` has no `_session/steering` extension |
+| pi | N/A | Terminal only — no Rich Chat channel at all |
 
 **Two gates, both required:** `supportsSteering` (what the CLI *claims* in
 `initialize`) **and** `plugin.supportsMidTurnSteering()` (what we *verified*,
@@ -225,6 +231,8 @@ send button's `aria-label` reads "Interrupts and steers the running turn" when
 |---|---|---|---|
 | claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and remaps `claude-sonnet-4-5` → `[1m]` variant and `claude-opus-4-5` → `[1m]` variant | Other models fall back to the default ceiling |
 | opencode / cursor / agy | CLI-managed | None | No ACP field exposes it |
+| codex | CLI-managed | None | No ACP field exposes it |
+| pi | CLI-managed | None | Terminal only — no ACP |
 
 Update sections 5–8 when a CLI ships a new ACP version or the daemon wires a
 new capability.

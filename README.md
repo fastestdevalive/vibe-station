@@ -99,7 +99,7 @@ The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re
 
 The `vst` binary contains the daemon and web UI; the desktop bundle adds `cloudflared` as a sidecar — you install neither Node.js nor pnpm.
 
-The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` (the pinned Claude adapter compiled with the bun runtime, so no bun or Node is needed) and `agy-acp` (shipped ready for agy Rich Chat, which is off while agy is terminal-only). They still drive your own `agy` / `claude` CLIs, which you must have installed. `claude-acp` is a glibc build and is skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
+The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Claude and Codex adapters compiled with the bun runtime, so no bun or Node is needed) and `agy-acp` (shipped ready for agy Rich Chat, which is off while agy is terminal-only). They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `claude-acp` and `codex-acp` are glibc builds and are skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
 
 **You still need** `tmux`, `git`, and at least one agent CLI on your `PATH`: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy. Run `vst doctor` to check.
 

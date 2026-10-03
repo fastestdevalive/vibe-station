@@ -426,6 +426,18 @@ pub trait AgentPlugin: Send + Sync {
         None
     }
 
+    /// Extra `(config_id, value)` pairs applied via `session/set_config_option`
+    /// right after the ACP session is created/loaded, before any prompt. Best
+    /// effort: a failure is logged and ignored. Unlike
+    /// `acp_initial_config_option` these are never compared or retried.
+    ///
+    /// For adapters whose default session mode is a sandboxed/approval-gated
+    /// one and must be switched to match vst's unattended-agent model (e.g.
+    /// codex-acp's `mode` = `agent-full-access`). Default: none.
+    fn acp_session_config_options(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Whether disposing this adapter's ACP connection must also SIGKILL its
     /// descendant process tree, including children that `setsid()` out of the
     /// process group the transport already kills.

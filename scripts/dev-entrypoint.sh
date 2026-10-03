@@ -43,16 +43,32 @@ if [ -d /opt/cursor-agent-versions ]; then
   fi
 fi
 
-# Drop in stubs for any missing CLI binaries so modes.json validates and demo-seed.sh doesn't fail
-for bin in claude cursor-agent; do
-  if [ ! -x "/usr/local/bin/$bin" ]; then
-    cat >"/usr/local/bin/$bin" <<'STUB'
-#!/usr/bin/env bash
-exec sleep infinity
-STUB
-    chmod +x "/usr/local/bin/$bin"
-  fi
-done
+# codex — the real binary is a static-pie ELF inside the platform package vendor
+# dir, NOT the Node.js launcher script (which needs its 427MB @openai/codex-linux-x64
+# optional dep alongside it). The vendor dir also holds codex-resources/ (bwrap,
+# voice, zsh) that codex looks for relative to its own path. Mount the whole
+# x86_64-unknown-linux-musl/ dir at /opt/codex-platform and symlink bin/codex.
+if [ -d /opt/codex-platform ] && [ -f /opt/codex-platform/bin/codex ]; then
+  ln -sf /opt/codex-platform/bin/codex /usr/local/bin/codex
+  echo "codex: symlinked to /opt/codex-platform/bin/codex"
+elif [ -d /opt/codex-platform ]; then
+  echo 'codex: WARNING — /opt/codex-platform is mounted but bin/codex not found; codex will not run' >&2
+fi
+
+# pi — same sibling-file problem as cursor-agent: cli.js loads ./cli-runtime.js
+# at runtime, so a single-file mount breaks it. Mount the whole dist/bundle/
+# dir at /opt/pi-bundle and symlink cli.js into /usr/local/bin/pi so the
+# loader can resolve siblings relative to the real path.
+if [ -d /opt/pi-bundle ] && [ -f /opt/pi-bundle/cli.js ]; then
+  ln -sf /opt/pi-bundle/cli.js /usr/local/bin/pi
+  echo "pi: symlinked to /opt/pi-bundle/cli.js"
+elif [ -d /opt/pi-bundle ]; then
+  echo 'pi: WARNING — /opt/pi-bundle is mounted but cli.js not found; pi will not run' >&2
+fi
+
+# No stubs for missing CLI binaries: a stub on PATH makes the daemon report the
+# CLI as "detected" (it just runs `which`), which is a lie on a machine that
+# doesn't have it installed. Only binaries the host actually mounts count.
 
 # Seed a writable ~/<name> dir from a read-only /seed/<name> mount, if one is
 # present, skipping any basenames listed in $3 (space-separated) — bulk,
@@ -158,6 +174,38 @@ seed_writable_home /seed/cursor-home /home/vst/.cursor "chats projects extension
 # opencode's own config/skills and is kept in full.
 seed_writable_home /seed/opencode-data /home/vst/.local/share/opencode "opencode.db opencode.db-shm opencode.db-wal snapshot repos"
 seed_writable_home /seed/opencode-config /home/vst/.config/opencode ""
+
+# codex — `auth.json` carries the OPENAI_API_KEY; `config.toml` carries TUI
+# prefs. Exclude bulk runtime state: sqlite DBs, sessions/, cache/, tmp/,
+# packages/, plugins/, shell_snapshots/, and lock dirs — the sandbox only
+# needs auth and config to start a fresh codex session.
+seed_writable_home /seed/codex /home/vst/.codex \
+  "sessions cache tmp packages plugins shell_snapshots thread-writer-locks tui-thread-reference-capabilities \
+   goals_1.sqlite goals_1.sqlite-shm goals_1.sqlite-wal \
+   logs_2.sqlite logs_2.sqlite-shm logs_2.sqlite-wal \
+   memories_1.sqlite memories_1.sqlite-shm memories_1.sqlite-wal \
+   queue_1.sqlite queue_1.sqlite-shm queue_1.sqlite-wal \
+   state_5.sqlite state_5.sqlite-shm state_5.sqlite-wal \
+   thread_history_1.sqlite thread_history_1.sqlite-shm thread_history_1.sqlite-wal"
+
+# pi — auth.json / models.json / settings.json under ~/.pi/agent. Without them
+# `pi --list-models` prints "No models available" and the model picker degrades
+# to a free-text field. Session history is excluded.
+seed_writable_home /seed/pi-agent /home/vst/.pi/agent "sessions bin"
+
+# codex and pi keep conversation history under ~/.codex and ~/.pi, which are
+# re-seeded from scratch whenever the container is recreated. Keep the history in
+# the persistent data volume instead, so a sandbox rebuild doesn't turn every
+# codex/pi session into one that can no longer be resumed.
+persist_cli_sessions() {
+  link="$1"; store="$2"
+  mkdir -p "$store" "$(dirname "$link")"
+  [ -L "$link" ] || { rm -rf "$link"; ln -s "$store" "$link"; }
+  chown -R vst:vst "$store" "$(dirname "$link")" 2>/dev/null || true
+}
+persist_cli_sessions /home/vst/.codex/sessions /home/vst/.vibe-station/cli-sessions/codex
+persist_cli_sessions /home/vst/.pi/agent/sessions /home/vst/.vibe-station/cli-sessions/pi
+
 
 # VST_SEED_MODE selects what gets seeded into this sandbox:
 #   demo                  (default) — 3 projects / 9 worktrees / 14 sessions,

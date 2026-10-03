@@ -543,6 +543,8 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
             vst_types::CliId::Cursor => "cursor",
             vst_types::CliId::Opencode => "opencode",
             vst_types::CliId::Agy => "agy",
+            vst_types::CliId::Codex => "codex",
+            vst_types::CliId::Pi => "pi",
         };
         let check_name = format!("plugin-{name}");
         let name_str = name.to_string();
@@ -597,16 +599,49 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         .await,
     );
 
-    // 8. orphan-sessions (Diagnostic, false)
+    // 8. codex-acp vendor install (the official ACP adapter for
+    // Codex, run via `bun` — see
+    // `rust/vst-agents/src/codex.rs::codex_acp_entry_path`). Only checked when
+    // codex itself is installed, so users without it aren't warned.
+    if resolve_bin_path("codex").is_some() {
+        // A bundled compiled `codex-acp` (curl install / desktop) needs no bun.
+        let entry = vst_agents::codex::codex_acp_bin()
+            .map(|b| b.to_string_lossy().to_string())
+            .unwrap_or_else(vst_agents::codex::codex_acp_entry_path);
+        let found = Path::new(&entry).is_file();
+        checks.push(if found {
+            DoctorCheck {
+                name: "codex-acp".to_string(),
+                status: DoctorStatus::Ok,
+                required: false,
+                group: CheckGroup::Feature,
+                message: format!("codex-acp adapter found at {entry} (Codex Rich Chat / ACP)"),
+                resolved_path: Some(entry),
+                install_hint: None,
+            }
+        } else {
+            DoctorCheck {
+                name: "codex-acp".to_string(),
+                status: DoctorStatus::Warn,
+                required: false,
+                group: CheckGroup::Feature,
+                message: "codex-acp adapter not found — Codex Rich Chat (ACP) will fail.".to_string(),
+                resolved_path: None,
+                install_hint: Some("./scripts/install-codex-acp-vendor.sh  (or set VST_CODEX_ACP_ENTRY to an existing dist/index.js)".to_string()),
+            }
+        });
+    }
+
+    // 9. orphan-sessions (Diagnostic, false)
     checks.push(check_orphan_sessions(store, tmux).await);
 
-    // 9. orphan-worktrees (Diagnostic, false)
+    // 10. orphan-worktrees (Diagnostic, false)
     checks.push(check_orphan_worktrees(store, paths).await);
 
-    // 10. github-cli (Feature, false)
+    // 11. github-cli (Feature, false)
     checks.push(check_github_cli().await);
 
-    // 11. github-auth (Feature, false)
+    // 12. github-auth (Feature, false)
     checks.push(check_github_auth().await);
 
     // Central install_hint population for all non-Ok checks
