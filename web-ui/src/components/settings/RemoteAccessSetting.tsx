@@ -715,6 +715,9 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   useEffect(() => {
     const offConnected = api.on("remote:connected", (e) => {
       if (e.type !== "remote:connected") return;
+      // The daemon sends remote:connected when a QR code is redeemed: the code
+      // is spent, so close the popup instead of leaving a dead code counting down.
+      setActiveQr(null);
       setSessions((prev) => {
         const idx = prev.findIndex((s) => s.tokenId === e.session.tokenId);
         if (idx >= 0) {

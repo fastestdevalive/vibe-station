@@ -180,10 +180,7 @@ impl TailscaleRoutes {
         let (code, expires_at) = self.code_store.mint_one_time_code("local");
         let qr_url = format!("{}/mobile-auth?code={}", https_url, code);
 
-        Ok(TailscaleQr {
-            qr_url,
-            expires_at: expires_at.to_string(),
-        })
+        Ok(TailscaleQr { qr_url, expires_at })
     }
 }
 

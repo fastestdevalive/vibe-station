@@ -595,3 +595,141 @@ async fn local_qr_refused_while_network_access_is_off() {
         vst_routes::mobile_auth::MobileAuthRouteError::NetworkAccessDisabled
     );
 }
+
+// ── remote:connected on QR redemption (lets the Settings QR popup close) ──
+
+fn sent_remote_connected(
+    sent: &Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) -> Vec<serde_json::Value> {
+    sent.lock()
+        .unwrap()
+        .iter()
+        .filter(|m| m["type"] == "remote:connected")
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn mobile_auth_redeem_broadcasts_remote_connected_once_per_new_device() {
+    use std::sync::atomic::AtomicUsize;
+    use vst_ws::broadcaster::WsHub;
+    use vst_ws::connection::{WsConnection, WsSinkHandle};
+
+    let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hub = Arc::new(WsHub::new());
+    hub.register_connection(&WsConnection::new(WsSinkHandle::from_parts(
+        sent.clone(),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(std::sync::Mutex::new(None)),
+    )));
+
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(
+        Some(AuthState::new("secret-daemon-key-12345", 0)),
+        code_store.clone(),
+        7421,
+        false,
+    )
+    .with_ws_hub(hub);
+
+    let ua = "Mozilla/5.0 (Linux; Android 13; Pixel 7)";
+
+    // A rejected code announces nothing.
+    let bad = routes
+        .mobile_auth(Some("nope".into()), Some("10.0.0.1"), false, ua)
+        .await;
+    assert_eq!(bad.status, 410);
+    assert!(sent_remote_connected(&sent).is_empty());
+
+    // A valid QR redemption announces the new device exactly once.
+    let (code, _) = code_store.mint_one_time_code("local");
+    let ok = routes
+        .mobile_auth(Some(code.clone()), Some("10.0.0.1"), false, ua)
+        .await;
+    assert_eq!(ok.status, 200);
+    let events = sent_remote_connected(&sent);
+    assert_eq!(
+        events.len(),
+        1,
+        "one remote:connected for the redeemed code"
+    );
+    assert_eq!(events[0]["session"]["scope"], "browser");
+    assert_eq!(events[0]["session"]["deviceName"], "Pixel 7");
+    assert_eq!(events[0]["session"]["connections"], 0);
+    assert!(events[0]["session"]["tokenId"]
+        .as_str()
+        .is_some_and(|t| !t.is_empty()));
+
+    // Replaying the burned code is a 410 and announces nothing more.
+    let replay = routes
+        .mobile_auth(Some(code), Some("10.0.0.1"), false, ua)
+        .await;
+    assert_eq!(replay.status, 410);
+    assert_eq!(sent_remote_connected(&sent).len(), 1);
+
+    // `/continue` (CLI-opened browser) is not a QR scan: no event.
+    let (cli_code, _) = routes.mint_continue_code(false).unwrap();
+    let cont = routes
+        .continue_redeem(Some(cli_code), Some("127.0.0.1"), ua)
+        .await;
+    assert_eq!(cont.status, 302);
+    assert_eq!(sent_remote_connected(&sent).len(), 1);
+}
+
+#[test]
+fn tailscale_qr_expires_at_serializes_as_a_number() {
+    let qr = vst_types::rest::tailscale::TailscaleQr {
+        qr_url: "https://m.ts.net/mobile-auth?code=x".into(),
+        expires_at: 1_791_000_000_000,
+    };
+    let v = serde_json::to_value(&qr).unwrap();
+    assert!(
+        v["expiresAt"].is_number(),
+        "client types.ts declares number: {v}"
+    );
+}
+
+// ── attacker-controlled `code` must never panic the log path ───────────────
+
+#[test]
+fn code_prefix_is_char_safe_and_masks_non_alphanumerics() {
+    use vst_routes::mobile_auth::code_prefix;
+    // Byte 8 of "aééééé" falls inside a multibyte char: byte-slicing would panic.
+    assert_eq!(code_prefix("a\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}"), "a?????");
+    assert_eq!(code_prefix("abc"), "abc");
+    assert_eq!(code_prefix("0123456789abcdef"), "01234567");
+    // Newlines / control chars can't forge log lines.
+    assert_eq!(code_prefix("ab\ncd\r\x1b[0m"), "ab?cd???");
+    assert_eq!(code_prefix(""), "");
+}
+
+#[tokio::test]
+async fn hostile_codes_get_410_without_panicking_on_both_redeem_routes() {
+    // tracing only evaluates log arguments when a subscriber is enabled for the
+    // level; install one (output discarded) so the log path is actually exercised.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(std::io::sink)
+        .try_init();
+    let routes = MobileAuthRoutes::new(
+        Some(AuthState::new("secret-daemon-key-12345", 0)),
+        OneTimeCodeStore::new(),
+        7421,
+        false,
+    );
+    let ua = "Mozilla/5.0 (Linux; Android 13; Pixel 7)";
+    for hostile in [
+        "a\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+        "ab\ncd",
+        "\u{1f600}\u{1f600}\u{1f600}",
+    ] {
+        let res = routes
+            .mobile_auth(Some(hostile.to_string()), Some("10.9.9.9"), false, ua)
+            .await;
+        assert_eq!(res.status, 410, "mobile-auth with {hostile:?}");
+        let res = routes
+            .continue_redeem(Some(hostile.to_string()), Some("10.9.9.9"), ua)
+            .await;
+        assert_eq!(res.status, 410, "continue with {hostile:?}");
+    }
+}

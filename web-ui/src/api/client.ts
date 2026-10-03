@@ -154,6 +154,11 @@ const MAX_BACKOFF_MS = 15000;
  *  connection, settle into the terminal `"disconnected"` state and wait for a
  *  manual Retry instead of retrying forever. */
 const MAX_RECONNECT_ATTEMPTS = 8;
+/** Close code used when the post-reconnect auth check is unreachable (not a logout). */
+const CLOSE_AUTH_UNVERIFIED = 4000;
+const AUTH_CHECK_TIMEOUT_MS = 8000;
+
+export type AuthCheckResult = "authed" | "unauthenticated" | "unreachable";
 const MAX_RECONNECT_ELAPSED_MS = 90_000;
 /** How long a connection must stay up (no reconnect) before the reconnect
  *  backoff is reset to `INITIAL_BACKOFF_MS` (socket-cycling fix). */
@@ -179,7 +184,7 @@ export function createClientApi() {
   let reconnectCycleStart: number | null = null;
   /** Phase 4: true once this client has successfully opened a socket before.
    *  The very first connection has no prior token to re-verify, so only
-   *  reconnects gate on a `checkAuth()` before flipping to `"online"`. */
+   *  reconnects gate on a `checkAuthStatus()` before flipping to `"online"`. */
   let hasConnectedBefore = false;
   /** Ref-counted subs: multiple components can sub to the same sessionId without
    *  one cleanup tearing down the others. */
@@ -300,16 +305,25 @@ export function createClientApi() {
     }
   }
 
-  /** Returns true if the current session cookie is valid. Shared by `api.checkAuth`
-   *  and the reconnect gate in `onopen` (Phase 4), so the post-reconnect auth check
-   *  is the exact same call `useAuth`'s `ws:open` recheck would have made. */
-  async function checkAuthNow(): Promise<boolean> {
+  /** Classifies the current session. Shared by `api.checkAuthStatus` and the
+   *  reconnect gate in `onopen`. Never rejects. Only 401/403 mean "logged out";
+   *  network errors, timeouts, 5xx/530/502 and non-JSON 200s (captive portal /
+   *  SPA fallback) are "unreachable" — a proxy/daemon hiccup, not a logout. */
+  async function checkAuthNow(): Promise<AuthCheckResult> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), AUTH_CHECK_TIMEOUT_MS);
     try {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/auth/check`);
-      return res.ok;
+      const res = await apiFetch(`${root}/auth/check`, { signal: ctrl.signal });
+      if (res.status === 401 || res.status === 403) return "unauthenticated";
+      if (!res.ok) return "unreachable";
+      // 200 alone is not proof — require the daemon's `{ok:true}` body.
+      const body = await res.json().catch(() => null);
+      return body?.ok === true ? "authed" : "unreachable";
     } catch {
-      return false;
+      return "unreachable";
+    } finally {
+      clearTimeout(t);
     }
   }
 
@@ -380,14 +394,20 @@ export function createClientApi() {
         // 401 before the real 4401 close lands a moment later.
         const isReconnect = hasConnectedBefore;
         if (isReconnect) {
-          const stillAuthed = await checkAuthNow();
+          const auth = await checkAuthNow();
           // Socket died or was replaced while awaiting auth — do not act on a
           // since-closed socket (the daemon's 4401 close can land during the await).
           if (ws !== socket || socket.readyState !== WebSocket.OPEN) return;
-          if (!stillAuthed) {
+          if (auth === "unauthenticated") {
             // Reuse the existing 4401 -> auth:expired -> LoginScreen path rather
             // than inventing a second auth-failure mechanism.
             socket.close(4401);
+            return;
+          }
+          if (auth === "unreachable") {
+            // Flaky /auth/check must not log the user out: close with a non-auth
+            // code so onclose falls through to the normal backoff reconnect.
+            socket.close(CLOSE_AUTH_UNVERIFIED);
             return;
           }
         }
@@ -1697,8 +1717,8 @@ export function createClientApi() {
       await apiFetch(`${root}/auth/logout`, { method: "POST" });
     },
 
-    /** Returns true if the current session cookie is valid. */
-    async checkAuth(): Promise<boolean> {
+    /** Tri-state session check; never rejects. */
+    async checkAuthStatus(): Promise<AuthCheckResult> {
       return checkAuthNow();
     },
 

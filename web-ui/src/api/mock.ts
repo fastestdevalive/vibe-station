@@ -2054,7 +2054,7 @@ export function createMockApi(seed: MockSeed = {}) {
     // Auth — mock always succeeds (no auth in test/mock mode)
     async login(_token: string): Promise<void> {},
     async logout(): Promise<void> {},
-    async checkAuth(): Promise<boolean> { return true; },
+    async checkAuthStatus(): Promise<"authed"> { return "authed"; },
 
     // Mobile / tunnel — stubs for mock mode
     async getTunnelStatus(): Promise<TunnelState> { return tunnelState; },
