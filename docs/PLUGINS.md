@@ -82,6 +82,36 @@ plugin via `compose_launch_prompt`:
 | **L2 — context** | Project name/path/default branch; current worktree branch + base branch/SHA; sibling sessions in the same worktree; mode-specific context. |
 | **L3 — rules** | Project rules from `<project>/AGENTS.md` or `<project>/.vibe-station/rules.md`, read at spawn time. |
 
+## Onboarding checklist
+
+Adding a new CLI terminal should not mean rediscovering the launch/resume bugs
+documented in `docs/CLI-LAUNCH-PITFALLS.md`. When you implement `<cli>.rs`,
+answer each of these against a real first launch on a clean host — not only
+your own machine:
+
+- **Where does the CLI install?** (nvm/npm global, cargo, brew, `~/.local/bin`, …)
+  Does that dir survive the daemon's PATH? The daemon captures the user's
+  interactive-shell PATH once at startup (`context::effective_path`, cached)
+  and launches agents with `sh -c "exec <line>"` — no login shell, so a
+  binary installed anywhere the user's shell sees should resolve. But verify:
+  on a host where the daemon started outside a configured shell, `PATH` is the
+  daemon's own — a CLI only on the user's `.bashrc` PATH won't be found.
+- **Does it need a ready signal or a timeout fallback?** `get_ready_signal`
+  returns a sentinel string to watch for in pane output, or a fallback delay.
+  If the CLI prints nothing recognizable on launch, rely on `fallback_ms`.
+- **When does it first persist a conversation?** Note the on-disk store
+  (e.g. pi writes a session file header at startup, before any message).
+  Existence of a file/id is **not** proof a conversation started.
+- **What does resume do on an empty conversation?** `get_restore_command`
+  MUST return `None` when the session has no stored id and no conversation of
+  its own; SHOULD verify ≥ 1 user turn before resuming (see the contract on
+  the trait). If a `--resume` on an unstarted conversation would skip the
+  initial prompt, gate it the way pi/codex do.
+- **Verify on a clean host:** `command -v <cli>` from a fresh non-login shell,
+  then create + resume an agent end-to-end. Confirm the binary resolves, the
+  first launch doesn't exit 127, and Resume re-sends the initial prompt when
+  the conversation never started.
+
 ## Tracker plugins
 
 Issue-tracker integration (GitHub/Linear/GitLab) is not implemented yet. The

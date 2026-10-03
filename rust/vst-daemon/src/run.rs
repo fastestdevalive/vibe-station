@@ -29,6 +29,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 
+use vst_agents::context::effective_path;
 use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_git::recover::{recover_not_started_sessions, sweep_direct_pty_sessions_on_boot};
@@ -385,6 +386,15 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     {
         tracing::error!("[vst] setupVstEnvironment failed (non-fatal): {e}");
     }
+
+    // ── Warm the effective PATH cache ────────────────────────────────────────
+    // Runs the one-time interactive-shell capture off the hot path so no spawn
+    // pays the ~5s worst case. Non-fatal: `effective_path()` always falls back
+    // to the daemon PATH. `spawn_blocking` so the blocking capture never stalls
+    // the async runtime.
+    let warm_handle = tokio::task::spawn_blocking(effective_path);
+    let _ = warm_handle.await;
+    tracing::debug!("[vst] effective PATH cached");
 
     // ── Manifest migration ───────────────────────────────────────────────────
     // One-time JSON → SQLite migration (idempotent after first successful boot).

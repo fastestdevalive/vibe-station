@@ -1328,6 +1328,23 @@ mod codex_plugin {
 mod pi_plugin {
     use super::*;
 
+    /// Seed a pi session file with a user turn under `home`, so pi's
+    /// conversation guard (`pi_conversation_started`) reports a started chat.
+    fn seed_pi_conversation(home: &std::path::Path, id: &str) {
+        let root = home.join(".pi/agent/sessions");
+        let dir = root.join("cwd-encoded");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("1700000000_{id}.jsonl")),
+            format!(
+                "{}\n{}",
+                r#"{"type":"session","session":{"id":""}}"#,
+                r#"{"type":"message","message":{"role":"user","content":"hi"}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn setup_workspace_hooks_gitignores_vibe_station_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -1373,6 +1390,9 @@ mod pi_plugin {
 
     #[tokio::test]
     async fn restore_command_re_passes_the_system_prompt_file() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_pi_conversation(home.path(), "s1");
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_str().unwrap();
         let session = make_session("s1");
@@ -1447,6 +1467,9 @@ mod pi_plugin {
 
     #[tokio::test]
     async fn capture_chat_id_is_the_vst_session_id() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_pi_conversation(home.path(), "s1");
         let session = make_session("s1");
         let id = create_pi_plugin()
             .capture_chat_id(CaptureArgs {
@@ -1461,6 +1484,8 @@ mod pi_plugin {
 
     #[tokio::test]
     async fn restore_command_resumes_this_sessions_own_id() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
         let plugin = create_pi_plugin();
         let restore = |session: vst_types::SessionRecord, model: Option<&'static str>| {
             let plugin = &plugin;
@@ -1476,6 +1501,7 @@ mod pi_plugin {
                     .expect("restore command must be Some")
             }
         };
+        seed_pi_conversation(home.path(), "s1");
         assert_eq!(
             restore(make_session("s1"), Some("deepseek-local/m")).await,
             vec![
@@ -1491,6 +1517,7 @@ mod pi_plugin {
         );
         let mut known = make_session("s2");
         known.agent_chat_id = Some("established".into());
+        seed_pi_conversation(home.path(), "established");
         let argv = restore(known, None).await;
         let idx = argv.iter().position(|a| a == "--session-id").unwrap();
         assert_eq!(argv[idx + 1], "established");
