@@ -614,21 +614,6 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         vst_home.clone(),
     ));
 
-    // ── agy-acp availability (non-fatal safety net) ──────────────────────────
-    // The openab agy-acp adapter binary is required for Rich Chat with the agy
-    // CLI. It's built from the vendored submodule (rust/vendor/openab/agy-acp)
-    // via scripts/build-agy-acp.sh and resolved through AGY_ACP_BIN / the
-    // Tauri sidecar / PATH. If it can't be resolved, agy Rich Chat will fail
-    // before ACP's initialize handshake — warn loudly rather than crashing,
-    // since not every deployment needs agy.
-    if !vst_agy_acp::agy_acp_available() {
-        tracing::warn!(
-            "agy-acp adapter binary could not be resolved (AGY_ACP_BIN/sidecar/PATH). \
-             Rich Chat with the agy CLI will fail until it is built. \
-             Build it with: scripts/build-agy-acp.sh"
-        );
-    }
-
     // The listener supervisor owns the accept loop; it swaps `127.0.0.1` ↔
     // `0.0.0.0` on a `NetworkControl::set` and drains on shutdown. Await it to
     // the end, same as the old `axum::serve(...).with_graceful_shutdown(...)`

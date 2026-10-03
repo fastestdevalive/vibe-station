@@ -2,7 +2,7 @@
 //! install this" text, consumed by both `vst-cli` (`vst doctor`) and
 //! `vst-daemon` (`GET /api/doctor`) so the two surfaces cannot drift.
 //!
-//! `bun`/`agy-acp`/`claude-agent-acp`/`cloudflared` strings below are
+//! `cloudflared` strings below are
 //! copied VERBATIM from `vst-cli/src/commands/doctor.rs`'s existing
 //! `print_hint(...)` calls (lines ~317-347) — Phase 4 makes the CLI call
 //! `hint_for` instead of inlining them, so wording cannot diverge.
@@ -17,13 +17,6 @@
 /// when bundled, or a check with no install story).
 pub fn hint_for(check_name: &str, host_os: &str) -> Option<&'static str> {
     match check_name {
-        "bun" => Some(if host_os == "macos" {
-            "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
-        } else if host_os == "windows" {
-            "curl -fsSL https://bun.sh/install | bash  (run inside WSL — there is no native Windows install path used by this project)"
-        } else {
-            "curl -fsSL https://bun.sh/install | bash"
-        }),
         "cloudflared" => Some(
             "brew install cloudflared  OR  https://developers.cloudflare.com/cloudflared/",
         ),
@@ -49,13 +42,9 @@ pub fn hint_for(check_name: &str, host_os: &str) -> Option<&'static str> {
             "windows" => "curl -fsSL https://opencode.ai/install | bash  (run inside WSL — there is no native Windows installer)",
             _ => "curl -fsSL https://opencode.ai/install | bash",
         }),
-        // `agy` is vendored (rust/vendor/openab/agy-acp), not a standalone
-        // public CLI install like claude/cursor/opencode — point at the
-        // same vendored-submodule build step the agy-acp check itself uses
-        // (see the "agy-acp" case above), not a guessed public URL.
-        "plugin-agy" => Some(
-            "Build it from the vendored submodule (rust/vendor/openab/agy-acp) — see AGENTS.md or docs/RICH-CHAT-ACP.md for the agy CLI itself",
-        ),
+        // `agy` has no standalone public install URL like claude/cursor/opencode —
+        // point at the docs rather than a guessed URL.
+        "plugin-agy" => Some("Install the agy CLI itself — see AGENTS.md or docs/RICH-CHAT-ACP.md"),
         "github-cli" => Some("https://cli.github.com"),
         "github-auth" => Some("gh auth login"),
         _ => None,
@@ -65,12 +54,6 @@ pub fn hint_for(check_name: &str, host_os: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bun_hint_contains_bun_install_url_on_linux() {
-        let hint = hint_for("bun", "linux").expect("bun hint on linux");
-        assert!(hint.contains("bun.sh/install"));
-    }
 
     #[test]
     fn unknown_check_returns_none() {

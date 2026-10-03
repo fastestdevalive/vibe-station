@@ -22,6 +22,9 @@
 # Gatekeeper checks. Download the .dmg from the Releases page and install it
 # the normal way instead.
 #
+# The CLI tarball also carries agy-acp and claude-acp (self-contained ACP adapters for
+# Rich Chat, no bun/node needed), installed beside vst. claude-acp is skipped on musl.
+#
 # Release assets consumed (GitHub Release of fastestdevalive/vibe-station):
 #   vst-<triple>.tar.gz              + vst-<triple>.tar.gz.sha256
 #   vibe-station-<triple>.AppImage   + .sha256          (glibc Linux only)
@@ -53,7 +56,7 @@ err() { printf 'vst-install: error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || err "required command '$1' not found"; }
 
 usage() {
-	sed -n '2,41p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+	sed -n '2,44p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
 	echo "See https://github.com/$REPO for usage."
 }
 
@@ -245,6 +248,12 @@ install_cli() {
 	mkdir -p "$TMP/cli"
 	tar -xzf "$TMP/$_asset" -C "$TMP/cli" || err "failed to extract $_asset"
 	mkdir -p "$INSTALL_DIR"
+	# claude-acp is a glibc build of bun: it cannot run on musl (e.g. Alpine).
+	# Skip it there so the daemon never launches a binary that cannot exec.
+	if is_musl && [ -f "$TMP/cli/claude-acp" ]; then
+		rm -f "$TMP/cli/claude-acp"
+		warn "musl system: the bundled claude-acp (glibc) was skipped, so Rich Chat for Claude sessions is unavailable here"
+	fi
 	_n=0
 	# Accept either a flat archive or one wrapping directory (cargo-dist style).
 	for _src in "$TMP/cli"/* "$TMP/cli"/*/*; do
@@ -260,6 +269,7 @@ install_cli() {
 	done
 	[ "$_n" -gt 0 ] || err "no executables found in $_asset"
 	[ -x "$INSTALL_DIR/vst" ] || err "archive did not contain a 'vst' binary"
+	say "if the vst daemon is already running, restart it to pick up the new version and adapters"
 	"$INSTALL_DIR/vst" --version >/dev/null 2>&1 ||
 		warn "$INSTALL_DIR/vst was installed but failed to run on this system"
 }

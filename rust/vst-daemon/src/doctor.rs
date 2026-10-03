@@ -5,7 +5,6 @@
 //! - tmux on PATH
 //! - git >= 2.20
 //! - supported CLIs (claude, cursor, opencode, agy) on PATH (warn if missing)
-//! - bun on PATH (warn if missing; required for claude ACP)
 //! - cloudflared (bundled via VST_CLOUDFLARED_BIN or on PATH)
 //! - tailscale on PATH
 //! - orphan tmux sessions (vr-* whose project/session is not in store)
@@ -575,35 +574,6 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
             .await,
         );
     }
-
-    // 5. bun (Optional, false)
-    checks.push(
-        with_timeout("bun", CheckGroup::Optional, false, || {
-            let path = resolve_bin_path("bun");
-            if let Some(path) = path {
-                DoctorCheck {
-                    name: "bun".to_string(),
-                    status: DoctorStatus::Ok,
-                    required: false,
-                    group: CheckGroup::Optional,
-                    message: "bun found on PATH (required for claude Rich Chat / ACP)".to_string(),
-                    resolved_path: Some(path),
-                    install_hint: None,
-                }
-            } else {
-                DoctorCheck {
-                    name: "bun".to_string(),
-                    status: DoctorStatus::Warn,
-                    required: false,
-                    group: CheckGroup::Optional,
-                    message: "bun not found on PATH — claude Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash".to_string(),
-                    resolved_path: None,
-                    install_hint: None,
-                }
-            }
-        })
-        .await,
-    );
 
     // 6. cloudflared (Optional, false — bundled via VST_CLOUDFLARED_BIN on desktop)
     checks.push(

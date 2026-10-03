@@ -254,16 +254,6 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
         check(&format!("{bin} is on PATH"), || which(bin));
     }
 
-    let bun_found = check(
-        "bun is on PATH (required for claude Rich Chat / ACP)",
-        || which("bun"),
-    );
-    if !bun_found {
-        if let Some(hint) = vst_types::rest::doctor_hints::hint_for("bun", std::env::consts::OS) {
-            print_hint(&format!("Install: {hint}"));
-        }
-    }
-
     let cloudflared_found = check("cloudflared", || which("cloudflared"));
     if !cloudflared_found {
         if let Some(hint) =

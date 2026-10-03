@@ -11,12 +11,13 @@
 # them: 666MB+, for zero benefit (confirmed via a real end-to-end ACP turn
 # with them omitted — see `rust/vst-agents/examples/acp_hello_bundled.rs`).
 #
-# A single-file compiled binary (`bun build --compile`) was tried and
-# rejected: it silently breaks the first time a real session is opened
-# ("Cannot find package '@anthropic-ai/claude-agent-sdk'") because that
-# dependency's per-platform optional variants can't be resolved from inside
-# a compiled binary's virtual filesystem. Running `bun` against this real,
-# unmodified `node_modules` install has none of that problem.
+# This script only installs the pinned adapter's node_modules. The curl-install
+# tarball does NOT ship that tree: scripts/build-claude-acp.sh compiles it with
+# `bun build --compile` into a self-contained `claude-acp` binary (verified with a
+# real prompt turn; an older note here claiming the compiled form fails at
+# `session/new` no longer reproduces on bun 1.4.2 + adapter 0.70.0). The tree
+# installed here is still what dev checkouts, the dev sandbox and the Tauri
+# desktop bundle run via `bun <entry.js>`.
 #
 # Requires: bun (https://bun.sh) — already a doctor-checked dependency for
 # agy's own ACP path, so this doesn't add a new tool to the project.
@@ -49,6 +50,12 @@ cd "$VENDOR_DIR"
 # network/registry/disk failure here should not look identical to a routine
 # lockfile mismatch), then retry without --frozen-lockfile.
 if ! frozen_err="$(bun install --omit=optional --frozen-lockfile 2>&1)"; then
+    # Release builds set VST_VENDOR_FROZEN=1: never publish unpinned dependencies.
+    if [[ "${VST_VENDOR_FROZEN:-0}" == "1" ]]; then
+        echo "error: frozen-lockfile install failed and VST_VENDOR_FROZEN=1 forbids the fallback:" >&2
+        echo "$frozen_err" >&2
+        exit 1
+    fi
     echo "warning: frozen-lockfile install failed, retrying without --frozen-lockfile (this may relax the pinned bun.lock if it did not match); original error:" >&2
     echo "$frozen_err" >&2
     bun install --omit=optional

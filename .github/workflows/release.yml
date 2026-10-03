@@ -39,6 +39,11 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
             is_musl: true
+            # claude-acp is the GLIBC bun build even in the musl tarball: the
+            # installer serves this tarball to glibc and musl systems alike,
+            # and a musl-linked bun cannot run on glibc (nor on bare Alpine
+            # without libstdc++). install.sh skips it on musl systems.
+            claude_target: x86_64-unknown-linux-gnu
           # Found in review: install.sh's own header comment already promises
           # aarch64-unknown-linux-musl as a published asset, but no CI job
           # ever built one — any aarch64 Linux curl-install would silently
@@ -47,6 +52,7 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             is_musl: true
+            claude_target: aarch64-unknown-linux-gnu
           # Intel macOS (x86_64-apple-darwin) deliberately dropped: the only
           # GitHub-hosted Intel runner left (macos-15-large) is a paid
           # "larger runners" tier this org doesn't have enabled -- see the
@@ -54,6 +60,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             is_musl: false
+            claude_target: aarch64-apple-darwin
 
     runs-on: ${{ matrix.os }}
 
@@ -109,6 +116,20 @@ jobs:
         with:
           workspaces: "rust -> target"
 
+      # ── ACP adapters shipped in the CLI tarball ───────────────────────────
+      - name: Setup Bun (compiles claude-acp)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Build claude-acp adapter (pinned, frozen, bun --compile)
+        env:
+          VST_VENDOR_FROZEN: "1"
+        run: bash scripts/build-claude-acp.sh --target ${{ matrix.claude_target }}
+
+      - name: Build agy-acp adapter
+        run: bash scripts/build-agy-acp.sh --target ${{ matrix.target }}
+
       # ── Build merged vst binary ───────────────────────────────────────────
       - name: Build merged vst release binary
         run: |
@@ -153,6 +174,24 @@ jobs:
           echo "Alpine --version output: $OUTPUT"
           test "$OUTPUT" = "${{ steps.ver.outputs.version }}"
 
+          echo "==> Verifying the bundled agy-acp executes under Alpine (static musl, bundled sqlite)..."
+          AGY="rust/target/agy-acp/${{ matrix.target }}/release/agy-acp"
+          test -x "$AGY"
+          # agy-acp is a stdio server: EOF on stdin ends it. Only an exec failure (126/127) is fatal.
+          set +e
+          docker run --rm -i -v "$(pwd)/$AGY:/bin/agy-acp:ro" -e HOME=/tmp alpine:latest timeout 10 /bin/agy-acp </dev/null
+          RC=$?
+          set -e
+          echo "agy-acp exit code under Alpine: $RC"
+          test "$RC" -ne 126 -a "$RC" -ne 127
+
+          echo "==> Verifying claude-acp answers ACP initialize on a glibc distro (debian bullseye)..."
+          CLAUDE="rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp"
+          test -x "$CLAUDE"
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
+          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CLAUDE:/bin/claude-acp:ro" -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/claude-acp > /tmp/acp-init.out || true
+          grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
+
           echo "==> Booting the actual daemon inside Alpine and hitting /health..."
           docker run --rm -d --name vst-alpine-boot-check \
             -v "$(pwd)/$BIN:/bin/vst:ro" \
@@ -193,6 +232,22 @@ jobs:
           test "$STATUS" = "401" || { echo "expected HTTP 401 under VST_NO_AUTH=1, got $STATUS"; exit 1; }
           echo "Confirmed: VST_NO_AUTH=1 is ignored by release binary (HTTP 401 returned)"
 
+      # ── Native smoke test of the bundled adapters (macOS: no docker above) ─
+      - name: Smoke-test bundled adapters natively
+        if: ${{ !matrix.is_musl }}
+        run: |
+          CLAUDE="rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp"
+          AGY="rust/target/agy-acp/${{ matrix.target }}/release/agy-acp"
+          test -x "$CLAUDE" && test -x "$AGY"
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
+          # macOS has no `timeout`: let the server end on stdin EOF after the reply.
+          (cat /tmp/acp-init.json; sleep 8) | "$CLAUDE" > /tmp/acp-init.out || true
+          grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
+          # agy-acp is a stdio server: EOF on stdin ends it; only an exec failure (126/127) is fatal.
+          set +e; "$AGY" </dev/null; RC=$?; set -e
+          echo "agy-acp exit code: $RC"
+          test "$RC" -ne 126 -a "$RC" -ne 127
+
       # ── Package archive + sha256 ──────────────────────────────────────────
       - name: Package archive and generate sha256
         run: |
@@ -201,7 +256,12 @@ jobs:
           mkdir -p "$DIST_DIR"
 
           ASSET="vst-${{ matrix.target }}.tar.gz"
-          tar -czf "$DIST_DIR/$ASSET" -C "$BIN_DIR" vst
+          # vst + agy-acp + claude-acp (see scripts/package-cli-tarball.sh)
+          bash scripts/package-cli-tarball.sh \
+            "$BIN_DIR/vst" \
+            "rust/target/agy-acp/${{ matrix.target }}/release/agy-acp" \
+            "rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp" \
+            "$DIST_DIR/$ASSET"
 
           cd "$DIST_DIR"
           if command -v sha256sum >/dev/null 2>&1; then
