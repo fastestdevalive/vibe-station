@@ -87,6 +87,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const insertTileIntoScratchCanvas = useWorkspaceStore((s) => s.insertTileIntoScratchCanvas);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
+  const openProjectAgentTab = useWorkspaceStore((s) => s.openProjectAgentTab);
   const chatFontVars = useMemo(() => {
     const vars: Record<string, string> = {};
     for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
@@ -425,6 +426,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 insertTileIntoScratchCanvas,
                 setActiveSession,
                 setActiveTerminalSession,
+                openProjectAgentTab,
               })
             }
           />
