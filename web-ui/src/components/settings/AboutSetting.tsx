@@ -3,6 +3,7 @@ import { Github } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import { Logo } from "@/components/shared/Logo";
 import { SectionHeader } from "./SectionHeader";
+import { THIRD_PARTY_LICENSES } from "./thirdPartyLicenses";
 
 function AgentName({ children }: { children: ReactNode }) {
   return (
@@ -154,6 +155,56 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
         }}
       >
         Made with care & crafted with ❤️ from India.
+      </div>
+
+      <div
+        style={{
+          marginTop: "var(--space-6)",
+          paddingTop: "var(--space-4)",
+          borderTop: "var(--border-width) solid var(--border-default)",
+        }}
+      >
+        <SectionHeader
+          title="Third-party licenses"
+          description="Components redistributed with Vibe Station, with links to their upstream licenses."
+        />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-3)",
+          }}
+        >
+          {THIRD_PARTY_LICENSES.map((item) => (
+            <div
+              key={item.name}
+              style={{
+                fontSize: "var(--font-size-xs)",
+                lineHeight: 1.6,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: "var(--font-weight-semibold)",
+                  color: "var(--fg-primary)",
+                }}
+              >
+                {item.name}
+              </div>
+              <div style={{ color: "var(--fg-muted)" }}>
+                {item.role} ·{" "}
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "var(--accent)" }}
+                >
+                  {item.license}
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
