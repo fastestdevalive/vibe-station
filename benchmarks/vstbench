@@ -106,6 +106,21 @@ def tree_mem(pid):
     }
 
 
+def process_breakdown(pid):
+    """PSS grouped by process name (comm), sorted descending. Used for stacked-bar charts."""
+    groups: dict[str, int] = {}
+    for p in tree(pid):
+        try:
+            name = open(f"/proc/{p}/comm").read().strip()
+        except OSError:
+            name = "unknown"
+        groups[name] = groups.get(name, 0) + pss_kb(p)
+    return sorted(
+        [{"name": k, "pss_mb": round(v / 1024, 1)} for k, v in groups.items() if v > 0],
+        key=lambda x: x["pss_mb"], reverse=True,
+    )
+
+
 def proc_cpu_ticks(pid):
     try:
         with open(f"/proc/{pid}/stat") as f:
@@ -330,9 +345,12 @@ def measure_vscode(repo, settle):
         time.sleep(1)
         # `code` is a shell wrapper that execs the real electron binary; descendants of p cover it.
         mem = settle_sample(p.pid, settle)
+        breakdown = process_breakdown(p.pid)
         return {"tool": "VS Code Desktop", "version": tool_version([code, "--version"]), **mem,
                 "client_rss_mb": mem["rss_mb"], "server_rss_mb": 0.0, "total_rss_mb": mem["rss_mb"],
-                "total_pss_mb": mem["pss_mb"], "client_pss_mb": mem["pss_mb"], "ready_s": None}
+                "total_pss_mb": mem["pss_mb"], "client_pss_mb": mem["pss_mb"], "ready_s": None,
+                "process_breakdown": breakdown,
+                "stacked_bar": [{"label": p["name"], "pss_mb": p["pss_mb"]} for p in breakdown]}
     finally:
         kill_tree(p)
         shutil.rmtree(prof, ignore_errors=True)
@@ -385,13 +403,15 @@ def cmd_footprint(a):
                 st, pid_, _ = d.register_repo(os.path.abspath(a.repo), "bench")
                 print(f"registered project: {st} {pid_}", file=sys.stderr)
             dm = settle_sample(d.proc.pid, a.settle)
+            dm_breakdown = process_breakdown(d.proc.pid)
             blank, tab = browser_tab_mem(d.base + "/", a.settle)
             # idle cpu over 10s (60s in --long)
             c0, t0 = proc_cpu_ticks(d.proc.pid), time.time()
             time.sleep(a.cpu_window)
             cpu_pct = (proc_cpu_ticks(d.proc.pid) - c0) / os.sysconf("SC_CLK_TCK") / (time.time() - t0) * 100
         runs.append({
-            "ready_ms": round(ready, 2), "daemon": dm, "browser_blank": blank, "browser_tab": tab,
+            "ready_ms": round(ready, 2), "daemon": dm, "daemon_breakdown": dm_breakdown,
+            "browser_blank": blank, "browser_tab": tab,
             "tab_delta_rss_mb": round(tab["rss_mb"] - blank["rss_mb"], 1),
             "tab_delta_pss_mb": round(tab["pss_mb"] - blank["pss_mb"], 1),
             "idle_cpu_pct": round(cpu_pct, 3),
@@ -423,6 +443,18 @@ def cmd_footprint(a):
     vst["total_rss_mb"] = round(vst["server_rss_mb"] + vst["client_rss_mb"], 1)
     vst["total_pss_mb"] = round(vst["server_pss_mb"] + vst["client_pss_mb"], 1)
     vst["total_if_browser_already_open_pss_mb"] = round(vst["server_pss_mb"] + vst["tab_delta_pss_mb"], 1)
+    # daemon breakdown from last run (representative; PSS is stable across runs)
+    vst["daemon_breakdown"] = runs[-1]["daemon_breakdown"]
+    # stacked bar data for the website chart (three segments, whole-browser view)
+    chrome_base_pss = round(vst["client_pss_mb"] - vst["tab_delta_pss_mb"], 1)
+    vst["stacked_bar"] = [
+        {"label": "vst daemon", "pss_mb": vst["server_pss_mb"],
+         "note": "daemon only — the server component"},
+        {"label": "vst UI tab", "pss_mb": vst["tab_delta_pss_mb"],
+         "note": "tab delta above a blank Chrome window"},
+        {"label": "Chrome base", "pss_mb": chrome_base_pss,
+         "note": "shared browser cost (already paid if Chrome is open)"},
+    ]
     vst["note"] = ("PSS is the primary total (shared pages counted once); RSS is the double-counting "
                    "cross-check. Client = whole dedicated browser instance. ready = server /health 200.")
     results = [vst]
@@ -448,6 +480,17 @@ def cmd_footprint(a):
                         agg[k + "_range"] = [round(min(vals), 2), round(max(vals), 2)]
                 agg["runs"] = len(rs)
                 results.append(agg)
+    if a.competitors:
+        # Tools we'd measure but aren't installed; shown as "not measured" in the website table.
+        measured_names = {r["tool"] for r in results}
+        for stub in (
+            {"tool": "Zed", "not_measured": True,
+             "note": "not installed on this machine; install with a display and re-run to measure"},
+            {"tool": "Cursor", "not_measured": True,
+             "note": "not installed on this machine; install with a display and re-run to measure"},
+        ):
+            if not any(stub["tool"].lower() in n.lower() for n in measured_names):
+                results.append(stub)
     emit({"part": "A", "machine": machine_info(), "results": results}, a)
 
 
