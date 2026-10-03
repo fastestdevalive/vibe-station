@@ -42,7 +42,18 @@ const SPAWN_TIMEOUT_MS: u64 = 10_000;
 /// (post-bind, background) restore is still sweeping would be killed.
 /// `shutdown_kill` does not take it (it must not wait out a 10s `enable`);
 /// shutdown instead aborts and awaits the boot restore task first.
-static TUNNEL_OP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static TUNNEL_OP: std::sync::LazyLock<Arc<tokio::sync::Mutex<()>>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+
+/// Guard returned by [`lock_for_boot_restore`].
+pub struct BootRestoreGuard(#[allow(dead_code)] tokio::sync::OwnedMutexGuard<()>);
+
+/// Take the tunnel lock for the boot restore. The caller acquires it *before*
+/// spawning the restore task (and before the server starts serving), so an API
+/// `enable` can never win the lock first and then be swept by the restore.
+pub async fn lock_for_boot_restore() -> BootRestoreGuard {
+    BootRestoreGuard(TUNNEL_OP.clone().lock_owned().await)
+}
 
 /// Kills a freshly spawned child if the `enable` future is dropped (e.g. the
 /// boot task is aborted mid-scrape on shutdown) or fails before the tunnel is
@@ -216,8 +227,7 @@ pub async fn sweep_orphans() -> CloudflaredResult<()> {
 /// lock, so an API `enable`/`disable` issued while this runs (it is spawned
 /// after the listener binds) waits for it instead of racing the sweep.
 /// Errors are logged, never returned — boot must not fail on tunnel trouble.
-pub async fn restore_on_boot(port: u16, store: &StoreHandle) {
-    let _op = TUNNEL_OP.lock().await;
+pub async fn restore_on_boot(_guard: BootRestoreGuard, port: u16, store: &StoreHandle) {
     if let Err(e) = sweep_orphans_locked().await {
         tracing::warn!("[vst] cloudflared sweep_orphans failed (non-fatal): {e}");
     }
@@ -302,7 +312,7 @@ async fn kill_pid(pid: u32, force: bool) -> CloudflaredResult<()> {
 mod tests {
     use super::*;
 
-    /// `enable`/`disable`/`sweep_orphans` all wait on the tunnel lock, which
+    /// `enable`/`disable` (and `sweep_orphans`) all wait on the tunnel lock, which
     /// `restore_on_boot` holds across sweep + enable.
     #[tokio::test]
     async fn tunnel_ops_wait_for_the_lock() {
@@ -311,19 +321,22 @@ mod tests {
 
         let held = TUNNEL_OP.lock().await;
         let s = store.clone();
-        let mut disable = tokio::spawn(async move { disable(&s).await });
-        let sweep = tokio::spawn(async { sweep_orphans().await });
+        let mut first = tokio::spawn(async move { disable(&s).await });
+        let s = store.clone();
+        let second = tokio::spawn(async move { disable(&s).await });
         tokio::time::sleep(Duration::from_millis(150)).await;
-        assert!(!disable.is_finished() && !sweep.is_finished());
+        assert!(!first.is_finished() && !second.is_finished());
 
         drop(held);
-        tokio::time::timeout(Duration::from_secs(5), &mut disable)
+        tokio::time::timeout(Duration::from_secs(5), &mut first)
             .await
             .expect("op proceeds once the lock is released")
             .unwrap()
             .unwrap();
-        // sweep may legitimately find (and kill) real cloudflared; only
-        // assert it was unblocked, not that it finished quickly.
-        sweep.abort();
+        tokio::time::timeout(Duration::from_secs(5), second)
+            .await
+            .expect("second waiter proceeds too")
+            .unwrap()
+            .unwrap();
     }
 }

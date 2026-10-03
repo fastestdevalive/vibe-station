@@ -526,6 +526,15 @@ pub async fn set_skill_paths(paths: &[String]) {
     start_watching(pathbufs);
 }
 
+/// Boot-time init: like [`set_skill_paths`] but a no-op if paths were already
+/// set (e.g. a `PATCH /settings` landed first), so the stale boot-time config
+/// can't overwrite a newer one. The daemon runs this after the listener binds.
+pub async fn init_skill_paths_if_unset(paths: &[String]) {
+    if PATHS.read().unwrap().is_empty() {
+        set_skill_paths(paths).await;
+    }
+}
+
 /// Rescan the currently-set `skillPaths` without changing the watch set.
 pub async fn refresh_skill_catalog() {
     let paths = PATHS.read().unwrap().clone();

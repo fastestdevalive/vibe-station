@@ -15,12 +15,11 @@
 //! 7. Generate fresh `daemonToken` (ring CSPRNG, never persisted).
 //! 8. Build `AuthState`, mint `cliToken` + `tauriToken`.
 //! 9. Write `config.json` (mode 0o600).
-//! 10. (post-bind, background) user skill catalog init.
-//! 11. (post-bind, background) cloudflared sweep + restore-on-boot.
-//! 12. (post-bind, background) Tailscale port-drift check.
-//! 13. Start lifecycle + PR pollers.
-//! 14. Register SIGINT/SIGTERM handlers.
-//! 15. Bind and serve.
+//! 10. Start lifecycle + PR pollers.
+//! 11. Register SIGINT/SIGTERM handlers.
+//! 12. Bind, then spawn the post-bind background tasks (user skill catalog
+//!     init, cloudflared sweep + restore-on-boot, Tailscale port-drift check)
+//!     and serve.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -297,18 +296,23 @@ impl BackgroundBoot {
 /// Cloudflared sweep + restore (one task, one tunnel-lock hold — see
 /// `cloudflared::restore_on_boot`). `tunnel_port` = daemon_port + 1, overridable
 /// via `VST_TUNNEL_PORT` (same as mobile_auth.rs).
-async fn cloudflared_boot_task(port: u16, store: StoreHandle) {
+async fn cloudflared_boot_task(
+    guard: cloudflared::BootRestoreGuard,
+    port: u16,
+    store: StoreHandle,
+) {
     let tunnel_port: u16 = std::env::var("VST_TUNNEL_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| port.saturating_add(1));
-    cloudflared::restore_on_boot(tunnel_port, &store).await;
+    cloudflared::restore_on_boot(guard, tunnel_port, &store).await;
 }
 
 /// Initialize the user skill catalog from persisted settings so it is
 /// populated on a fresh install without opening Skills settings first.
-/// Re-reads `config.json` here (not the boot snapshot) so a `PATCH /settings`
-/// that landed before this task ran isn't overwritten with stale paths.
+/// Re-reads `config.json` here (not the boot snapshot) and only applies it if
+/// no `PATCH /settings` has already set the paths, so it can't clobber a newer
+/// config.
 async fn skill_catalog_boot_task(config_path: PathBuf, vst_home: PathBuf) {
     let config = read_raw_config(&config_path).await;
     let custom: Vec<String> = config
@@ -321,7 +325,7 @@ async fn skill_catalog_boot_task(config_path: PathBuf, vst_home: PathBuf) {
         })
         .unwrap_or_default();
     // Same effective-path computation `PATCH /settings` uses.
-    skill_resolution::set_skill_paths(&effective_skill_paths(&custom, &vst_home)).await;
+    skill_resolution::init_skill_paths_if_unset(&effective_skill_paths(&custom, &vst_home)).await;
 }
 
 /// Log a warning if a tailscale serve rule exists but targets a different
@@ -600,7 +604,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // None of these gate serving: the orphan sweep forks `pgrep` (tens of ms on
     // a busy box), the tailscale check forks `tailscale`, the skill scan walks
     // the skill dirs. Errors are logged, never fatal.
-    background_boot.spawn(cloudflared_boot_task(port, store.clone()));
+    // The tunnel lock is taken HERE, before the supervisor starts serving, so
+    // an API tunnel-enable can't slip in ahead of the restore and be swept.
+    let tunnel_guard = cloudflared::lock_for_boot_restore().await;
+    background_boot.spawn(cloudflared_boot_task(tunnel_guard, port, store.clone()));
     background_boot.spawn(tailscale_drift_check_task(port));
     background_boot.spawn(skill_catalog_boot_task(
         config_path.clone(),

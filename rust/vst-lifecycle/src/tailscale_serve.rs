@@ -38,21 +38,21 @@ pub enum TailscaleStatus {
 }
 
 async fn run_tailscale(args: &[&str]) -> TailscaleResult<std::process::Output> {
-    let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    tokio::task::spawn_blocking(move || {
-        std::process::Command::new("tailscale")
-            .args(owned.iter().map(String::as_str))
-            .output()
-    })
-    .await
-    .map_err(|e| TailscaleError::Command(e.to_string()))?
-    .map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            TailscaleError::NotInstalled
-        } else {
-            TailscaleError::Io(e)
-        }
-    })
+    // `kill_on_drop`: `get_status` also runs as an abortable post-bind boot
+    // task; a `spawn_blocking` child couldn't be cancelled and would stall
+    // runtime shutdown if tailscaled hangs.
+    tokio::process::Command::new("tailscale")
+        .args(args)
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                TailscaleError::NotInstalled
+            } else {
+                TailscaleError::Io(e)
+            }
+        })
 }
 
 /// Get the current Tailscale+serve status for the daemon port.
