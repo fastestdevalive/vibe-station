@@ -16,6 +16,8 @@ use vst_types::rest::mobile_auth::{
     ConnectionType, LocalQrResult, MobileQrResult, TunnelDisableResult, TunnelEnableResult,
     TunnelStatus,
 };
+use vst_types::ws::{RemoteSession, ServerMessage};
+use vst_ws::broadcaster::WsHub;
 
 use crate::auth::{mint_token, AuthState, BrowserSession, BROWSER_MAX_AGE_SECONDS, COOKIE_NAME};
 
@@ -54,6 +56,53 @@ pub fn check_mobile_auth_rate_limit(ip: &str) -> bool {
         );
         true
     }
+}
+
+/// Log-safe prefix of an attacker-controlled one-time code: the first 8 chars
+/// (never bytes -- slicing a `String` at a byte offset panics mid-UTF-8, and
+/// release builds abort on panic), with anything non-alphanumeric masked so a
+/// decoded `%0A` can't forge log lines. Minted codes are hex, so this is
+/// lossless for real codes.
+pub fn code_prefix(code: &str) -> String {
+    code.chars()
+        .take(8)
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '?' })
+        .collect()
+}
+
+/// Debug-level diagnostic for one `/mobile-auth` request: method (HEAD is
+/// served by the GET handler), peer, and the headers that identify prefetch /
+/// app-launch duplicates. Never logs the full code, cookie values or tokens.
+pub fn log_redeem_request(
+    method: &axum::http::Method,
+    code: Option<&str>,
+    peer_ip: Option<&str>,
+    headers: &axum::http::HeaderMap,
+) {
+    let h = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+    };
+    tracing::debug!(
+        "[mobile-auth] {method} code={}… peer={} xff={} proto={} host={} cookie={} ua={:?} \
+         sec-fetch(dest={} mode={} site={} user={}) purpose={} sec-purpose={} referer={}",
+        code.map_or_else(|| "-".to_string(), code_prefix),
+        peer_ip.unwrap_or("-"),
+        h("x-forwarded-for"),
+        h("x-forwarded-proto"),
+        h("host"),
+        headers.contains_key(axum::http::header::COOKIE),
+        h("user-agent"),
+        h("sec-fetch-dest"),
+        h("sec-fetch-mode"),
+        h("sec-fetch-site"),
+        h("sec-fetch-user"),
+        h("purpose"),
+        h("sec-purpose"),
+        h("referer"),
+    );
 }
 
 /// A one-time auth code entry.
@@ -116,6 +165,11 @@ impl OneTimeCodeStore {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
+        tracing::info!(
+            "[mobile-auth] minted code {}… origin={}",
+            code_prefix(&code),
+            origin
+        );
         self.codes.write().unwrap().insert(
             code.clone(),
             OneTimeCode {
@@ -277,6 +331,7 @@ pub struct MobileAuthRoutes {
     no_auth: bool,
     network_access: Arc<AtomicBool>,
     store: Option<StoreHandle>,
+    ws_hub: Option<Arc<WsHub>>,
 }
 
 impl MobileAuthRoutes {
@@ -293,7 +348,15 @@ impl MobileAuthRoutes {
             no_auth,
             network_access: Arc::new(AtomicBool::new(true)),
             store: None,
+            ws_hub: None,
         }
+    }
+
+    /// Lets a successful `/mobile-auth` redemption announce the newly paired
+    /// device (`remote:connected`) so the Settings QR popup can close itself.
+    pub fn with_ws_hub(mut self, hub: Arc<WsHub>) -> Self {
+        self.ws_hub = Some(hub);
+        self
     }
 
     /// Whether the daemon listens beyond loopback. Defaults to true so callers
@@ -483,11 +546,19 @@ impl MobileAuthRoutes {
             )
             .await
         {
-            Ok(s) => MobileAuthRedeemResponse {
-                status: 200,
-                html: SUCCESS_HTML.to_string(),
-                set_cookie: Some(s.set_cookie),
-            },
+            Ok(s) => {
+                // The code was just redeemed: tell connected UIs a new device
+                // paired (the QR popup closes on it). Not sent for `/continue`
+                // -- that is the CLI opening a browser, not a QR scan.
+                if let Some(hub) = &self.ws_hub {
+                    hub.broadcast_all(&ServerMessage::RemoteConnected { session: s.session });
+                }
+                MobileAuthRedeemResponse {
+                    status: 200,
+                    html: SUCCESS_HTML.to_string(),
+                    set_cookie: Some(s.set_cookie),
+                }
+            }
             Err(RedeemError::RateLimited) => MobileAuthRedeemResponse {
                 status: 429,
                 html: "Rate limit exceeded".to_string(),
@@ -626,8 +697,33 @@ impl MobileAuthRoutes {
             .consume_if_valid(&code, expected_origin, now)
             .is_none()
         {
+            // Diagnose WHY (read-only, after the fact) so a 410 is explainable
+            // from the log: unknown / already consumed / expired / wrong origin.
+            let reason = match self.code_store.get_code(&code) {
+                None => "unknown-or-swept".to_string(),
+                Some(e) if e.origin != expected_origin => {
+                    format!(
+                        "origin-mismatch(minted={}, expected={})",
+                        e.origin, expected_origin
+                    )
+                }
+                Some(e) if e.consumed => "already-consumed".to_string(),
+                Some(e) => format!("expired(age_ms={})", now - e.created_at),
+            };
+            tracing::warn!(
+                "[mobile-auth] redeem REJECTED code {}… ip={} reason={}",
+                code_prefix(&code),
+                ip_to_check,
+                reason
+            );
             return Err(RedeemError::Invalid);
         }
+        tracing::info!(
+            "[mobile-auth] redeem OK code {}… ip={} origin={}",
+            code_prefix(&code),
+            ip_to_check,
+            expected_origin
+        );
 
         let auth_state = match &self.auth_state {
             Some(s) => s,
@@ -640,14 +736,24 @@ impl MobileAuthRoutes {
         let token_id = token_val[..dot].to_string();
 
         let dev_name = parse_device_name(user_agent);
+        let expires_at = Some(now + BROWSER_MAX_AGE_SECONDS * 1000);
         auth_state.record_browser_session(BrowserSession {
-            token_id,
+            token_id: token_id.clone(),
             scope: "browser".to_string(),
             issued_at: now,
-            expires_at: Some(now + BROWSER_MAX_AGE_SECONDS * 1000),
+            expires_at,
             epoch: auth_state.browser_epoch(),
-            device_name: Some(dev_name),
+            device_name: Some(dev_name.clone()),
         });
+        let session = RemoteSession {
+            token_id,
+            scope: "browser".to_string(),
+            connections: 0,
+            issued_at: now,
+            last_seen_at: now,
+            expires_at,
+            device_name: Some(dev_name),
+        };
 
         let secure_attr = if secure_cookie { " Secure;" } else { "" };
         let cookie_header = format!(
@@ -657,12 +763,14 @@ impl MobileAuthRoutes {
 
         Ok(RedeemSuccess {
             set_cookie: cookie_header,
+            session,
         })
     }
 }
 
 struct RedeemSuccess {
     set_cookie: String,
+    session: RemoteSession,
 }
 
 enum RedeemError {

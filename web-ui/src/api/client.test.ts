@@ -40,7 +40,7 @@ vi.stubGlobal("window", {
 });
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) }));
 });
 
 /**
@@ -571,7 +571,7 @@ describe("reconnect auth gate (Phase 4)", () => {
     vi.restoreAllMocks();
   });
 
-  it("4.T1 — on reconnect with rejected checkAuth(), closes with 4401, emits auth:expired, never flips to online or emits ws:open", async () => {
+  it("4.T1 — on reconnect with a 401 from checkAuthStatus(), closes with 4401, emits auth:expired, never flips to online or emits ws:open", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
     const { FakeWebSocket, sockets } = makeControllableWsFactory();
@@ -595,7 +595,7 @@ describe("reconnect auth gate (Phase 4)", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(2);
 
-    // Daemon restarted: checkAuth now fails (401)
+    // Daemon restarted: the auth check now fails (401)
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }));
 
     sockets[1]!.readyState = 1;
@@ -609,7 +609,7 @@ describe("reconnect auth gate (Phase 4)", () => {
     expect(authExpiredSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("4.T2 — on reconnect with valid checkAuth(), flips to online and emits ws:open exactly once", async () => {
+  it("4.T2 — on reconnect with a valid checkAuthStatus(), flips to online and emits ws:open exactly once", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
     const { FakeWebSocket, sockets } = makeControllableWsFactory();
@@ -631,12 +631,125 @@ describe("reconnect auth gate (Phase 4)", () => {
     expect(sockets.length).toBe(2);
 
     // Valid auth on reconnect
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) }));
     sockets[1]!.readyState = 1;
     await sockets[1]!.onopen!();
 
     expect(wsOpenSpy).toHaveBeenCalledTimes(2);
     expect(api.getConnectionState()).toBe("online");
+  });
+
+  it("1.T2 — on reconnect with unreachable auth check, closes with 4000, no auth:expired, no ws:open, reconnects after backoff", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+    const authExpiredSpy = vi.fn();
+    const wsOpenSpy = vi.fn();
+    api.on("auth:expired", authExpiredSpy);
+    api.on("ws:open", wsOpenSpy);
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+
+    for (const failing of [
+      vi.fn().mockRejectedValue(new TypeError("net")),
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    ]) {
+      vi.stubGlobal("fetch", failing);
+      const idx = sockets.length - 1;
+      sockets[idx]!.readyState = 1;
+      const closeSpy = vi.spyOn(sockets[idx]!, "close");
+      await sockets[idx]!.onopen!();
+      expect(closeSpy).toHaveBeenCalledWith(4000);
+      expect(authExpiredSpy).not.toHaveBeenCalled();
+      expect(wsOpenSpy).toHaveBeenCalledTimes(1);
+      expect(api.getConnectionState()).not.toBe("online");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(sockets.length).toBe(idx + 2); // new socket after backoff
+    }
+  });
+
+  it("1.T3 — repeated unreachable across reconnects eventually settles 'disconnected' (never auth:expired)", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+    const authExpiredSpy = vi.fn();
+    api.on("auth:expired", authExpiredSpy);
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    sockets[0]!.onclose!({ code: 1006 });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("net")));
+
+    for (let i = 0; i < 20 && api.getConnectionState() !== "disconnected"; i++) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      const s = sockets[sockets.length - 1]!;
+      if (s.readyState === 0) {
+        s.readyState = 1;
+        await s.onopen!();
+      }
+    }
+    expect(api.getConnectionState()).toBe("disconnected");
+    expect(authExpiredSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkAuthStatus (1.T1/1.T5)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const res = (status: number, json: () => Promise<unknown>) =>
+    ({ ok: status >= 200 && status < 300, status, json }) as unknown as Response;
+
+  const cases: Array<[string, () => Promise<Response>, string]> = [
+    ["200 {ok:true}", async () => res(200, async () => ({ ok: true })), "authed"],
+    ["200 html (json rejects)", async () => res(200, async () => { throw new SyntaxError("x"); }), "unreachable"],
+    ["200 {}", async () => res(200, async () => ({})), "unreachable"],
+    ["401", async () => res(401, async () => ({})), "unauthenticated"],
+    ["403", async () => res(403, async () => ({})), "unauthenticated"],
+    ["500", async () => res(500, async () => ({})), "unreachable"],
+    ["530", async () => res(530, async () => ({})), "unreachable"],
+    ["502", async () => res(502, async () => ({})), "unreachable"],
+    ["TypeError", async () => { throw new TypeError("Failed to fetch"); }, "unreachable"],
+    ["AbortError", async () => { throw new DOMException("aborted", "AbortError"); }, "unreachable"],
+  ];
+  it.each(cases)("%s -> %s", async (_n, impl, expected) => {
+    vi.stubGlobal("fetch", vi.fn(impl));
+    expect(await createClientApi().checkAuthStatus()).toBe(expected);
+  });
+
+  it("1.T5 — hung check aborts at 8000ms -> unreachable, no timers left", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_u: string, init?: RequestInit) =>
+        new Promise((_r, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+      ),
+    );
+    const api = createClientApi(); // registers its own long-lived interval
+    const baseline = vi.getTimerCount();
+    const p = api.checkAuthStatus();
+    expect(vi.getTimerCount()).toBe(baseline + 1);
+    let settled: string | null = null;
+    void p.then((v) => { settled = v; });
+    await vi.advanceTimersByTimeAsync(7999);
+    expect(settled).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await p).toBe("unreachable");
+    expect(vi.getTimerCount()).toBe(baseline);
   });
 });
 

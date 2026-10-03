@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -89,6 +89,40 @@ describe("RemoteAccessSetting", () => {
   });
 
   // ── Tailscale card ────────────────────────────────────────────────────────────
+
+  it("closes the open QR popup when remote:connected arrives (a QR code was redeemed)", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({
+      enabled: true,
+      tunnelUrl: "https://live.trycloudflare.com",
+    });
+    const handlers: Array<(e: unknown) => void> = [];
+    const realOn = api.on.bind(api);
+    vi.spyOn(api, "on").mockImplementation(((type: string, h: (e: never) => void) => {
+      if (type === "remote:connected") handlers.push(h as (e: unknown) => void);
+      return realOn(type as never, h as never);
+    }) as typeof api.on);
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+    await user.click((await screen.findAllByRole("button", { name: "Show QR" }))[0]!);
+    expect(await screen.findByText(/Expires \d+s/)).toBeInTheDocument();
+
+    act(() =>
+      handlers.forEach((h) =>
+        h({
+          type: "remote:connected",
+          session: {
+            tokenId: "freshly-paired-device",
+            scope: "browser",
+            connections: 0,
+            issuedAt: 1,
+            lastSeenAt: 1,
+          },
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText(/Expires \d+s/)).not.toBeInTheDocument());
+  });
 
   it("renders the Cloudflare card title, not Remote", async () => {
     const api = createMockApi();

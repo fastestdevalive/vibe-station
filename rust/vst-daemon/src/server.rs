@@ -477,7 +477,8 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.no_auth,
     )
     .with_network_flag(opts.network.flag())
-    .with_store(opts.store.clone());
+    .with_store(opts.store.clone())
+    .with_ws_hub(ws_hub.clone());
 
     let tailscale_routes = TailscaleRoutes::new(code_store.clone(), opts.port);
     let lsp_manager = LspManager::new(opts.paths.vst_home().clone());
@@ -1168,7 +1169,7 @@ async fn auth_middleware(
     // SPA fallback exemption: any GET/HEAD that isn't an API or protocol path
     // falls through to handle_fallback (which serves the hardened dist). This
     // broadens the old "/, /index.html, /assets/*" list so every SPA deep link
-    // renders the app's own login screen (via the client's checkAuth) even with
+    // renders the app's own login screen (via the client's checkAuthStatus) even with
     // an invalid/revoked token. `/api/*` is excluded by the ORIGINAL (pre-rewrite)
     // path so API routes stay token-protected; `/ws` and `/mobile-auth` keep their
     // explicit exemptions above and are additionally excluded here defensively.
@@ -4311,6 +4312,12 @@ async fn handle_mobile_auth(
     let via_tunnel = headers.contains_key("cf-connecting-ip");
     let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
     let peer_ip = connect_info.map(|ci| ci.0.ip().to_string());
+    vst_routes::mobile_auth::log_redeem_request(
+        req.method(),
+        q.code.as_deref(),
+        peer_ip.as_deref(),
+        &headers,
+    );
     let client_ip = if let Some(cf_ip) = headers
         .get("cf-connecting-ip")
         .and_then(|v| v.to_str().ok())
@@ -4328,6 +4335,11 @@ async fn handle_mobile_auth(
         .mobile_auth_routes
         .mobile_auth(q.code, client_ip, via_tunnel, user_agent)
         .await;
+    tracing::debug!(
+        "[mobile-auth] -> {} set_cookie={}",
+        res.status,
+        res.set_cookie.is_some()
+    );
 
     let mut response = (
         StatusCode::from_u16(res.status).unwrap_or(StatusCode::OK),

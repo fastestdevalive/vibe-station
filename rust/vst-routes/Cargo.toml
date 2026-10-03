@@ -16,6 +16,7 @@ vst-lsp = { workspace = true }
 vst-proc = { workspace = true }
 axum = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -25,6 +26,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
+tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
