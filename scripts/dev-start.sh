@@ -62,6 +62,14 @@ if [[ ! -f "$VST_STUB" ]]; then
   echo "[dev-start] created vst stub: $VST_STUB"
 fi
 
+CODEX_ACP_STUB="$BINARIES_DIR/codex-acp-$TRIPLE"
+
+if [[ ! -f "$CODEX_ACP_STUB" ]]; then
+  printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$CODEX_ACP_STUB"
+  chmod +x "$CODEX_ACP_STUB"
+  echo "[dev-start] created codex-acp stub: $CODEX_ACP_STUB"
+fi
+
 # Build vst-cli so the daemon can write the ~/.vibe-station/bin/vst shim pointing
 # at the real Rust binary. `cargo run -p vst-daemon` only compiles vst-daemon, so
 # vst-cli would be missing on a fresh checkout or after `cargo clean`.
@@ -93,12 +101,18 @@ echo "[dev-start] checking vendored claude-agent-acp adapter..."
 bash "$REPO_ROOT/scripts/install-claude-acp-vendor.sh"
 CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
 
+# Vendored codex-acp adapter (same rationale as claude-agent-acp above):
+# required by build.rs (bundle.resources) and by the daemon's Codex ACP path.
+echo "[dev-start] checking vendored codex-acp adapter..."
+bash "$REPO_ROOT/scripts/install-codex-acp-vendor.sh"
+CODEX_ACP_ENTRY="$REPO_ROOT/vendor/codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+
 # Launch Rust daemon + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_ALLOWED_ORIGINS=http://localhost:5180 VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_ALLOWED_ORIGINS=http://localhost:5180 VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' VST_CODEX_ACP_ENTRY='$CODEX_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '
