@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Mode, Session } from "@/api/types";
@@ -79,31 +79,30 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
   });
 
-  it("shows the toggle for every eligible agent CLI (including no-importer agy) across a no-remount session switch", async () => {
-    // This pane slot is not keyed by session id (Decision 14 remount
-    // invariant), so switching tabs re-renders this component with new props
-    // instead of remounting. The gate is gone — visibility no longer depends
-    // on the CLI, so the toggle stays visible when switching from an
-    // importer-backed CLI (claude) to one without (agy).
+  it("hides the toggle for a CLI that can't run Rich Chat (agy, terminal-only)", async () => {
+    // Render agy directly. The toggle is absent while the capability lookup is
+    // in flight (cli/supportsJson reset to null on each effect run), so wait
+    // until the lookup has RESOLVED before asserting — this proves it stays
+    // hidden because agy can't run Rich Chat, not merely hidden during the
+    // loading window. (A json-capable CLI like claude/cursor shows the toggle
+    // after resolution — see the tests above — so if the `supportsJson ===
+    // false` check were removed, `cli` would resolve to agy and the button
+    // would appear here.)
     const api = createMockApi();
+    const getClisSpy = vi.spyOn(api, "getSupportedClis");
     vi.spyOn(api, "listModes").mockResolvedValue([
-      { id: "mode-claude", name: "Claude", cli: "claude", context: "" } as Mode,
       { id: "mode-agy", name: "Antigravity", cli: "agy", context: "" } as Mode,
     ]);
-    const { rerender } = render(
-      <TerminalChannelToggle api={api} session={session({ modeId: "mode-claude" })} />,
+    render(
+      <TerminalChannelToggle api={api} session={session({ id: "sess-agy", modeId: "mode-agy" })} />,
     );
-    await screen.findByRole("button", { name: /Rich Chat/i }); // visible for claude
 
-    rerender(
-      <TerminalChannelToggle
-        api={api}
-        session={session({ id: "sess-agy", modeId: "mode-agy" })}
-      />,
-    );
-    // agy is eligible too now (gate removed) — the toggle stays visible once
-    // its mode/capability resolve.
-    await waitFor(() => expect(vi.mocked(api.listModes).mock.calls.length).toBeGreaterThanOrEqual(2));
-    expect(await screen.findByRole("button", { name: /Rich Chat/i })).toBeTruthy();
+    // Let the capability lookup run to completion (cli -> agy, supportsJson -> false).
+    await waitFor(() => expect(getClisSpy).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
   });
 });

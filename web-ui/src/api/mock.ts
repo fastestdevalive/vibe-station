@@ -1351,7 +1351,9 @@ export function createMockApi(seed: MockSeed = {}) {
         {
           id: "agy",
           defaultModel: "Gemini 3.1 Pro (High)",
-          supportsJson: true,
+          // TEMPORARY: agy is terminal-only until terminal<->ACP conversation
+          // ids are bridged — mirrors the daemon's agy `supports_json() == false`.
+          supportsJson: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1362,11 +1364,14 @@ export function createMockApi(seed: MockSeed = {}) {
         },
       ];
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
-      // override-aware default_channel / default_channel_overridden).
+      // override-aware default_channel / default_channel_overridden). A Json
+      // override for a CLI that can't run Rich Chat (e.g. agy while
+      // terminal-only) is dropped, exactly as the daemon's
+      // resolve_effective_default_channel does.
       if (mockSettings.defaultChannelByCli) {
         for (const cli of base) {
           const ov = mockSettings.defaultChannelByCli[cli.id];
-          if (ov !== undefined) {
+          if (ov !== undefined && !(cli.supportsJson === false && ov === "json")) {
             cli.defaultChannel = ov;
             cli.defaultChannelOverridden = true;
           } else {

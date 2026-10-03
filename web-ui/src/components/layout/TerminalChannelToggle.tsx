@@ -27,6 +27,8 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
   const [cli, setCli] = useState<CliId | null>(null);
   // null = unknown yet; default to importing (no warning) until resolved.
   const [importsHistory, setImportsHistory] = useState<boolean | null>(null);
+  // null = unknown yet; default to showing the toggle until resolved.
+  const [supportsJson, setSupportsJson] = useState<boolean | null>(null);
 
   const channel = session.channel ?? "tmux";
   const eligible =
@@ -45,6 +47,7 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
     // from the PREVIOUS session stays in state during the fetch window.
     setCli(null);
     setImportsHistory(null);
+    setSupportsJson(null);
     let live = true;
     void Promise.all([api.listModes(), api.getSupportedClis()]).then(([modes, clis]) => {
       if (!live) return;
@@ -52,13 +55,16 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
       setCli(resolved);
       const cap = resolved ? clis.find((c) => c.id === resolved) : undefined;
       setImportsHistory(cap?.importsNativeHistory ?? true);
+      // Hide the toggle for CLIs that can't run Rich Chat (e.g. agy while it
+      // is terminal-only) — driven by the capability, not a hardcoded name.
+      setSupportsJson(cap?.supportsJson ?? true);
     });
     return () => {
       live = false;
     };
   }, [api, session.modeId, eligible]);
 
-  if (!eligible || !cli) return null;
+  if (!eligible || !cli || supportsJson === false) return null;
 
   // No idle gate on this direction (there is no live JSON turn queue to
   // protect) — `triggerDisabled`/`confirmBlocked` stay unset.

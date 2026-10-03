@@ -1221,9 +1221,11 @@ mod tests {
         assert!(names.contains(&"concurrent-b".to_string()));
     }
 
-    /// A plugin that defaults to `Tmux` and does NOT `supports_json()` — only
-    /// this 2.T11 test stub has that combination (no real `CliId` does), which
-    /// is exactly why the stub is needed to exercise the total-ness branch.
+    /// A plugin that defaults to `Tmux` and does NOT `supports_json()` — the
+    /// stub keeps this 2.T11 test hermetic (agy now really is Tmux+no-json, but
+    /// wiring it in here would couple this pure function test to the real
+    /// registry), which is exactly why the stub is needed to exercise the
+    /// total-ness branch.
     struct TmuxNoJsonStub;
     impl AgentPlugin for TmuxNoJsonStub {
         fn name(&self) -> &str {
@@ -1296,5 +1298,36 @@ mod tests {
             resolve_effective_default_channel(&ov_json, CliId::Claude, &stub),
             Channel::Tmux
         );
+    }
+
+    #[test]
+    fn json_unsupported_cli_flags_agy_mode() {
+        // TEMPORARY: agy is terminal-only until terminal<->ACP conversation ids
+        // are bridged — an agy mode must be flagged so session/worktree create
+        // rejects `--channel=json` instead of silently forking a fresh session.
+        use vst_agents::home::{home_dir, with_home};
+        use vst_types::rest::shared::Mode;
+
+        let tmp = tempdir().unwrap();
+        let _guard = with_home(tmp.path().to_path_buf());
+        let modes = vec![Mode {
+            id: "agy-mode".to_string(),
+            name: "Agy".to_string(),
+            cli: CliId::Agy,
+            context: String::new(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            model: None,
+            icon: None,
+        }];
+        let home = home_dir();
+        std::fs::create_dir_all(home.join(".vibe-station")).unwrap();
+        std::fs::write(
+            home.join(".vibe-station").join("modes.json"),
+            serde_json::to_string(&modes).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(json_unsupported_cli("agy-mode"), Some(CliId::Agy));
+        assert_eq!(json_unsupported_cli("non-existent-id-xyz"), None);
     }
 }

@@ -226,6 +226,53 @@ async fn patch_channel_terminal_session_400() {
 }
 
 #[tokio::test]
+async fn patch_channel_tty_to_json_rejected_for_agy() {
+    use vst_agents::home::{home_dir, with_home};
+    use vst_types::rest::shared::Mode;
+    use vst_types::CliId;
+
+    // agy is terminal-only — toggling it to Rich Chat must be rejected, not
+    // silently fork a fresh session.
+    let dir = tempdir().unwrap();
+    let _guard = with_home(dir.path().to_path_buf());
+    let home_path = home_dir();
+    std::fs::create_dir_all(home_path.join(".vibe-station")).unwrap();
+    std::fs::write(
+        home_path.join(".vibe-station").join("modes.json"),
+        serde_json::to_string(&vec![Mode {
+            id: "agy-mode".to_string(),
+            name: "Agy".to_string(),
+            cli: CliId::Agy,
+            context: String::new(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            model: None,
+            icon: None,
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("agy-mode".to_string());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store);
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChannelError::JsonUnsupported(_)));
+}
+
+#[tokio::test]
 async fn patch_channel_idempotent_noop_ok() {
     let (_d, store) = store();
     let mut p = make_project("p1");

@@ -10,6 +10,16 @@ lives in `rust/vst-agents` (plugins, `acp_connection.rs`, `json_agent_session/`)
 > launch argv/env, an `enrich()` event hook, and chat-id handling. Nothing in
 > shared code branches on which CLI is running (see `AGENTS.md` → Agent plugin).
 
+> **TEMPORARY — agy is terminal-only.** `agy` currently has `supports_json() ==
+> false`, so it cannot be created as, or toggled to, Rich Chat. Reason: the
+> daemon passes agy's NATIVE conversation id to `agy-acp`'s `session/load`,
+> which only knows ACP ids from its own store, so it fails with `unknown
+> sessionId` and the daemon silently falls back to a fresh session (and Rich
+> Chat → terminal also forks). A proper bridge (map native↔ACP ids in the
+> adapter) is deferred; until it lands, agy must not offer Rich Chat. Revert
+> `agy::supports_json` (and the web-ui `supportsJson: false` for agy in
+> `web-ui/src/api/mock.ts`) once bridged. See § Two session identities below.
+
 ## 1. Architecture
 
 ```mermaid

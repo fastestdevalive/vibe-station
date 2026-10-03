@@ -25,9 +25,10 @@ use tempfile::tempdir;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
+use vst_routes::modes::json_unsupported_cli;
 use vst_routes::sessions::{
     find_session_context, wait_for_handoff_file, DoneError, DoneResult, HandoffRouteError,
-    ResetError, ResumeError, SessionContext, SessionRoutes,
+    ResetError, ResumeError, SessionContext, SessionRoutes, StartError,
 };
 use vst_routes::settings::load_default_channel_overrides;
 use vst_store::StoreHandle;
@@ -144,6 +145,16 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
         handoff_timeout: Duration::from_secs(120),
+    }
+}
+
+/// `routes` but with `json_unsupported` wired to the REAL `json_unsupported_cli`
+/// (which consults each mode's plugin capability), so an agy mode is flagged as
+/// unable to run Rich Chat. Needed to exercise the draft-start json gate.
+fn routes_with_real_json_gate(store: StoreHandle) -> SessionRoutes {
+    SessionRoutes {
+        json_unsupported: Arc::new(json_unsupported_cli),
+        ..routes(store)
     }
 }
 
@@ -1072,9 +1083,11 @@ async fn subagent_parent_mode_deleted_does_not_inherit() {
 }
 
 #[tokio::test]
-async fn agy_override_to_json_wins_over_plugin_default() {
-    // 2.T12 — a persisted defaultChannelByCli override {agy: json} makes an
-    // agy-mode session default to Json (override beats the plugin's Tmux).
+async fn agy_override_to_json_dropped_agy_is_terminal_only() {
+    // 2.T12 — agy is terminal-only, so a persisted defaultChannelByCli override
+    // {agy: json} is DROPPED (resolve_effective_default_channel falls back to
+    // the plugin's Tmux default) instead of winning — creating an agy-mode
+    // session must never land on Json.
     let (home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
     std::fs::write(
         home.path().join(".vibe-station").join("config.json"),
@@ -1085,7 +1098,7 @@ async fn agy_override_to_json_wins_over_plugin_default() {
     add_project(&store, make_project("p1")).await;
     let r = routes(store.clone());
     let s = create_direct_agent(&r, "p1", "agy-mode").await;
-    assert_eq!(s.channel, Channel::Json);
+    assert_eq!(s.channel, Channel::Tmux);
 }
 
 #[tokio::test]
@@ -1150,4 +1163,41 @@ async fn start_draft_agy_no_channel_defaults_to_tmux() {
     let started = &project.direct_sessions[0];
     assert_eq!(started.channel, Some(Channel::Tmux));
     assert_eq!(started.mode_id.as_deref(), Some("agy-mode"));
+}
+
+#[tokio::test]
+async fn start_draft_agy_explicit_json_rejected() {
+    // agy is terminal-only — promoting a draft with an explicit `channel: json`
+    // for an agy mode must be rejected (400), not silently forked into a Rich
+    // Chat session (the exact bug this feature exists to prevent).
+    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s-draft", "p1");
+    s.lifecycle.state = LifecycleState::Drafting;
+    s.draft_prompt = Some("initial".into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes_with_real_json_gate(store.clone());
+    let body = StartDraftBody {
+        draft_prompt: "do it".into(),
+        draft_config: DraftConfig {
+            entry_point: DraftEntryPoint::Direct,
+            mode_id: Some("agy-mode".into()),
+            channel: Some(Channel::Json), // explicit json -> must be rejected
+            channel_explicit: Some(true),
+            worktree_choice: None,
+            existing_worktree_id: None,
+            branch: None,
+            base_branch: None,
+            use_tmux: None,
+            use_worktree: None,
+        },
+        skip_auto_turn: Some(true),
+    };
+    let err = r.start_session("s-draft", &body).await.unwrap_err();
+    assert!(
+        matches!(err, StartError::Validation(m) if m.contains("does not support JSON chat mode"))
+    );
 }

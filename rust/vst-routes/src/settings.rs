@@ -656,9 +656,10 @@ mod tests {
         PromptDelivery, ReadySignal,
     };
 
-    /// A stub plugin that does NOT support json — round-2 M4: no production
-    /// `CliId` has `supports_json() == false`, so only a stub can exercise the
-    /// Json-rejection branch of `validate_default_channel_overrides`.
+    /// A stub plugin that does NOT support json — round-2 M4: agy is now a real
+    /// `!supports_json` CLI, but this test stays hermetic by using a stub so it
+    /// doesn't depend on the real registry. Exercises the Json-rejection branch
+    /// of `validate_default_channel_overrides`.
     struct NoJsonStub;
     impl AgentPlugin for NoJsonStub {
         fn name(&self) -> &str {
