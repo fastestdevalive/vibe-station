@@ -81,5 +81,5 @@ pub struct TailscaleUpResult {
 #[serde(rename_all = "camelCase")]
 pub struct TailscaleQr {
     pub qr_url: String,
-    pub expires_at: String,
+    pub expires_at: i64,
 }

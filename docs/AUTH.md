@@ -166,8 +166,10 @@ If `daemonToken` rotates (daemon restart with a new config), all existing cookie
 **Tauri desktop shell flow:**
 1. Daemon reads `daemonToken` from `config.json` on startup.
 2. Rust `setup()` injects `window.__VST_TOKEN__ = '<daemonToken>'` via `win.eval()` before page JS runs.
-3. `useAuth.ts` reads `__VST_TOKEN__`, calls `api.checkAuth()` first; if no valid session, calls `api.login(token)` to exchange the injected token for a session cookie.
+3. `apiFetch` (`web-ui/src/api/client.ts`) reads `__VST_TOKEN__` and sends it as `Authorization: Bearer` (REST) / `?token=` (WebSocket); `useAuth.ts` calls `api.checkAuthStatus()` on mount.
 4. From that point on the browser holds the HMAC-signed cookie — `__VST_TOKEN__` is no longer needed.
+
+- `useAuth` is tri-state (`loading | authed | unauthenticated | unreachable`): only 401/403 from `/auth/check` shows the login screen; network errors, 5xx/530 and non-JSON 200s show "Can't reach vibe-station — retrying…". While not authed it re-checks on `visibilitychange`/`focus`/`online`/`pageshow` plus a timer (2s→15s backoff when unreachable, 5s when unauthenticated), so an installed PWA self-heals. A login completed in another app (e.g. a QR scanned in the browser) is picked up where the cookie jar is shared with the PWA (Android Chrome); an iOS home-screen PWA has its own jar and must sign in itself.
 
 ---
 

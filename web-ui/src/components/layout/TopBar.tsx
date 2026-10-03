@@ -87,10 +87,13 @@ interface TopBarProps {
    * - "floating": floating top-right widget overlapping the underlying pane
    */
   variant?: "bar" | "floating" | "sidebar-header";
+  /** Chip text shown in `layoutMode="login"` (default "● not signed in"). */
+  loginStatus?: string;
 }
 
 export function TopBar({
   layoutMode = "workspace",
+  loginStatus = "● not signed in",
   projects,
   worktrees,
   viewedWorkspaceName,
@@ -219,7 +222,7 @@ export function TopBar({
             Vibe Station
           </span>
           <div className="top-bar__end">
-            <span className="top-bar__login-status">● not signed in</span>
+            <span className="top-bar__login-status">{loginStatus}</span>
           </div>
         </div>
       </header>

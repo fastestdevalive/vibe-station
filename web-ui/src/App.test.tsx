@@ -48,7 +48,7 @@ vi.mock("react-resizable-panels", () => ({
 
 // Control useAuth's authed/loading per test (App calls useOobeGate with
 // enabled: authed, and its loading/!authed early returns drive the minimal shell).
-let authMock: { authed: boolean; loading: boolean; onLoginSuccess: () => void };
+let authMock: { status?: string; authed: boolean; loading: boolean; onLoginSuccess: () => void };
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => authMock,
 }));
@@ -179,5 +179,34 @@ describe("App OOBE gate", () => {
     expect(screen.getByText(/not signed in/)).toBeInTheDocument();
     expect(screen.queryByTestId("oobe-step1")).toBeNull();
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("App tri-state auth shells", () => {
+  const renderApp = () =>
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+  it("3.T1 — unreachable renders the retry screen + reconnecting chip, not login", () => {
+    authMock = { status: "unreachable", authed: false, loading: false, onLoginSuccess: () => {} };
+    const spy = vi.spyOn(testApi, "getOobeState");
+    renderApp();
+    expect(screen.getByTestId("daemon-unreachable")).toBeInTheDocument();
+    expect(screen.getByText(/Can't reach vibe-station/)).toBeInTheDocument();
+    expect(screen.getByText("● reconnecting…")).toBeInTheDocument();
+    expect(screen.queryByText(/not signed in/)).toBeNull();
+    expect(screen.queryByText(/Show QR/)).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("3.T2 — unauthenticated renders LoginScreen + not-signed-in chip", () => {
+    authMock = { status: "unauthenticated", authed: false, loading: false, onLoginSuccess: () => {} };
+    renderApp();
+    expect(screen.getByText(/not signed in/)).toBeInTheDocument();
+    expect(screen.getByText(/Show QR/)).toBeInTheDocument();
+    expect(screen.queryByTestId("daemon-unreachable")).toBeNull();
   });
 });

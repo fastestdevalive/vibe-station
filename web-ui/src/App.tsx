@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-
 import { useEffect } from "react";
 import { Workspace } from "./routes/Workspace";
 import { LoginScreen } from "./components/auth/LoginScreen";
+import { DaemonUnreachable } from "./components/auth/DaemonUnreachable";
 import { TopBar } from "./components/layout/TopBar";
 import { useAuth } from "./hooks/useAuth";
 import { DevStatePanel } from "./components/dev/DevStatePanel";
@@ -42,7 +43,7 @@ export function resolveNavigateAction(opts: {
 
 function AppShell() {
   const env = useDemoEnv();
-  const { authed, loading, onLoginSuccess } = useAuth();
+  const { status, authed, loading, onLoginSuccess } = useAuth();
   const oobe = useOobeGate(api, { enabled: authed });
   const navigate = useNavigate();
   const location = useLocation();
@@ -140,6 +141,26 @@ function AppShell() {
           mobileSidebarOpen={false}
           onOpenQuickOpen={() => {}}
         />
+      </div>
+    );
+  }
+
+  if (status === "unreachable") {
+    // Daemon/proxy can't be asked — NOT a logout. useAuth keeps retrying.
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: env.demo ? "100%" : "100dvh" }}>
+        <TopBar
+          layoutMode="login"
+          loginStatus="● reconnecting…"
+          projects={[]}
+          worktrees={[]}
+          isMobile={false}
+          onToggleLeftSidebar={() => {}}
+          leftSidebarCollapsed={false}
+          mobileSidebarOpen={false}
+          onOpenQuickOpen={() => {}}
+        />
+        <DaemonUnreachable />
       </div>
     );
   }
