@@ -1283,3 +1283,19 @@ describe("MessageList virtual list (Phase 2)", () => {
   });
 });
 
+
+describe("groupEvents turnId-only burst (Phase 2 — out-of-band notif turn)", () => {
+  it("2.T6 — status + text + tool_use under one notif turn with no user event render as status/assistant/toolRun", () => {
+    const items = mergeToolRuns(
+      groupEvents([
+        statusEvent("n0", "Agent resumed work on its own"),
+        textEvent("n1", "notif-x", "autonomous output"),
+        toolUseEvent("n2", "notif-x", "", "Bash"),
+      ]),
+    );
+    expect(items.map((i) => i.type)).toEqual(["status", "assistant", "toolRun"]);
+    expect(items.some((i) => i.type === "user")).toBe(false);
+    expect((items[0] as { text: string }).text).toBe("Agent resumed work on its own");
+    expect((items[1] as { text: string }).text).toBe("autonomous output");
+  });
+});

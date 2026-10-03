@@ -279,7 +279,11 @@ export function createClientApi() {
         if (typeof e.logSeq === "number" && e.logSeq > maxSeq) maxSeq = e.logSeq;
       }
       if (typeof msg.nextSeq === "number" && msg.nextSeq > maxSeq) maxSeq = msg.nextSeq;
-      more = msg.hasMore === true;
+      // Page only delta frames (hasMore present, oldestSeq absent). A tail
+      // frame (hasMore + oldestSeq) must never trigger a re-open: it is the
+      // overflow answer to an oversized delta (Decision 5) and re-requesting
+      // the same oversized delta forever would just reconnect the 1009 loop.
+      more = msg.hasMore === true && msg.oldestSeq === undefined;
     }
 
     if (sid == null) return;

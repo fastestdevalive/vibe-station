@@ -405,6 +405,20 @@ export function useChat(
       },
     );
 
+    // Re-arm gap detection on every WS reconnect from the client's current max
+    // logSeq. A reconnect's delta that overflows the bounded window is answered
+    // with the tail frame (Decision 5); without re-arming here, `restoredLatestSeqRef`
+    // stays null after the first replay so a reconnect gap would never be detected.
+    // Ordering is safe: client.ts emits `ws:open` synchronously in `onopen` right
+    // after sending `chat:open`, before any reply can arrive.
+    const offWsOpen = api.on(
+      "ws:open" as unknown as Parameters<typeof api.on>[0],
+      () => {
+        const latest = computeLatestSeq(eventsRef.current);
+        if (latest != null) restoredLatestSeqRef.current = latest;
+      },
+    );
+
     // ── Open the chat (AFTER listeners are registered) ───────────────────────
     void chatRepo.openChat(sessionId, openChatSinceSeq);
 
@@ -418,6 +432,7 @@ export function useChat(
       offError();
       offFork();
       offAuthExpired();
+      offWsOpen();
 
       // Persist a snapshot for the next mount — skip when:
       //   • no events (nothing worth caching)
