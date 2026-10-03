@@ -42,8 +42,12 @@ const SPAWN_TIMEOUT_MS: u64 = 10_000;
 /// (post-bind, background) restore is still sweeping would be killed.
 /// `shutdown_kill` does not take it (it must not wait out a 10s `enable`);
 /// shutdown instead aborts and awaits the boot restore task first.
-static TUNNEL_OP: std::sync::LazyLock<Arc<tokio::sync::Mutex<()>>> =
-    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+///
+/// A `OnceLock` rather than `LazyLock` because the workspace MSRV is 1.77.
+fn tunnel_op() -> &'static Arc<tokio::sync::Mutex<()>> {
+    static OP: std::sync::OnceLock<Arc<tokio::sync::Mutex<()>>> = std::sync::OnceLock::new();
+    OP.get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+}
 
 /// Guard returned by [`lock_for_boot_restore`].
 pub struct BootRestoreGuard(#[allow(dead_code)] tokio::sync::OwnedMutexGuard<()>);
@@ -52,7 +56,7 @@ pub struct BootRestoreGuard(#[allow(dead_code)] tokio::sync::OwnedMutexGuard<()>
 /// spawning the restore task (and before the server starts serving), so an API
 /// `enable` can never win the lock first and then be swept by the restore.
 pub async fn lock_for_boot_restore() -> BootRestoreGuard {
-    BootRestoreGuard(TUNNEL_OP.clone().lock_owned().await)
+    BootRestoreGuard(tunnel_op().clone().lock_owned().await)
 }
 
 /// Kills a freshly spawned child if the `enable` future is dropped (e.g. the
@@ -87,7 +91,7 @@ pub struct CloudflaredState {
 /// named by `VST_CLOUDFLARED_BIN`) as a long-lived background process and
 /// scrapes the public URL from its output within 10s.
 pub async fn enable(port: u16, store: &StoreHandle) -> CloudflaredResult<String> {
-    let _op = TUNNEL_OP.lock().await;
+    let _op = tunnel_op().lock().await;
     enable_locked(port, store).await
 }
 
@@ -187,7 +191,7 @@ async fn enable_locked(port: u16, store: &StoreHandle) -> CloudflaredResult<Stri
 
 /// Disable the cloudflared tunnel, killing the process if any.
 pub async fn disable(store: &StoreHandle) -> CloudflaredResult<()> {
-    let _op = TUNNEL_OP.lock().await;
+    let _op = tunnel_op().lock().await;
     let state = store.get_tunnel_state().await;
     if let Some(pid) = state.current_pid {
         let _ = kill_pid(pid as u32, false).await;
@@ -218,7 +222,7 @@ pub async fn shutdown_kill(store: &StoreHandle) -> CloudflaredResult<()> {
 
 /// Sweep orphaned cloudflared processes via pgrep.
 pub async fn sweep_orphans() -> CloudflaredResult<()> {
-    let _op = TUNNEL_OP.lock().await;
+    let _op = tunnel_op().lock().await;
     sweep_orphans_locked().await
 }
 
@@ -319,7 +323,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = StoreHandle::open(&dir.path().join("t.db")).unwrap();
 
-        let held = TUNNEL_OP.lock().await;
+        let held = tunnel_op().lock().await;
         let s = store.clone();
         let mut first = tokio::spawn(async move { disable(&s).await });
         let s = store.clone();
