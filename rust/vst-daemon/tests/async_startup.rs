@@ -3,7 +3,8 @@
 //!
 //! A fake `pgrep` on `PATH` sleeps for several seconds — the real sweep forks
 //! `pgrep -x cloudflared`, so this stands in for a slow sweep. The daemon runs
-//! with an isolated `HOME`, a loopback bind (the default) and no auth.
+//! with an isolated `HOME` and a loopback bind (the default); `/health` is
+//! unauthenticated so auth state doesn't matter.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -43,7 +44,22 @@ fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
     .unwrap();
     std::fs::set_permissions(&pgrep, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let port = vst_daemon::port::find_free_port(29900).unwrap();
+    // Fake `tailscale` too: the post-bind drift check must neither reach a
+    // real tailscaled nor hold up shutdown while it hangs.
+    let tailscale = bin_dir.join("tailscale");
+    std::fs::write(
+        &tailscale,
+        format!("#!/bin/sh\nsleep {FAKE_PGREP_SLEEP_SECS}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&tailscale, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // OS-assigned ephemeral port (released right before the daemon binds it).
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let path = format!(
         "{}:{}",
         bin_dir.display(),
@@ -55,6 +71,10 @@ fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
         .env("VST_PORT", port.to_string())
         .env("PATH", path)
         .env_remove("VST_NO_AUTH")
+        .env_remove("TMUX")
+        .env_remove("VST_TUNNEL_PORT")
+        .env_remove("VST_CLOUDFLARED_BIN")
+        .env_remove("VST_DIST_PATH")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
