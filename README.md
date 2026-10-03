@@ -74,6 +74,12 @@ Themes, fonts, and per-element Markdown styling are all configurable, with a liv
 
 <img src="docs/screenshots/06-markdown-customization.png" alt="Markdown customization with live preview" width="900" />
 
+### Read the files your agents write
+
+Open any file from the worktree's file tree — Markdown renders inline, with multiple files open as tabs right next to the Rich Chat agent that wrote them. Shown here in light mode.
+
+<img src="docs/screenshots/07-markdown-file-tree.png" alt="Light-mode workspace with a Rich Chat agent, the file tree, file tabs and a rendered Markdown plan" width="900" />
+
 ### Three front ends, one daemon
 
 A native **desktop app** for daily use, the **browser UI** (and installable PWA) for any device, and the **`vst` CLI** for scripting, CI, and for agents driving other agents. All three are thin clients over the same daemon.
