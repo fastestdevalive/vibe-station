@@ -86,7 +86,6 @@ async fn test_get_api_doctor_returns_report_with_checks() {
     assert!(names.contains(&"git"));
     assert!(names.contains(&"daemon-reachable"));
     assert!(names.contains(&"plugin-claude"));
-    assert!(names.contains(&"bun"));
     assert!(names.contains(&"cloudflared"));
     assert!(names.contains(&"tailscale"));
     assert!(names.contains(&"orphan-sessions"));

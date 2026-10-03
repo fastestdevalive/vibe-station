@@ -15,6 +15,10 @@
 # built in isolation via --manifest-path and a --target-dir OUTSIDE the
 # submodule so the submodule working tree stays clean.
 #
+# Optional: `--target <triple>` (or env AGY_ACP_TARGET) cross/explicitly targets a
+# triple (e.g. x86_64-unknown-linux-musl for the curl-install tarball); the binary
+# then lives under <target-dir>/<triple>/release/. Default = host build.
+#
 # Output contract: prints ONLY the resolved absolute path to the built binary
 # on stdout (so callers can safely do `BIN="$(bash scripts/build-agy-acp.sh)"`).
 # Every progress/log/error message goes to stderr via >&2.
@@ -23,9 +27,24 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+TRIPLE="${AGY_ACP_TARGET:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target) [[ $# -ge 2 ]] || { echo "Error: --target needs a value" >&2; exit 1; }; TRIPLE="$2"; shift 2 ;;
+    --target=*) TRIPLE="${1#*=}"; shift ;;
+    *) echo "Error: unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
 SUB_MANIFEST="$REPO_ROOT/rust/vendor/openab/agy-acp/Cargo.toml"
 TARGET_DIR="$REPO_ROOT/rust/target/agy-acp"
-BIN="$TARGET_DIR/release/agy-acp"
+TARGET_ARGS=()
+if [[ -n "$TRIPLE" ]]; then
+  TARGET_ARGS=(--target "$TRIPLE")
+  BIN="$TARGET_DIR/$TRIPLE/release/agy-acp"
+else
+  BIN="$TARGET_DIR/release/agy-acp"
+fi
 
 # Verify the vendored submodule is checked out before trying to build it.
 if [[ ! -f "$SUB_MANIFEST" ]]; then
@@ -39,7 +58,8 @@ fi
 echo "==> Building agy-acp adapter (vendored openab submodule, in isolation)..." >&2
 cargo build --release --locked \
   --manifest-path "$SUB_MANIFEST" \
-  --target-dir "$TARGET_DIR"
+  --target-dir "$TARGET_DIR" \
+  ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}
 
 if [[ ! -x "$BIN" ]]; then
   echo "Error: expected agy-acp binary at $BIN — build may have failed." >&2

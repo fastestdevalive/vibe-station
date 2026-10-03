@@ -19,7 +19,6 @@ vst-proc = { workspace = true }
 vst-git = { workspace = true }
 vst-rpc = { workspace = true }
 vst-agents = { workspace = true }
-vst-agy-acp = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
 vst-routes = { workspace = true }

@@ -3104,7 +3104,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vst-agents",
- "vst-agy-acp",
  "vst-git",
  "vst-lifecycle",
  "vst-lsp",

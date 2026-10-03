@@ -99,7 +99,9 @@ The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re
 
 The `vst` binary contains the daemon and web UI; the desktop bundle adds `cloudflared` as a sidecar — you install neither Node.js nor pnpm.
 
-**You still need** `tmux`, `git`, and at least one agent CLI on your `PATH`: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy. Rich Chat on Claude Code also needs `bun` on your `PATH`. Run `vst doctor` to check.
+The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` (the pinned Claude adapter compiled with the bun runtime, so no bun or Node is needed) and `agy-acp` (shipped ready for agy Rich Chat, which is off while agy is terminal-only). They still drive your own `agy` / `claude` CLIs, which you must have installed. `claude-acp` is a glibc build and is skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
+
+**You still need** `tmux`, `git`, and at least one agent CLI on your `PATH`: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy. Run `vst doctor` to check.
 
 ### Build from source
 
@@ -375,7 +377,7 @@ vst doctor
 
 ## Troubleshooting
 
-**`vst doctor`** is the first stop — it checks `tmux`, `git`, `bun`, the agent CLIs on `PATH`, `cloudflared`, Tailscale, and whether a daemon is registered. It does not prove every API route works.
+**`vst doctor`** is the first stop — it checks `tmux`, `git`, the agent CLIs on `PATH`, `cloudflared`, Tailscale, and whether a daemon is registered. It does not prove every API route works.
 
 - **Daemon not starting** — `vst daemon status`, then `cat ~/.vibe-station/logs/daemon.log`.
 - **Port 7421 in use** — the daemon picks the next free port up to 7520; the one in use is in `~/.vibe-station/config.json`.

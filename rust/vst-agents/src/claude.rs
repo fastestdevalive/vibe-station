@@ -32,10 +32,19 @@ use vst_proc::sq;
 
 /// Launch spec for the claude ACP adapter — shared by real turns and the
 /// model-list probe so both always run the same setup.
+///
+/// A compiled, self-contained `claude-acp` binary (see [`claude_acp_bin`]) is
+/// preferred: no `bun` needed at runtime. Without one — dev checkouts, the
+/// Tauri bundle, or an explicit `VST_CLAUDE_ACP_ENTRY` override — it falls back
+/// to `bun <entry.js>`.
 fn claude_acp_spec(cwd: PathBuf) -> AcpLaunchSpec {
+    let (command, args) = match claude_acp_bin() {
+        Some(bin) => (bin.to_string_lossy().to_string(), Vec::new()),
+        None => (claude_acp_bun_command(), vec![claude_acp_entry_path()]),
+    };
     AcpLaunchSpec {
-        command: claude_acp_bun_command(),
-        args: vec![claude_acp_entry_path()],
+        command,
+        args,
         cwd,
         env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".to_string(), "claude".to_string())])
             .into_iter()
@@ -44,6 +53,46 @@ fn claude_acp_spec(cwd: PathBuf) -> AcpLaunchSpec {
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
     }
+}
+
+/// Name of the compiled claude ACP adapter binary shipped in the CLI tarball.
+pub const CLAUDE_ACP_BIN_NAME: &str = "claude-acp";
+
+/// Env var for an explicit compiled-adapter path override.
+pub const CLAUDE_ACP_BIN_ENV: &str = "VST_CLAUDE_ACP_BIN";
+
+/// Resolve the compiled `claude-acp` adapter (`bun build --compile` of the
+/// pinned `@agentclientprotocol/claude-agent-acp`, built by
+/// `scripts/build-claude-acp.sh`). Order: `VST_CLAUDE_ACP_BIN` env → `claude-acp`
+/// beside `current_exe()` (the curl-install layout). `None` when neither
+/// resolves, or when `VST_CLAUDE_ACP_ENTRY` is set — that explicit
+/// `bun <entry.js>` override (dev sandbox, `tauri dev`, desktop bundle) wins.
+pub fn claude_acp_bin() -> Option<PathBuf> {
+    if std::env::var("VST_CLAUDE_ACP_ENTRY").is_ok_and(|v| !v.is_empty()) {
+        return None;
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(PathBuf::from));
+    resolve_claude_acp_bin(
+        std::env::var(CLAUDE_ACP_BIN_ENV).ok().as_deref(),
+        exe_dir.as_deref(),
+    )
+}
+
+fn resolve_claude_acp_bin(
+    env_value: Option<&str>,
+    exe_dir: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    if let Some(p) = env_value.map(str::trim).filter(|p| !p.is_empty()) {
+        let pb = PathBuf::from(p);
+        // A dangling override must not be reported as available.
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    let beside = exe_dir?.join(CLAUDE_ACP_BIN_NAME);
+    beside.is_file().then_some(beside)
 }
 
 /// Budget for the whole throwaway `initialize` + `session/new` model probe.
@@ -576,15 +625,12 @@ impl AgentPlugin for ClaudePlugin {
 /// dependency for Claude: `bun <entry.js>` replaces `node <entry.js>`
 /// one-for-one, sharing the tool the project already requires elsewhere.
 ///
-/// (A single compiled standalone binary via `bun build --compile` was tried
-/// first and rejected: it silently fails at `session/new` with "Cannot find
-/// package '@anthropic-ai/claude-agent-sdk'" — that dependency ships
-/// per-platform optional variants Bun's static bundler can't resolve inside
-/// a compiled binary's virtual filesystem, `--external` doesn't help either
-/// since the externalized `require` can't walk up from a virtual path to a
-/// real `node_modules` on disk. Running `bun` against the real, unmodified
-/// `dist/index.js` — a real file, real `require.resolve` — has none of that
-/// problem, confirmed end to end via `examples/acp_hello_bundled.rs`.)
+/// (A compiled standalone binary was once tried and recorded here as failing
+/// at `session/new` with "Cannot find package '@anthropic-ai/claude-agent-sdk'".
+/// Re-tested with bun 1.4.2 + adapter 0.70.0: `bun build --compile` of
+/// `dist/index.js` completes `initialize`, `session/new` AND a real prompt turn
+/// from a directory with no `node_modules` — that is now the curl-install form,
+/// see [`claude_acp_bin`]. This `bun <entry.js>` path stays for dev/desktop.)
 fn claude_acp_bun_command() -> String {
     std::env::var("VST_CLAUDE_ACP_BUN").unwrap_or_else(|_| "bun".to_string())
 }
@@ -632,8 +678,9 @@ fn claude_acp_bun_command() -> String {
 ///    (see git history), and losing it here would make a broken install
 ///    silently produce a generic downstream ACP connection error with no
 ///    hint that entry-path resolution itself came up empty.
-///    `vst doctor` (`vst-cli/src/commands/doctor.rs`) also flags a missing
-///    install ahead of time, but that only helps if someone actually runs it.
+///    `vst doctor` does NOT check for the adapter install itself — only for
+///    `bun`. The curl tarball ships the compiled `claude-acp` binary instead
+///    (see [`claude_acp_bin`]), so this bun path is the dev/desktop fallback.
 pub fn claude_acp_entry_path() -> String {
     if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ENTRY") {
         if !p.is_empty() {
@@ -699,6 +746,32 @@ async fn write_mode_755(path: &PathBuf, content: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn claude_acp_bin_prefers_env_then_beside_exe() {
+        use super::resolve_claude_acp_bin;
+        let dir = tempfile::tempdir().unwrap();
+        let beside = dir.path().join("claude-acp");
+        let other = dir.path().join("override-bin");
+        // Nothing exists yet: nothing resolves, and a dangling override is ignored.
+        assert_eq!(resolve_claude_acp_bin(None, Some(dir.path())), None);
+        assert_eq!(
+            resolve_claude_acp_bin(other.to_str(), Some(dir.path())),
+            None
+        );
+        std::fs::write(&beside, b"").unwrap();
+        assert_eq!(
+            resolve_claude_acp_bin(None, Some(dir.path())),
+            Some(beside.clone())
+        );
+        assert_eq!(resolve_claude_acp_bin(Some("  "), None), None);
+        // A real override beats the beside-exe copy.
+        std::fs::write(&other, b"").unwrap();
+        assert_eq!(
+            resolve_claude_acp_bin(other.to_str(), Some(dir.path())),
+            Some(other)
+        );
+    }
+
     #[test]
     fn resolve_starter_model_matches_family_newest_first() {
         let live: Vec<String> = [
