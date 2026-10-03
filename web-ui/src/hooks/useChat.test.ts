@@ -423,6 +423,123 @@ describe("useChat snapshot cache", () => {
   });
 });
 
+describe("useChat reconnect gap (4.T3/4.T4)", () => {
+  it("(4.T3) reconnect gap — ws:open re-arms latest seq; overflow tail drops stale cache", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    // Events up to logSeq 10 are already loaded (plain tail replay).
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [
+          ev("e9", { kind: "user", role: "user", text: "a", turnId: "t9", logSeq: 9 }),
+          ev("e10", { kind: "text", role: "assistant", text: "b", logSeq: 10 }),
+        ],
+        oldestSeq: 9,
+        hasMore: false,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Reconnect: ws:open re-arms restoredLatestSeqRef from the current max seq.
+    act(() => {
+      api.emit({ type: "ws:open" } as WSEvent);
+    });
+
+    // Overflow delta answered with a tail frame: oldestSeq=50 > latest=10 → gap.
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e50", { kind: "text", role: "assistant", text: "fresh", logSeq: 50 })],
+        oldestSeq: 50,
+        hasMore: true,
+      });
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // Stale events dropped; only the fresh tail remains.
+    expect(result.current.events.map((e) => e.id)).toEqual(["e50"]);
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("(4.T4) reconnect no gap — tail with oldestSeq <= latest merges without dropping", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e10", { kind: "text", role: "assistant", text: "old", logSeq: 10 })],
+        oldestSeq: 10,
+        hasMore: false,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Reconnect re-arms latest seq (10).
+    act(() => {
+      api.emit({ type: "ws:open" } as WSEvent);
+    });
+
+    // Tail frame with oldestSeq=5 (<= latest) → no gap → merge, nothing dropped.
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [
+          ev("e5", { kind: "user", role: "user", text: "q", turnId: "t5", logSeq: 5 }),
+          ev("e11", { kind: "text", role: "assistant", text: "a", logSeq: 11 }),
+        ],
+        oldestSeq: 5,
+        hasMore: true,
+      });
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const ids = result.current.events.map((e) => e.id);
+    expect(ids).toContain("e5");
+    expect(ids).toContain("e10");
+    expect(ids).toContain("e11");
+    expect(ids).toHaveLength(3);
+  });
+
+  it("(4.T4) plain delta replay (hasMore undefined) after ws:open still merges", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e10", { kind: "text", role: "assistant", text: "old", logSeq: 10 })],
+        oldestSeq: 10,
+        hasMore: false,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      api.emit({ type: "ws:open" } as WSEvent);
+    });
+
+    // Fitting delta (no cursor fields) merges on top of existing events.
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e11", { kind: "text", role: "assistant", text: "b", logSeq: 11 })],
+      });
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.events.map((e) => e.id)).toEqual(["e10", "e11"]);
+  });
+});
+
 describe("useChat live-event cap (4.T1)", () => {
   const MAX = 5000;
   const TRIM_TO = 4000;
