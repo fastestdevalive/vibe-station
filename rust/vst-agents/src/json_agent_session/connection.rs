@@ -34,7 +34,7 @@ impl JsonAgentSession {
     pub async fn get_or_create_connection(
         &self,
         spec: AcpLaunchSpec,
-        _enrich: Option<Arc<AcpEnrichHook>>,
+        enrich: Option<Arc<AcpEnrichHook>>,
     ) -> Result<AcpConnection, AcpTransportError> {
         // Check liveness of any cached connection.
         let existing = {
@@ -212,6 +212,11 @@ impl JsonAgentSession {
             if should_persist_session_id(est.resumed, &est.model) {
                 self.persist_acp_session_id(est.session_id).await;
             }
+
+            // Attach the out-of-band sink ONLY now, after `session/load` has
+            // completed (Decision 2 — load replays the whole history as
+            // `session/update` notifications, which must not be ingested).
+            self.attach_out_of_band_sink(&conn, enrich);
 
             return Ok(conn);
         }

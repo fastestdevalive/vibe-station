@@ -299,3 +299,19 @@ fn the_enrich_hook_can_replace_the_default_mapping() {
         Some("overridden")
     );
 }
+
+#[test]
+fn normalized_event_ts_is_iso8601() {
+    // 1.T3 — every normalized event ts must parse via RFC3339 (ISO-8601), not
+    // the old "<secs>.<ms>Z" epoch-seconds format.
+    let ev = norm(SessionUpdate::AgentMessageChunk(ContentChunk::new(
+        ContentBlock::Text(TextContent::new("hi")),
+    )))
+    .expect("a text chunk should map to a text event");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&ev.ts).is_ok(),
+        "ts not ISO-8601: {}",
+        ev.ts
+    );
+    assert!(ev.ts.ends_with('Z'), "ts must end with Z: {}", ev.ts);
+}

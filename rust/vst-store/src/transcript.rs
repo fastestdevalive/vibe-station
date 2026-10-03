@@ -92,18 +92,33 @@ fn has_real_usage(usage: &Option<vst_types::UsageInfo>) -> bool {
         .is_some_and(|u| u.total_tokens > 0 || u.context_window.is_some())
 }
 
-/// Content signature of a `user` event for round-trip dedup: trimmed prompt
-/// text. Empty prompts return `None` (never dedup on an empty string).
-fn user_signature(ev: &NormalizedEvent) -> Option<String> {
-    if ev.kind != NormalizedEventKind::User {
-        return None;
-    }
-    let t = ev.text.as_deref()?.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
-    }
+/// Content fingerprint of one tool-less turn, the key for idempotent import:
+/// `u:` + trimmed user text when the turn has a user row, else `a:` + trimmed
+/// concatenation (seq order) of its assistant `text` rows (the prefixes keep a
+/// prompt and an assistant reply with equal text apart). One normalization for
+/// imported groups and for turns already in the log, so an autonomous turn
+/// persisted live as many small streamed rows matches its one-row imported
+/// copy. `None` (never matches) when there is no text.
+fn fingerprint(user: Option<&str>, assistant: &str) -> Option<String> {
+    let (tag, t) = match user {
+        Some(u) => ("u:", u.trim()),
+        None => ("a:", assistant.trim()),
+    };
+    (!t.is_empty()).then(|| format!("{tag}{t}"))
+}
+
+/// `fingerprint` of an imported group's events.
+fn group_fingerprint(events: &[NormalizedEvent]) -> Option<String> {
+    let user = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::User)
+        .and_then(|e| e.text.as_deref());
+    let assistant: String = events
+        .iter()
+        .filter(|e| e.kind == NormalizedEventKind::Text)
+        .filter_map(|e| e.text.as_deref())
+        .collect();
+    fingerprint(user, &assistant)
 }
 
 /// Mutates `ev` in place, capping oversized `tool_result.content` and
@@ -480,10 +495,59 @@ impl TranscriptStore {
         .unwrap_or_default()
         .into_iter()
         .collect();
-        let mut existing_user_sigs: std::collections::HashSet<String> = {
+        // Fingerprints of every turn already in the log (rows without a turn id
+        // count as their own one-row turn), folded straight from the payload's
+        // text. A turn holding a cancelled/silent user row (queue-cancel, notice
+        // turns) is not real prompt content, so it never suppresses a re-typed
+        // prompt.
+        let mut existing_fps: std::collections::HashSet<String> = {
+            type Row = (Option<String>, String, Option<String>, bool);
+            let rows: Vec<Row> = (|| -> rusqlite::Result<Vec<Row>> {
+                let mut stmt = self.conn.prepare(
+                    "SELECT turn_id, kind, json_extract(payload, '$.text'),
+                            COALESCE(json_extract(payload, '$.cancelled'), 0)
+                              OR COALESCE(json_extract(payload, '$.silent'), 0)
+                     FROM message
+                     WHERE session_id = ?1 AND superseded = 0 AND kind IN ('user', 'text')
+                     ORDER BY seq",
+                )?;
+                let result = stmt
+                    .query_map([&self.session_id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(result)
+            })()
+            .unwrap_or_default();
+            // turn key -> (user text, assistant text, has cancelled/silent user row)
+            let mut turns: std::collections::HashMap<String, (Option<String>, String, bool)> =
+                std::collections::HashMap::new();
+            for (i, (turn_id, kind, text, void)) in rows.into_iter().enumerate() {
+                let t = turns
+                    .entry(turn_id.unwrap_or_else(|| format!("\0{i}")))
+                    .or_default();
+                if kind == "user" {
+                    t.2 |= void;
+                    if t.0.is_none() {
+                        t.0 = text;
+                    }
+                } else {
+                    t.1.push_str(&text.unwrap_or_default());
+                }
+            }
+            turns
+                .values()
+                .filter(|(_, _, void)| !void)
+                .filter_map(|(u, a, _)| fingerprint(u.as_deref(), a))
+                .collect()
+        };
+        // Existing `tool_use` ids in the live log — a group whose tool_use id
+        // already exists was already imported (Decision 4c). Parse the payloads
+        // of `kind = 'tool_use'` rows.
+        let existing_tool_ids: std::collections::HashSet<String> = {
             let rows: Vec<String> = (|| -> rusqlite::Result<Vec<String>> {
                 let mut stmt = self.conn.prepare(
-                    "SELECT payload FROM message WHERE session_id = ?1 AND kind = 'user'",
+                    "SELECT payload FROM message WHERE session_id = ?1 AND kind = 'tool_use'",
                 )?;
                 let result = stmt
                     .query_map([&self.session_id], |r| r.get(0))?
@@ -494,8 +558,8 @@ impl TranscriptStore {
             let mut set = std::collections::HashSet::new();
             for r in rows {
                 if let Ok(ev) = serde_json::from_str::<NormalizedEvent>(&r) {
-                    if let Some(sig) = user_signature(&ev) {
-                        set.insert(sig);
+                    if let Some(id) = ev.tool_id {
+                        set.insert(id);
                     }
                 }
             }
@@ -528,14 +592,25 @@ impl TranscriptStore {
         let result = (|| -> rusqlite::Result<()> {
             let txn = self.conn.transaction()?;
             for (turn_id, group_events) in &groups {
-                let user_sig = group_events.iter().filter_map(user_signature).next();
+                let has_tools = group_events
+                    .iter()
+                    .any(|e| e.kind == NormalizedEventKind::ToolUse);
+                // Tool-less groups are decided by content; a group with tool use
+                // by ids alone (its text may legitimately repeat, e.g. /loop
+                // wake-ups that each do new work).
+                let fp = (!has_tools)
+                    .then(|| group_fingerprint(group_events))
+                    .flatten();
                 let dup_by_turn = turn_id
                     .as_ref()
                     .is_some_and(|t| existing_turn_ids.contains(t));
-                let dup_by_content = user_sig
-                    .as_ref()
-                    .is_some_and(|s| existing_user_sigs.contains(s));
-                if dup_by_turn || dup_by_content {
+                let dup_by_tool = group_events
+                    .iter()
+                    .filter(|e| e.kind == NormalizedEventKind::ToolUse)
+                    .filter_map(|e| e.tool_id.as_deref())
+                    .any(|id| existing_tool_ids.contains(id));
+                let dup_by_content = fp.as_ref().is_some_and(|f| existing_fps.contains(f));
+                if dup_by_turn || dup_by_tool || dup_by_content {
                     turns_skipped += 1;
                     continue;
                 }
@@ -555,8 +630,8 @@ impl TranscriptStore {
                 if let Some(t) = turn_id {
                     existing_turn_ids.insert(t.clone());
                 }
-                if let Some(s) = user_sig {
-                    existing_user_sigs.insert(s);
+                if let Some(f) = fp {
+                    existing_fps.insert(f);
                 }
             }
             txn.execute(

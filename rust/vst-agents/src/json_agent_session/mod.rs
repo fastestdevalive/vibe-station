@@ -14,6 +14,7 @@ pub mod drain;
 pub mod events;
 pub mod meta;
 pub mod model_race;
+pub mod out_of_band;
 pub mod pids;
 pub mod queue;
 

@@ -587,3 +587,229 @@ fn concurrent_first_open_does_not_panic_on_superseded_column_race() {
             .expect("open_transcript_store must not panic under concurrent first-open");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 — importer dedupe (Decision 4c): tool-id skip rule, watermark, gating
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_skips_group_with_existing_tool_id_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    // Live log has toolu_A under a DIFFERENT turn id.
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "q live", "turnId": "live"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::ToolUse,
+        serde_json::json!({"toolId": "toolu_A", "turnId": "live"}),
+    ));
+
+    let events = vec![
+        // Group t1 carries toolu_A (already in log) -> skipped even though t1 is new.
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q t1", "turnId": "t1"}),
+        ),
+        ev(
+            NormalizedEventKind::ToolUse,
+            serde_json::json!({"toolId": "toolu_A", "turnId": "t1"}),
+        ),
+        // Group t2 has only toolu_B -> imported.
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q t2", "turnId": "t2"}),
+        ),
+        ev(
+            NormalizedEventKind::ToolUse,
+            serde_json::json!({"toolId": "toolu_B", "turnId": "t2"}),
+        ),
+        // A human prompt with no tools and new text -> imported.
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "yes", "turnId": "y1"}),
+        ),
+    ];
+    let outcome = store.import_transaction(
+        events,
+        vst_store::transcript::ImportOptions {
+            cli: "claude".into(),
+            cursor: "c".into(),
+        },
+    );
+    assert_eq!(outcome.turns_imported, 2);
+    assert_eq!(outcome.turns_skipped, 1);
+}
+
+#[test]
+fn reimport_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let events = vec![
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q", "turnId": "n1"}),
+        ),
+        ev(
+            NormalizedEventKind::ToolUse,
+            serde_json::json!({"toolId": "toolu_B", "turnId": "n1"}),
+        ),
+    ];
+    let opts = vst_store::transcript::ImportOptions {
+        cli: "claude".into(),
+        cursor: "c".into(),
+    };
+    let first = store.import_transaction(events.clone(), opts.clone());
+    assert_eq!(first.turns_imported, 1);
+    // Same native-uuid turn id (and tool id) already in the log -> skipped.
+    let second = store.import_transaction(events.clone(), opts.clone());
+    assert_eq!(second.turns_imported, 0);
+}
+
+fn opts(cursor: &str) -> vst_store::transcript::ImportOptions {
+    vst_store::transcript::ImportOptions {
+        cli: "claude".into(),
+        cursor: cursor.into(),
+    }
+}
+
+fn text_ev(text: &str, turn: &str) -> NormalizedEvent {
+    ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"role": "assistant", "text": text, "turnId": turn}),
+    )
+}
+
+/// Live `notif-*` turn: no user row, text streamed as several small rows.
+fn seed_live_notif(store: &mut vst_store::transcript::TranscriptStore) {
+    for chunk in ["Wake-up: ", "build ", "finished.\n"] {
+        store.append(&mut text_ev(chunk, "notif-1"));
+    }
+}
+
+#[test]
+fn text_only_autonomous_group_matching_live_notif_turn_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    seed_live_notif(&mut store);
+    let out = store.import_transaction(
+        vec![text_ev("Wake-up: build finished.", "native-uuid")],
+        opts("c"),
+    );
+    assert_eq!((out.turns_imported, out.turns_skipped), (0, 1));
+}
+
+#[test]
+fn text_only_autonomous_group_with_new_text_is_imported_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    seed_live_notif(&mut store);
+    let events = vec![text_ev("Something else happened.", "native-2")];
+    let first = store.import_transaction(events.clone(), opts("c"));
+    assert_eq!((first.turns_imported, first.turns_skipped), (1, 0));
+    let second = store.import_transaction(events, opts("c"));
+    assert_eq!((second.turns_imported, second.turns_skipped), (0, 1));
+}
+
+#[test]
+fn reimport_of_mixed_log_adds_no_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let log = |sfx: &str| {
+        vec![
+            ev(
+                NormalizedEventKind::User,
+                serde_json::json!({"text": "do it", "turnId": format!("h1{sfx}")}),
+            ),
+            text_ev("ok", &format!("h1{sfx}")),
+            ev(
+                NormalizedEventKind::ToolUse,
+                serde_json::json!({"toolId": "toolu_Z", "turnId": format!("a1{sfx}")}),
+            ),
+            text_ev("tool turn", &format!("a1{sfx}")),
+            text_ev("wake-up text", &format!("a2{sfx}")),
+        ]
+    };
+    let first = store.import_transaction(log(""), opts("c"));
+    assert_eq!(first.turns_imported, 3);
+    // Fresh turn ids: only the content rule (human + text-only) and the tool id
+    // rule can recognise these as already present.
+    let second = store.import_transaction(log("-again"), opts("c"));
+    assert_eq!(
+        (second.imported, second.turns_imported, second.turns_skipped),
+        (0, 0, 3)
+    );
+}
+
+#[test]
+fn text_matching_group_with_new_tool_ids_is_imported() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    seed_live_notif(&mut store);
+    let events = vec![
+        text_ev("Wake-up: build finished.", "n1"),
+        ev(
+            NormalizedEventKind::ToolUse,
+            serde_json::json!({"toolId": "toolu_new", "turnId": "n1"}),
+        ),
+    ];
+    let out = store.import_transaction(events, opts("c"));
+    assert_eq!((out.turns_imported, out.turns_skipped), (1, 0));
+}
+
+#[test]
+fn identical_text_only_groups_in_one_import_dedupe() {
+    // Content identity: two text-only autonomous groups with the same text are
+    // the same turn as far as the log can tell, so only the first is imported.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let events = vec![text_ev("tick", "n1"), text_ev("tick", "n2")];
+    let out = store.import_transaction(events, opts("c"));
+    assert_eq!((out.turns_imported, out.turns_skipped), (1, 1));
+}
+
+#[test]
+fn cancelled_live_user_row_does_not_suppress_terminal_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut queued = ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "retry me", "turnId": "q1"}),
+    );
+    store.append(&mut queued);
+    let mut cancelled = ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "retry me", "turnId": "q1"}),
+    );
+    cancelled.cancelled = Some(true);
+    store.append(&mut cancelled);
+    let events = vec![ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "retry me", "turnId": "native-1"}),
+    )];
+    let out = store.import_transaction(events, opts("c"));
+    assert_eq!((out.turns_imported, out.turns_skipped), (1, 0));
+}
+
+#[test]
+fn human_prompt_matching_existing_user_text_is_skipped_new_one_imported() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "hello", "turnId": "t0"}),
+    ));
+    let dup = vec![ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": " hello ", "turnId": "t9"}),
+    )];
+    let out = store.import_transaction(dup, opts("c"));
+    assert_eq!((out.turns_imported, out.turns_skipped), (0, 1));
+    let fresh = vec![ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "brand new", "turnId": "t10"}),
+    )];
+    let out = store.import_transaction(fresh, opts("c"));
+    assert_eq!((out.turns_imported, out.turns_skipped), (1, 0));
+}
