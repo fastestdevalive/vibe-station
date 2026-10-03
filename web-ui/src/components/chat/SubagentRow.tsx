@@ -359,9 +359,12 @@ export function openSubagentSession(
     insertTileIntoScratchCanvas: ReturnType<typeof useWorkspaceStore.getState>["insertTileIntoScratchCanvas"];
     setActiveSession: ReturnType<typeof useWorkspaceStore.getState>["setActiveSession"];
     setActiveTerminalSession: ReturnType<typeof useWorkspaceStore.getState>["setActiveTerminalSession"];
+    openProjectAgentTab?: ReturnType<typeof useWorkspaceStore.getState>["openProjectAgentTab"];
   },
 ): void {
   if (target.worktreeId !== from.worktreeId) return; // Requirement 7 — never cross-worktree
+  // Direct agents share worktreeId === null, so also keep them in one project.
+  if (target.worktreeId == null && target.projectId !== from.projectId) return;
   const worktreeId = from.worktreeId;
   const layout = worktreeId ? (store.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT) : DEFAULT_WORKTREE_LAYOUT;
   // The active-slot switch runs in BOTH layout modes. In workspace mode the
@@ -372,6 +375,18 @@ export function openSubagentSession(
   const activate: TileKind = target.type === "terminal" ? "terminal" : "agent";
   if (activate === "terminal") store.setActiveTerminalSession(target.id);
   else store.setActiveSession(target.id);
+  // A direct agent has no worktree, and its pane/tab only exist while its id
+  // is in the project's open-tab set — activating alone is a silent no-op.
+  // Only when the project's set already exists: creating it here would stop
+  // `seedProjectAgentTabsIfEmpty` from ever seeding the user's other agents.
+  if (
+    activate === "agent" &&
+    worktreeId == null &&
+    target.projectId &&
+    useWorkspaceStore.getState().openDirectAgentTabsByProject[target.projectId] !== undefined
+  ) {
+    store.openProjectAgentTab?.(target.projectId, target.id);
+  }
   if (worktreeId && layout.layoutMode === "workspace") {
     if (layout.activeWorkspaceId && store.workspaceDocs[layout.activeWorkspaceId]) {
       store.insertTileIntoWorkspaceDoc(layout.activeWorkspaceId, activate, target.id, target.worktreeId ?? undefined);

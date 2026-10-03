@@ -281,6 +281,19 @@ export function useServerSync(api: ApiInstance): void {
           );
         }
       }
+      // Direct (worktree-less) agent subagents get a project tab like any
+      // other direct agent — but only when the parent is itself an open tab,
+      // so a subagent never resurrects a tab the user closed. Focus is left
+      // alone (project scope never auto-focuses an agent-spawned child).
+      const snap = ev.snapshot && {
+        ...ev.snapshot,
+        parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
+      };
+      if (snap && snap.parentSessionId && snap.worktreeId == null && snap.type === "agent" && snap.projectId) {
+        const store = useWorkspaceStore.getState();
+        const open = store.openDirectAgentTabsByProject[snap.projectId];
+        if (open?.includes(snap.parentSessionId)) store.openProjectAgentTab(snap.projectId, snap.id);
+      }
     });
     const offSessState = sessionRepo.on("session:state", (ev) => {
       if (ev.type === "session:state") {
