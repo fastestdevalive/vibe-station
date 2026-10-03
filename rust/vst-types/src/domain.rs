@@ -49,6 +49,53 @@ pub enum CliId {
     Pi,
 }
 
+impl CliId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CliId::Claude => "claude",
+            CliId::Cursor => "cursor",
+            CliId::Opencode => "opencode",
+            CliId::Agy => "agy",
+            CliId::Codex => "codex",
+            CliId::Pi => "pi",
+        }
+    }
+}
+
+impl std::fmt::Display for CliId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Error returned when parsing an unrecognized CLI identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParseCliIdError;
+
+impl std::fmt::Display for ParseCliIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("unknown cli identifier")
+    }
+}
+
+impl std::error::Error for ParseCliIdError {}
+
+impl std::str::FromStr for CliId {
+    type Err = ParseCliIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "claude" => Ok(CliId::Claude),
+            "cursor" => Ok(CliId::Cursor),
+            "opencode" => Ok(CliId::Opencode),
+            "agy" => Ok(CliId::Agy),
+            "codex" => Ok(CliId::Codex),
+            "pi" => Ok(CliId::Pi),
+            _ => Err(ParseCliIdError),
+        }
+    }
+}
+
 id_newtype!(
     /// A session's opaque id.
     SessionId
