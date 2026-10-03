@@ -16,6 +16,7 @@ use vst_agents::opencode::create_opencode_plugin;
 use vst_agents::paths::Paths;
 use vst_agents::plugin::{CaptureArgs, ComposePromptInput, RestoreArgs};
 use vst_agents::{resolve_plugin, AgentPlugin, CliId};
+use vst_types::Channel;
 
 use common::{make_project, make_session, proj_launch, wt_launch};
 
@@ -61,10 +62,13 @@ mod resolution {
     }
 
     #[test]
-    fn agy_supports_json() {
+    fn agy_is_terminal_only() {
         let p = resolve_plugin(CliId::Agy);
         assert_eq!(p.name(), "agy");
-        assert!(p.supports_json());
+        // TEMPORARY: agy is terminal-only until terminal<->ACP conversation ids
+        // are bridged — it must not support (or default to) the JSON channel.
+        assert!(!p.supports_json());
+        assert_eq!(p.default_channel(), Channel::Tmux);
     }
 
     #[test]

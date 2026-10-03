@@ -412,7 +412,7 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
   }
 
   it("4.T1 — agy mode with no explicit channel defaults the radio to Terminal", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
     const terminal = await screen.findByRole("radio", { name: /Terminal/i });
     await waitFor(() => expect(terminal).toBeChecked());
@@ -445,7 +445,7 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     // LeftSidebar's scaffold `{ entryPoint, worktreeChoice, channel: "json" }`
     // carries channel but NOT channelExplicit — so the mode-follow effect must
     // still fire and flip an agy mode's channel to Terminal.
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "agy-mode", cli: "agy" })]);
     vi.spyOn(api, "getSupportedClis").mockResolvedValue([agy]);
     const session = makeDraftSession({
@@ -482,12 +482,15 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
   });
 
   it("4.T3 — a manual channel pick survives a later mode change (touched ref)", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    // agy can no longer be the tmux-default starter here (it can't pick Rich
+    // Chat at all now), so use a synthetic tmux-default, json-capable CLI to
+    // exercise the touched-ref logic.
+    const tmuxDefault = makeCli({ id: "tmux-default", defaultChannel: "tmux" });
     const claude = makeCli({ id: "claude", defaultChannel: "json" });
-    // Auto-select the agy mode first (ms[0]) so the default is Terminal.
+    // Auto-select the tmux-default mode first (ms[0]) so the default is Terminal.
     renderTier2(
-      [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
-      [agy, claude],
+      [makeMode({ id: "tmux-default-mode", cli: "tmux-default" }), makeMode({ id: "claude-mode", cli: "claude" })],
+      [tmuxDefault, claude],
     );
     const terminal = await screen.findByRole("radio", { name: /Terminal/i });
     await waitFor(() => expect(terminal).toBeChecked());
@@ -505,7 +508,7 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
   });
 
   it("4.T8a — an untouched agy default flips back to Rich Chat when the mode changes to claude", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     const claude = makeCli({ id: "claude", defaultChannel: "json" });
     renderTier2(
       [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
@@ -530,18 +533,19 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeDisabled();
   });
 
-  it("4.T10 — an override making agy's default json selects Rich Chat, not Terminal", async () => {
-    // Server reports agy's defaultChannel as json (a settings override), so the
-    // mode-follow default must be Rich Chat despite agy's plugin default being tmux.
-    const agyJson = makeCli({ id: "agy", defaultChannel: "json", defaultChannelOverridden: true });
+  it("4.T10 — a persisted json default override for agy is dropped (agy is terminal-only)", async () => {
+    // The daemon drops a json override for a CLI that can't run Rich Chat
+    // (agy supportsJson=false), so the server never reports agy's defaultChannel
+    // as json. Rich Chat stays disabled and Terminal is forced.
+    const agyJson = makeCli({ id: "agy", defaultChannel: "json", defaultChannelOverridden: true, supportsJson: false });
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agyJson]);
-    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
-    await waitFor(() => expect(rich).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Terminal/i })).not.toBeChecked();
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeDisabled();
   });
 
   it("4.T6 — Tier 2 agy mode: the default Terminal channel reaches the createWorktree payload as tmux", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     const spy = vi.spyOn(api, "createWorktree");
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
     const terminal = await screen.findByRole("radio", { name: /Terminal/i });

@@ -491,8 +491,9 @@ fn baseline_patch() -> PatchSettingsBody {
 
 #[tokio::test]
 async fn test_settings_default_channel_by_cli_merge_is_per_key() {
-    // 6.T1 — per-key merge: PATCH {cursor: json} then PATCH {agy: json} must
-    // leave cursor's override intact (not a whole-map replace).
+    // 6.T1 — per-key merge: PATCH {cursor: json} then PATCH {opencode: json}
+    // must leave cursor's override intact (not a whole-map replace). (agy is
+    // terminal-only — a json override for it is rejected, so use opencode.)
     let tmp = tempdir().unwrap();
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));
     let broadcaster = Broadcaster::new(32);
@@ -509,7 +510,7 @@ async fn test_settings_default_channel_by_cli_merge_is_per_key() {
     routes
         .patch_settings(PatchSettingsBody {
             last_mode_id: None,
-            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Opencode, Some(Channel::Json))])),
             ..baseline_patch()
         })
         .await
@@ -518,7 +519,7 @@ async fn test_settings_default_channel_by_cli_merge_is_per_key() {
     let raw = std::fs::read_to_string(paths.vst_home().join("config.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(v["defaultChannelByCli"]["cursor"], "json");
-    assert_eq!(v["defaultChannelByCli"]["agy"], "json");
+    assert_eq!(v["defaultChannelByCli"]["opencode"], "json");
 }
 
 #[tokio::test]
@@ -534,17 +535,17 @@ async fn test_settings_default_channel_by_cli_null_clears_one_key() {
             last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([
                 (CliId::Cursor, Some(Channel::Json)),
-                (CliId::Agy, Some(Channel::Json)),
+                (CliId::Opencode, Some(Channel::Json)),
             ])),
             ..baseline_patch()
         })
         .await
         .unwrap();
-    // Clear agy with null.
+    // Clear opencode with null.
     routes
         .patch_settings(PatchSettingsBody {
             last_mode_id: None,
-            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, None)])),
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Opencode, None)])),
             ..baseline_patch()
         })
         .await
@@ -553,13 +554,15 @@ async fn test_settings_default_channel_by_cli_null_clears_one_key() {
     let raw = std::fs::read_to_string(paths.vst_home().join("config.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(v["defaultChannelByCli"]["cursor"], "json"); // untouched
-    assert!(v["defaultChannelByCli"].get("agy").is_none()); // cleared
+    assert!(v["defaultChannelByCli"].get("opencode").is_none()); // cleared
 }
 
 #[tokio::test]
 async fn test_supported_clis_reflects_default_channel_override() {
     // 6.T3 — a just-set override is reflected by GET /supported-clis immediately
-    // (no caching lag), via the actual PATCH -> GET round trip.
+    // (no caching lag), via the actual PATCH -> GET round trip. Uses cursor
+    // (default json) overridden to tmux — agy can't be overridden to json, and
+    // agy already defaults to tmux, so cursor is the clean non-default case.
     let tmp = tempdir().unwrap();
     let _guard = with_home(tmp.path().to_path_buf());
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));
@@ -567,17 +570,17 @@ async fn test_supported_clis_reflects_default_channel_override() {
     let store = StoreHandle::open(tmp.path().join("db.sqlite")).unwrap();
     let modes = ModeRoutes::new(store, Broadcaster::new(32)).with_paths(paths.clone());
 
-    // No override yet -> agy defaults to tmux, not overridden.
+    // No override yet -> cursor defaults to json, not overridden.
     let clis = modes.list_supported_clis().await;
-    let agy = clis.iter().find(|c| c.id == CliId::Agy).unwrap();
-    assert_eq!(agy.default_channel, Channel::Tmux);
-    assert!(!agy.default_channel_overridden);
+    let cursor = clis.iter().find(|c| c.id == CliId::Cursor).unwrap();
+    assert_eq!(cursor.default_channel, Channel::Json);
+    assert!(!cursor.default_channel_overridden);
 
-    // PATCH agy -> json.
+    // PATCH cursor -> tmux.
     settings
         .patch_settings(PatchSettingsBody {
             last_mode_id: None,
-            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Cursor, Some(Channel::Tmux))])),
             ..baseline_patch()
         })
         .await
@@ -585,9 +588,9 @@ async fn test_supported_clis_reflects_default_channel_override() {
 
     // GET reflects the override immediately.
     let clis = modes.list_supported_clis().await;
-    let agy = clis.iter().find(|c| c.id == CliId::Agy).unwrap();
-    assert_eq!(agy.default_channel, Channel::Json);
-    assert!(agy.default_channel_overridden);
+    let cursor = clis.iter().find(|c| c.id == CliId::Cursor).unwrap();
+    assert_eq!(cursor.default_channel, Channel::Tmux);
+    assert!(cursor.default_channel_overridden);
 }
 
 #[tokio::test]

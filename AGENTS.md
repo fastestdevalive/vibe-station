@@ -184,6 +184,7 @@ else if (mode.cli === "opencode") { ... }
 | `getReadySignal()` | yes | Sentinel string or fallback timeout |
 | `composeLaunchPrompt(...)` | yes | Build the shell line / post-launch input |
 | `default_channel()` | yes | Default execution channel for this CLI (`json` for claude/cursor/opencode, `tmux` for agy); used when no explicit/inherited channel and no user override resolve otherwise |
+| `supports_json()` | optional (default `false`) | Whether this CLI can run the JSON (Rich Chat) channel. **Temporarily `false` for agy** — terminal-only until the terminal↔ACP conversation id bridge lands (`agy.rs`). When false, the daemon rejects `--channel=json` on session/worktree create and the tty→json toggle with a 4xx, and the web UI hides/disables the Rich Chat affordances |
 | `setupWorkspaceHooks?(path)` | optional | Write hook scripts into the worktree |
 | `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
 | `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |

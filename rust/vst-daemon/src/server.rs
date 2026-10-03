@@ -3435,6 +3435,10 @@ async fn handle_patch_session_channel(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),
             ),
+            ChannelError::JsonUnsupported(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m })),
+            ),
             ChannelError::NotIdle => (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": "NOT_IDLE" })),

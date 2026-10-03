@@ -11,6 +11,13 @@
 //! itself spawns `agy -p`. The adapter's session store lives under
 //! `~/.vibe-station/agy-acp/` (handed to it via `AGY_ACP_STATE_DIR`); the
 //! native-chat-id bridge reads the same store.
+//!
+//! TEMPORARY: agy is currently terminal-only — `supports_json()` returns
+//! `false` because the daemon passes agy's NATIVE conversation id to
+//! `agy-acp`'s `session/load`, which only knows ACP ids from its own store, so
+//! it fails with `unknown sessionId` and silently forks a fresh session (Rich
+//! Chat -> terminal also forks). Revert `supports_json` to `true` once the ids
+//! are bridged (see docs/RICH-CHAT-ACP.md).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -506,7 +513,14 @@ impl AgentPlugin for AgyPlugin {
     }
 
     fn supports_json(&self) -> bool {
-        true
+        // TEMPORARY: agy is terminal-only until the terminal<->ACP conversation
+        // id bridge lands. The daemon passes agy's NATIVE conversation id to
+        // `agy-acp`'s `session/load`, which only knows ACP ids from its own
+        // store, so it fails with `unknown sessionId` and silently forks a fresh
+        // session. Rich Chat -> terminal also forks. Disabling json keeps agy
+        // terminal-only; revert this once the ids are bridged (see
+        // docs/RICH-CHAT-ACP.md).
+        false
     }
 
     fn supports_acp(&self) -> bool {
