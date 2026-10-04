@@ -130,7 +130,7 @@ const OUT = [
   { file: "04-remote-access-qr.png", window: "qr" },
   { file: "05-mobile.png", phones: ["phone-list", "phone-chat"] },
   { file: "06-markdown-customization.png", window: "markdown" },
-  // Light-mode app on a dark wallpaper; `lights` draws the traffic lights (live shots have no demo chrome).
+  // Light-mode app on a dark wallpaper; `lights` overlays the traffic lights on the app's top bar (live shots have no demo chrome).
   { file: "07-markdown-file-tree.png", window: "files-light", wallpaper: "dusk", lights: true },
 ];
 
@@ -176,11 +176,11 @@ async function captureRaw() {
   }
 }
 
-/** Open markdown files in the real UI (light theme, collapsed rail, agent pane narrowed) and grab the frame. */
+/** Open markdown files in the real UI (light theme, agent pane narrowed) and grab the frame. */
 async function captureLive() {
   for (const l of LIVE.filter((l) => needed.has(l.id))) {
-    // 1440x779 scales by 1120/1440 into the 1120x606 area under the frame's 24px title bar (1120x630 total).
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 779 }, deviceScaleFactor: 1.6 });
+    // 1440x810 scales by 1120/1440 into the full 1120x630 window; the traffic lights are overlaid on the app's own top bar.
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 810 }, deviceScaleFactor: 1.6 });
     await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), l.theme);
     const page = await ctx.newPage();
     if (l.chat) await mockRichChat(page, l); // before the settings route below: later routes win
@@ -192,6 +192,8 @@ async function captureLive() {
     });
     await page.goto(`${LIVE_URL}/worktree/${l.worktree}`);
     await page.waitForSelector('button[aria-label="Hide projects sidebar"]');
+    // Make room for the overlaid traffic lights (the website demo does the same: padding-left on the top bar).
+    await page.addStyleTag({ content: 'button[aria-label$="projects sidebar"] { margin-left: 70px !important; }' });
     await page.waitForTimeout(2500);
     const opened = new Set(); // tree folders are toggles: expand each once
     for (const f of l.files) {
@@ -204,13 +206,17 @@ async function captureLive() {
       await clickTreeRow(page, f.split("/").pop());
       await page.waitForTimeout(700);
     }
-    await page.locator('button[aria-label="Hide projects sidebar"]').click();
-    await page.waitForTimeout(800);
-    const sep = await page.locator('[role="separator"]').first().boundingBox();
+    // Sidebar stays open: its header is the app top bar the traffic lights sit on. Narrow the agent pane
+    // (the separator between the sidebar and the files panel) so the markdown preview gets the room.
+    let sep = null;
+    for (const s of await page.locator('[role="separator"]').all()) {
+      const box = await s.boundingBox();
+      if (box && box.height > 300 && box.x > 400) { sep = box; break; }
+    }
     await page.mouse.move(sep.x + sep.width / 2, 400);
     await page.mouse.down();
-    await page.mouse.move(560, 400, { steps: 8 });
-    await page.mouse.move(500, 400, { steps: 8 });
+    await page.mouse.move(sep.x - 40, 400, { steps: 8 });
+    await page.mouse.move(sep.x - 80, 400, { steps: 8 });
     await page.mouse.up();
     await page.waitForTimeout(1000);
     // Chat pane (left of x=700): show the latest messages.
@@ -298,18 +304,16 @@ function page_(inner, bg = WALLPAPER) {
     background:${bg};position:relative;overflow:hidden">${inner}</body>`;
 }
 
+// Live shots have no demo chrome: overlay the lights on the app's own top bar (same 12px dots, 16px inset as the website hero).
 const LIGHTS = ["#ff5f57", "#febc2e", "#28c840"]
-  .map((c, i) => `<i style="position:absolute;left:${12 + i * 18}px;top:6px;width:12px;height:12px;border-radius:50%;background:${c}"></i>`)
+  .map((c, i) => `<i style="position:absolute;left:${16 + i * 18}px;top:8px;width:12px;height:12px;border-radius:50%;background:${c}"></i>`)
   .join("");
-
-const TITLEBAR = 24; // light shots: title bar with the traffic lights, app underneath
 
 function windowHtml(id, { bg, lights } = {}) {
   const w = 1120;
   const h = 630;
-  const bar = lights ? TITLEBAR : 0;
   return page_(`<div style="position:absolute;left:${(CANVAS.w - w) / 2}px;top:${(CANVAS.h - h) / 2 - 8}px;width:${w}px;height:${h}px;${WINDOW_CHROME}">
-    ${lights ? `<div style="position:relative;height:${bar}px;background:#ececec;border-bottom:1px solid rgba(0,0,0,.08);box-sizing:border-box">${LIGHTS}</div>` : ""}<img src="file://${join(RAW_DIR, id + ".png")}" style="display:block;width:${w}px;height:${h - bar}px"></div>`, bg);
+    <img src="file://${join(RAW_DIR, id + ".png")}" style="display:block;width:${w}px;height:${h}px">${lights ? LIGHTS : ""}</div>`, bg);
 }
 
 function phonesHtml(ids) {
