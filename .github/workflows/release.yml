@@ -203,7 +203,10 @@ jobs:
           echo "==> Verifying codex-acp answers ACP initialize on a glibc distro (debian bullseye)..."
           CODEX="rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp"
           test -x "$CODEX"
-          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CODEX:/bin/codex-acp:ro" -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/codex-acp > /tmp/codex-init.out || true
+          # codex-acp only answers initialize once `codex app-server` answers it, and the
+          # bundled adapter deliberately omits @openai/codex (users run their own `codex`
+          # via CODEX_PATH). Point CODEX_PATH at a stub app-server so the smoke test is hermetic.
+          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CODEX:/bin/codex-acp:ro" -v "$(pwd)/scripts/fake-codex-app-server.sh:/bin/fake-codex:ro" -e CODEX_PATH=/bin/fake-codex -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/codex-acp > /tmp/codex-init.out || true
           grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
 
           echo "==> Booting the actual daemon inside Alpine and hitting /health..."
@@ -258,7 +261,8 @@ jobs:
           # macOS has no `timeout`: let the server end on stdin EOF after the reply.
           (cat /tmp/acp-init.json; sleep 8) | "$CLAUDE" > /tmp/acp-init.out || true
           grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
-          (cat /tmp/acp-init.json; sleep 8) | "$CODEX" > /tmp/codex-init.out || true
+          # codex-acp needs a `codex app-server` to answer initialize; use the stub (see the Linux step).
+          (cat /tmp/acp-init.json; sleep 8) | CODEX_PATH="$(pwd)/scripts/fake-codex-app-server.sh" "$CODEX" > /tmp/codex-init.out || true
           grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
           # agy-acp is a stdio server: EOF on stdin ends it; only an exec failure (126/127) is fatal.
           set +e; "$AGY" </dev/null; RC=$?; set -e
