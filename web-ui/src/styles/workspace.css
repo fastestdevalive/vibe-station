@@ -1863,7 +1863,7 @@
 
 .top-bar {
   border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar);
   flex-shrink: 0;
 }
 
@@ -2194,7 +2194,7 @@
   padding: 0 var(--space-2) 0 12px;
   gap: var(--space-2);
   border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar);
   flex-shrink: 0;
   min-width: 0;
   overflow: hidden;
@@ -4350,8 +4350,26 @@
 .hljs-comment,
 .hljs-quote,
 .hljs-doctag {
-  color: var(--fg-muted);
+  color: #5c6370;
   font-style: italic;
+}
+
+[data-theme="vibestation-dark"] .workspace-code-content--shiki span[style*="color:#6A9955" i],
+[data-theme="vibestation-dark"] .workspace-code-content--shiki span[style*="color:#6a9955" i],
+[data-theme="vibestation-dark"] .diff-line-text--shiki span[style*="color:#6A9955" i],
+[data-theme="vibestation-dark"] .diff-line-text--shiki span[style*="color:#6a9955" i],
+.theme-scope[data-theme="vibestation-dark"] .workspace-code-content--shiki span[style*="color:#6A9955" i],
+.theme-scope[data-theme="vibestation-dark"] .workspace-code-content--shiki span[style*="color:#6a9955" i],
+.theme-scope[data-theme="vibestation-dark"] .diff-line-text--shiki span[style*="color:#6A9955" i],
+.theme-scope[data-theme="vibestation-dark"] .diff-line-text--shiki span[style*="color:#6a9955" i] {
+  color: #5c6370 !important;
+}
+
+[data-theme="vibestation-light"] .workspace-code-content--shiki span[style*="color:#008000" i],
+[data-theme="vibestation-light"] .diff-line-text--shiki span[style*="color:#008000" i],
+.theme-scope[data-theme="vibestation-light"] .workspace-code-content--shiki span[style*="color:#008000" i],
+.theme-scope[data-theme="vibestation-light"] .diff-line-text--shiki span[style*="color:#008000" i] {
+  color: #6a737d !important;
 }
 
 .hljs-addition {
@@ -4410,7 +4428,7 @@
 [data-appearance="light"] .hljs-comment,
 [data-appearance="light"] .hljs-quote,
 [data-appearance="light"] .hljs-doctag {
-  color: var(--fg-muted);
+  color: #6a737d;
 }
 
 /* ── Markdown code block (wrapper with header + copy) ──── */
@@ -6390,7 +6408,7 @@ button.dashboard-card {
   height: var(--global-status-bar-h, 24px);
   padding: 0 var(--space-2);
   border-top: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   z-index: 10;

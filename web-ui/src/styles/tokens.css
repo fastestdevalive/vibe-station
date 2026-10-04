@@ -65,17 +65,17 @@
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
 
   /* Defaults until a valid [data-theme] applies (avoids blank UI if theme attr is missing/invalid) */
-  --bg-primary: #0f0f0f;
-  --bg-secondary: #151515;
-  --bg-card: #191919;
-  --bg-hover: #222222;
-  --bg-active: #2a2a2a;
-  --bg-sidebar: #030303;
-  --bg-sidebar-secondary: #090909;
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #1b1b1b;
+  --bg-card: #161616;
+  --bg-hover: #262626;
+  --bg-active: #2f2f2f;
+  --bg-sidebar: #1b1b1b;
+  --bg-sidebar-secondary: #141414;
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
-  --fg-muted: #6b6b6b;
-  --border-default: #262626;
+  --fg-muted: #828282;
+  --border-default: #2a2a2a;
   --ref-match-bg: rgba(234, 179, 8, 0.3);
 
   --kind-fn: #a78bfa;
@@ -96,36 +96,34 @@
   /* Quiet, chat-scoped accent (user bubble border, spinners, throttle badge).
      Contained here so the global purple --accent stays on primary buttons etc. */
   --chat-accent: #8a8a8a;
-  --bg-primary: #0f0f0f;
-  --bg-secondary: #151515;
-  --bg-card: #191919;
-  --bg-elevated: #1e1e1e;
+  --bg-primary: #0d0d0d;
+  --bg-secondary: #1b1b1b;
+  --bg-card: #161616;
+  --bg-elevated: #212121;
   --bg-overlay: rgba(0, 0, 0, 0.7);
-  --bg-input: #1e1e1e;
-  --bg-hover: #222222;
-  --bg-tertiary: #262626;
-  --bg-active: #2a2a2a;
-  /* Sidebar layering (darkest → lightest: sidebar < sidebar-secondary < bg-primary),
-     an absolute darken of --bg-primary by 12/6 RGB units — not a percentage mix, so
-     it stays visible at both very-dark and very-light extremes. See
-     scripts/generate-theme-css.ts's darken() for the formula shared with the other
-     12 themes. --bg-sidebar is the primary left-nav rail; --bg-sidebar-secondary is
-     for nested tree/list panels (file tree, artifacts list, VCS tree, settings nav). */
-  --bg-sidebar: #030303;
-  --bg-sidebar-secondary: #090909;
+  --bg-input: #171717;
+  --bg-hover: #262626;
+  --bg-tertiary: #2a2a2a;
+  --bg-active: #2f2f2f;
+  /* Standard IDE layering:
+     --bg-primary is the darkest content background (editor, chat, terminal, canvas);
+     --bg-sidebar-secondary is for nested tree/list panels (file tree, artifacts list, VCS tree, settings nav), darker than the sidebar;
+     --bg-sidebar is the lighter chrome shared across the primary left-nav rail, top bar, and bottom status bar. */
+  --bg-sidebar: #1b1b1b;
+  --bg-sidebar-secondary: #141414;
 
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
-  --fg-muted: #6b6b6b;
-  --fg-faint: #404040;
+  --fg-muted: #828282;
+  --fg-faint: #4e4e4e;
   --fg-inverse: #0a0a0a;
   --fg-danger: #f85149;
   --fg-success: #16a34a;
   --fg-warning: #d29922;
 
-  --border-default: #262626;
-  --border-subtle: #1e1e1e;
-  --border-strong: #404040;
+  --border-default: #2a2a2a;
+  --border-subtle: #202020;
+  --border-strong: #444444;
   --border-hover: rgba(229, 229, 229, 0.15);
 
   --destructive: #dc2626;
