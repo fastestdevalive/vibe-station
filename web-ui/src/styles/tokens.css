@@ -66,16 +66,16 @@
 
   /* Defaults until a valid [data-theme] applies (avoids blank UI if theme attr is missing/invalid) */
   --bg-primary: #0d0d0d;
-  --bg-secondary: #1b1b1b;
-  --bg-card: #161616;
-  --bg-hover: #262626;
-  --bg-active: #2f2f2f;
-  --bg-sidebar: #1b1b1b;
-  --bg-sidebar-secondary: #141414;
+  --bg-secondary: #181818;
+  --bg-card: #151515;
+  --bg-hover: #222222;
+  --bg-active: #2b2b2b;
+  --bg-sidebar: #181818;
+  --bg-sidebar-secondary: #131313;
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
   --fg-muted: #828282;
-  --border-default: #2a2a2a;
+  --border-default: #262626;
   --ref-match-bg: rgba(234, 179, 8, 0.3);
 
   --kind-fn: #a78bfa;
@@ -97,20 +97,20 @@
      Contained here so the global purple --accent stays on primary buttons etc. */
   --chat-accent: #8a8a8a;
   --bg-primary: #0d0d0d;
-  --bg-secondary: #1b1b1b;
-  --bg-card: #161616;
-  --bg-elevated: #212121;
+  --bg-secondary: #181818;
+  --bg-card: #151515;
+  --bg-elevated: #1e1e1e;
   --bg-overlay: rgba(0, 0, 0, 0.7);
-  --bg-input: #171717;
-  --bg-hover: #262626;
-  --bg-tertiary: #2a2a2a;
-  --bg-active: #2f2f2f;
+  --bg-input: #151515;
+  --bg-hover: #222222;
+  --bg-tertiary: #262626;
+  --bg-active: #2b2b2b;
   /* Standard IDE layering:
      --bg-primary is the darkest content background (editor, chat, terminal, canvas);
      --bg-sidebar-secondary is for nested tree/list panels (file tree, artifacts list, VCS tree, settings nav), darker than the sidebar;
      --bg-sidebar is the lighter chrome shared across the primary left-nav rail, top bar, and bottom status bar. */
-  --bg-sidebar: #1b1b1b;
-  --bg-sidebar-secondary: #141414;
+  --bg-sidebar: #181818;
+  --bg-sidebar-secondary: #131313;
 
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
