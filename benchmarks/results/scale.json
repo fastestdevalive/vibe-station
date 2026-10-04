@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T15:11:14-0700",
+  "commit": "19a7c146098a4cda0f369f63d9696111f14bba51",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "scale",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      10.03515625,
+      5.53076171875,
+      4.0546875
+    ],
+    "mem_available_mb": 50967,
+    "swap_used_mb": 19204,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 9
+  },
+  "note": "sessions run a stub agent (sleep); daemon RSS only",
+  "rows": [
+    {
+      "sessions_target": 1,
+      "sessions_created": 1,
+      "procs": 1,
+      "rss_mb": 19.4,
+      "pss_mb": 17.1,
+      "tmux_server_rss_mb": 0.0
+    },
+    {
+      "sessions_target": 10,
+      "sessions_created": 10,
+      "procs": 1,
+      "rss_mb": 20.3,
+      "pss_mb": 18.0,
+      "tmux_server_rss_mb": 0.0
+    },
+    {
+      "sessions_target": 25,
+      "sessions_created": 25,
+      "procs": 1,
+      "rss_mb": 21.7,
+      "pss_mb": 19.4,
+      "tmux_server_rss_mb": 0.0
+    },
+    {
+      "sessions_target": 50,
+      "sessions_created": 50,
+      "procs": 1,
+      "rss_mb": 25.3,
+      "pss_mb": 23.0,
+      "tmux_server_rss_mb": 0.0
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T00:36:06-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "C",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      18.74072265625,
+      14.892578125,
+      10.65234375
+    ],
+    "mem_available_mb": 41688,
+    "swap_used_mb": 22621,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
+  },
+  "rows": [
+    {
+      "endpoint": "GET /health",
+      "requests": 102964,
+      "req_s": 6863.8,
+      "p50_ms": 1.16,
+      "p95_ms": 3.96,
+      "p99_ms": 5.94,
+      "errors": 0
+    },
+    {
+      "endpoint": "GET /api/projects",
+      "requests": 101629,
+      "req_s": 6774.9,
+      "p50_ms": 1.19,
+      "p95_ms": 3.93,
+      "p99_ms": 5.76,
+      "errors": 0
+    },
+    {
+      "endpoint": "GET /api/modes",
+      "requests": 102633,
+      "req_s": 6841.8,
+      "p50_ms": 1.2,
+      "p95_ms": 3.52,
+      "p99_ms": 5.49,
+      "errors": 0
+    }
+  ]
+}
