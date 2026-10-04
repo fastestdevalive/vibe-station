@@ -68,6 +68,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           submodules: true
 
       - name: Resolve release version (R29)
@@ -81,6 +82,8 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
           echo "Building version $VERSION (tag: $TAG)"
+          # Fail fast if the tag disagrees with the committed version files.
+          bash scripts/check-version-sync.sh "$VERSION"
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
@@ -316,6 +319,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           submodules: true
 
       - name: Resolve release version and stamp metadata (R29)
@@ -328,11 +332,9 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Stamping version $VERSION into desktop/src-tauri/tauri.conf.json"
-
-          # Stamp version into tauri.conf.json so Tauri bundles carry release version
-          jq --arg v "$VERSION" '.version = $v' desktop/src-tauri/tauri.conf.json > desktop/src-tauri/tauri.conf.json.tmp
-          mv desktop/src-tauri/tauri.conf.json.tmp desktop/src-tauri/tauri.conf.json
+          # tauri.conf.json's version points at desktop/package.json; verify the
+          # committed version files match the tag instead of stamping over them.
+          bash scripts/check-version-sync.sh "$VERSION"
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
@@ -433,6 +435,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve release tag
         id: ver
@@ -475,6 +479,21 @@ jobs:
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
           fi
 
+      # Curated notes live at .github/release-notes/<tag>.md (format: docs/RELEASE-NOTES.md).
+      # No file for this tag -> fall back to GitHub's auto-generated notes.
+      - name: Select release notes
+        id: notes
+        run: |
+          F=".github/release-notes/${{ steps.ver.outputs.tag }}.md"
+          if [ -f "$F" ]; then
+            echo "path=$F" >> $GITHUB_OUTPUT
+            echo "generate=false" >> $GITHUB_OUTPUT
+          else
+            echo "No curated notes at $F; using auto-generated notes"
+            echo "path=" >> $GITHUB_OUTPUT
+            echo "generate=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -482,7 +501,8 @@ jobs:
           name: Release ${{ steps.ver.outputs.tag }}
           draft: false
           prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,8 +3,8 @@
 # Usage: ./versionbump.sh [major|minor|patch] [--beta] [--dry-run] [--yes] [--release]
 #
 # --release  : strip -beta suffix from current version, produce X.Y.Z final; no increment
-# --beta     : append -beta to the new version (NOTE: Linux/AppImage only; WiX/MSI and
-#              macOS .app bundles reject pre-release version strings)
+# --beta     : append -beta to the new version (NOTE: WiX/MSI rejects pre-release version strings;
+#              Linux and macOS dmg builds accept them)
 # --dry-run  : print the plan and exit 0, no writes, no git
 # --yes / -y : skip interactive confirmation prompt (for CI)
 
@@ -26,9 +26,16 @@ ROOT="$(git rev-parse --show-toplevel)"
 # Files to version-bump
 # To include cli/ or web-ui/ when they graduate from 0.0.0 placeholders, append here.
 # ---------------------------------------------------------------------------
+# Canonical source of truth: [workspace.package] version in rust/Cargo.toml (every
+# Rust crate inherits it via `version.workspace = true`). Everything else below is
+# a derived copy that this script rewrites; scripts/check-version-sync.sh verifies
+# they all agree. tauri.conf.json has no version of its own -- it points at
+# desktop/package.json, so it never needs bumping.
+WORKSPACE_TOML="rust/Cargo.toml"
 JSON_FILES=(
-  "desktop/src-tauri/tauri.conf.json"
   "desktop/package.json"
+  "web-ui/package.json"
+  "package.json"
 )
 CARGO_TOML="desktop/src-tauri/Cargo.toml"
 
@@ -62,16 +69,24 @@ fi
 # ---------------------------------------------------------------------------
 # Read current version from canonical source
 # ---------------------------------------------------------------------------
-CANONICAL="$ROOT/$( echo "${JSON_FILES[0]}" )"
-CURRENT_VER="$(perl -ne 'if (/"version":\s*"([^"]+)"/) { print $1; exit }' "$CANONICAL")"
+CANONICAL="$ROOT/$WORKSPACE_TOML"
+CURRENT_VER="$(perl -ne '$s=$1 if /^\[([^\]]+)\]/; if ($s eq "workspace.package" && /^version = "([^"]*)"/) { print $1; exit }' "$CANONICAL")"
 [[ -n "$CURRENT_VER" ]] || die "Could not read current version from $CANONICAL"
 
 # ---------------------------------------------------------------------------
 # Compute new version
 # ---------------------------------------------------------------------------
 # Strip any existing -beta suffix before arithmetic
-BASE_VER="${CURRENT_VER%-beta}"
+BASE_VER="${CURRENT_VER%%-*}"
+[[ "$BASE_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Cannot parse version '$CURRENT_VER'"
 IFS='.' read -r MAJ MIN PAT <<< "$BASE_VER"
+
+if $RELEASE && $BETA; then
+  die "--release and --beta are mutually exclusive"
+fi
+if $RELEASE && [[ "$CURRENT_VER" != *-* ]]; then
+  die "--release needs a pre-release version (current: $CURRENT_VER)"
+fi
 
 if $RELEASE; then
   # Just drop the -beta suffix
@@ -100,9 +115,10 @@ if $DRY_RUN; then
   echo "  New version     : $NEW_VER"
   echo "  Tag             : $TAG"
   echo "  JSON files      : ${JSON_FILES[*]}"
+  echo "  Canonical       : $WORKSPACE_TOML"
   echo "  Cargo.toml      : $CARGO_TOML"
   if $BETA; then
-    echo "  NOTE: -beta tag is Linux/AppImage only; WiX/MSI and macOS .app reject pre-release strings"
+    echo "  NOTE: WiX/MSI (Windows) rejects pre-release strings; Linux/macOS builds accept them"
   fi
   exit 0
 fi
@@ -122,7 +138,7 @@ if ! git -C "$ROOT" diff --cached --quiet; then
 fi
 
 # 3. Dirty worktree for target files
-for f in "${JSON_FILES[@]}" "$CARGO_TOML"; do
+for f in "${JSON_FILES[@]}" "$CARGO_TOML" "$WORKSPACE_TOML" desktop/src-tauri/Cargo.lock rust/Cargo.lock; do
   if ! git -C "$ROOT" diff --quiet -- "$f" 2>/dev/null; then
     die "uncommitted changes in $f — commit or stash first"
   fi
@@ -141,7 +157,7 @@ echo ""
 echo "Version bump plan:"
 echo "  $CURRENT_VER  →  $NEW_VER  (tag: $TAG)"
 if $BETA; then
-  echo "  NOTE: -beta tag is Linux/AppImage only; WiX/MSI and macOS .app reject pre-release strings"
+  echo "  NOTE: WiX/MSI (Windows) rejects pre-release strings; Linux/macOS builds accept them"
 fi
 echo ""
 
@@ -166,8 +182,12 @@ for file in "${JSON_FILES[@]}"; do
 done
 
 # Cargo.toml: only the version line inside [package], not dependency version lines
-sed -i '/^\[package\]/,/^\[/{s/^version = "[^"]*"/version = "'"$NEW_VER"'"/}' "$ROOT/$CARGO_TOML"
+NEW_VER="$NEW_VER" perl -i -pe 'if (/^\[([^\]]+)\]/) { $s = $1 } if ($s eq "package" && /^version = "/) { s/"[^"]*"/"$ENV{NEW_VER}"/ }' "$ROOT/$CARGO_TOML"
 info "Updated $CARGO_TOML"
+
+# Canonical: workspace version (inherited by every vst-* crate)
+NEW_VER="$NEW_VER" perl -i -pe 'if (/^\[([^\]]+)\]/) { $s = $1 } if ($s eq "workspace.package" && /^version = "/) { s/"[^"]*"/"$ENV{NEW_VER}"/ }' "$ROOT/$WORKSPACE_TOML"
+info "Updated $WORKSPACE_TOML"
 
 # ---------------------------------------------------------------------------
 # Refresh Cargo.lock
@@ -175,7 +195,8 @@ info "Updated $CARGO_TOML"
 CARGO_BIN="$(command -v cargo 2>/dev/null || echo "/home/gb/.cargo/bin/cargo")"
 if [[ -x "$CARGO_BIN" ]]; then
   info "Refreshing Cargo.lock ..."
-  "$CARGO_BIN" metadata --no-deps --manifest-path "$ROOT/$CARGO_TOML" --format-version 1 > /dev/null
+  "$CARGO_BIN" metadata --manifest-path "$ROOT/$CARGO_TOML" --format-version 1 > /dev/null
+  "$CARGO_BIN" metadata --manifest-path "$ROOT/$WORKSPACE_TOML" --format-version 1 > /dev/null
 else
   warn "cargo not found; Cargo.lock not refreshed"
 fi
@@ -187,13 +208,16 @@ STAGE_FILES=()
 for f in "${JSON_FILES[@]}"; do
   STAGE_FILES+=("$f")
 done
-STAGE_FILES+=("$CARGO_TOML")
+STAGE_FILES+=("$CARGO_TOML" "$WORKSPACE_TOML")
 
 # Include Cargo.lock if it changed
-CARGO_LOCK="desktop/src-tauri/Cargo.lock"
-if ! git -C "$ROOT" diff --quiet -- "$CARGO_LOCK" 2>/dev/null; then
-  STAGE_FILES+=("$CARGO_LOCK")
-fi
+for CARGO_LOCK in desktop/src-tauri/Cargo.lock rust/Cargo.lock; do
+  if ! git -C "$ROOT" diff --quiet -- "$CARGO_LOCK" 2>/dev/null; then
+    STAGE_FILES+=("$CARGO_LOCK")
+  fi
+done
+
+"$ROOT/scripts/check-version-sync.sh" "$NEW_VER"
 
 git -C "$ROOT" add -- "${STAGE_FILES[@]}"
 git -C "$ROOT" commit -m "chore(version): bump to $NEW_VER" -- "${STAGE_FILES[@]}"

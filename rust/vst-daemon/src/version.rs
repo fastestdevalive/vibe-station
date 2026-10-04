@@ -5,7 +5,8 @@
 //! `VST_VERSION` is set at *build* time (via `option_env!`, not `std::env::var`)
 //! by release CI from the git tag — see `scripts/install.sh`/the release
 //! workflow. A local `cargo build` with no override falls back to
-//! `CARGO_PKG_VERSION` (the workspace's static `0.1.0`), same as before this
+//! `CARGO_PKG_VERSION` (the workspace version in `rust/Cargo.toml`, the canonical
+//! source — see `versionbump.sh`), same as before this
 //! module existed.
 
 /// Returns the effective version string for this build.
