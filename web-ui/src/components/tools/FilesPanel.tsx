@@ -390,7 +390,7 @@ export function FilesPanel({
           width: masterDetailVertical ? undefined : "calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))",
           height: masterDetailVertical ? "var(--tools-rail-panel-h, 240px)" : undefined,
           zIndex: 20,
-          background: "var(--bg-secondary)",
+          background: "var(--bg-sidebar-secondary)",
           borderRight: masterDetailVertical ? undefined : "var(--border-width) solid var(--border-default)",
           borderBottom: masterDetailVertical ? "var(--border-width) solid var(--border-default)" : undefined,
           display: isPanelOpen ? "flex" : "none",

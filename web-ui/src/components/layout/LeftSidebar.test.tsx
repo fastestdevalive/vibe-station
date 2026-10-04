@@ -124,12 +124,9 @@ describe("LeftSidebar", () => {
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
   });
 
-  it("collapsed rail — project folder toggle stays clickable to expand/collapse worktrees (regression)", async () => {
-    // The collapsed project row hides the folder icon (making the button 0×0)
-    // and the abbreviation label is `pointer-events: none` — so without a real
-    // hit area on the toggle button there was NO way to expand/collapse a
-    // project from the collapsed rail, and clicking the abbreviation navigated
-    // to /project/:id instead of toggling. The toggle must remain clickable.
+  it("collapsed rail — project tile opens a flyout listing its worktrees", async () => {
+    // Indentation can't work in the icon rail, so each project is one tile and
+    // its worktrees/agents live in a flyout opened by clicking the tile.
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -138,16 +135,12 @@ describe("LeftSidebar", () => {
         </Harness>
       </MemoryRouter>,
     );
-    // Active project (proj-a) auto-expands, so its worktrees show in the rail.
-    await screen.findByRole("link", { name: /Open worktree wt-1/i });
-
-    // Collapse: worktrees hide (toggle remains clickable in collapsed mode).
-    await user.click(screen.getByRole("button", { name: /Collapse project Proj A/i }));
-    expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
-
-    // Expand again: worktrees return.
-    await user.click(screen.getByRole("button", { name: /Expand project Proj A/i }));
-    await screen.findByRole("link", { name: /Open worktree wt-1/i });
+    const tile = await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    await user.click(tile);
+    expect((await screen.findAllByRole("menuitem")).length).toBeGreaterThan(0);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitem")).toBeNull();
   });
 
   it("clicking worktree sets active worktree", async () => {
@@ -301,7 +294,7 @@ describe("LeftSidebar", () => {
     expect(menus[0]?.className).toContain("wt-menu-trigger");
   });
 
-  it("collapsed rail shows abbreviated labels and hides worktree overflow menu", async () => {
+  it("collapsed rail shows one tile per project and no worktree overflow menus", async () => {
     render(
       <MemoryRouter>
         <Harness api={api}>
@@ -309,10 +302,7 @@ describe("LeftSidebar", () => {
         </Harness>
       </MemoryRouter>,
     );
-    await screen.findByText("Pra");
-    await screen.findByText("Prb");
-    await screen.findByText("wt1");
-    await screen.findByText("wt2");
+    await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
     expect(screen.queryAllByRole("button", { name: /Worktree actions for/i })).toHaveLength(0);
   });
 
@@ -381,8 +371,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("link", { name: /Open worktree wt-1/i });
-      await waitFor(() => expect(api.getDiffStat).toHaveBeenCalled());
+      await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
       expect(screen.queryByText("+7")).not.toBeInTheDocument();
     });
   });
@@ -502,7 +491,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByText("Pra");
+      await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
       expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
     });
 
@@ -936,7 +925,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByText("Pra"); // collapsed (not visible) — abbreviated label
+      await screen.findByRole("button", { name: /Proj A — agents and worktrees/i }); // collapsed (not visible) — abbreviated label
       (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
 
       // Reopen: collapsed → expanded (rising edge).
@@ -962,7 +951,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByText("Pra");
+      await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
       (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
       rerender(
         <MemoryRouter initialEntries={["/"]}>
@@ -1785,7 +1774,7 @@ describe("LeftSidebar", () => {
       });
     });
 
-    it("3.T5 — collapsed rail: double-clicking a worktree row renders no input", async () => {
+    it("3.T5 — collapsed rail: renders no worktree rows, so there is nothing to rename", async () => {
       render(
         <MemoryRouter>
           <Harness api={api}>
@@ -1793,9 +1782,8 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByText("wt1");
-      const row = screen.getByText("wt1").closest(".tree-row")! as HTMLElement;
-      fireEvent.doubleClick(row);
+      await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
+      expect(document.querySelector(".tree-row--worktree")).toBeNull();
       expect(screen.queryByLabelText("Rename")).toBeNull();
     });
 
