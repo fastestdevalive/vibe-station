@@ -1,6 +1,6 @@
 {
   "name": "vibe-station",
-  "version": "0.0.0",
+  "version": "0.0.1-beta",
   "private": true,
   "description": "Web-based orchestrator for parallel AI coding agents.",
   "packageManager": "pnpm@9.0.0",

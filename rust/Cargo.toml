@@ -23,7 +23,7 @@ members = [
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.0.1-beta"
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"
