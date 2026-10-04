@@ -902,23 +902,31 @@
 
 /* Ensure the expand/collapse button covers the entire area to the left of the
    project label text (including the row's left/top/bottom padding and the space
-   up to the label text). This ensures tapping anywhere on the left of the project
-   label only toggles expand/collapse without selecting the project. */
-.tree-row--project:not(.draft-row) .tree-row__project-main {
-  align-self: stretch;
-  height: 100%;
-}
-
+   up to the label text) without shifting the folder icon or label off their
+   vertical center.
+   By keeping normal flex centering on .tree-row__project-main and the button,
+   the folder icon and label stay vertically centered in the row (center y = 18px),
+   matching the action buttons.
+   An absolute ::after on the expand button, positioned relative to the row,
+   provides the full-height click target covering from the row's left border
+   up to the start of the project label. */
 .left-sidebar:not(.left-sidebar--collapsed) .tree-row--project:not(.draft-row) .tree-row__project-main {
-  gap: 0;
+  position: static;
 }
 
 .left-sidebar:not(.left-sidebar--collapsed) .tree-row--project .tree-row__project-expand {
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  margin: calc(-1 * var(--space-1)) 0 calc(-1 * var(--space-1)) calc(-1 * (var(--space-2) - 2px));
-  padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) - 2px);
+  position: static;
+}
+
+.left-sidebar:not(.left-sidebar--collapsed) .tree-row--project .tree-row__project-expand::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  width: calc(2px + var(--space-2) - 2px + 14px + var(--space-2));
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .left-sidebar:not(.left-sidebar--collapsed) .tree-row--project:not(.draft-row) .wt-row__stretch-link {
