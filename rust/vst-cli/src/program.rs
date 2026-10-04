@@ -3,7 +3,6 @@
 //! Mirrors `cli/src/program.ts`. Exposes `build_program` / `run` to parse command line args
 //! and dispatch to registered subcommands.
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NAME: &str = "vst";
 pub const DESCRIPTION: &str = "vibe-station — orchestrate parallel AI coding agents";
 

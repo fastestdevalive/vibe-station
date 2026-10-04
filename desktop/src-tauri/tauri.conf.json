@@ -1,6 +1,6 @@
 {
   "productName": "vibe-station",
-  "version": "0.0.0",
+  "version": "../package.json",
   "identifier": "com.fastestdevalive.vibestation",
   "build": {
     "beforeDevCommand": "bash ../scripts/dev-start.sh",

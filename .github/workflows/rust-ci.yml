@@ -2,9 +2,9 @@ name: Rust CI
 
 on:
   push:
-    paths: ["rust/**", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
   pull_request:
-    paths: ["rust/**", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
 
 concurrency:
   group: rust-ci-${{ github.ref }}
@@ -20,6 +20,9 @@ jobs:
         with:
           # The agy-acp adapter lives in a git submodule (rust/vendor/openab).
           submodules: true
+
+      - name: Check version files are in sync
+        run: bash scripts/check-version-sync.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
