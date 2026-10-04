@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T00:33:37-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "B",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      16.326171875,
+      12.63818359375,
+      9.333984375
+    ],
+    "mem_available_mb": 41161,
+    "swap_used_mb": 22620,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
+  },
+  "note": "project-level endpoints; fuzzy (worktree-scoped) not yet covered",
+  "rows": [
+    {
+      "repo": "ripgrep",
+      "files": 237,
+      "file_list_cold_ms": 12.7,
+      "file_list_returned": 236,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 14.6,
+      "content_search_ms": 8.1,
+      "content_rare_ms": 11.9,
+      "idle_rss_mb": 19.3
+    },
+    {
+      "repo": "flask",
+      "files": 236,
+      "file_list_cold_ms": 8.3,
+      "file_list_returned": 236,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 13.1,
+      "content_search_ms": 6.2,
+      "content_rare_ms": 13.7,
+      "idle_rss_mb": 19.4
+    },
+    {
+      "repo": "django",
+      "files": 7084,
+      "file_list_cold_ms": 19.1,
+      "file_list_returned": 7079,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 20.9,
+      "content_search_ms": 5.7,
+      "content_rare_ms": 27.0,
+      "idle_rss_mb": 20.9
+    },
+    {
+      "repo": "react",
+      "files": 7252,
+      "file_list_cold_ms": 19.0,
+      "file_list_returned": 7251,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 16.3,
+      "content_search_ms": 5.6,
+      "content_rare_ms": 21.6,
+      "idle_rss_mb": 20.8
+    },
+    {
+      "repo": "kubernetes",
+      "files": 31356,
+      "file_list_cold_ms": 36.2,
+      "file_list_returned": 31351,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 41.2,
+      "content_search_ms": 6.1,
+      "content_rare_ms": 57.5,
+      "idle_rss_mb": 29.9
+    },
+    {
+      "repo": "linux",
+      "files": 96053,
+      "file_list_cold_ms": 48.9,
+      "file_list_returned": 95950,
+      "file_list_truncated": false,
+      "file_list_source": "ripgrep",
+      "file_list_warm_ms": 57.2,
+      "content_search_ms": 6.6,
+      "content_rare_ms": 126.4,
+      "idle_rss_mb": 23.3
+    }
+  ]
+}

@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T14:26:49-0700",
+  "commit": "736c354cddf59a397384de091f02c0c766feee96",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "A",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      2.8779296875,
+      3.50927734375,
+      3.6845703125
+    ],
+    "mem_available_mb": 38070,
+    "swap_used_mb": 25936,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 11
+  },
+  "results": [
+    {
+      "tool": "vst (daemon + 1 tab)",
+      "binary_mb": 31.0,
+      "runs": 5,
+      "ready_ms": 10.83,
+      "ready_ms_range": [
+        9.96,
+        24.53
+      ],
+      "ready_ms_source": "startup.json",
+      "server_rss_mb": 19.1,
+      "server_rss_range": [
+        18.9,
+        19.1
+      ],
+      "server_pss_mb": 16.8,
+      "client_rss_mb": 1202.9,
+      "client_rss_range": [
+        1198.9,
+        1215.3
+      ],
+      "client_pss_mb": 263.7,
+      "browser_blank_rss_mb": 1126.3,
+      "tab_delta_rss_mb": 72.6,
+      "tab_delta_pss_mb": 38.5,
+      "idle_cpu_pct": 0.3,
+      "total_rss_mb": 91.7,
+      "total_pss_mb": 55.3,
+      "daemon_breakdown": [
+        {
+          "name": "vst",
+          "pss_mb": 16.9
+        }
+      ],
+      "stacked_bar": [
+        {
+          "label": "vst daemon",
+          "pss_mb": 16.8,
+          "note": "daemon only \u2014 the server component"
+        },
+        {
+          "label": "vst UI tab",
+          "pss_mb": 38.5,
+          "note": "tab delta above a blank Chrome window"
+        }
+      ],
+      "note": "PSS is the primary total (shared pages counted once); RSS is the double-counting cross-check. total_* = server + the tab's own delta over a blank browser window (browser assumed already open); total_incl_browser_* also charges the whole dedicated browser instance. ready = server /health 200.",
+      "total_incl_browser_rss_mb": 1222.0,
+      "total_incl_browser_pss_mb": 280.5
+    },
+    {
+      "tool": "code-server + 1 tab",
+      "version": "4.140.0 ccc19adc2e8992e18b14dd25eb1e646f5b9ef7cf with Code 1.140.0",
+      "server_rss_mb": 727.3,
+      "server_pss_mb": 528.8,
+      "tab_delta_rss_mb": 396.8,
+      "tab_delta_pss_mb": 333.0,
+      "total_rss_mb": 1124.1,
+      "total_pss_mb": 861.8,
+      "total_incl_browser_rss_mb": 2257.1,
+      "total_incl_browser_pss_mb": 1170.2,
+      "client_rss_mb": 1529.8,
+      "client_pss_mb": 642.1,
+      "browser_blank_rss_mb": 1133.0,
+      "browser_blank_pss_mb": 308.4,
+      "ready_s": 0.19,
+      "server_rss_mb_range": [
+        709.0,
+        791.6
+      ],
+      "server_pss_mb_range": [
+        510.6,
+        551.0
+      ],
+      "tab_delta_rss_mb_range": [
+        384.9,
+        418.4
+      ],
+      "tab_delta_pss_mb_range": [
+        329.4,
+        346.9
+      ],
+      "total_rss_mb_range": [
+        1099.8,
+        1210.0
+      ],
+      "total_pss_mb_range": [
+        842.9,
+        897.9
+      ],
+      "total_incl_browser_rss_mb_range": [
+        2232.1,
+        2330.0
+      ],
+      "total_incl_browser_pss_mb_range": [
+        1150.8,
+        1203.7
+      ],
+      "client_rss_mb_range": [
+        1523.1,
+        1539.8
+      ],
+      "client_pss_mb_range": [
+        640.2,
+        652.9
+      ],
+      "browser_blank_rss_mb_range": [
+        1120.0,
+        1144.2
+      ],
+      "browser_blank_pss_mb_range": [
+        305.8,
+        312.7
+      ],
+      "ready_s_range": [
+        0.19,
+        0.25
+      ],
+      "runs": 5
+    },
+    {
+      "tool": "VS Code Desktop",
+      "version": "1.140.0",
+      "procs": 14,
+      "rss_mb": 1859.9,
+      "pss_mb": 874.2,
+      "client_rss_mb": 1859.9,
+      "server_rss_mb": 0.0,
+      "total_rss_mb": 1859.9,
+      "total_pss_mb": 874.2,
+      "client_pss_mb": 874.2,
+      "ready_s": null,
+      "process_breakdown": [
+        {
+          "name": "code",
+          "pss_mb": 507.1
+        },
+        {
+          "name": "dconf",
+          "pss_mb": 0.5
+        },
+        {
+          "name": "sh",
+          "pss_mb": 0.1
+        }
+      ],
+      "stacked_bar": [
+        {
+          "label": "code",
+          "pss_mb": 507.1
+        },
+        {
+          "label": "dconf",
+          "pss_mb": 0.5
+        },
+        {
+          "label": "sh",
+          "pss_mb": 0.1
+        }
+      ],
+      "procs_range": [
+        14,
+        14
+      ],
+      "rss_mb_range": [
+        1848.0,
+        1890.4
+      ],
+      "pss_mb_range": [
+        865.2,
+        908.0
+      ],
+      "client_rss_mb_range": [
+        1848.0,
+        1890.4
+      ],
+      "server_rss_mb_range": [
+        0.0,
+        0.0
+      ],
+      "total_rss_mb_range": [
+        1848.0,
+        1890.4
+      ],
+      "total_pss_mb_range": [
+        865.2,
+        908.0
+      ],
+      "client_pss_mb_range": [
+        865.2,
+        908.0
+      ],
+      "runs": 5
+    },
+    {
+      "tool": "Cursor",
+      "not_measured": true,
+      "note": "not installed on this machine; install with a display and re-run to measure"
+    },
+    {
+      "tool": "txt",
+      "not_measured": true,
+      "note": "plain-text editor baseline; not measured on this machine"
+    },
+    {
+      "tool": "Zed",
+      "version": "Zed 1.22.0 76659a55a8c10ed355a070f8764a0b1733e3c115  \u2013 /home/gb/.local/zed.app/libexec/zed-editor",
+      "procs": 2,
+      "rss_mb": 381.6,
+      "pss_mb": 307.0,
+      "client_rss_mb": 381.6,
+      "server_rss_mb": 0.0,
+      "total_rss_mb": 381.6,
+      "total_pss_mb": 307.0,
+      "client_pss_mb": 307.0,
+      "ready_s": null,
+      "process_breakdown": [
+        {
+          "name": "zed-editor",
+          "pss_mb": 306.9
+        }
+      ],
+      "stacked_bar": [
+        {
+          "label": "zed-editor",
+          "pss_mb": 306.9
+        }
+      ],
+      "procs_range": [
+        2,
+        2
+      ],
+      "rss_mb_range": [
+        381.3,
+        382.1
+      ],
+      "pss_mb_range": [
+        306.8,
+        307.7
+      ],
+      "client_rss_mb_range": [
+        381.3,
+        382.1
+      ],
+      "server_rss_mb_range": [
+        0.0,
+        0.0
+      ],
+      "total_rss_mb_range": [
+        381.3,
+        382.1
+      ],
+      "total_pss_mb_range": [
+        306.8,
+        307.7
+      ],
+      "client_pss_mb_range": [
+        306.8,
+        307.7
+      ],
+      "runs": 5
+    },
+    {
+      "tool": "Sublime Text",
+      "version": "Sublime Text Build 4200",
+      "procs": 3,
+      "rss_mb": 161.9,
+      "pss_mb": 119.9,
+      "client_rss_mb": 161.9,
+      "server_rss_mb": 0.0,
+      "total_rss_mb": 161.9,
+      "total_pss_mb": 119.9,
+      "client_pss_mb": 119.9,
+      "ready_s": null,
+      "process_breakdown": [
+        {
+          "name": "sublime_text",
+          "pss_mb": 68.2
+        },
+        {
+          "name": "plugin_host-3.8",
+          "pss_mb": 30.0
+        },
+        {
+          "name": "plugin_host-3.3",
+          "pss_mb": 21.0
+        }
+      ],
+      "stacked_bar": [
+        {
+          "label": "sublime_text",
+          "pss_mb": 68.2
+        },
+        {
+          "label": "plugin_host-3.8",
+          "pss_mb": 30.0
+        },
+        {
+          "label": "plugin_host-3.3",
+          "pss_mb": 21.0
+        }
+      ],
+      "procs_range": [
+        3,
+        3
+      ],
+      "rss_mb_range": [
+        160.8,
+        162.8
+      ],
+      "pss_mb_range": [
+        119.0,
+        120.8
+      ],
+      "client_rss_mb_range": [
+        160.8,
+        162.8
+      ],
+      "server_rss_mb_range": [
+        0.0,
+        0.0
+      ],
+      "total_rss_mb_range": [
+        160.8,
+        162.8
+      ],
+      "total_pss_mb_range": [
+        119.0,
+        120.8
+      ],
+      "client_pss_mb_range": [
+        119.0,
+        120.8
+      ],
+      "runs": 5
+    }
+  ],
+  "editors_machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      0.822265625,
+      0.7998046875,
+      0.7158203125
+    ],
+    "mem_available_mb": 51404,
+    "swap_used_mb": 17785,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 9
+  }
+}

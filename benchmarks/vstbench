@@ -1,0 +1,938 @@
+#!/usr/bin/env python3
+"""vstbench — vibe-station footprint & performance harness (stdlib only).
+
+Subcommands
+  footprint   Part A: daemon + one browser tab (and optional competitors)
+  scale       Part A callout: daemon RSS vs number of live sessions
+  trace       Part E: RSS through fresh / seed / 1 WS / burst / idle
+  load        Part C: concurrent API load
+  corpus      Part B: file-list / search timings across cloned repos
+  fetch       shallow-clone the Part B corpus
+
+Isolation (see .vibekit/feature-plans/benchmarking/BENCHMARKING-STRATEGY.md §2.1)
+  * the daemon is started with its OWN $HOME (lock, config, shell-config
+    patching all live under $HOME/.vibe-station), own port, own cwd;
+  * memory is measured by PID / process-tree only, never by process name;
+  * every result records load average, other vst daemons and machine spec.
+
+Results are written to benchmarks/results/<name>.json (schema_version 1) unless --json is given.
+
+Usage:  vstbench <subcommand> --bin /path/to/vst [options]
+"""
+import argparse, hashlib, json, os, platform, shutil, signal, socket, statistics
+import subprocess, sys, tempfile, threading, time, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor
+
+PAGE = os.sysconf("SC_PAGE_SIZE")
+
+
+def ensure_netns():
+    """Re-exec inside a private network namespace (loopback only, same uid).
+
+    The daemon binds 0.0.0.0 and VST_NO_AUTH=1 disables auth, so on the host
+    network it would be an unauthenticated LAN-reachable shell for the whole
+    run. Inside the namespace nothing outside can reach it (and the dev
+    daemon's ports are irrelevant). Filesystem unix sockets (X11, tmux) still
+    work. `fetch` needs real network and skips this.
+    """
+    if os.environ.get("VSTBENCH_NETNS") == "1":
+        return
+    if not shutil.which("unshare"):
+        sys.exit("unshare not found; cannot isolate the unauthenticated daemon")
+    uid, gid = os.getuid(), os.getgid()
+    inner = (f"ip link set lo up && exec unshare -U --map-user={uid} --map-group={gid} "
+             f"env VSTBENCH_NETNS=1 \"$@\"")
+    os.execvp("unshare", ["unshare", "-Urn", "sh", "-c", inner, "sh", sys.executable, *sys.argv])
+
+
+def check_no_cloudflared(force):
+    # the daemon's boot-time cloudflared::sweep_orphans() kills EVERY process
+    # named cloudflared on the machine (vst-lifecycle/src/cloudflared.rs)
+    r = subprocess.run(["pgrep", "-x", "cloudflared"], capture_output=True, text=True)
+    if r.returncode == 0 and not force:
+        sys.exit("a cloudflared process is running; the daemon would kill it on boot. stop it or pass --force")
+
+
+# ───────────────────────── /proc helpers ──────────────────────────
+def children_map():
+    m = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/stat") as f:
+                s = f.read()
+            ppid = int(s[s.rindex(")") + 2:].split()[1])
+            m.setdefault(ppid, []).append(int(d))
+        except (OSError, ValueError):
+            pass
+    return m
+
+
+def tree(pid):
+    cm, out, stack = children_map(), [], [pid]
+    while stack:
+        p = stack.pop()
+        out.append(p)
+        stack.extend(cm.get(p, []))
+    return out
+
+
+def rss_kb(pid):
+    try:
+        with open(f"/proc/{pid}/statm") as f:
+            return int(f.read().split()[1]) * PAGE // 1024
+    except (OSError, ValueError):
+        return 0
+
+
+def pss_kb(pid):
+    try:
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def tree_mem(pid):
+    pids = tree(pid)
+    return {
+        "procs": len(pids),
+        "rss_mb": round(sum(rss_kb(p) for p in pids) / 1024, 1),
+        "pss_mb": round(sum(pss_kb(p) for p in pids) / 1024, 1),
+    }
+
+
+def process_breakdown(pid):
+    """PSS grouped by process name (comm), sorted descending. Used for stacked-bar charts."""
+    groups: dict[str, int] = {}
+    for p in tree(pid):
+        try:
+            name = open(f"/proc/{p}/comm").read().strip()
+        except OSError:
+            name = "unknown"
+        groups[name] = groups.get(name, 0) + pss_kb(p)
+    return sorted(
+        [{"name": k, "pss_mb": round(v / 1024, 1)} for k, v in groups.items() if v > 0],
+        key=lambda x: x["pss_mb"], reverse=True,
+    )
+
+
+def proc_cpu_ticks(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            s = f.read()
+        v = s[s.rindex(")") + 2:].split()
+        return sum(int(v[i]) for i in (11, 12, 13, 14))  # utime stime cutime cstime
+    except (OSError, ValueError):
+        return 0
+
+
+def settle_sample(pid, settle_s, samples=15, gap=1.0):
+    """Wait settle_s, then take `samples` readings and return medians."""
+    time.sleep(settle_s)
+    rows = []
+    for _ in range(samples):
+        rows.append(tree_mem(pid))
+        time.sleep(gap)
+    return {
+        "procs": rows[-1]["procs"],
+        "rss_mb": statistics.median(r["rss_mb"] for r in rows),
+        "pss_mb": statistics.median(r["pss_mb"] for r in rows),
+    }
+
+
+# ───────────────────────── environment ──────────────────────────
+def machine_info():
+    cpu = ""
+    try:
+        for line in open("/proc/cpuinfo"):
+            if line.startswith("model name"):
+                cpu = line.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    mem_gb = round(os.sysconf("SC_PHYS_PAGES") * PAGE / 2**30, 1)
+    others = subprocess.run(
+        ["pgrep", "-af", r"vst-daemon|vst daemon|vst-daemon-rust"],
+        capture_output=True, text=True).stdout.strip().splitlines()
+    mi = {}
+    try:
+        for line in open("/proc/meminfo"):
+            k, v = line.split(":", 1)
+            mi[k] = int(v.split()[0]) // 1024
+    except (OSError, ValueError):
+        pass
+    try:
+        governor = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").read().strip()
+    except OSError:
+        governor = None
+    return {
+        "kernel": platform.release(), "cpu": cpu, "cores": os.cpu_count(),
+        "ram_gb": mem_gb, "loadavg": os.getloadavg(),
+        "mem_available_mb": mi.get("MemAvailable"),
+        "swap_used_mb": (mi["SwapTotal"] - mi["SwapFree"]) if "SwapTotal" in mi else None,
+        "cpu_governor": governor,
+        "other_vst_daemons": len([l for l in others if "pgrep" not in l]),
+    }
+
+
+def check_quiet(max_load, force):
+    la = os.getloadavg()[0]
+    if la > max_load and not force:
+        sys.exit(f"load average {la:.1f} > {max_load}; quiet the machine or pass --force")
+
+
+def port_free(port):
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def http(url, method="GET", body=None, timeout=30):
+    req = urllib.request.Request(url, method=method)
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        req.add_header("Content-Type", "application/json")
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, data, timeout=timeout) as r:
+            payload = r.read()
+            return r.status, payload, (time.perf_counter() - t0) * 1000
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), (time.perf_counter() - t0) * 1000
+
+
+def jget(url, **kw):
+    st, payload, ms = http(url, **kw)
+    try:
+        return st, json.loads(payload), ms
+    except ValueError:
+        return st, None, ms
+
+
+# ───────────────────────── daemon harness ──────────────────────────
+class Daemon:
+    """Headless daemon with an isolated $HOME. Context manager."""
+
+    def __init__(self, binary, port, extra_env=None, path_prepend=None):
+        self.binary, self.port = os.path.abspath(binary), port
+        self.home = tempfile.mkdtemp(prefix="vstbench-home-")
+        self.base = f"http://127.0.0.1:{port}"
+        self.env = {
+            "PATH": os.environ["PATH"], "HOME": self.home,
+            "VST_PORT": str(port), "VST_NO_AUTH": "1",
+            "TERM": "xterm-256color", "LANG": "C.UTF-8",
+            "TMUX_TMPDIR": self.home,  # private tmux server, never the user's
+        }
+        if path_prepend:
+            self.env["PATH"] = path_prepend + ":" + self.env["PATH"]
+        self.env.update(extra_env or {})
+        self.proc = None
+        self.ready_ms = None
+        # a fresh $HOME shows the onboarding wizard in the UI; mark it complete
+        vdir = os.path.join(self.home, ".vibe-station")
+        os.makedirs(vdir, exist_ok=True)
+        with open(os.path.join(vdir, "oobe.json"), "w") as f:
+            json.dump({"completed": True, "step1_confirmed": True, "auto_bundle_created_for": []}, f)
+
+    def tmux_pid(self):
+        r = subprocess.run(["tmux", "display-message", "-p", "#{pid}"], capture_output=True, text=True, env=self.env)
+        return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else None
+
+    def register_repo(self, path, name, prefix="bn"):
+        st, proj, _ = self.api("/projects", method="POST", body={"path": path, "name": name, "prefix": prefix, "setup": False})
+        pid = (proj or {}).get("id") or ((proj or {}).get("project") or {}).get("id")
+        return st, pid, proj
+
+    def __enter__(self):
+        if not port_free(self.port):
+            sys.exit(f"port {self.port} is in use; refusing to run")
+        # `vst daemon run` is the merged binary's foreground entry point.
+        cmd = [self.binary, "daemon", "run"] if os.path.basename(self.binary) == "vst" else [self.binary]
+        t0 = time.perf_counter()
+        self.proc = subprocess.Popen(
+            cmd, env=self.env, cwd=self.home, start_new_session=True,
+            stdout=open(os.path.join(self.home, "stdout.log"), "w"), stderr=subprocess.STDOUT)
+        deadline = t0 + 30
+        while time.perf_counter() < deadline:
+            if self.proc.poll() is not None:
+                sys.exit(f"daemon exited early; see {self.home}/stdout.log")
+            try:
+                with urllib.request.urlopen(self.base + "/health", timeout=0.2) as r:
+                    if r.status == 200:
+                        self.ready_ms = (time.perf_counter() - t0) * 1000
+                        return self
+            except (urllib.error.URLError, OSError):
+                pass
+            time.sleep(0.0005)
+        sys.exit("daemon not ready within 30s")
+
+    def __exit__(self, *a):
+        if self.proc and self.proc.poll() is None:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+            try:
+                self.proc.wait(10)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+        # the daemon's tmux server is private (TMUX_TMPDIR); stop it so no sessions leak
+        subprocess.run(["tmux", "kill-server"], capture_output=True, env={**self.env})
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def api(self, path, **kw):
+        return jget(self.base + "/api" + path, **kw)
+
+
+# ───────────────────────── browser / competitors ──────────────────────────
+def launch_chrome(url, profile, extra=()):
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    if not chrome:
+        sys.exit("no chrome/chromium on PATH")
+    return subprocess.Popen(
+        [chrome, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+         "--disable-extensions", "--disable-sync", "--disable-background-networking",
+         "--new-window", *extra, url],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def kill_tree(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(10)
+    except Exception:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
+def browser_tab_mem(url, settle):
+    """Return (baseline about:blank mem, mem with url loaded). Fresh profile each."""
+    out = {}
+    for label, target in (("blank", "about:blank"), ("tab", url)):
+        prof = tempfile.mkdtemp(prefix="vstbench-chrome-")
+        p = launch_chrome(target, prof)
+        try:
+            time.sleep(1)  # let the main process fork its helpers
+            out[label] = settle_sample(p.pid, settle)
+        finally:
+            kill_tree(p)
+            shutil.rmtree(prof, ignore_errors=True)
+    return out["blank"], out["tab"]
+
+
+def tool_version(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout.strip().splitlines()[0]
+    except Exception:
+        return "unknown"
+
+
+def measure_vscode(repo, settle):
+    code = shutil.which("code")
+    if not code:
+        return None
+    prof, ext = tempfile.mkdtemp(prefix="vstbench-code-"), tempfile.mkdtemp(prefix="vstbench-codeext-")
+    t0 = time.perf_counter()
+    p = subprocess.Popen(
+        [code, "--new-window", "--wait", f"--user-data-dir={prof}", f"--extensions-dir={ext}",
+         "--disable-extensions", "--disable-workspace-trust", "--skip-welcome", "--skip-release-notes", repo],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        time.sleep(1)
+        # `code` is a shell wrapper that execs the real electron binary; descendants of p cover it.
+        mem = settle_sample(p.pid, settle)
+        breakdown = process_breakdown(p.pid)
+        return {"tool": "VS Code Desktop", "version": tool_version([code, "--version"]), **mem,
+                "client_rss_mb": mem["rss_mb"], "server_rss_mb": 0.0, "total_rss_mb": mem["rss_mb"],
+                "total_pss_mb": mem["pss_mb"], "client_pss_mb": mem["pss_mb"], "ready_s": None,
+                "process_breakdown": breakdown,
+                "stacked_bar": [{"label": p["name"], "pss_mb": p["pss_mb"]} for p in breakdown]}
+    finally:
+        kill_tree(p)
+        # Electron re-parents/detaches from the wrapper, so kill_tree alone leaks the window; sweep by profile dir.
+        subprocess.run(["pkill", "-f", f"[u]ser-data-dir={prof}"], check=False)
+        shutil.rmtree(prof, ignore_errors=True)
+        shutil.rmtree(ext, ignore_errors=True)
+
+
+def measure_native_editor(tool, argv, env_extra, sweep_pat, settle, version_cmd):
+    """Launch a desktop editor in an isolated profile, settle, sample the whole process tree's memory."""
+    p = subprocess.Popen(argv, env={**os.environ, **env_extra}, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        time.sleep(3)
+        if p.poll() is not None:
+            raise RuntimeError(f"{tool} exited early (rc={p.returncode}); needs a display?")
+        mem = settle_sample(p.pid, settle)
+        breakdown = process_breakdown(p.pid)
+        return {"tool": tool, "version": tool_version(version_cmd), **mem,
+                "client_rss_mb": mem["rss_mb"], "server_rss_mb": 0.0, "total_rss_mb": mem["rss_mb"],
+                "total_pss_mb": mem["pss_mb"], "client_pss_mb": mem["pss_mb"], "ready_s": None,
+                "process_breakdown": breakdown,
+                "stacked_bar": [{"label": b["name"], "pss_mb": b["pss_mb"]} for b in breakdown]}
+    finally:
+        kill_tree(p)
+        subprocess.run(["pkill", "-f", sweep_pat], check=False)
+
+
+def measure_zed(repo, settle):
+    zed = os.path.expanduser("~/.local/zed.app/libexec/zed-editor")
+    if not os.path.exists(zed):
+        return None
+    prof = tempfile.mkdtemp(prefix="vstbench-zed-")
+    try:
+        return measure_native_editor("Zed", [zed, f"--user-data-dir={prof}", repo], {},
+                                     f"[u]ser-data-dir={prof}", settle, [os.path.expanduser("~/.local/bin/zed"), "--version"])
+    finally:
+        shutil.rmtree(prof, ignore_errors=True)
+
+
+def measure_sublime(repo, settle):
+    subl = os.path.expanduser("~/.local/sublime_text/sublime_text")
+    if not os.path.exists(subl):
+        return None
+    prof = tempfile.mkdtemp(prefix="vstbench-subl-")
+    env = {"XDG_CONFIG_HOME": prof + "/config", "XDG_CACHE_HOME": prof + "/cache", "XDG_DATA_HOME": prof + "/data"}
+    try:
+        return measure_native_editor("Sublime Text", [subl, "--detached", "--multiinstance", "-n", repo], env,
+                                     "[s]ublime_text/(sublime_text|plugin_host|crash_reporter)", settle, [subl, "--version"])
+    finally:
+        shutil.rmtree(prof, ignore_errors=True)
+
+
+def measure_codeserver(repo, settle, port):
+    cs = shutil.which("code-server")
+    if not cs:
+        # probe common out-of-PATH install locations used by the vstbench toolchain
+        for candidate in (
+            os.path.expanduser("~/vstbench-data/tools/code-server-4.140.0-linux-amd64/bin/code-server"),
+            "/usr/lib/code-server/bin/code-server",
+        ):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                cs = candidate
+                break
+    if not cs:
+        return None
+    if not port_free(port):
+        return None
+    prof, ext = tempfile.mkdtemp(prefix="vstbench-cs-"), tempfile.mkdtemp(prefix="vstbench-csext-")
+    t0 = time.perf_counter()
+    p = subprocess.Popen(
+        [cs, "--bind-addr", f"127.0.0.1:{port}", "--auth", "none", f"--user-data-dir={prof}",
+         f"--extensions-dir={ext}", "--disable-telemetry", "--disable-update-check", repo],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    ready = None
+    try:
+        while time.perf_counter() - t0 < 60:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=0.3) as r:
+                    if r.status == 200:
+                        ready = time.perf_counter() - t0
+                        break
+            except (urllib.error.URLError, OSError):
+                time.sleep(0.01)
+        blank, tab = browser_tab_mem(f"http://127.0.0.1:{port}/?folder={repo}", settle)
+        srv = settle_sample(p.pid, 0, samples=3)
+        d_rss, d_pss = round(tab["rss_mb"] - blank["rss_mb"], 1), round(tab["pss_mb"] - blank["pss_mb"], 1)
+        return {"tool": "code-server + 1 tab", "version": tool_version([cs, "--version"]),
+                "server_rss_mb": srv["rss_mb"], "server_pss_mb": srv["pss_mb"],
+                "tab_delta_rss_mb": d_rss, "tab_delta_pss_mb": d_pss,
+                # headline: browser assumed already open, so only the server + the tab's own cost count
+                "total_rss_mb": round(srv["rss_mb"] + d_rss, 1), "total_pss_mb": round(srv["pss_mb"] + d_pss, 1),
+                "total_incl_browser_rss_mb": round(srv["rss_mb"] + tab["rss_mb"], 1),
+                "total_incl_browser_pss_mb": round(srv["pss_mb"] + tab["pss_mb"], 1),
+                "client_rss_mb": tab["rss_mb"], "client_pss_mb": tab["pss_mb"],
+                "browser_blank_rss_mb": blank["rss_mb"], "browser_blank_pss_mb": blank["pss_mb"], "ready_s": ready}
+    finally:
+        kill_tree(p)
+        shutil.rmtree(prof, ignore_errors=True)
+        shutil.rmtree(ext, ignore_errors=True)
+
+
+# ───────────────────────── subcommands ──────────────────────────
+def aggregate_runs(rs):
+    """Median every numeric field across runs, keeping min/max as <key>_range."""
+    agg = dict(rs[0])
+    for k, v in rs[0].items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            vals = [r[k] for r in rs if isinstance(r.get(k), (int, float))]
+            agg[k] = round(statistics.median(vals), 2)
+            agg[k + "_range"] = [round(min(vals), 2), round(max(vals), 2)]
+    agg["runs"] = len(rs)
+    return agg
+
+
+def cmd_editors(a):
+    """Measure the native editors (Zed, Sublime Text) and merge them into results/footprint.json,
+    replacing their not_measured stubs. Leaves every other row (vst, code-server, VS Code) untouched."""
+    check_quiet(a.max_load, a.force)
+    out = a.json or os.path.join(HERE, "results", "footprint.json")
+    doc = json.load(open(out))
+    repo = os.path.abspath(a.repo)
+    fns = {"zed": lambda r, st: measure_zed(r, st), "sublime": lambda r, st: measure_sublime(r, st),
+           "codeserver": lambda r, st: measure_codeserver(r, st, a.cs_port)}
+    for fn in (fns[t] for t in a.tools.split(",")):
+        rs = []
+        for i in range(a.runs):
+            r = fn(repo, a.settle)
+            if r:
+                rs.append(r)
+                print(f"{r['tool']} run {i+1}: pss={r['total_pss_mb']} rss={r['total_rss_mb']}", file=sys.stderr)
+        if rs:
+            agg = aggregate_runs(rs)
+            idx = next((i for i, x in enumerate(doc["results"]) if x.get("tool") == agg["tool"]), None)
+            if idx is None:
+                doc["results"].append(agg)
+            else:
+                doc["results"][idx] = agg  # replace in place so row order is stable
+    doc["editors_machine"] = machine_info()
+    doc["preliminary"] = doc.get("preliminary", False) or doc["editors_machine"]["loadavg"][0] > a.max_load \
+        or (doc["editors_machine"].get("swap_used_mb") or 0) > 1024
+    open(out, "w").write(json.dumps(doc, indent=2) + "\n")
+    print(f"updated {out}", file=sys.stderr)
+
+
+def cmd_footprint(a):
+    check_quiet(a.max_load, a.force)
+    runs = []
+    for i in range(a.runs):
+        with Daemon(a.bin, a.port) as d:
+            ready = d.ready_ms
+            if a.repo:
+                st, pid_, _ = d.register_repo(os.path.abspath(a.repo), "bench")
+                print(f"registered project: {st} {pid_}", file=sys.stderr)
+            dm = settle_sample(d.proc.pid, a.settle)
+            dm_breakdown = process_breakdown(d.proc.pid)
+            blank, tab = browser_tab_mem(d.base + "/", a.settle)
+            # idle cpu over 10s (60s in --long)
+            c0, t0 = proc_cpu_ticks(d.proc.pid), time.time()
+            time.sleep(a.cpu_window)
+            cpu_pct = (proc_cpu_ticks(d.proc.pid) - c0) / os.sysconf("SC_CLK_TCK") / (time.time() - t0) * 100
+        runs.append({
+            "ready_ms": round(ready, 2), "daemon": dm, "daemon_breakdown": dm_breakdown,
+            "browser_blank": blank, "browser_tab": tab,
+            "tab_delta_rss_mb": round(tab["rss_mb"] - blank["rss_mb"], 1),
+            "tab_delta_pss_mb": round(tab["pss_mb"] - blank["pss_mb"], 1),
+            "idle_cpu_pct": round(cpu_pct, 3),
+        })
+        print(f"run {i+1}/{a.runs}: ready={ready:.1f}ms daemon={dm['rss_mb']}MB tab={tab['rss_mb']}MB "
+              f"(blank {blank['rss_mb']}) cpu={cpu_pct:.2f}%", file=sys.stderr)
+
+    def med(f):
+        return round(statistics.median(f(r) for r in runs), 2)
+
+    def rng(f):
+        v = [f(r) for r in runs]
+        return [round(min(v), 2), round(max(v), 2)]
+
+    bin_mb = round(os.path.getsize(a.bin) / 2**20, 1)
+
+    # Authoritative ready_ms: prefer startup.json's 30-run "after" median so footprint and
+    # startup never disagree (same definition: exec → /health 200, empty $HOME).
+    _startup_ready_ms = None
+    _startup_ready_range = None
+    _startup_json = os.path.join(HERE, "results", "startup.json")
+    if os.path.isfile(_startup_json):
+        try:
+            _sd = json.load(open(_startup_json))
+            _after = _sd.get("after", {})
+            _rm = _after.get("ready_ms", {})
+            if _rm.get("median") is not None:
+                _startup_ready_ms = _rm["median"]
+                _startup_ready_range = [_rm.get("min", _rm["median"]), _rm.get("max", _rm["median"])]
+        except Exception:
+            pass
+
+    vst = {
+        "tool": "vst (daemon + 1 tab)", "binary_mb": bin_mb, "runs": a.runs,
+        "ready_ms": _startup_ready_ms if _startup_ready_ms is not None else med(lambda r: r["ready_ms"]),
+        "ready_ms_range": _startup_ready_range if _startup_ready_range is not None else rng(lambda r: r["ready_ms"]),
+        "ready_ms_source": "startup.json" if _startup_ready_ms is not None else "footprint_runs",
+        "server_rss_mb": med(lambda r: r["daemon"]["rss_mb"]), "server_rss_range": rng(lambda r: r["daemon"]["rss_mb"]),
+        "server_pss_mb": med(lambda r: r["daemon"]["pss_mb"]),
+        "client_rss_mb": med(lambda r: r["browser_tab"]["rss_mb"]),
+        "client_rss_range": rng(lambda r: r["browser_tab"]["rss_mb"]),
+        "client_pss_mb": med(lambda r: r["browser_tab"]["pss_mb"]),
+        "browser_blank_rss_mb": med(lambda r: r["browser_blank"]["rss_mb"]),
+        "tab_delta_rss_mb": med(lambda r: r["tab_delta_rss_mb"]),
+        "tab_delta_pss_mb": med(lambda r: r["tab_delta_pss_mb"]),
+        "idle_cpu_pct": med(lambda r: r["idle_cpu_pct"]),
+    }
+    # headline: browser assumed already open, so only the daemon + the tab's own cost count
+    vst["total_rss_mb"] = round(vst["server_rss_mb"] + vst["tab_delta_rss_mb"], 1)
+    vst["total_pss_mb"] = round(vst["server_pss_mb"] + vst["tab_delta_pss_mb"], 1)
+    # cold-start view: also charge the whole dedicated browser instance
+    vst["total_incl_browser_rss_mb"] = round(vst["server_rss_mb"] + vst["client_rss_mb"], 1)
+    vst["total_incl_browser_pss_mb"] = round(vst["server_pss_mb"] + vst["client_pss_mb"], 1)
+    # daemon breakdown from last run (representative; PSS is stable across runs)
+    vst["daemon_breakdown"] = runs[-1]["daemon_breakdown"]
+    # stacked bar data for the website chart: browser base is excluded, matching the headline
+    vst["stacked_bar"] = [
+        {"label": "vst daemon", "pss_mb": vst["server_pss_mb"], "note": "daemon only — the server component"},
+        {"label": "vst UI tab", "pss_mb": vst["tab_delta_pss_mb"], "note": "tab delta above a blank Chrome window"},
+    ]
+    vst["note"] = ("PSS is the primary total (shared pages counted once); RSS is the double-counting "
+                   "cross-check. total_* = server + the tab's own delta over a blank browser window (browser "
+                   "assumed already open); total_incl_browser_* also charges the whole dedicated browser "
+                   "instance. ready = server /health 200.")
+    results = [vst]
+    if a.competitors and a.repo:
+        repo = os.path.abspath(a.repo)
+        for fn in (lambda: measure_codeserver(repo, a.settle, a.cs_port),
+                   lambda: measure_vscode(repo, a.settle),
+                   lambda: measure_zed(repo, a.settle),
+                   lambda: measure_sublime(repo, a.settle)):
+            rs = []
+            for i in range(a.runs):
+                try:
+                    r = fn()
+                except Exception as e:  # keep going; record failure
+                    r = {"tool": "error", "error": str(e)}
+                if r and "error" not in r:
+                    rs.append(r)
+                    print(f"competitor {r['tool']} run {i+1}: pss={r.get('total_pss_mb')} rss={r.get('total_rss_mb')}", file=sys.stderr)
+            if rs:
+                results.append(aggregate_runs(rs))
+    if a.competitors:
+        # Tools we'd measure but aren't installed; shown as "not measured" in the website table.
+        measured_names = {r["tool"] for r in results}
+        for stub in (
+            {"tool": "Zed", "not_measured": True,
+             "note": "not installed on this machine; install with a display and re-run to measure"},
+            {"tool": "Cursor", "not_measured": True,
+             "note": "not installed on this machine; install with a display and re-run to measure"},
+            {"tool": "Sublime Text", "not_measured": True,
+             "note": "not installed on this machine; install with a display and re-run to measure"},
+            {"tool": "txt", "not_measured": True,
+             "note": "plain-text editor baseline; not measured on this machine"},
+        ):
+            if not any(stub["tool"].lower() in n.lower() for n in measured_names):
+                results.append(stub)
+    emit({"part": "A", "machine": machine_info(), "results": results}, a)
+
+
+def seed_stub_agents(d, n, tmpdir):
+    """Create n live sessions backed by a stub agent binary (sleep). Returns count created."""
+    # Registers a project, a mode that points at a stub 'claude', then n worktrees.
+    if not hasattr(d, "_scale_pid"):
+        repo = os.path.join(tmpdir, "scale-repo")
+        os.makedirs(repo, exist_ok=True)
+        env = {**os.environ, "HOME": d.home}
+        for cmd in (["git", "init", "-q", "-b", "main"], ["git", "config", "user.email", "b@b"],
+                    ["git", "config", "user.name", "b"], ["git", "commit", "-q", "--allow-empty", "-m", "i"]):
+            subprocess.run(cmd, cwd=repo, env=env, check=True)
+        st, proj, _ = d.api("/projects", method="POST", body={"path": repo, "name": "scale", "prefix": "sc", "setup": False})
+        if st >= 300 or not proj:
+            sys.exit(f"project create failed: {st} {proj}")
+        d._scale_pid = proj.get("id") or proj.get("project", {}).get("id")
+        d._scale_made = 0
+    pid = d._scale_pid
+    st, modes, _ = d.api("/modes")
+    mode_id = (modes[0]["id"] if isinstance(modes, list) and modes else None)
+    if not mode_id:
+        # fresh isolated $HOME has no modes; create one pointing at the stub `claude`
+        st, mode, _ = d.api("/modes", method="POST", body={"name": "bench", "cli": "claude", "context": "bench stub"})
+        mode_id = mode.get("id") if isinstance(mode, dict) else None
+    if not mode_id:
+        sys.exit("no modes available in isolated HOME; cannot create sessions (see stub-bin notes)")
+    made = 0
+    for i in range(n):
+        st, w, _ = d.api("/worktrees", method="POST",
+                         body={"projectId": pid, "modeId": mode_id, "branch": f"bench/{d._scale_made + i}",
+                               "useTmux": True, "channel": "tmux", "skipAutoTurn": True})
+        if st < 300:
+            made += 1
+    d._scale_made += n
+    return made
+
+
+def _log_ts(text, pattern):
+    import re, datetime
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    m = re.search(r"(\d{4}-\d\d-\d\dT[\d:.]+)Z.*?" + pattern, clean)
+    if not m:
+        return None
+    return datetime.datetime.fromisoformat(m.group(1)).replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
+def start_once(binary, port):
+    """One cold start: exec -> /health 200 (external), plus in-process phases from the daemon's own log."""
+    t_wall = time.time()
+    with Daemon(binary, port) as d:
+        ready = d.ready_ms
+        time.sleep(0.4)
+        text = open(os.path.join(d.home, "stdout.log")).read()
+    up = _log_ts(text, "starting daemon")
+    listen = _log_ts(text, "listening on")
+    return {
+        "ready_ms": ready,
+        "process_up_ms": (up - t_wall) * 1000 if up else None,
+        "in_process_to_listen_ms": (listen - up) * 1000 if up and listen else None,
+    }
+
+
+def cmd_startup(a):
+    """Alternate baseline/candidate cold starts so machine drift hits both equally."""
+    check_quiet(a.max_load, a.force)
+    arms = [("before", a.baseline), ("after", a.bin)]
+    runs = {"before": [], "after": []}
+    for i in range(a.runs + a.warmup):
+        for label, binary in (arms if i % 2 == 0 else arms[::-1]):
+            r = start_once(binary, a.port)
+            if i >= a.warmup:
+                runs[label].append(r)
+        print(f"{i+1}/{a.runs + a.warmup}", file=sys.stderr)
+
+    def stats(rs, key):
+        v = [r[key] for r in rs if r[key] is not None]
+        if not v:
+            return None
+        v.sort()
+        return {"median": round(statistics.median(v), 2), "min": round(v[0], 2), "p90": round(v[int(0.9 * (len(v) - 1))], 2),
+                "max": round(v[-1], 2)}
+    out = {}
+    for label, rs in runs.items():
+        out[label] = {k: stats(rs, k) for k in ("ready_ms", "process_up_ms", "in_process_to_listen_ms")}
+        out[label]["runs"] = len(rs)
+        out[label]["binary"] = os.path.basename(os.path.dirname(os.path.dirname(arms[0][1] if label == "before" else arms[1][1])))
+    emit({"part": "startup", "machine": machine_info(),
+          "note": ("ready = exec -> /health 200 measured externally; process_up = exec -> first daemon log line; "
+                   "in_process_to_listen = 'starting daemon' -> 'listening' from the daemon's own log. "
+                   "before/after alternate per iteration on the same machine; empty $HOME so boot-recovery and "
+                   "migration costs of a populated store are not included."),
+          **out}, a)
+
+
+def cmd_scale(a):
+    check_quiet(a.max_load, a.force)
+    stub = tempfile.mkdtemp(prefix="vstbench-stub-")
+    for name in ("claude", "cursor-agent", "opencode", "agy"):
+        p = os.path.join(stub, name)
+        open(p, "w").write("#!/bin/sh\nexec sleep 100000\n")
+        os.chmod(p, 0o755)
+    steps = [int(x) for x in a.counts.split(",")]
+    rows = []
+    with Daemon(a.bin, a.port, path_prepend=stub) as d:
+        have = 0
+        for target in steps:
+            if target > have:
+                have += seed_stub_agents(d, target - have, d.home)
+            m = settle_sample(d.proc.pid, a.settle)
+            tp = d.tmux_pid()
+            m["tmux_server_rss_mb"] = round(rss_kb(tp) / 1024, 1) if tp else 0.0
+            rows.append({"sessions_target": target, "sessions_created": have, **m})
+            print(f"{target}: rss={m['rss_mb']}MB", file=sys.stderr)
+    shutil.rmtree(stub, ignore_errors=True)
+    emit({"part": "scale", "machine": machine_info(), "note": "sessions run a stub agent (sleep); daemon RSS only",
+          "rows": rows}, a)
+
+
+def cmd_trace(a):
+    check_quiet(a.max_load, a.force)
+    rows = []
+    with Daemon(a.bin, a.port) as d:
+        pid = d.proc.pid
+        rows.append({"phase": "fresh", **settle_sample(pid, a.settle, 3)})
+        for _ in range(200):
+            http(d.base + "/api/projects")
+        rows.append({"phase": "after 200 reqs", **settle_sample(pid, 1, 3)})
+        peak = 0.0
+        stop = threading.Event()
+
+        def watch():
+            nonlocal peak
+            while not stop.is_set():
+                peak = max(peak, rss_kb(pid) / 1024)
+                time.sleep(0.01)
+        th = threading.Thread(target=watch)
+        th.start()
+        burst(d.base + "/api/projects", workers=10, duration=a.duration)
+        stop.set(); th.join()
+        rows.append({"phase": "peak during 10-worker burst", "rss_mb": round(peak, 1)})
+        rows.append({"phase": f"idle {a.idle}s after burst", **settle_sample(pid, a.idle, 3)})
+    emit({"part": "E", "machine": machine_info(), "rows": rows}, a)
+
+
+def pct(v, p):
+    v = sorted(v)
+    return v[min(len(v) - 1, int(round(p / 100 * (len(v) - 1))))]
+
+
+def burst(url, workers, total=None, duration=None):
+    """Closed-loop load: `total` requests, or run for `duration` seconds."""
+    lat, errs = [], 0
+    lock = threading.Lock()
+    t0 = time.perf_counter()
+    stop_at = t0 + duration if duration else None
+    counter = iter(range(total)) if total else None
+
+    def worker():
+        nonlocal errs
+        while True:
+            if stop_at is not None:
+                if time.perf_counter() >= stop_at:
+                    return
+            else:
+                with lock:
+                    if next(counter, None) is None:
+                        return
+            st, _, ms = http(url)
+            with lock:
+                lat.append(ms)
+                if st >= 400:
+                    errs += 1
+    ths = [threading.Thread(target=worker) for _ in range(workers)]
+    [t.start() for t in ths]
+    [t.join() for t in ths]
+    dur = time.perf_counter() - t0
+    total = len(lat)
+    return {"requests": total, "req_s": round(total / dur, 1), "p50_ms": round(pct(lat, 50), 2), "p95_ms": round(pct(lat, 95), 2),
+            "p99_ms": round(pct(lat, 99), 2), "errors": errs}
+
+
+def cmd_load(a):
+    check_quiet(a.max_load, a.force)
+    out = []
+    with Daemon(a.bin, a.port) as d:
+        for name, path in (("GET /health", "/health"), ("GET /api/projects", "/api/projects"),
+                           ("GET /api/modes", "/api/modes")):
+            burst(d.base + path, 10, duration=3)  # warm-up
+            runs = [burst(d.base + path, 10, duration=a.duration) for _ in range(a.runs)]
+            out.append({"endpoint": name, **{k: statistics.median(r[k] for r in runs) for k in runs[0]}})
+            print(out[-1], file=sys.stderr)
+    emit({"part": "C", "machine": machine_info(), "rows": out}, a)
+
+
+CORPUS = {  # name: (url, tag) — set chosen for language spread; shallow-cloned
+    "ripgrep": ("https://github.com/BurntSushi/ripgrep", None),
+    "flask": ("https://github.com/pallets/flask", None),
+    "django": ("https://github.com/django/django", None),
+    "react": ("https://github.com/facebook/react", None),
+    "kubernetes": ("https://github.com/kubernetes/kubernetes", None),
+    "linux": ("https://github.com/torvalds/linux", None),
+}
+
+
+def cmd_fetch(a):
+    os.makedirs(a.dir, exist_ok=True)
+    for name in (a.only.split(",") if a.only else CORPUS):
+        url = CORPUS[name][0]
+        dest = os.path.join(a.dir, name)
+        if os.path.isdir(dest):
+            print(f"skip {name} (exists)", file=sys.stderr)
+            continue
+        subprocess.run(["git", "clone", "--depth", "1", "-q", url, dest], check=True)
+        print(f"cloned {name}", file=sys.stderr)
+
+
+def cmd_corpus(a):
+    check_quiet(a.max_load, a.force)
+    rows = []
+    for name in (a.only.split(",") if a.only else CORPUS):
+        repo = os.path.abspath(os.path.join(a.dir, name))
+        if not os.path.isdir(repo):
+            print(f"skip {name} (not cloned)", file=sys.stderr)
+            continue
+        files = int(subprocess.run(["git", "-C", repo, "ls-files"], capture_output=True, text=True).stdout.count("\n"))
+        with Daemon(a.bin, a.port) as d:
+            st, pid, _ = d.register_repo(repo, name)
+            if st >= 300 or not pid:
+                rows.append({"repo": name, "error": f"register failed {st}"})
+                continue
+            row = {"repo": name, "files": files}
+            st, fl, ms = d.api(f"/projects/{pid}/file-list")
+            row["file_list_cold_ms"] = round(ms, 1)
+            if isinstance(fl, dict):
+                row["file_list_returned"] = len(fl.get("files", []))
+                row["file_list_truncated"] = fl.get("truncated")
+                row["file_list_source"] = fl.get("source")
+            warm = [d.api(f"/projects/{pid}/file-list")[2] for _ in range(a.runs)]
+            row["file_list_warm_ms"] = round(statistics.median(warm), 1)
+            for key, q in (("content_search_ms", "func"), ("content_rare_ms", "zzqxjv_unlikely")):
+                t = [d.api(f"/projects/{pid}/search?q={q}&limit=50")[2] for _ in range(a.runs)]
+                row[key] = round(statistics.median(t), 1)
+            row["idle_rss_mb"] = settle_sample(d.proc.pid, 3, 3)["rss_mb"]
+            rows.append(row)
+            print(row, file=sys.stderr)
+    emit({"part": "B", "machine": machine_info(),
+          "note": "project-level endpoints; fuzzy (worktree-scoped) not yet covered", "rows": rows}, a)
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+RESULT_NAMES = {"startup": "startup", "A": "footprint", "scale": "scale", "E": "trace", "C": "load", "B": "corpus"}
+SCHEMA_VERSION = 1
+
+
+def git(*args):
+    try:
+        return subprocess.run(["git", "-C", HERE, *args], capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        return ""
+
+
+def emit(doc, a):
+    """Write results/<name>.json next to this script (override with --json)."""
+    m = doc["machine"]
+    noisy = m["loadavg"][0] > a.max_load or (m.get("swap_used_mb") or 0) > 1024
+    meta = {
+        "schema_version": SCHEMA_VERSION,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": bool(git("status", "--porcelain", "--untracked-files=no", "--", ":/", ":(exclude)benchmarks/results")),
+        "binary_sha256": hashlib.sha256(open(a.bin, "rb").read()).hexdigest()[:16],
+        # website: show only runs with preliminary == false
+        "preliminary": noisy,
+    }
+    doc = {**meta, **doc}
+    s = json.dumps(doc, indent=2)
+    out = a.json or os.path.join(HERE, "results", RESULT_NAMES[doc["part"]] + ".json")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    open(out, "w").write(s + "\n")
+    print(f"wrote {out}", file=sys.stderr)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="vstbench", description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p, runs=5):
+        p.add_argument("--bin", required=True, help="path to release `vst` binary (embed-ui build)")
+        p.add_argument("--port", type=int, default=7900)
+        p.add_argument("--runs", type=int, default=runs)
+        p.add_argument("--settle", type=float, default=15)
+        p.add_argument("--max-load", type=float, default=2.0)
+        p.add_argument("--force", action="store_true", help="ignore the load-average guard (results flagged noisy)")
+        p.add_argument("--json")
+
+    p = sub.add_parser("footprint"); common(p)
+    p.add_argument("--competitors", action="store_true"); p.add_argument("--repo")
+    p.add_argument("--cs-port", type=int, default=7901); p.add_argument("--cpu-window", type=float, default=20)
+    p.set_defaults(fn=cmd_footprint)
+    p = sub.add_parser("editors"); common(p); p.add_argument("--repo", required=True)
+    p.add_argument("--tools", default="zed,sublime", help="comma list of: zed,sublime,codeserver")
+    p.add_argument("--cs-port", type=int, default=7901); p.set_defaults(fn=cmd_editors)
+    p = sub.add_parser("startup"); common(p, 30)
+    p.add_argument("--baseline", required=True, help="binary to compare against (the 'before' arm)")
+    p.add_argument("--warmup", type=int, default=2); p.set_defaults(fn=cmd_startup)
+    p = sub.add_parser("scale"); common(p, 1); p.add_argument("--counts", default="0,14,50"); p.set_defaults(fn=cmd_scale)
+    p = sub.add_parser("trace"); common(p, 1)
+    p.add_argument("--duration", type=float, default=15); p.add_argument("--idle", type=float, default=30)
+    p.set_defaults(fn=cmd_trace)
+    p = sub.add_parser("load"); common(p, 3); p.add_argument("--duration", type=float, default=15); p.set_defaults(fn=cmd_load)
+    p = sub.add_parser("corpus"); common(p, 5)
+    p.add_argument("--dir", default="bench-repos"); p.add_argument("--only"); p.set_defaults(fn=cmd_corpus)
+    p = sub.add_parser("fetch"); p.add_argument("--dir", default="bench-repos"); p.add_argument("--only")
+    p.set_defaults(fn=cmd_fetch)
+    a = ap.parse_args()
+    if a.cmd != "fetch":
+        ensure_netns()
+        check_no_cloudflared(a.force)
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

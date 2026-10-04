@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T14:06:37-0700",
+  "commit": "736c354cddf59a397384de091f02c0c766feee96",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "startup",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      5.8935546875,
+      3.53076171875,
+      2.65869140625
+    ],
+    "mem_available_mb": 40737,
+    "swap_used_mb": 26056,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 11
+  },
+  "note": "ready = exec -> /health 200 measured externally; process_up = exec -> first daemon log line; in_process_to_listen = 'starting daemon' -> 'listening' from the daemon's own log. before/after alternate per iteration on the same machine; empty $HOME so boot-recovery and migration costs of a populated store are not included.",
+  "before": {
+    "ready_ms": {
+      "median": 11.25,
+      "min": 9.83,
+      "p90": 11.84,
+      "max": 13.88
+    },
+    "process_up_ms": {
+      "median": 2.21,
+      "min": 1.63,
+      "p90": 2.9,
+      "max": 4.39
+    },
+    "in_process_to_listen_ms": {
+      "median": 7.01,
+      "min": 6.43,
+      "p90": 7.77,
+      "max": 8.06
+    },
+    "runs": 30,
+    "binary": "target"
+  },
+  "after": {
+    "ready_ms": {
+      "median": 10.83,
+      "min": 9.96,
+      "p90": 12.22,
+      "max": 24.53
+    },
+    "process_up_ms": {
+      "median": 2.14,
+      "min": 1.66,
+      "p90": 2.89,
+      "max": 6.03
+    },
+    "in_process_to_listen_ms": {
+      "median": 6.94,
+      "min": 6.38,
+      "p90": 7.55,
+      "max": 13.33
+    },
+    "runs": 30,
+    "binary": "target"
+  }
+}

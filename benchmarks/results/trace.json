@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-10-03T00:37:17-0700",
+  "commit": "244916559930bc821fbba76a490903c6594cfb1c",
+  "dirty": true,
+  "binary_sha256": "9f3229ce7f6e59fd",
+  "preliminary": true,
+  "part": "E",
+  "machine": {
+    "kernel": "6.12.86+deb13-amd64",
+    "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 60.5,
+    "loadavg": [
+      20.6083984375,
+      15.81494140625,
+      11.25537109375
+    ],
+    "mem_available_mb": 41611,
+    "swap_used_mb": 22619,
+    "cpu_governor": "powersave",
+    "other_vst_daemons": 20
+  },
+  "rows": [
+    {
+      "phase": "fresh",
+      "procs": 1,
+      "rss_mb": 18.2,
+      "pss_mb": 15.9
+    },
+    {
+      "phase": "after 200 reqs",
+      "procs": 1,
+      "rss_mb": 18.3,
+      "pss_mb": 16.1
+    },
+    {
+      "phase": "peak during 10-worker burst",
+      "rss_mb": 19.5
+    },
+    {
+      "phase": "idle 30s after burst",
+      "procs": 1,
+      "rss_mb": 19.5,
+      "pss_mb": 17.3
+    }
+  ]
+}
