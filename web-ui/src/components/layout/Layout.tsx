@@ -225,8 +225,8 @@ export function Layout({
       style={{
         height: "100%",
         overflow: "auto",
-        // Darkest of the app's 3-tier chrome hierarchy (sidebar < secondary
-        // tree panels < main content) — see tokens.css's --bg-sidebar comment.
+        // Lighter tone of the standard 3-tier hierarchy (sidebar, top bar,
+        // bottom bar > secondary tree panels > main content) — see tokens.css.
         background: "var(--bg-sidebar)",
       }}
     >
