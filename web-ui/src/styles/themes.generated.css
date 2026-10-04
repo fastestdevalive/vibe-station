@@ -13,10 +13,10 @@
   --bg-card: #151515;
   --bg-elevated: #1e1e1e;
   --bg-overlay: rgba(0, 0, 0, 0.7);
-  --bg-input: #151515;
+  --bg-input: #1e1e1e;
   --bg-hover: #222222;
   --bg-active: #2b2b2b;
-  --bg-sidebar: #181818;
+  --bg-sidebar: #151515;
   --bg-sidebar-secondary: #131313;
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
@@ -121,10 +121,10 @@
   --bg-card: #151515;
   --bg-elevated: #1e1e1e;
   --bg-overlay: rgba(0, 0, 0, 0.7);
-  --bg-input: #151515;
+  --bg-input: #1e1e1e;
   --bg-hover: #222222;
   --bg-active: #2b2b2b;
-  --bg-sidebar: #181818;
+  --bg-sidebar: #151515;
   --bg-sidebar-secondary: #131313;
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;

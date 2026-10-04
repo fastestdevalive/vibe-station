@@ -1,5 +1,5 @@
 import { useViewportWidth, usePortalRoot, useEventTargets, useDemoEnv } from "../../context/DemoEnv";
-import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
 import { fuzzyScore } from "@/lib/fuzzyMatch";
@@ -42,8 +42,19 @@ import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/workt
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
+import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 import { clampPopupPosition } from "@/lib/popupPosition";
+
+/** Material Design "search" glyph — a more natural glass-to-handle proportion than Lucide's. */
+function MaterialSearchIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+    </svg>
+  );
+}
+
 
 /**
  * Drag-reorder wrapper for a sidebar row (worktree or direct-session).
@@ -743,6 +754,15 @@ export function LeftSidebar({
     return true;
   });
 
+  /** "Pinned" section collapse state — same persisted-boolean shape as `workspacesOpen`. */
+  const [pinnedOpen, setPinnedOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("sidebar:pinnedOpen");
+      if (saved != null) return saved === "1";
+    } catch { /* ignore */ }
+    return true;
+  });
+
   /** Direct agents section disclosure state per project — collapsed by default. */
   const [openDirectAgents, setOpenDirectAgents] = useState<Set<string>>(() => {
     try {
@@ -771,11 +791,13 @@ export function LeftSidebar({
   });
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const preSearchSnapshotRef = useRef<{
     openProj: Set<string>;
     openWorktrees: Set<string>;
     openDirectAgents: Set<string>;
     workspacesOpen: boolean;
+    pinnedOpen: boolean;
   } | null>(null);
 
   function handleSearchChange(nextVal: string) {
@@ -791,17 +813,20 @@ export function LeftSidebar({
         openWorktrees: new Set(openWorktrees),
         openDirectAgents: new Set(openDirectAgents),
         workspacesOpen,
+        pinnedOpen,
       };
       setOpenProj(new Set(projects.map((p) => p.id)));
       setOpenWorktrees(new Set(worktrees.map((w) => w.id)));
       setOpenDirectAgents(new Set(projects.map((p) => p.id)));
       setWorkspacesOpen(true);
+      setPinnedOpen(true);
     } else if (prev && !next) {
       if (preSearchSnapshotRef.current) {
         setOpenProj(preSearchSnapshotRef.current.openProj);
         setOpenWorktrees(preSearchSnapshotRef.current.openWorktrees);
         setOpenDirectAgents(preSearchSnapshotRef.current.openDirectAgents);
         setWorkspacesOpen(preSearchSnapshotRef.current.workspacesOpen);
+        setPinnedOpen(preSearchSnapshotRef.current.pinnedOpen);
         preSearchSnapshotRef.current = null;
       }
     }
@@ -814,6 +839,13 @@ export function LeftSidebar({
       localStorage.setItem("sidebar:workspacesOpen", workspacesOpen ? "1" : "0");
     } catch { /* ignore */ }
   }, [workspacesOpen]);
+
+  useEffect(() => {
+    if (preSearchSnapshotRef.current != null) return;
+    try {
+      localStorage.setItem("sidebar:pinnedOpen", pinnedOpen ? "1" : "0");
+    } catch { /* ignore */ }
+  }, [pinnedOpen]);
 
   /** ALL saved workspaces, globally — detached from any owning worktree
    *  (agent-interaction-workspaces/04-workspaces Phase 3b, Decision 6). A
@@ -1525,11 +1557,7 @@ export function LeftSidebar({
                 <Github size={12} />
               </a>
             </div>
-          ) : (
-            <div className="left-sidebar__brand-inner" aria-hidden>
-              <Logo size={13} />
-            </div>
-          )}
+          ) : null}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
           <Link
@@ -1554,48 +1582,65 @@ export function LeftSidebar({
             <Plus size={16} aria-hidden />
             {!collapsed ? "Create new agent" : null}
           </button>
+          {!collapsed ? (
+            <label className="sidebar-search">
+              <span className="sidebar-search__icon" aria-hidden>
+                <MaterialSearchIcon size={16} />
+              </span>
+              <input
+                type="text"
+                className="sidebar-search__input"
+                placeholder={searchOpen ? "Search sessions, worktrees..." : "Search"}
+                aria-label="Search sidebar"
+                value={searchQuery}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setSearchOpen(false)}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    handleSearchChange("");
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  className="sidebar-search__clear"
+                  aria-label="Clear search"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleSearchChange("")}
+                >
+                  <X size={12} />
+                </button>
+              ) : null}
+            </label>
+          ) : null}
         </div>
-        {!collapsed ? <div className="sidebar-section-divider" aria-hidden style={{ marginTop: "var(--space-6)", marginBottom: "var(--space-2)" }} /> : null}
-        {!collapsed ? (
-          <div className="sidebar-search">
-            <span className="sidebar-search__icon" aria-hidden>
-              <Search size={14} />
-            </span>
-            <input
-              type="text"
-              className="sidebar-search__input"
-              placeholder="Search sessions, worktrees..."
-              aria-label="Search sidebar"
-              value={searchQuery}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  handleSearchChange("");
-                }
-              }}
-            />
-            {searchQuery ? (
-              <button
-                type="button"
-                className="sidebar-search__clear"
-                aria-label="Clear search"
-                onClick={() => handleSearchChange("")}
-              >
-                <X size={12} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        {!collapsed ? <div className="sidebar-section-divider" aria-hidden /> : null}
         {!collapsed && showPinned ? (
           <section className="pinned-section" aria-label="Pinned">
             <div className="sidebar-projects-heading pinned-section__heading">
               <span className="sidebar-projects-heading__gutter" aria-hidden />
-              <span className="sidebar-projects-heading__icon" aria-hidden>
-                <Pin size={12} />
-              </span>
-              <span className="sidebar-projects-heading__title">Pinned</span>
+              <button
+                type="button"
+                className="tree-row__project-expand"
+                style={{ flex: 1 }}
+                aria-expanded={pinnedOpen}
+                aria-label={`${pinnedOpen ? "Collapse" : "Expand"} Pinned`}
+                onClick={() => setPinnedOpen((v) => !v)}
+              >
+                <span
+                  className={`sidebar-projects-heading__icon pinned-section__pin${pinnedOpen ? "" : " pinned-section__pin--closed"}`}
+                  aria-hidden
+                >
+                  <Pin size={12} />
+                </span>
+                <span className="sidebar-projects-heading__title">Pinned</span>
+              </button>
             </div>
+            {pinnedOpen ? (
             <DndContext
               sensors={activeDndSensors}
               collisionDetection={closestCenter}
@@ -1834,6 +1879,7 @@ export function LeftSidebar({
                 })}
               </SortableContext>
             </DndContext>
+            ) : null}
           </section>
         ) : null}
         {!collapsed && showPinned ? <div className="sidebar-section-divider" aria-hidden /> : null}
@@ -1977,11 +2023,7 @@ export function LeftSidebar({
         {!collapsed ? <div className="sidebar-section-divider" aria-hidden /> : null}
         <div className="sidebar-projects-heading">
           <span className="sidebar-projects-heading__gutter" aria-hidden />
-          {collapsed ? (
-            <span className="sidebar-projects-heading__mark" title="Projects">
-              <FolderTree size={15} aria-hidden />
-            </span>
-          ) : (
+          {collapsed ? null : (
             <>
               <span className="sidebar-projects-heading__icon" aria-hidden>
                 <FolderTree size={12} />
@@ -2064,11 +2106,27 @@ export function LeftSidebar({
               "No projects yet."
             )}
           </div>
-        ) : trimmedQuery && filteredTopLevelItems.length === 0 ? (
+        ) : !collapsed && trimmedQuery && filteredTopLevelItems.length === 0 ? (
           <div className="empty-state" style={{ padding: "var(--space-4)" }}>
             No matching projects or sessions
           </div>
         ) : null}
+        {collapsed ? (
+          <CollapsedProjectRail
+            projects={visibleProjects}
+            pinnedItems={orderedPinnedItems}
+            workspaces={orderedWorkspaces}
+            projectById={projectById}
+            worktreeMap={worktreeMap}
+            directSessionMap={directSessionMap}
+            sessionMap={sessionMap}
+            sessionStates={sessionStates}
+            activeProjectId={activeProjectId}
+            onSelectProject={(p) => setOpenProj((prev) => new Set(prev).add(p.id))}
+            onSelectWorktree={(p, w) => selectWorktree(p.id, w)}
+            onNewSession={(project, rect) => setPlusMenu({ project, rect })}
+          />
+        ) : (
         <DndContext
           sensors={activeDndSensors}
           collisionDetection={closestCenter}
@@ -2883,6 +2941,7 @@ export function LeftSidebar({
         })}
         </SortableContext>
         </DndContext>
+        )}
       </div>
       {!collapsed ? (
         <div className="left-sidebar__footer">

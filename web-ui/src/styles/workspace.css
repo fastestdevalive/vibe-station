@@ -401,55 +401,89 @@
   margin-right: var(--space-1);
 }
 
+/* Pinned section: the pin itself is the disclosure affordance — upright when
+   open, rotated 90deg anticlockwise when closed (no chevron). */
+.pinned-section__pin {
+  transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.pinned-section__pin--closed {
+  transform: rotate(-90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pinned-section__pin { transition: none; }
+}
+
 /* 1px separator between adjacent sidebar sections (Pinned/Workspaces/Projects). */
 .sidebar-section-divider {
   border-top: var(--border-width) solid var(--border-default);
   margin: var(--space-2) 0;
 }
 
-/* Sidebar fuzzy search input */
+/* Sidebar fuzzy search: laid out exactly like a .left-sidebar__nav-item row
+   (same padding, icon box, gap, font) so focusing it changes nothing but the
+   background (faded in) and the placeholder text. */
 .sidebar-search {
   position: relative;
   display: flex;
   align-items: center;
-  margin: var(--space-1) var(--space-2) var(--space-2);
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  box-sizing: border-box;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: text;
+  transition: background 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-search:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-search:focus-within {
+  background: var(--bg-input, var(--bg-secondary));
 }
 
 .sidebar-search__icon {
-  position: absolute;
-  left: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--fg-muted);
+  flex-shrink: 0;
+  color: inherit;
   pointer-events: none;
 }
 
 .sidebar-search__input {
-  width: 100%;
-  height: 28px;
-  background: var(--bg-input, var(--bg-secondary));
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-sm);
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--fg-primary);
+  font-family: inherit;
   font-size: var(--font-size-sm);
-  padding: 4px 24px 4px 28px;
+  font-weight: var(--font-weight-normal);
   outline: none;
   box-sizing: border-box;
-  transition: border-color var(--transition-fast);
 }
 
 .sidebar-search__input::placeholder {
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
 }
 
-.sidebar-search__input:focus {
-  border-color: var(--accent);
+.sidebar-search:focus-within .sidebar-search__input::placeholder {
+  color: var(--fg-muted);
 }
 
 .sidebar-search__clear {
   position: absolute;
   right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -515,9 +549,15 @@
 .left-sidebar__brand {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: var(--space-1) var(--space-1) var(--space-4);
+  justify-content: flex-start;
+  /* Left inset matches .left-sidebar__nav-item so the brand lines up with the icons below. */
+  padding: var(--space-1) var(--space-2) var(--space-4);
   user-select: none;
+}
+
+/* No brand row in the icon rail — it would just be a clipped glyph. */
+.left-sidebar--collapsed .left-sidebar__brand {
+  display: none;
 }
 
 .left-sidebar__brand-inner {
@@ -1703,6 +1743,7 @@
 }
 
 .changed-file-list {
+  background: var(--bg-sidebar-secondary);
   font-size: var(--font-size-sm);
   flex: 1;
   min-height: 0;
@@ -2917,6 +2958,7 @@
 }
 
 .pane-fill-host {
+  background: var(--bg-sidebar-secondary);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -3616,6 +3658,7 @@
 /* ── References Panel ───────────────────────────────────── */
 
 .references-panel {
+  background: var(--bg-sidebar-secondary);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -3630,7 +3673,7 @@
   gap: 6px;
   padding: 0 var(--space-2);
   border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar-secondary);
   flex-shrink: 0;
   box-sizing: border-box;
   /* Shared 35px top-bar height across all tools-pane side panels. One line,
@@ -4091,6 +4134,7 @@
 /* ── Outline panel ─────────────────────────────────────── */
 
 .outline-panel {
+  background: var(--bg-sidebar-secondary);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -4103,7 +4147,7 @@
   display: flex;
   align-items: center;
   border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar-secondary);
   flex-shrink: 0;
   box-sizing: border-box;
   /* Shared 35px top-bar height across all tools-pane side panels. */
@@ -6862,6 +6906,7 @@ button.dashboard-card {
 
 /* ── Search tool: content-search panel, grouped-by-file results ─────────────── */
 .search-panel {
+  background: var(--bg-sidebar-secondary);
   flex: 1;
   min-height: 0;
   display: flex;
@@ -6882,7 +6927,7 @@ button.dashboard-card {
   min-height: 35px;
   margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0;
   border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
+  background: var(--bg-sidebar-secondary);
 }
 
 .search-panel__controls {
@@ -7153,9 +7198,13 @@ button.dashboard-card {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* This tab's own body IS a file tree (the changed-file list) -- secondary
-     sidebar tone, same as .pane-fill-host .pane / .artifacts-list. */
-  background: var(--bg-sidebar-secondary);
+  /* The commit list is a full content page, not a side panel -- content
+     background. (The commit view's own side panel stays secondary.) */
+  background: var(--bg-primary);
+}
+
+.vcs-panel .vcs-topbar {
+  background: var(--bg-primary);
 }
 
 .vcs-panel__branch-chip {
@@ -7879,6 +7928,7 @@ button.dashboard-card {
 }
 
 .files-left-pane {
+  background: var(--bg-sidebar-secondary);
   position: relative;
   width: 100%;
   height: 100%;
@@ -7923,6 +7973,7 @@ button.dashboard-card {
  * FilesLeftPane: the inactive one is CSS-hidden (display:none, never a
  * `hidden` attribute) so neither unmounts on a rail-mode switch. */
 .files-left-pane__body {
+  background: var(--bg-sidebar-secondary);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -7988,6 +8039,7 @@ button.dashboard-card {
    Files topbar and VCS bar so the back-arrow breadcrumb never sits under the
    floating top-right fullscreen/orientation buttons plus outer inset. */
 .vcs-topbar {
+  background: var(--bg-sidebar-secondary);
   height: 35px;
   min-height: 35px;
   max-height: 35px;
@@ -8786,4 +8838,161 @@ body[data-tauri-os="macos"] .sidebar-header {
   flex-basis: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.files-left-pane .pane {
+  background: var(--bg-sidebar-secondary);
+}
+
+/* ── Collapsed sidebar rail: one tile per project + flyout ───────────────── */
+.collapsed-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.collapsed-rail__tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.collapsed-rail__tile:hover,
+.collapsed-rail__tile--open {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.collapsed-rail__tile--active {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+}
+
+.collapsed-rail__mono {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.01em;
+}
+
+.collapsed-rail__status {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: flex;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--bg-sidebar);
+}
+
+.collapsed-rail__flyout {
+  width: max-content;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.collapsed-rail__flyout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 200px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+}
+
+.collapsed-rail__flyout-title {
+  min-width: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+  text-decoration: none;
+}
+
+.menu-pop button.collapsed-rail__flyout-add {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  justify-content: center;
+}
+
+.collapsed-rail__flyout-section {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.collapsed-rail__flyout-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+  text-decoration: none;
+}
+
+.collapsed-rail__flyout-row:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.collapsed-rail__flyout-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed-rail__flyout-empty {
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.collapsed-rail__divider {
+  width: 20px;
+  border-top: var(--border-width) solid var(--border-default);
+  margin: var(--space-1) 0;
+}
+
+.collapsed-rail__flyout-row--active {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.collapsed-rail__flyout-hint {
+  margin-left: auto;
+  padding-left: var(--space-2);
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* Collapsed rail has no Projects heading (the tiles are self-explanatory). */
+.left-sidebar--collapsed .sidebar-projects-heading {
+  display: none;
 }
