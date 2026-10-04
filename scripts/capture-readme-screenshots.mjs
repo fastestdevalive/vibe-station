@@ -43,7 +43,7 @@ const RAW = [
   { id: "qr", demo: 0, at: 12400 },
   { id: "phone-list", demo: 0, at: 17000 },
   { id: "phone-chat", demo: 0, at: 27500 },
-  { id: "canvas", demo: 1, at: 19000 },
+  { id: "canvas", demo: 1, at: 18400 },
   { id: "markdown", demo: 2, at: 33000 },
 ];
 
