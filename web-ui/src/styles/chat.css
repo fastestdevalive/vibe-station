@@ -49,6 +49,29 @@
   color: var(--fg-secondary);
 }
 
+/* Subtle cue that a "Reset with handoff" is still running after the user
+   closed its overlay. Reopens the overlay on click. */
+.reset-progress-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+  background: var(--bg-secondary, #181818);
+  border: 1px solid var(--border-default, #333);
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.reset-progress-chip:hover {
+  opacity: 1;
+}
+.chat-pane__composer > .reset-progress-chip {
+  margin: 0 0 var(--space-1, 4px) var(--space-2, 8px);
+}
+
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
    narrower comment this replaces, which limited COLOR to waiting_for_human
    only; re-broadened by user request to also cover `working`). States that

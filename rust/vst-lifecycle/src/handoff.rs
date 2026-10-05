@@ -26,6 +26,9 @@ pub type HandoffResult<T> = Result<T, HandoffError>;
 
 const POLL_INTERVAL_MS: u64 = 100;
 const TIMEOUT_MS: u64 = 30_000;
+/// Pause between the bracketed paste and the submitting Enter so the TUI has
+/// finished ingesting the paste before it sees the keypress.
+const SUBMIT_DELAY_MS: u64 = 150;
 
 /// Attempt to deliver a handoff instruction to a session.
 /// Returns `false` for json-channel sessions (not applicable).
@@ -51,10 +54,17 @@ pub async fn run_handoff_turn(
             let target = tmux_name.to_string();
             let data = instruction.to_string();
             let buf_id = format!("handoff-{tmux_name}");
-            tokio::task::spawn_blocking(move || tmux.paste_buffer(&target, &buf_id, &data))
-                .await
-                .map_err(|e| HandoffError::Io(std::io::Error::other(e.to_string())))?
-                .map_err(|e| HandoffError::Io(std::io::Error::other(e.to_string())))?;
+            // paste_buffer uses bracketed paste, which only types the text into
+            // the TUI's input box — a separate Enter is required to submit it
+            // (same paste-then-submit convention as spawn and `/sessions/:id/send`).
+            tokio::task::spawn_blocking(move || -> Result<(), vst_proc::error::TmuxError> {
+                tmux.paste_buffer(&target, &buf_id, &data)?;
+                std::thread::sleep(Duration::from_millis(SUBMIT_DELAY_MS));
+                tmux.send_keys(&target, "", true)
+            })
+            .await
+            .map_err(|e| HandoffError::Io(std::io::Error::other(e.to_string())))?
+            .map_err(|e| HandoffError::Io(std::io::Error::other(e.to_string())))?;
         }
         Channel::Pty => {
             // Direct PTY write — caller supplies the instruction content; the

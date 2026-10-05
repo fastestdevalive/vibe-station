@@ -6,6 +6,7 @@ import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
 import { ResetProgressOverlay } from "./ResetProgressOverlay";
+import { ResetProgressChip } from "./ResetProgressChip";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
@@ -145,6 +146,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
               </div>
             </div>
             <div className="agent-pane-header__controls">
+              <ResetProgressChip sessionId={sessionId} />
               <div className="terminal-font-overlay__btns">
                 <button
                   type="button"
