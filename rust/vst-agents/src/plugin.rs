@@ -447,6 +447,15 @@ pub trait AgentPlugin: Send + Sync {
         None
     }
 
+    /// `true` when this adapter's refusal of the model from
+    /// [`Self::acp_initial_config_option`] is deterministic (an invalid value,
+    /// never a lost startup race), so the session layer must not respawn to
+    /// retry it. Default `false`: a refused model the adapter doesn't list is
+    /// retried (opencode's startup race).
+    fn acp_model_refusal_is_final(&self) -> bool {
+        false
+    }
+
     /// Extra `(config_id, value)` pairs applied via `session/set_config_option`
     /// right after the ACP session is created/loaded, before any prompt. Best
     /// effort: a failure is logged and ignored. Unlike

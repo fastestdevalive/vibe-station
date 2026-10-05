@@ -122,6 +122,7 @@ impl JsonAgentSession {
                 acp_meta,
                 model_option,
                 extra_options: self.0.plugin.acp_session_config_options(),
+                refusal_is_final: self.0.plugin.acp_model_refusal_is_final(),
                 on_first_retry: Some(&notify_retry),
             };
             let est = establish_with_recovery(
@@ -180,6 +181,19 @@ impl JsonAgentSession {
                 self.emit_status(&format!(
                     "the model changed during startup; the agent is running on the earlier \
                      selection \"{active_model}\" — re-select the model to switch"
+                ));
+            }
+            if let (true, Some(from)) = (est.resumed, &est.corrected_from) {
+                // `session/load` reported a different model than requested
+                // (the CLI re-reads it from the transcript) and the requested
+                // one was re-applied. Said out loud: a silent swap here is how
+                // sessions ended up on a smaller-context model unnoticed. The
+                // reported value may be a full id naming the same model as the
+                // requested alias, so this says "re-applied", not "switched".
+                self.emit_status(&format!(
+                    "resumed session reported model \"{from}\" — re-applied the \
+                     requested \"{}\"",
+                    wanted.as_deref().unwrap_or(&active_model),
                 ));
             }
             if est.load_fell_back {

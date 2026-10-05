@@ -2748,12 +2748,14 @@ impl SessionRoutes {
         if session.r#type == SessionType::Agent && session.mode_id.is_some() {
             let mode = self.resolve_resume_mode(session);
             let plugin = resolve_plugin(mode.cli);
+            let model = resume_model(session, &mode);
+            let model = model.as_deref();
             let restore_argv = plugin
                 .get_restore_command(RestoreArgs {
                     session,
                     project,
                     cwd,
-                    model: mode.model.as_deref(),
+                    model,
                 })
                 .await;
 
@@ -2769,7 +2771,7 @@ impl SessionRoutes {
                     },
                     session: session.clone(),
                     daemon_port: self.daemon_port,
-                    model: mode.model.clone(),
+                    model: model.map(str::to_string),
                 };
                 let mut env = build_vst_env(&BuildVstEnvOptions {
                     project: project.clone(),
@@ -2820,7 +2822,7 @@ impl SessionRoutes {
                         session,
                         project,
                         cwd,
-                        model: mode.model.as_deref(),
+                        model,
                     })
                     .await;
             }
@@ -2849,7 +2851,7 @@ impl SessionRoutes {
                         daemon_port: self.daemon_port,
                         system_prompt: built.system_prompt,
                         task_prompt: built.task_prompt,
-                        model: mode.model.clone(),
+                        model: model.map(str::to_string),
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
                     })
@@ -2870,7 +2872,7 @@ impl SessionRoutes {
                         daemon_port: self.daemon_port,
                         system_prompt: built.system_prompt,
                         task_prompt: built.task_prompt,
-                        model: mode.model.clone(),
+                        model: model.map(str::to_string),
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
                     })
@@ -4004,12 +4006,14 @@ impl SessionRoutes {
                 session.tmux_name = tty_tmux_name.clone();
                 session.channel = Some(new_channel);
                 session.use_tmux = new_use_tmux;
+                // The Rich Chat model switch carries over to the terminal.
+                let tty_model = resume_model(&session, &mode);
                 self.spawn_tty_for_agent(
                     &project,
                     worktree.as_ref(),
                     &mut session,
                     &*plugin,
-                    mode.model.as_deref(),
+                    tty_model.as_deref(),
                     if mode.context.is_empty() {
                         None
                     } else {
@@ -5374,9 +5378,57 @@ pub fn group_json_output(events: &[vst_types::NormalizedEvent]) -> String {
     turns.join("\n\n")
 }
 
+/// The model a resumed/toggled agent should restart on: the session's own
+/// Rich Chat model switch (`model_override`) outranks the mode's model, or a
+/// resume silently reverts it. Only while the mode still exists — a deleted
+/// mode's fallback (`resolve_resume_mode`) may name a different CLI than the
+/// one the override was picked for, so the old no-model behaviour applies.
+fn resume_model(session: &SessionRecord, mode: &Mode) -> Option<String> {
+    let mode_exists = session
+        .mode_id
+        .as_deref()
+        .is_some_and(|id| find_mode(id).is_some());
+    pick_resume_model(
+        session.model_override.as_deref(),
+        mode.model.as_deref(),
+        mode_exists,
+    )
+}
+
+fn pick_resume_model(
+    model_override: Option<&str>,
+    mode_model: Option<&str>,
+    mode_exists: bool,
+) -> Option<String> {
+    if mode_exists {
+        model_override.or(mode_model).map(str::to_string)
+    } else {
+        mode_model.map(str::to_string)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::shell_command_parts;
+    use super::{pick_resume_model, shell_command_parts};
+
+    #[test]
+    fn resume_prefers_the_rich_chat_model_override_over_the_mode_model() {
+        assert_eq!(
+            pick_resume_model(Some("opus"), Some("sonnet"), true).as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            pick_resume_model(None, Some("sonnet"), true).as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(pick_resume_model(None, None, true), None);
+    }
+
+    #[test]
+    fn resume_ignores_the_override_when_the_mode_was_deleted() {
+        // The deleted-mode fallback may resolve to another CLI's plugin.
+        assert_eq!(pick_resume_model(Some("provider/x"), None, false), None);
+    }
 
     #[test]
     fn shell_command_parts_uses_c_not_lc_and_execs() {
