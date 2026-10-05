@@ -11,6 +11,7 @@ import { Composer } from "@/components/chat/Composer";
 import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
+import { ResetProgressChip } from "./ResetProgressChip";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
@@ -452,6 +453,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 </button>
               </div>
             ) : null}
+            <ResetProgressChip sessionId={sessionId} />
             <TodoStrip events={events} liveState={liveState} />
             <Composer
             key={`${sessionId}:${composerKey}`}
