@@ -192,7 +192,19 @@ mod claude_plugin {
         );
         assert_eq!(p.acp_initial_config_option(""), None);
         // Plugins without the hook are untouched.
-        assert_eq!(create_claude_plugin().acp_initial_config_option("x"), None);
+        assert_eq!(create_cursor_plugin().acp_initial_config_option("x"), None);
+    }
+
+    #[test]
+    fn claude_re_pins_model_over_acp_so_session_load_cannot_drift() {
+        let p = create_claude_plugin();
+        assert_eq!(
+            p.acp_initial_config_option("sonnet"),
+            Some(("model".to_string(), "sonnet".to_string()))
+        );
+        assert_eq!(p.acp_initial_config_option(""), None);
+        assert!(p.acp_model_refusal_is_final());
+        assert!(!create_opencode_plugin().acp_model_refusal_is_final());
     }
 
     #[tokio::test]

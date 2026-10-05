@@ -122,6 +122,11 @@ pub(super) struct Established<T> {
     /// A `session/load` was attempted but rejected, so a fresh session was made.
     pub load_fell_back: bool,
     pub model: ModelState,
+    /// The model the session reported before a successful
+    /// `set_config_option` moved it to the wanted one (`None` when no
+    /// correction was needed). On a resumed session this is the model the
+    /// CLI silently restored, which the caller surfaces to the user.
+    pub corrected_from: Option<String>,
     /// Connections spawned to get here (1 = first try succeeded).
     pub attempts: usize,
 }
@@ -137,10 +142,23 @@ pub(super) struct EstablishParams<'a> {
     pub model_option: Option<(String, String)>,
     /// Best-effort `(config_id, value)` pairs from `acp_session_config_options`.
     pub extra_options: Vec<(String, String)>,
+    /// From `acp_model_refusal_is_final`: a refused model set never retries.
+    pub refusal_is_final: bool,
     /// Called once, on the FIRST mismatch, only when a retry will actually
     /// follow: `(wanted, actual)`. Lets the caller tell the user why the chat
     /// is about to pause.
     pub on_first_retry: Option<&'a RetryNotifier<'a>>,
+}
+
+/// Outcome of [`establish_once`].
+struct Attempt {
+    session_id: String,
+    resumed: bool,
+    load_fell_back: bool,
+    model: ModelState,
+    corrected_from: Option<String>,
+    /// True when retrying cannot help (see `refusal_is_final`).
+    hopeless: bool,
 }
 
 /// One attempt on an already-initialized connection: load-or-new, then verify
@@ -149,7 +167,7 @@ async fn establish_once<T: AcpTransport>(
     conn: &T,
     init: InitializeOutcome,
     p: &EstablishParams<'_>,
-) -> Result<(String, bool, bool, ModelState, bool), AcpTransportError> {
+) -> Result<Attempt, AcpTransportError> {
     let mut reported: Option<String> = None;
     let mut adapter_models: Vec<String> = Vec::new();
     let mut load_fell_back = false;
@@ -182,8 +200,8 @@ async fn establish_once<T: AcpTransport>(
         }
     }
 
-    // True when retrying cannot help (see `refusal_is_final`).
     let mut hopeless = false;
+    let mut corrected_from = None;
     let model = match &p.model_option {
         None => ModelState::Unchecked,
         // An empty wanted value carries no preference: nothing to compare or
@@ -194,10 +212,14 @@ async fn establish_once<T: AcpTransport>(
                 ModelState::Confirmed
             } else {
                 match conn.set_config_option(config_id, wanted).await {
-                    Ok(()) => ModelState::Confirmed,
+                    Ok(()) => {
+                        corrected_from = reported;
+                        ModelState::Confirmed
+                    }
                     Err(e) => match reported {
                         Some(actual) => {
-                            hopeless = refusal_is_final(&adapter_models, wanted);
+                            hopeless =
+                                p.refusal_is_final || refusal_is_final(&adapter_models, wanted);
                             tracing::warn!(%config_id, %wanted, %actual, error = %e, hopeless,
                                 "model option not applied; session is on a different model");
                             ModelState::Mismatch { actual }
@@ -214,7 +236,14 @@ async fn establish_once<T: AcpTransport>(
             }
         }
     };
-    Ok((session_id, resumed, load_fell_back, model, hopeless))
+    Ok(Attempt {
+        session_id,
+        resumed,
+        load_fell_back,
+        model,
+        corrected_from,
+        hopeless,
+    })
 }
 
 /// Spawn (via `make_conn`, which must also `initialize`) and establish a
@@ -236,16 +265,15 @@ where
     let mut attempt = 1;
     loop {
         let (conn, init) = make_conn().await?;
-        let (session_id, resumed, load_fell_back, model, hopeless) =
-            match establish_once(&conn, init, p).await {
-                Ok(r) => r,
-                Err(e) => {
-                    conn.dispose().await;
-                    return Err(e);
-                }
-            };
-        if let ModelState::Mismatch { actual } = &model {
-            if !hopeless
+        let a = match establish_once(&conn, init, p).await {
+            Ok(r) => r,
+            Err(e) => {
+                conn.dispose().await;
+                return Err(e);
+            }
+        };
+        if let ModelState::Mismatch { actual } = &a.model {
+            if !a.hopeless
                 && attempt < budget.max_attempts.max(1)
                 && started.elapsed() < budget.max_elapsed
             {
@@ -267,10 +295,11 @@ where
         }
         return Ok(Established {
             conn,
-            session_id,
-            resumed,
-            load_fell_back,
-            model,
+            session_id: a.session_id,
+            resumed: a.resumed,
+            load_fell_back: a.load_fell_back,
+            model: a.model,
+            corrected_from: a.corrected_from,
             attempts: attempt,
         });
     }
@@ -392,6 +421,7 @@ mod tests {
         fail_new_on_spawn: Option<usize>,
         budget: RetryBudget,
         models: Vec<&'static str>,
+        refusal_is_final: bool,
         on_first_retry: Option<Box<RetryNotifier<'static>>>,
     }
 
@@ -411,6 +441,7 @@ mod tests {
                 fail_new_on_spawn: None,
                 budget: budget(5),
                 models: vec![],
+                refusal_is_final: false,
                 on_first_retry: None,
             }
         }
@@ -441,6 +472,7 @@ mod tests {
             acp_meta: None,
             model_option: sc.model.map(|m| ("model".to_string(), m.to_string())),
             extra_options: Vec::new(),
+            refusal_is_final: sc.refusal_is_final,
             on_first_retry: sc
                 .on_first_retry
                 .as_ref()
@@ -510,6 +542,7 @@ mod tests {
     #[tokio::test]
     async fn set_config_option_success_fixes_a_wrong_model_without_respawn() {
         let (est, _, spawns) = run(vec![Some("wrong")], true, Some("good"), 5).await;
+        assert_eq!(est.corrected_from.as_deref(), Some("wrong"));
         assert_eq!((spawns, est.model), (1, ModelState::Confirmed));
     }
 
@@ -588,6 +621,41 @@ mod tests {
         assert!(est.resumed);
         assert_eq!(est.session_id, "acp-old");
         assert_eq!(*log, ["load", "set"]);
+        assert_eq!(est.corrected_from.as_deref(), Some("stored-other"));
+    }
+
+    #[tokio::test]
+    async fn resumed_session_already_on_the_wanted_model_records_no_correction() {
+        let mut sc = Script::new(vec![Some("unused")], true, Some("good"));
+        sc.prior = Some("acp-old");
+        sc.load_model = Some("good");
+        let (est, log, _) = run_script(sc).await;
+        let est = est.unwrap();
+        assert_eq!(est.model, ModelState::Confirmed);
+        assert_eq!(est.corrected_from, None);
+        assert_eq!(
+            *log,
+            ["load"],
+            "no set when the reported model already matches"
+        );
+    }
+
+    /// Claude: `session/load` makes the CLI restore the transcript's model
+    /// (e.g. `claude-sonnet-4-6`, 200k) and ignores `_meta`'s model; only a
+    /// follow-up `set_config_option` re-pins the requested alias. The adapter
+    /// lists the alias, so a refusal is final — no respawn loop.
+    #[tokio::test]
+    async fn claude_style_load_drift_is_re_pinned_without_respawn() {
+        let mut sc = Script::new(vec![Some("unused")], true, Some("sonnet"));
+        sc.prior = Some("acp-old");
+        sc.load_model = Some("claude-sonnet-4-6");
+        sc.models = vec!["default", "sonnet", "opus"];
+        let (est, log, spawns) = run_script(sc).await;
+        let est = est.unwrap();
+        assert_eq!((spawns, est.model.clone()), (1, ModelState::Confirmed));
+        assert!(est.resumed);
+        assert_eq!(est.corrected_from.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(*log, ["load", "set"]);
     }
 
     #[tokio::test]
@@ -625,6 +693,27 @@ mod tests {
         let est = est.unwrap();
         assert_eq!((spawns, est.attempts), (1, 1));
         assert!(matches!(est.model, ModelState::Mismatch { .. }));
+        assert!(!log.contains(&"dispose".to_string()), "last conn is kept");
+    }
+
+    /// Claude: an unlisted value the adapter can't resolve (stale override,
+    /// full id) is refused deterministically — never a respawn loop.
+    #[tokio::test]
+    async fn plugin_declared_final_refusal_never_respawns() {
+        let mut sc = Script::new(vec![Some("unused")], false, Some("claude-gone-1"));
+        sc.prior = Some("acp-old");
+        sc.load_model = Some("claude-sonnet-4-6");
+        sc.models = vec!["default", "sonnet"];
+        sc.refusal_is_final = true;
+        let (est, log, spawns) = run_script(sc).await;
+        let est = est.unwrap();
+        assert_eq!((spawns, est.attempts), (1, 1));
+        assert_eq!(
+            est.model,
+            ModelState::Mismatch {
+                actual: "claude-sonnet-4-6".into()
+            }
+        );
         assert!(!log.contains(&"dispose".to_string()), "last conn is kept");
     }
 

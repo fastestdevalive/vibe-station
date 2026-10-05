@@ -268,7 +268,7 @@ send button's `aria-label` reads "Interrupts and steers the running turn" when
 
 | CLI | Window | Knob exposed? | Notes |
 |---|---|---|---|
-| claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and remaps `claude-sonnet-4-5` → `[1m]` variant and `claude-opus-4-5` → `[1m]` variant | Other models fall back to the default ceiling |
+| claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and the model on `session/new` | The adapter ignores `_meta` on `session/load`, where the CLI restores the transcript's model (e.g. a `sonnet` mode came back as `claude-sonnet-4-6`, 200k). `acp_initial_config_option()` re-pins the model with `session/set_config_option` after every load, and a status event says so |
 | opencode / cursor / agy | CLI-managed | None | No ACP field exposes it |
 | codex | CLI-managed | None | No ACP field exposes it |
 | pi | CLI-managed | None | Terminal only — no ACP |

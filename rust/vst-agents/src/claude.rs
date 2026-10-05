@@ -615,6 +615,30 @@ impl AgentPlugin for ClaudePlugin {
         }
         Some(serde_json::json!({ "claudeCode": { "options": options } }))
     }
+
+    /// `_meta`'s model above is honoured only by `session/new`. On
+    /// `session/load` claude-agent-acp ignores `_meta` and the CLI restores
+    /// the model recorded in the transcript — for a `sonnet` mode that is
+    /// `claude-sonnet-4-6` (200k) instead of the alias's current model (1M),
+    /// silently, after every adapter respawn / model switch / channel toggle.
+    /// An explicit `session/set_config_option {configId: "model"}` after
+    /// load re-pins it (verified against adapter 0.70.0: the next turn runs
+    /// the requested model, 1M window). The adapter's reported `currentValue`
+    /// is not always the alias even when the model is right (a fresh session
+    /// reports the default id), so the session layer may re-assert a model
+    /// that already applies — harmless. Empty = no preference, never sent.
+    fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
+        if model.is_empty() {
+            return None;
+        }
+        Some(("model".to_string(), model.to_string()))
+    }
+
+    /// claude-agent-acp rejects a model it can't resolve with "Invalid value"
+    /// every time — there is no startup race to win by respawning.
+    fn acp_model_refusal_is_final(&self) -> bool {
+        true
+    }
 }
 
 /// The `bun` binary that runs the claude ACP adapter. `bun` (not `node`) is
