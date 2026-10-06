@@ -616,17 +616,30 @@ impl AgentPlugin for ClaudePlugin {
         Some(serde_json::json!({ "claudeCode": { "options": options } }))
     }
 
+    /// claude-agent-acp ranks `ANTHROPIC_MODEL` above every other model
+    /// source. Inherited from the user's shell (e.g. `claude-sonnet-4-6`), it
+    /// made `session/new` report the env model while turns ran `_meta`'s,
+    /// and on `session/load` the adapter re-asserted it with `setModel`, so
+    /// turns ran it (200k) instead of the mode's `sonnet` (1M). Pinning the
+    /// var to the session's model removes that source of drift. Empty = the
+    /// account default: the user's own `ANTHROPIC_MODEL`, if any, is left
+    /// alone, matching a terminal `claude` with no `--model`.
+    fn acp_model_env(&self, model: &str) -> BTreeMap<String, String> {
+        if model.is_empty() {
+            return BTreeMap::new();
+        }
+        BTreeMap::from([("ANTHROPIC_MODEL".to_string(), model.to_string())])
+    }
+
     /// `_meta`'s model above is honoured only by `session/new`. On
-    /// `session/load` claude-agent-acp ignores `_meta` and the CLI restores
-    /// the model recorded in the transcript — for a `sonnet` mode that is
-    /// `claude-sonnet-4-6` (200k) instead of the alias's current model (1M),
-    /// silently, after every adapter respawn / model switch / channel toggle.
-    /// An explicit `session/set_config_option {configId: "model"}` after
-    /// load re-pins it (verified against adapter 0.70.0: the next turn runs
-    /// the requested model, 1M window). The adapter's reported `currentValue`
-    /// is not always the alias even when the model is right (a fresh session
-    /// reports the default id), so the session layer may re-assert a model
-    /// that already applies — harmless. Empty = no preference, never sent.
+    /// `session/load` the adapter ignores `_meta`: the session resumes on the
+    /// transcript's model (or the env one, see [`Self::acp_model_env`]). An
+    /// explicit `session/set_config_option {configId: "model"}` after load
+    /// re-pins it (verified against adapter 0.70.0: the next turn runs the
+    /// requested model, 1M window). The reported `currentValue` can be a full
+    /// id naming the requested alias's model, so the session layer may
+    /// re-assert a model that already applies — harmless. Empty = no
+    /// preference, never sent.
     fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
         if model.is_empty() {
             return None;

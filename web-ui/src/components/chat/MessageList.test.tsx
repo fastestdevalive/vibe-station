@@ -534,9 +534,9 @@ describe("MessageList footer-resize-aware auto-scroll", () => {
   // via `listRef.current.parentElement`, so no extra DOM wiring is needed to
   // simulate it here.
   function mockResizeObserver() {
-    let captured: (() => void) | null = null;
+    let captured: ((entries?: ResizeObserverEntry[]) => void) | null = null;
     class MockResizeObserver {
-      constructor(cb: () => void) {
+      constructor(cb: (entries?: ResizeObserverEntry[]) => void) {
         captured = cb;
       }
       observe() {}
@@ -546,7 +546,7 @@ describe("MessageList footer-resize-aware auto-scroll", () => {
     const original = globalThis.ResizeObserver;
     globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
     return {
-      trigger: () => captured?.(),
+      trigger: (entries?: ResizeObserverEntry[]) => captured?.(entries),
       restore: () => {
         globalThis.ResizeObserver = original;
       },
@@ -585,6 +585,91 @@ describe("MessageList footer-resize-aware auto-scroll", () => {
     } finally {
       ro.restore();
     }
+  });
+
+  // Moving a scroller (or an ancestor) in the DOM — what React does to a keyed
+  // panel that changes position when the agent/tool split flips orientation —
+  // makes the browser zero its `scrollTop` with NO `scroll` event. The only
+  // signal is the size change waking the ResizeObserver.
+  describe("scrollTop silently reset by a DOM move (orientation flip)", () => {
+    function setup(ro: ReturnType<typeof mockResizeObserver>) {
+      const { container } = render(<MessageList events={[userEvent("t1", "hi")]} pending={[]} />);
+      Object.defineProperty(container, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(container, "clientHeight", { value: 300, configurable: true });
+      return { container, ro };
+    }
+
+    it("restores the reading position when the reader was scrolled up in history", () => {
+      const ro = mockResizeObserver();
+      try {
+        const { container } = setup(ro);
+        container.scrollTop = 250; // distance = 450 → away from the bottom
+        fireEvent.scroll(container);
+        container.scrollTop = 0; // the move's silent reset (no scroll event)
+        act(() => ro.trigger());
+        expect(container.scrollTop).toBe(250);
+      } finally {
+        ro.restore();
+      }
+    });
+
+    it("returns to the live edge when the reader was following it", () => {
+      const ro = mockResizeObserver();
+      try {
+        const { container } = setup(ro);
+        container.scrollTop = 700; // distance = 0 → at the bottom
+        fireEvent.scroll(container);
+        container.scrollTop = 0;
+        act(() => ro.trigger());
+        expect(container.scrollTop).toBe(1000);
+      } finally {
+        ro.restore();
+      }
+    });
+
+    it("keeps following the live edge when a resize reflow pushes the bottom out of reach", () => {
+      const ro = mockResizeObserver();
+      try {
+        const { container } = setup(ro);
+        container.scrollTop = 700; // at the bottom (1000 - 300)
+        fireEvent.scroll(container);
+        // The pane narrows: content reflows taller under the same scrollTop.
+        Object.defineProperty(container, "scrollHeight", { value: 1800, configurable: true });
+        act(() => ro.trigger([{ target: container } as unknown as ResizeObserverEntry]));
+        expect(container.scrollTop).toBe(1800);
+      } finally {
+        ro.restore();
+      }
+    });
+
+    it("does not yank a reader who is away from the bottom when the pane resizes", () => {
+      const ro = mockResizeObserver();
+      try {
+        const { container } = setup(ro);
+        container.scrollTop = 250;
+        fireEvent.scroll(container); // away from the bottom
+        Object.defineProperty(container, "scrollHeight", { value: 1800, configurable: true });
+        act(() => ro.trigger([{ target: container } as unknown as ResizeObserverEntry]));
+        expect(container.scrollTop).toBe(250);
+      } finally {
+        ro.restore();
+      }
+    });
+
+    it("leaves a genuine scroll to the top alone", () => {
+      const ro = mockResizeObserver();
+      try {
+        const { container } = setup(ro);
+        container.scrollTop = 250;
+        fireEvent.scroll(container);
+        container.scrollTop = 0; // the user scrolled up to the very top…
+        fireEvent.scroll(container); // …which, unlike a move, DOES fire a scroll event
+        act(() => ro.trigger());
+        expect(container.scrollTop).toBe(0);
+      } finally {
+        ro.restore();
+      }
+    });
   });
 });
 

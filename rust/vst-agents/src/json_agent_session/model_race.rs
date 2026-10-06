@@ -640,10 +640,11 @@ mod tests {
         );
     }
 
-    /// Claude: `session/load` makes the CLI restore the transcript's model
-    /// (e.g. `claude-sonnet-4-6`, 200k) and ignores `_meta`'s model; only a
-    /// follow-up `set_config_option` re-pins the requested alias. The adapter
-    /// lists the alias, so a refusal is final — no respawn loop.
+    /// Claude: `session/load` ignores `_meta`'s model and resumes on another
+    /// one (the transcript's, or an inherited `ANTHROPIC_MODEL` the adapter
+    /// re-asserts, e.g. `claude-sonnet-4-6`, 200k); only a follow-up
+    /// `set_config_option` re-pins the requested alias. The adapter lists the
+    /// alias, so a refusal is final — no respawn loop.
     #[tokio::test]
     async fn claude_style_load_drift_is_re_pinned_without_respawn() {
         let mut sc = Script::new(vec![Some("unused")], true, Some("sonnet"));
