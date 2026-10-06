@@ -207,6 +207,33 @@ mod claude_plugin {
         assert!(!create_opencode_plugin().acp_model_refusal_is_final());
     }
 
+    #[test]
+    fn claude_pins_anthropic_model_env_to_the_session_model() {
+        let p = create_claude_plugin();
+        let env = p.acp_model_env("sonnet");
+        assert_eq!(
+            env.get("ANTHROPIC_MODEL").map(|s| s.as_str()),
+            Some("sonnet")
+        );
+        assert_eq!(env.len(), 1);
+        // No mode model: the user's own env is left alone, not forced.
+        assert!(p.acp_model_env("").is_empty());
+        // Plugins without the hook add nothing.
+        assert!(create_opencode_plugin().acp_model_env("x").is_empty());
+        assert!(create_cursor_plugin().acp_model_env("auto").is_empty());
+    }
+
+    #[test]
+    fn claude_terminal_env_leaves_anthropic_model_to_the_model_flag() {
+        // Terminal: `--model` already beats an inherited `ANTHROPIC_MODEL`,
+        // and without a mode model the user's env is their default.
+        let p = create_claude_plugin();
+        let mut cfg = launch_cfg_worktree();
+        cfg.model = Some("sonnet".to_string());
+        let env = p.get_environment(&cfg);
+        assert!(!env.contains_key("ANTHROPIC_MODEL"));
+    }
+
     #[tokio::test]
     async fn restore_command_null_when_no_uuid() {
         let home = tempfile::tempdir().unwrap();

@@ -585,6 +585,14 @@ export function MessageList({
   // top of history (that would be a mount-time regression).
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
+  // `scrollTop` as of the last `scroll` event. The browser resets a scroller's
+  // `scrollTop` to 0 — silently, with NO `scroll` event — when the scroller or
+  // an ancestor is detached and re-inserted, which is what React does to a
+  // keyed sibling that changes position (the agent/tool-panel orientation
+  // flip reorders the panels). So a `scrollTop` of 0 here while this ref says
+  // otherwise means "the node was moved", not "the user scrolled to the top"
+  // (that would have updated this ref). See the ResizeObserver effect below.
+  const lastScrollTopRef = useRef(0);
   // Read through a ref so the once-registered scroll listener below (empty
   // deps, passive) never has to re-attach when the parent passes a new
   // callback identity.
@@ -804,6 +812,7 @@ export function MessageList({
     const container = listRef.current?.parentElement;
     if (!container) return;
     const onScroll = () => {
+      lastScrollTopRef.current = container.scrollTop;
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       const near = distance < 80;
       applyAtBottom(near);
@@ -940,9 +949,27 @@ export function MessageList({
   useEffect(() => {
     const container = listRef.current?.parentElement;
     if (!container || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => {
+    const ro = new ResizeObserver((entries?: ResizeObserverEntry[]) => {
+      // Re-attached after a DOM move (e.g. the agent/tool-panel orientation
+      // flip): the browser zeroed `scrollTop` without a `scroll` event, and the
+      // size change of the move is what woke this observer. Put the reader
+      // back where they were — the live edge if they were following it, else
+      // the same offset — BEFORE the distance check below, which would
+      // otherwise read the bogus 0 as "far from the bottom" and leave the
+      // chat stranded at the top. The write fires a real `scroll` event, which
+      // also re-syncs the tracked state and the virtualizer's own offset.
+      if (container.scrollTop === 0 && lastScrollTopRef.current > 0) {
+        container.scrollTop = atBottomRef.current ? container.scrollHeight : lastScrollTopRef.current;
+        return;
+      }
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (distance < 80) {
+      // The scroller itself changed size (not just its content) while the
+      // reader was following the live edge (per the last `scroll` event): the
+      // reflow — e.g. a narrower pane after the orientation flip — grows the
+      // content under a `scrollTop` that no longer reaches the bottom, so the
+      // fresh `distance` alone would drop them out of follow-mode.
+      const resizedWhileFollowing = atBottomRef.current && !!entries?.some((e) => e.target === container);
+      if (distance < 80 || resizedWhileFollowing) {
         // Not `bottomRef.current.scrollIntoView(...)`: that walks EVERY
         // scrollable ancestor (including `overflow: hidden` boxes, which are
         // still programmatically scrollable), so an unrelated resize (a

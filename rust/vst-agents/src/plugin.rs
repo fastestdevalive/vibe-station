@@ -414,6 +414,17 @@ pub trait AgentPlugin: Send + Sync {
         None
     }
 
+    /// Extra env vars for the ACP adapter process, derived from the model the
+    /// connection is being set up for. Merged over the daemon's inherited env
+    /// and the launch spec's own env (a var can be overridden, not removed).
+    /// For a CLI that reads its model from the environment with a priority
+    /// above the one requested over ACP (claude: `ANTHROPIC_MODEL`), so a
+    /// value inherited from the user's shell cannot override the session's
+    /// model. Default: none.
+    fn acp_model_env(&self, _model: &str) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     /// `true` when `list_models()` is the live, authoritative model list (the
     /// CLI reports exactly what the account can use), so a model outside it
     /// — or a failure to fetch it — is a hard error. Default `false`: the

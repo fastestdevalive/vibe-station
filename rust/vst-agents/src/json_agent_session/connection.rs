@@ -100,6 +100,12 @@ impl JsonAgentSession {
             };
             // ACP meta for the agent adapter (forward model & options without branching on CLI id).
             let acp_meta = self.0.plugin.acp_meta(&active_model);
+            // Model-derived adapter env, from the same model as `_meta` so a
+            // redone round never spawns with a stale one.
+            let mut round_spec = spec_with_vst_env.clone();
+            round_spec
+                .env
+                .extend(self.0.plugin.acp_model_env(&active_model));
 
             // Some adapters ignore `_meta` and only take a model through an
             // explicit `session/set_config_option`, and some lose a startup race
@@ -127,7 +133,7 @@ impl JsonAgentSession {
             };
             let est = establish_with_recovery(
                 || {
-                    let spec = spec_with_vst_env.clone();
+                    let spec = round_spec.clone();
                     async move {
                         let conn = AcpConnection::new(spec);
                         match conn.initialize().await {
@@ -185,8 +191,9 @@ impl JsonAgentSession {
             }
             if let (true, Some(from)) = (est.resumed, &est.corrected_from) {
                 // `session/load` reported a different model than requested
-                // (the CLI re-reads it from the transcript) and the requested
-                // one was re-applied. Said out loud: a silent swap here is how
+                // (the transcript's, or one the adapter re-asserted from its
+                // env) and the requested one was re-applied. Said out loud: a
+                // silent swap here is how
                 // sessions ended up on a smaller-context model unnoticed. The
                 // reported value may be a full id naming the same model as the
                 // requested alias, so this says "re-applied", not "switched".

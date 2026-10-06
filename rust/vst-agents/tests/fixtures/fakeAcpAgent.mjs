@@ -42,6 +42,9 @@
 //     META_OUT_FILE, as `{ hasMeta, meta }`. The file is ALWAYS written (with
 //     hasMeta:false when `_meta` was omitted) so tests can assert absence
 //     positively rather than relying on a missing file.
+//   ENV_ECHO_VAR + ENV_OUT_FILE (any mode) — on every session/new and
+//     session/load, write `{ value }` (the spawn-time value of the env var
+//     named by ENV_ECHO_VAR, or null) to ENV_OUT_FILE.
 //   FAKE_ACP_MODE=usage_update — like normal, but session/prompt first sends a
 //     mid-turn `usage_update` session/update (used/size/cost from
 //     FAKE_ACP_USAGE_USED / FAKE_ACP_USAGE_SIZE / FAKE_ACP_USAGE_COST_USD,
@@ -99,6 +102,11 @@ function write(obj) {
 // echo_meta mode: record the `_meta` of a session/new|load request exactly as
 // it arrived, so a test can assert both its contents and its absence.
 function recordMeta(params) {
+  // Any mode: record the value of env var ENV_ECHO_VAR this process was
+  // spawned with, so a test can assert on the adapter's launch env.
+  if (process.env.ENV_ECHO_VAR && process.env.ENV_OUT_FILE) {
+    writeFileSync(process.env.ENV_OUT_FILE, JSON.stringify({ value: process.env[process.env.ENV_ECHO_VAR] ?? null }));
+  }
   if (mode !== "echo_meta" || !process.env.META_OUT_FILE) return;
   const meta = params?._meta;
   writeFileSync(process.env.META_OUT_FILE, JSON.stringify({ hasMeta: meta !== undefined, meta: meta ?? null }));
