@@ -2,6 +2,12 @@ import { useEffect, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { Project, Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import {
+  isTabVisibleAgent,
+  pickFirstDirectAgent,
+  pickNextDirectAgent,
+  resolveSupersededChain,
+} from "@/lib/sessionVisibility";
 
 /**
  * Re-entrant, ping-pong-safe URL↔store sync for the project workspace
@@ -37,6 +43,10 @@ export function useProjectWorkspaceUrlSync(
   const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const lastAppliedRef = useRef<{ pid: string | null; sid: string | null } | null>(null);
+  // Decision 10 — snapshot of the tab-visible direct agent ids from the
+  // PREVIOUS effect run, replaced (never accumulated) on every run so a row
+  // that was already hidden at the previous run never fires the guard.
+  const lastVisibleRef = useRef<Set<string> | null>(null);
   // Set when the read effect redirects away (unknown/hidden project) so the
   // write effect bails for that same tick instead of reading the still-stale
   // store and navigating back to the previous project (ping-pong).
@@ -60,13 +70,40 @@ export function useProjectWorkspaceUrlSync(
       navigate("/", { replace: true });
       return;
     }
-    // Only accept a sessionId that is actually a direct agent OF this project.
-    const sid =
-      params.sessionId &&
-      sessions.some((s) => s.id === params.sessionId && s.projectId === pid && s.worktreeId === null && s.type === "agent")
-        ? params.sessionId
-        : null;
+    // Resolve the sessionId to apply. Decision 9: strict tab-visibility
+    // validation on FIRST apply only (mount, re-entry, full reload); later
+    // param changes (a sidebar click on a superseded row) accept any listed
+    // direct agent of this project.
+    const firstApply = lastAppliedRef.current === null;
     const store = useWorkspaceStore.getState();
+    // Seed the open-tab set up front so the fallback picks below (and any
+    // first visit via a direct sidebar link) operate on the full tab set.
+    store.seedProjectAgentTabsIfEmpty(pid, sessions);
+    let sid: string | null;
+    if (params.sessionId) {
+      const listed = sessions.find(
+        (s) => s.id === params.sessionId && s.projectId === pid && s.worktreeId === null && s.type === "agent",
+      );
+      if (listed && (isTabVisibleAgent(listed) || !firstApply)) {
+        sid = listed.id;
+      } else {
+        // Present but invalid/hidden. Keep the store's active id if it's still
+        // a valid visible direct tab of this project (so a store-side pick —
+        // e.g. the guard's neighbor re-selection — is never overwritten by the
+        // URL's stale sid); else the first open tab; else null (Project tab).
+        const openTabs = useWorkspaceStore.getState().openDirectAgentTabsByProject[pid] ?? [];
+        const active = store.activeSessionId;
+        const activeValid =
+          active != null &&
+          store.activeDirectContextId === pid &&
+          openTabs.includes(active) &&
+          sessions.some((s) => s.id === active && isTabVisibleAgent(s));
+        sid = activeValid ? active : pickFirstDirectAgent(openTabs, sessions);
+      }
+    } else {
+      // No sessionId in the URL → Project home tab (R1).
+      sid = null;
+    }
     // Skip only when BOTH the ref and the live store already agree the
     // project/no-worktree context is right — deliberately NOT checking
     // activeSessionId here: a same-tick programmatic write (e.g. "New direct
@@ -82,13 +119,57 @@ export function useProjectWorkspaceUrlSync(
     // main path in via the sidebar.
     if (store.activeProjectId !== pid || store.activeWorktreeId != null) store.selectProject(pid);
     store.setActiveDirectContext(pid);
-    // Seed the open-tab set BEFORE opening the URL-provided session, so a
-    // first visit via a direct sidebar link (/project/p/s1) still seeds
-    // every OTHER pre-existing direct agent as a tab, not just s1.
-    store.seedProjectAgentTabsIfEmpty(pid, sessions);
     store.setActiveSession(sid);
     if (sid) store.openProjectAgentTab(pid, sid);
   }, [enabled, bundleLoaded, params.projectId, params.sessionId, sessions, projects, navigate]);
+
+  // Edge-triggered guard (Decisions 5, 10): if the active DIRECT agent was a
+  // visible tab in the previous snapshot but is now hidden/missing (deleted,
+  // superseded, any client/any source), re-select a live agent in real time —
+  // the neighbor in tab order (or null → Project tab). Reads store state fresh
+  // via getState (Decision 3). Order: read effect → guard → write effect, so
+  // the guard's re-selection is reflected in the URL without a loop; the read
+  // effect's keep-if-valid rule (above) never overwrites that store-side pick.
+  useEffect(() => {
+    if (!enabled) {
+      lastVisibleRef.current = null;
+      return;
+    }
+    if (!location.pathname.startsWith("/project")) {
+      lastVisibleRef.current = null;
+      return;
+    }
+    const { activeDirectContextId: pid, activeSessionId: sessId } = useWorkspaceStore.getState();
+    if (!pid) {
+      lastVisibleRef.current = null;
+      return;
+    }
+    const directSessions = sessions.filter((s) => s.worktreeId === null && s.projectId === pid);
+    const visible = new Set(directSessions.filter(isTabVisibleAgent).map((s) => s.id));
+
+    const prev = lastVisibleRef.current;
+    // Decision 10: replace the snapshot on every run, even when we don't act.
+    lastVisibleRef.current = visible;
+
+    if (!prev || sessId == null) return; // nothing observed yet / nothing active
+    if (!prev.has(sessId)) return; // Decision 5: never seen visible → leave alone
+    if (visible.has(sessId)) return; // still visible → nothing to do
+
+    const active = sessions.find((s) => s.id === sessId);
+    const store = useWorkspaceStore.getState();
+    if (active?.supersededBy) {
+      // Follow the supersededBy chain to the live replacement (existing behavior).
+      store.setActiveSession(resolveSupersededChain(sessId, sessions));
+    } else {
+      const openTabs = store.openDirectAgentTabsByProject[pid] ?? [];
+      const next = pickNextDirectAgent(
+        openTabs,
+        active ?? ({ id: sessId } as Session),
+        directSessions,
+      );
+      store.setActiveSession(next);
+    }
+  }, [enabled, sessions, location.pathname, activeSessionId]);
 
   // Write effect: mirror active ids to path
   useEffect(() => {

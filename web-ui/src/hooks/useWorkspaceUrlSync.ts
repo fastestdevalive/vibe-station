@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { Session, Worktree } from "@/api/types";
 import { reconcileActiveFileForContext, useWorkspaceStore } from "@/hooks/useStore";
+import { isTabVisibleAgent, pickWorktreeAgent, resolveSupersededChain } from "@/lib/sessionVisibility";
 
 /**
  * One-shot: apply :wtId/:sessionId from URL path when bundle is ready.
@@ -14,6 +15,10 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const lastParamsRef = useRef<{ wtId?: string; sessionId?: string } | null>(null);
+  // Decision 10 — snapshot of the tab-visible agent ids from the PREVIOUS
+  // effect run, replaced (never accumulated) on every run so a row that was
+  // already hidden at the previous run never fires the guard.
+  const lastVisibleRef = useRef<Set<string> | null>(null);
 
   // Read effect: apply path params to store only when path params actually change
   useEffect(() => {
@@ -50,6 +55,10 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
       lastParamsRef.current.wtId === wtId &&
       lastParamsRef.current.sessionId === sessionId;
     if (paramsUnchanged) return;
+    // Decision 9 — strict visibility validation applies on FIRST apply only
+    // (mount, re-entry, full reload). Later param changes (a sidebar click on a
+    // superseded row) accept any listed agent of the worktree instead.
+    const firstApply = lastParamsRef.current === null;
     lastParamsRef.current = { wtId, sessionId };
 
     if (wtId) {
@@ -58,18 +67,13 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
         const wtSessions = sessions.filter((s) => s.worktreeId === w.id);
         const lastSessionId = useWorkspaceStore.getState().lastSessionByWorktree[w.id];
 
-        // Prefer explicit path sessionId, then last-used, then main slot, then first.
-        let pickedSessionId: string | null = null;
-        if (sessionId) {
-          const explicit = wtSessions.find((s) => s.id === sessionId);
-          pickedSessionId = explicit?.id ?? null;
-        }
-        if (!pickedSessionId) {
-          pickedSessionId =
-            (lastSessionId && wtSessions.some((s) => s.id === lastSessionId) ? lastSessionId : null) ??
-            wtSessions.find((s) => s.isMain)?.id ??
-            wtSessions[0]?.id ??
-            null;
+        let pickedSessionId: string | null;
+        if (!firstApply && sessionId && wtSessions.some((s) => s.type === "agent" && s.id === sessionId)) {
+          // Later param change to a listed agent of this worktree — keep it
+          // (Decision 9; sidebar lists superseded rows too).
+          pickedSessionId = sessionId;
+        } else {
+          pickedSessionId = pickWorktreeAgent(wtSessions, { explicitId: sessionId, lastId: lastSessionId });
         }
 
         useWorkspaceStore.setState((st) => ({
@@ -82,6 +86,45 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
       }
     }
   }, [ready, worktrees, sessions, params.wtId, params.sessionId, navigate, location.search, location.pathname]);
+
+  // Edge-triggered guard (Decisions 5, 10): if the active agent WAS a visible
+  // tab in the previous snapshot but is now hidden/missing (deleted,
+  // superseded, any client/any source), re-select a live agent in real time.
+  // Reads store state fresh via getState (Decision 3). Order: read effect →
+  // guard → write effect, so the guard's re-selection is reflected in the URL
+  // without a loop.
+  useEffect(() => {
+    if (!ready) return;
+    if (!location.pathname.startsWith("/worktree")) {
+      lastVisibleRef.current = null;
+      return;
+    }
+    const { activeWorktreeId: wtId, activeSessionId: sessId } = useWorkspaceStore.getState();
+    if (!wtId) {
+      lastVisibleRef.current = null;
+      return;
+    }
+    const wtSessions = sessions.filter((s) => s.worktreeId === wtId);
+    const visible = new Set(wtSessions.filter(isTabVisibleAgent).map((s) => s.id));
+
+    const prev = lastVisibleRef.current;
+    // Decision 10: replace the snapshot on every run, even when we don't act.
+    lastVisibleRef.current = visible;
+
+    if (!prev || sessId == null) return; // nothing observed yet / nothing active
+    if (!prev.has(sessId)) return; // Decision 5: never seen visible → leave alone
+    if (visible.has(sessId)) return; // still visible → nothing to do
+
+    const active = sessions.find((s) => s.id === sessId);
+    const store = useWorkspaceStore.getState();
+    if (active?.supersededBy) {
+      // Follow the supersededBy chain to the live replacement (existing behavior).
+      store.setActiveSession(resolveSupersededChain(sessId, sessions));
+    } else {
+      const lastId = store.lastSessionByWorktree[wtId];
+      store.setActiveSession(pickWorktreeAgent(wtSessions, { lastId }));
+    }
+  }, [ready, sessions, location.pathname, activeSessionId]);
 
   // Write effect: mirror active ids to path
   useEffect(() => {

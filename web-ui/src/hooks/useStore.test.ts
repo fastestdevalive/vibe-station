@@ -211,6 +211,18 @@ describe("useWorkspaceStore - setActiveWorktree", () => {
     // back to the first terminal, not the dead one.
     expect(state.activeTerminalSessionId).toBe(`${W1}-term-live`);
   });
+
+  it("Phase 1 — a superseded last-known agent falls back to main, not the hidden session", () => {
+    const sessions = mockSessions(W1);
+    sessions[1] = { ...sessions[1]!, supersededBy: `${W1}-main` }; // "-alt" hidden from tabs
+    useWorkspaceStore.setState({
+      lastSessionByWorktree: { [W1]: `${W1}-alt` },
+    });
+    useWorkspaceStore.getState().setActiveWorktree(P1, W1, sessions);
+    const state = useWorkspaceStore.getState();
+    // "-alt" is not tab-visible (superseded) → pickWorktreeAgent falls to main.
+    expect(state.activeSessionId).toBe(`${W1}-main`);
+  });
 });
 
 /**
@@ -718,11 +730,21 @@ describe("useWorkspaceStore - removeTilesForSession", () => {
     expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
   });
 
-  it("Regression — falls back to null when the remaining sessions have no main-slot session", () => {
+  it("Phase 1 — falls back to the first tab-visible agent (not main-only) when the remaining sessions have no main slot", () => {
     const [, alt] = mockSessions(W1);
     useWorkspaceStore.setState({ activeSessionId: "sess-doomed" });
     useWorkspaceStore.getState().removeTilesForSession("sess-doomed", [alt!]);
-    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+    // `alt` is a tab-visible agent → pickWorktreeAgent picks it (no main present).
+    expect(useWorkspaceStore.getState().activeSessionId).toBe(alt!.id);
+  });
+
+  it("Phase 1 — skips superseded remaining agents when re-picking after a deletion", () => {
+    const [main, alt] = mockSessions(W1);
+    const superseded = { ...alt!, supersededBy: main!.id };
+    useWorkspaceStore.setState({ activeSessionId: "sess-doomed" });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed", [main!, superseded]);
+    // superseded `alt` is hidden from tabs → main is the pick.
+    expect(useWorkspaceStore.getState().activeSessionId).toBe(main!.id);
   });
 
   it("Requirement 5d — deletes lastSessionByWorktree/lastTerminalByWorktree entries pointing at the deleted id", () => {
@@ -734,6 +756,81 @@ describe("useWorkspaceStore - removeTilesForSession", () => {
     const state = useWorkspaceStore.getState();
     expect(state.lastSessionByWorktree).toEqual({ [W2]: "sess-other" });
     expect(state.lastTerminalByWorktree).toEqual({});
+  });
+
+  it("Phase 2 — a deleted DIRECT agent re-selects the neighbor (before in tab order), not main", () => {
+    const direct = (id: string, sortOrder: number): Session => ({
+      id,
+      worktreeId: null,
+      projectId: P1,
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "idle",
+      lifecycleState: "idle",
+      tmuxName: id,
+      sortOrder,
+      createdAt: new Date().toISOString(),
+    });
+    useWorkspaceStore.setState({
+      activeWorktreeId: null,
+      activeDirectContextId: P1,
+      activeSessionId: "s2",
+      openDirectAgentTabsByProject: { [P1]: ["s1", "s2", "s3"] },
+    });
+    const remaining = [direct("s1", 1), direct("s3", 3)];
+    useWorkspaceStore.getState().removeTilesForSession("s2", remaining, direct("s2", 2));
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+    // The open-tab set is pruned of the deleted id.
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P1]).toEqual(["s1", "s3"]);
+  });
+
+  it("Phase 2 — deleting the last direct agent falls back to null (project home)", () => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: null,
+      activeDirectContextId: P1,
+      activeSessionId: "s1",
+      openDirectAgentTabsByProject: { [P1]: ["s1"] },
+    });
+    const only = {
+      id: "s1",
+      worktreeId: null as string | null,
+      projectId: P1,
+      modeId: "mode-1",
+      type: "agent" as const,
+      isMain: false,
+      state: "idle" as const,
+      lifecycleState: "idle",
+      tmuxName: "s1",
+      createdAt: new Date().toISOString(),
+    } as Session;
+    useWorkspaceStore.getState().removeTilesForSession("s1", [], only);
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("Phase 2 — a deleted direct agent with no closed Session degrades to pickFirstDirectAgent", () => {
+    const direct = (id: string, sortOrder: number): Session => ({
+      id,
+      worktreeId: null,
+      projectId: P1,
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "idle",
+      lifecycleState: "idle",
+      tmuxName: id,
+      sortOrder,
+      createdAt: new Date().toISOString(),
+    });
+    useWorkspaceStore.setState({
+      activeWorktreeId: null,
+      activeDirectContextId: P1,
+      activeSessionId: "s2",
+      openDirectAgentTabsByProject: { [P1]: ["s1", "s2", "s3"] },
+    });
+    // No `closed` session passed (reconnect safety-net call) → first open tab.
+    useWorkspaceStore.getState().removeTilesForSession("s2", [direct("s1", 1), direct("s3", 3)]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
   });
 });
 
@@ -1600,14 +1697,58 @@ describe("useWorkspaceStore - seedProjectAgentTabsIfEmpty (Decision 5)", () => {
     expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual([]);
   });
 
-  it("openProjectAgentTab adds an id and closeProjectAgentTab removes it and clears activeSessionId", () => {
+  it("openProjectAgentTab adds an id and closeProjectAgentTab removes it and re-selects the neighbor when it was active", () => {
     useWorkspaceStore.setState({ activeSessionId: "s1" });
     useWorkspaceStore.getState().openProjectAgentTab(P, "s1");
     useWorkspaceStore.getState().openProjectAgentTab(P, "s2");
     expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s1", "s2"]);
 
-    useWorkspaceStore.getState().closeProjectAgentTab(P, "s1");
+    const sessions: Session[] = [makeDirect("s1", "idle"), makeDirect("s2", "idle")];
+    useWorkspaceStore.getState().closeProjectAgentTab(P, "s1", sessions);
     expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s2"]);
+    // Closing the active id re-selects the neighbor (s2), not null (Phase 2).
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s2");
+  });
+
+  it("Phase 2 — closeProjectAgentTab picks the neighbor BEFORE in tab order (compareTabOrder)", () => {
+    useWorkspaceStore.setState({ activeSessionId: "s-mid" });
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s-a");
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s-mid");
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s-z");
+
+    const sessions: Session[] = [
+      { ...makeDirect("s-a", "idle"), sortOrder: 1 },
+      { ...makeDirect("s-mid", "idle"), sortOrder: 2 },
+      { ...makeDirect("s-z", "idle"), sortOrder: 3 },
+    ];
+    useWorkspaceStore.getState().closeProjectAgentTab(P, "s-mid", sessions);
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s-a", "s-z"]);
+    // Immediately-before neighbor (s-a), not the first remaining (which is
+    // also s-a here, but the rule is "before else first remaining").
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s-a");
+  });
+
+  it("Phase 2 — closeProjectAgentTab falls back to null when it was the only tab", () => {
+    useWorkspaceStore.setState({ activeSessionId: "s1" });
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s1");
+
+    useWorkspaceStore.getState().closeProjectAgentTab(P, "s1", [makeDirect("s1", "idle")]);
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual([]);
     expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("Phase 2 — Decision 12: closeProjectAgentTab is a no-op when the id was already pruned from the tab set", () => {
+    useWorkspaceStore.setState({ activeSessionId: "s1" });
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s1");
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s2");
+    // A WS `session:deleted` already pruned s1 from the open-tab set.
+    useWorkspaceStore.setState({ openDirectAgentTabsByProject: { [P]: ["s2"] } });
+
+    const before = useWorkspaceStore.getState();
+    useWorkspaceStore.getState().closeProjectAgentTab(P, "s1", [makeDirect("s1", "idle"), makeDirect("s2", "idle")]);
+    // No-op: the tab set and active id are untouched.
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s2"]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+    expect(useWorkspaceStore.getState()).toBe(before);
   });
 });

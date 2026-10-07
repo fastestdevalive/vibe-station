@@ -1,10 +1,15 @@
-import { describe, it, expect } from "vitest";
-import type { Session } from "@/api/types";
+import { createElement, useState } from "react";
+import { act, render, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { Session, Worktree } from "@/api/types";
+import { useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceUrlSync } from "./useWorkspaceUrlSync";
 
 const P1 = "project-1";
 const W1 = "wt-1";
 
-const mockSession = (id: string, isMain = true): Session => ({
+const mockSession = (id: string, isMain = true, overrides: Partial<Session> = {}): Session => ({
   id,
   worktreeId: W1,
   projectId: P1,
@@ -15,96 +20,232 @@ const mockSession = (id: string, isMain = true): Session => ({
   isMain,
   tmuxName: id,
   createdAt: new Date().toISOString(),
+  ...overrides,
 });
 
-describe("useWorkspaceUrlSync - URL omission for main session logic", () => {
-  it("identifies main session correctly", () => {
-    const mainSession = mockSession("s-main", true);
-    const altSession = mockSession("s-alt", false);
+const mockWorktree = (id = W1): Worktree => ({
+  id,
+  projectId: P1,
+  branch: "main",
+  baseBranch: "main",
+  createdAt: new Date().toISOString(),
+  pinnedAt: null,
+  hiddenAt: null,
+  lspEnabled: false,
+});
 
-    expect(mainSession.isMain).toBe(true);
-    expect(altSession.isMain).toBe(false);
+const navigateRef: { current: ((p: string) => void) | null } = { current: null };
+const setSessionsRef: {
+  current: ((sessions: Session[]) => void) | null;
+} = { current: null };
+
+/** Stateful harness — lets a test swap the `sessions` prop (simulating WS
+ *  churn) and navigate (simulating a sidebar click) after mount. */
+function StatefulHarness({ initialSessions }: { initialSessions: Session[] }) {
+  const [sessions, setSessions] = useState(initialSessions);
+  navigateRef.current = useNavigate();
+  setSessionsRef.current = setSessions;
+  useWorkspaceUrlSync(true, [mockWorktree()], sessions);
+  return null;
+}
+
+function renderAt(path: string, initialSessions: Session[]) {
+  return render(
+    createElement(
+      MemoryRouter,
+      { initialEntries: [path] },
+      createElement(
+        Routes,
+        null,
+        createElement(Route, { path: "/worktree/:wtId/:sessionId", element: createElement(StatefulHarness, { initialSessions }) }),
+        createElement(Route, { path: "/worktree/:wtId", element: createElement(StatefulHarness, { initialSessions }) }),
+      ),
+    ),
+  );
+}
+
+function navigate(path: string) {
+  act(() => navigateRef.current?.(path));
+}
+
+function setSessions(sessions: Session[]) {
+  act(() => setSessionsRef.current?.(sessions));
+}
+
+describe("useWorkspaceUrlSync", () => {
+  beforeEach(() => {
+    navigateRef.current = null;
+    setSessionsRef.current = null;
+    useWorkspaceStore.setState({
+      activeProjectId: null,
+      activeWorktreeId: null,
+      activeSessionId: null,
+      activeTerminalSessionId: null,
+      lastSessionByWorktree: {},
+      lastTerminalByWorktree: {},
+      sessionStates: {},
+    });
   });
 
-  it("main sessions are distinguishable from others", () => {
-    const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
-    const main = sessions.find((s) => s.isMain);
-    expect(main?.id).toBe("s-main");
-  });
+  describe("read effect — pickWorktreeAgent (Phase 1)", () => {
+    it("1.2a — a stale superseded last-used id falls back to the live main agent", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-stale", false, { type: "agent", supersededBy: "sess-main" }),
+      ];
+      // Long-idle client persisted a last-used id that is now superseded.
+      useWorkspaceStore.setState({ lastSessionByWorktree: { [W1]: "sess-stale" } });
 
-  it("session not in list returns undefined", () => {
-    const sessions = [mockSession("s-main", true)];
-    const notFound = sessions.find((s) => s.id === "nonexistent");
-    expect(notFound).toBeUndefined();
-  });
+      renderAt(`/worktree/${W1}`, sessions);
 
-  it("multiple sessions can be filtered by worktreeId and isMain", () => {
-    const sessions = [
-      mockSession("s-main-1", true),
-      mockSession("s-alt-1", false),
-      mockSession("s-alt-2", false),
-    ];
-    const mainSessions = sessions.filter((s) => s.isMain);
-    expect(mainSessions).toHaveLength(1);
-    expect(mainSessions[0]!.id).toBe("s-main-1");
-  });
-
-  describe("URL param logic", () => {
-    it("should omit session param when active session is main", () => {
-      const sessions = [mockSession("s-main", true)];
-      const activeSessionId = "s-main";
-      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
-
-      // This mimics the logic in useWorkspaceUrlSync write effect
-      const shouldOmitSessionParam = activeSession.isMain;
-      expect(shouldOmitSessionParam).toBe(true);
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeWorktreeId).toBe(W1);
+      });
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
     });
 
-    it("should include session param when active session is non-main", () => {
-      const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
-      const activeSessionId = "s-alt";
-      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+    it("1.2b — an explicit superseded sessionId in the URL falls back to the live main agent", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-stale", false, { type: "agent", supersededBy: "sess-main" }),
+      ];
 
-      const shouldOmitSessionParam = activeSession.isMain;
-      expect(shouldOmitSessionParam).toBe(false);
+      renderAt(`/worktree/${W1}/sess-stale`, sessions);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeWorktreeId).toBe(W1);
+      });
+      // Superseded explicit id is not tab-visible → pickWorktreeAgent falls to main.
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+    });
+
+    it("1.2c — an explicit visible sessionId is selected", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-alt", false, { type: "agent" }),
+      ];
+
+      renderAt(`/worktree/${W1}/sess-alt`, sessions);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-alt");
+      });
+    });
+
+    it("1.2d — pinned-row click: an exited (still tabbed) last-used agent, even already active in the store, loses to the live main agent", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-exited", false, { type: "agent", state: "exited" }),
+      ];
+      // setActiveWorktree's idempotent early return can leave a stale active id;
+      // the URL read effect's first apply must still resolve to the live main.
+      useWorkspaceStore.setState({
+        activeWorktreeId: W1,
+        activeSessionId: "sess-exited",
+        lastSessionByWorktree: { [W1]: "sess-exited" },
+      });
+
+      renderAt(`/worktree/${W1}`, sessions);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+      });
+    });
+
+    it("1.T2a — Decision 9: a later param change to a superseded id keeps it selected (sidebar click not bounced)", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-stale", false, { type: "agent", supersededBy: "sess-main" }),
+      ];
+
+      // First apply: mount on a valid visible agent.
+      renderAt(`/worktree/${W1}/sess-main`, sessions);
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+      });
+
+      // Sidebar click navigates to the superseded row as a LATER param change.
+      navigate(`/worktree/${W1}/sess-stale`);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-stale");
+      });
     });
   });
 
-  describe("Path-param routing logic", () => {
-    it("write effect produces /worktree/:wtId path for the main session", () => {
-      const activeWorktreeId = W1;
-      const sessions = [mockSession("s-main", true)];
-      const activeSessionId = "s-main";
-      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+  describe("guard effect — edge-triggered re-selection (Phase 1)", () => {
+    it("1.4a — active agent deleted live → falls back to the main agent", async () => {
+      const sessionsWithAgent = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-agent2", false, { type: "agent" }),
+      ];
+      const sessionsAfterDelete = [mockSession("sess-main", true, { type: "agent" })];
 
-      // Compute target path (mimics write effect logic)
-      let targetPath = "/worktree";
-      if (activeWorktreeId) {
-        targetPath = `/worktree/${activeWorktreeId}`;
-        if (activeSessionId && !activeSession.isMain) {
-          targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
-        }
-      }
+      renderAt(`/worktree/${W1}/sess-agent2`, sessionsWithAgent);
 
-      expect(targetPath).toBe(`/worktree/${W1}`);
+      // Agent2 is selected and observed as visible.
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+      });
+
+      // The active agent is deleted (removed from the list) live.
+      setSessions(sessionsAfterDelete);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+      });
     });
 
-    it("write effect produces /worktree/:wtId/:sessionId path for non-main session", () => {
-      const activeWorktreeId = W1;
-      const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
-      const activeSessionId = "s-alt";
-      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+    it("1.4b — active agent superseded live → follows the replacement chain", async () => {
+      const sessionsBefore = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-agent2", false, { type: "agent" }),
+      ];
+      const sessionsAfter = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-agent2", false, { type: "agent", supersededBy: "sess-agent2-new" }),
+        mockSession("sess-agent2-new", false, { type: "agent", sortOrder: 3 }),
+      ];
 
-      // Compute target path (mimics write effect logic)
-      let targetPath = "/worktree";
-      if (activeWorktreeId) {
-        targetPath = `/worktree/${activeWorktreeId}`;
-        if (activeSessionId && !activeSession.isMain) {
-          targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
-        }
-      }
+      renderAt(`/worktree/${W1}/sess-agent2`, sessionsBefore);
 
-      expect(targetPath).toBe(`/worktree/${W1}/s-alt`);
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+      });
+
+      // The active agent is superseded by a replacement.
+      setSessions(sessionsAfter);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2-new");
+      });
+    });
+
+    it("1.4c — Decision 5: an id never seen visible is left untouched by the guard", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-stale", false, { type: "agent", supersededBy: "sess-main" }),
+      ];
+
+      renderAt(`/worktree/${W1}/sess-main`, sessions);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+      });
+
+      // Sidebar click selects a superseded row (never observed as visible) —
+      // the read effect keeps it (Decision 9), so activeSessionId is the stale id.
+      act(() => useWorkspaceStore.getState().setActiveSession("sess-stale"));
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-stale");
+      });
+
+      // A later sessions change triggers the guard re-run; the stale id was
+      // never seen visible, so it must NOT be bounced.
+      setSessions([...sessions, mockSession("sess-new", false, { type: "agent", sortOrder: 5 })]);
+
+      await new Promise((r) => setTimeout(r, 30));
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-stale");
     });
   });
 });

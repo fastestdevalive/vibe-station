@@ -140,7 +140,8 @@ export function useServerSync(api: ApiInstance): void {
           // `activeSessionId` (the only thing `remainingSessions` is consulted
           // for) always belongs to `activeWorktreeId`.
           const freshIds = new Set(mergedSessions.map((s) => s.id));
-          const { layoutByWorktree, workspaceDocs, activeWorktreeId } = useWorkspaceStore.getState();
+          const { layoutByWorktree, workspaceDocs, activeWorktreeId, activeDirectContextId } =
+            useWorkspaceStore.getState();
           const tiledIds = new Set<string>();
           for (const layout of Object.values(layoutByWorktree)) {
             for (const tile of layout.scratchCanvas?.tiles ?? []) {
@@ -152,7 +153,16 @@ export function useServerSync(api: ApiInstance): void {
               if (tile.sessionId) tiledIds.add(tile.sessionId);
             }
           }
-          const activeWorktreeSessions = mergedSessions.filter((s) => s.worktreeId === activeWorktreeId);
+          // Scope the remaining sessions to the active context: the worktree's
+          // own sessions, or for a direct context (activeWorktreeId null) this
+          // project's direct sessions only — not every direct session of every
+          // project.
+          const activeWorktreeSessions =
+            activeWorktreeId != null
+              ? mergedSessions.filter((s) => s.worktreeId === activeWorktreeId)
+              : activeDirectContextId != null
+                ? mergedSessions.filter((s) => s.worktreeId === null && s.projectId === activeDirectContextId)
+                : [];
           for (const staleId of tiledIds) {
             if (freshIds.has(staleId)) continue;
             useWorkspaceStore.getState().removeTilesForSession(staleId, activeWorktreeSessions);
@@ -345,22 +355,30 @@ export function useServerSync(api: ApiInstance): void {
         sessionsAnnouncedDuringRefresh.delete(ev.sessionId);
         // Captured before `applySessionDeleted` removes it from the list —
         // needed below to scope the fallback-session lookup to the deleted
-        // session's own worktree.
-        const deletedWorktreeId = useServerStore
+        // session's own worktree/project, and to pass the deleted `Session`
+        // (its `sortOrder`) for the direct-agent neighbor pick.
+        const deletedSession = useServerStore
           .getState()
-          .sessions.find((sess) => sess.id === ev.sessionId)?.worktreeId;
+          .sessions.find((sess) => sess.id === ev.sessionId);
+        const deletedWorktreeId = deletedSession?.worktreeId;
+        const deletedProjectId = deletedSession?.projectId;
         applySessionDeleted(ev.sessionId);
         // Explicit deletion (not a natural exit — a session can resume from
         // that) is the "this is gone" signal: drop any canvas/workspace tile
         // still referencing it, live, without a reload (Requirement 5). Pass
-        // along the worktree's remaining sessions (post-deletion) so a
-        // cleared `activeSessionId` can fall back to that worktree's main
-        // agent instead of going bare (Requirement 5d follow-up).
+        // along the remaining sessions (post-deletion), scoped to the deleted
+        // session's own worktree (or, for a direct agent, its own project's
+        // direct sessions), so a cleared `activeSessionId` can fall back to a
+        // live agent instead of going bare (Requirement 5d follow-up).
         const remainingSessions =
           deletedWorktreeId != null
             ? useServerStore.getState().sessions.filter((sess) => sess.worktreeId === deletedWorktreeId)
-            : undefined;
-        useWorkspaceStore.getState().removeTilesForSession(ev.sessionId, remainingSessions);
+            : deletedProjectId != null
+              ? useServerStore
+                  .getState()
+                  .sessions.filter((sess) => sess.worktreeId === null && sess.projectId === deletedProjectId)
+              : undefined;
+        useWorkspaceStore.getState().removeTilesForSession(ev.sessionId, remainingSessions, deletedSession);
       }
     });
     const offSessUpdated = sessionRepo.on("session:updated", (ev) => {
