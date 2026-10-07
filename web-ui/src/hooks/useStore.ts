@@ -4,6 +4,7 @@ import { api } from "@/api";
 import type { DiffScope, FileScope, Session, SessionState } from "@/api/types";
 import type { LspFailure } from "@/lib/lspApi";
 import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
+import { pickFirstDirectAgent, pickNextDirectAgent, pickWorktreeAgent } from "@/lib/sessionVisibility";
 import { randomId } from "@/lib/uuid";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
@@ -450,8 +451,12 @@ export interface WorkspaceState {
   setActiveSession: (sessionId: string | null) => void;
   /** Add a direct-agent session id to a project's open-tab set (no-op if already present). */
   openProjectAgentTab: (projectId: string, sessionId: string) => void;
-  /** Remove a direct-agent session id from a project's open-tab set; clears activeSessionId if it was active. */
-  closeProjectAgentTab: (projectId: string, sessionId: string) => void;
+  /** Remove a direct-agent session id from a project's open-tab set; if it was
+   *  active, re-select the neighbor in tab order (`pickNextDirectAgent`, else
+   *  null). No-op when the id is not in the pre-close tab set (Decision 12 —
+   *  a WS delete may have already pruned/moved it). `sessions` carries the
+   *  project's sessions so the closed session's `sortOrder` is available. */
+  closeProjectAgentTab: (projectId: string, sessionId: string, sessions: Session[]) => void;
   /** Seed a project's open-tab set only when it has NO entry yet (undefined); excludes drafts. */
   seedProjectAgentTabsIfEmpty: (projectId: string, sessions: Session[]) => void;
   setActiveTerminalSession: (sessionId: string) => void;
@@ -637,8 +642,15 @@ export interface WorkspaceState {
    * sessions, if the caller has them) is used to fall back to that
    * worktree's main-slot agent session — same fallback shape as
    * `setActiveWorktree`'s main-slot step — rather than leaving the pane bare.
+   *
+   * For a DELETED DIRECT agent (`activeWorktreeId == null`), `remainingSessions`
+   * holds the same-project direct sessions (post-deletion) and `closed` carries
+   * the deleted `Session` object; the fallback re-selects the neighbor in tab
+   * order (`pickNextDirectAgent`) instead of the worktree main-slot rule. When
+   * `closed` is absent (a reconnect safety-net call that has no post-deletion
+   * Session), the direct fallback degrades to `pickFirstDirectAgent`.
    */
-  removeTilesForSession: (sessionId: string, remainingSessions?: Session[]) => void;
+  removeTilesForSession: (sessionId: string, remainingSessions?: Session[], closed?: Session) => void;
   reorderWorkspace: (scopeKey: string, orderedIds: string[]) => void;
   setActiveWorkspace: (worktreeId: string, workspaceId: string | null) => void;
   setLayoutMode: (worktreeId: string, mode: "classic" | "workspace") => void;
@@ -1097,24 +1109,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               return reconcileActiveFileForContext(s, worktreeId) ?? s;
             }
 
-            // Compute default agent session: lastSessionByWorktree → main slot → first agent → null.
-            // The last-known id only "wins" if it's still a LIVE session —
-            // `state !== "exited"` — not merely still present in the list: a
-            // session that died naturally (never explicitly deleted) stays
-            // in `sessions` with `state: "exited"` forever, and without this
-            // guard it would permanently win the fallback over the main
+            // Compute default agent session via the shared pick helper
+            // (explicit none here; last-known → main → first tab-visible agent).
+            // The last-known id only "wins" if it's still a LIVE, tab-visible
+            // agent — `state !== "exited"` — not merely still present in the
+            // list: a session that died naturally (never explicitly deleted)
+            // stays in `sessions` with `state: "exited"` forever, and without
+            // this guard it would permanently win the fallback over the main
             // agent (Requirement 4a). `archivedAt`/`supersededBy` staleness
             // is a separate class already handled by `relinkSessionTiles`'s
-            // chain resolution — deliberately untouched here (Requirement 4c).
-            let defaultSessionId: string | null = null;
+            // chain resolution — and by `pickWorktreeAgent`'s tab-visibility
+            // filter (Requirement 4c).
             const lastInWorktree = s.lastSessionByWorktree[worktreeId];
-            const agents = sessions?.filter((ss) => ss.type === "agent");
-            if (lastInWorktree && agents?.some((ss) => ss.id === lastInWorktree && ss.state !== "exited")) {
-              defaultSessionId = lastInWorktree;
-            } else if (agents) {
-              const mainSlot = agents.find((ss) => ss.isMain);
-              defaultSessionId = mainSlot?.id ?? agents[0]?.id ?? null;
-            }
+            const agents = sessions?.filter((ss) => ss.type === "agent") ?? [];
+            const defaultSessionId = pickWorktreeAgent(agents, { lastId: lastInWorktree });
 
             // Compute default terminal session: lastTerminalByWorktree → first terminal → null.
             // Same `state !== "exited"` guard, same bug class (Requirement 4b).
@@ -1239,12 +1247,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const next = cur.includes(sessionId) ? cur : [...cur, sessionId];
             return { openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: next } };
           }),
-        closeProjectAgentTab: (projectId, sessionId) =>
+        closeProjectAgentTab: (projectId, sessionId, sessions) =>
           set((s) => {
             const cur = s.openDirectAgentTabsByProject[projectId] ?? [];
+            // Decision 12 — a WS `session:deleted` may have already pruned (or
+            // moved) this id, so the tab close is a no-op when it's absent.
+            if (!cur.includes(sessionId)) return s;
+            const closed = sessions.find((x) => x.id === sessionId);
+            const nextActive =
+              s.activeSessionId === sessionId
+                ? pickNextDirectAgent(cur, closed ?? ({ id: sessionId } as Session), sessions)
+                : s.activeSessionId;
             return {
               openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: cur.filter((id) => id !== sessionId) },
-              activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
+              activeSessionId: nextActive,
             };
           }),
         // Seeds only when the project has NO entry yet (undefined, not `[]`) —
@@ -2049,7 +2065,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...(lastChanged ? { lastSessionByWorktree: nextLast } : {}),
             };
           }),
-        removeTilesForSession: (sessionId, remainingSessions) =>
+        removeTilesForSession: (sessionId, remainingSessions, closed) =>
           set((s) => {
             let layoutChanged = false;
             const nextLayoutByWorktree = { ...s.layoutByWorktree };
@@ -2084,8 +2100,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // since a deletion has no "last known good" session to prefer).
             let fallbackSessionId: string | null = null;
             if (activeSessionChanged && remainingSessions) {
-              const mainSlot = remainingSessions.find((ss) => ss.type === "agent" && ss.isMain);
-              fallbackSessionId = mainSlot?.id ?? null;
+              const closedIsDirect = closed ? closed.worktreeId == null : s.activeWorktreeId == null;
+              if (closedIsDirect && s.activeDirectContextId != null) {
+                // Deleted DIRECT agent: re-select the neighbor in tab order.
+                // `preCloseTabs` must be captured BEFORE the open-tab set is
+                // pruned below. When `closed` is absent (reconnect safety-net
+                // call with no post-deletion Session), degrade to the first
+                // open tab.
+                const preCloseTabs = s.openDirectAgentTabsByProject[s.activeDirectContextId] ?? [];
+                fallbackSessionId = closed
+                  ? pickNextDirectAgent(preCloseTabs, closed, remainingSessions)
+                  : pickFirstDirectAgent(preCloseTabs, remainingSessions);
+              } else {
+                // Worktree agent: pick a live tab-visible agent via the shared
+                // helper (main → first by tab order) instead of main-only.
+                fallbackSessionId = pickWorktreeAgent(remainingSessions, {});
+              }
             }
             let lastSessionChanged = false;
             const nextLastSessionByWorktree = { ...s.lastSessionByWorktree };

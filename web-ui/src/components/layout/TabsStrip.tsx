@@ -22,6 +22,7 @@ import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Channel, Session } from "@/api/types";
 import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
+import { compareTabOrder, pickWorktreeAgent } from "@/lib/sessionVisibility";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
@@ -326,12 +327,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const orderedSessions = useMemo(() => {
     return sessions
       .filter((s) => s.supersededBy == null)
-      .sort((a, b) => {
-        const ao = a.sortOrder ?? 0;
-        const bo = b.sortOrder ?? 0;
-        if (ao !== bo) return ao - bo;
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
+      .sort(compareTabOrder);
   }, [sessions]);
 
   // subagent-ux-v2 Decision 5 — deleting a parent detaches, never cascades.
@@ -450,19 +446,28 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       const store = useWorkspaceStore.getState();
       store.syncSessionsFromApi(all);
       const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
+      // Keep `cur` if it is in the UNFILTERED list (Decision 9): a superseded
+      // session already selected by a sidebar click stays selected on refetch.
       if (cur && ss.some((s) => s.id === cur)) {
         return;
       }
       const last = isAgent
         ? store.lastSessionByWorktree[wt]
         : store.lastTerminalByWorktree[wt];
-      const main = isAgent ? ss.find((s) => s.isMain) : undefined;
-      const pick =
-        (last && ss.some((s) => s.id === last) ? last : null) ??
-        main?.id ??
-        ss[0]?.id ??
-        null;
-      if (pick) setActiveSession(pick);
+      if (isAgent) {
+        // Shared pick: last(tab-visible, non-exited) → main → first tab-visible
+        // by tab order → null. Superseded sessions are filtered out internally.
+        const pick = pickWorktreeAgent(ss, { lastId: last });
+        if (pick) setActiveSession(pick);
+      } else {
+        const main = ss.find((s) => s.isMain);
+        const pick =
+          (last && ss.some((s) => s.id === last) ? last : null) ??
+          main?.id ??
+          ss[0]?.id ??
+          null;
+        if (pick) setActiveSession(pick);
+      }
     }
 
     void fetchSessions();
@@ -523,7 +528,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         // fall back to the first remaining tab.
         const st = useWorkspaceStore.getState();
         const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
-        if (cur === ev.sessionId && remaining.length > 0) {
+        // Agent-kind deletion selection is owned by the store
+        // (`removeTilesForSession` via useServerSync), which re-picks a live
+        // tab-visible agent deterministically — do not compete here. Terminal
+        // kind keeps its own neighbor pick (no store-side terminal fallback).
+        if (cur === ev.sessionId && remaining.length > 0 && !isAgent) {
           const beforeId = idx > 0 ? prev[idx - 1]?.id : null;
           const target = beforeId && remaining.some((r) => r.id === beforeId)
             ? beforeId
@@ -1104,7 +1113,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 // terminate leaves the tab in place and in sync with the
                 // sidebar (which still shows the session on failure).
                 if (isAgent && isProject && worktreeId) {
-                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, targetId);
+                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, targetId, sessions);
                 }
                 void refreshTabs();
               })

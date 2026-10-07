@@ -817,8 +817,8 @@ export function Workspace() {
               } catch {
                 /* ignore */
               }
-              // Also nulls `activeSessionId` if it was the discarded draft.
-              useWorkspaceStore.getState().closeProjectAgentTab(projectId, activeSessionId);
+              // Also re-selects a neighbor if it was the discarded draft.
+              useWorkspaceStore.getState().closeProjectAgentTab(projectId, activeSessionId, sessions);
             }}
           />
         ) : (

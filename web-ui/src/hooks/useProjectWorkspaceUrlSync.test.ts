@@ -1,6 +1,6 @@
-import { createElement } from "react";
-import { render, renderHook, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { createElement, useState } from "react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -198,5 +198,174 @@ describe("useProjectWorkspaceUrlSync", () => {
     // Give any spurious bounce a chance to happen; we must STAY on "/".
     await new Promise((r) => setTimeout(r, 50));
     expect(currentPath).toBe("/");
+  });
+});
+
+describe("useProjectWorkspaceUrlSync - Phase 2 (direct agents)", () => {
+  const projects = [makeProject({})];
+  const navigateRef: { current: ((p: string) => void) | null } = { current: null };
+  const setSessionsRef: {
+    current: ((sessions: Session[]) => void) | null;
+  } = { current: null };
+
+  function StatefulHarness({ initialSessions }: { initialSessions: Session[] }) {
+    const [sessions, setSessions] = useState(initialSessions);
+    navigateRef.current = useNavigate();
+    setSessionsRef.current = setSessions;
+    useProjectWorkspaceUrlSync(true, true, sessions, projects);
+    return null;
+  }
+
+  function renderAt(path: string, initialSessions: Session[]) {
+    return render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: [path] },
+        createElement(
+          Routes,
+          null,
+          createElement(
+            Route,
+            { path: "/project/:projectId/:sessionId", element: createElement(StatefulHarness, { initialSessions }) },
+          ),
+          createElement(
+            Route,
+            { path: "/project/:projectId", element: createElement(StatefulHarness, { initialSessions }) },
+          ),
+        ),
+      ),
+    );
+  }
+
+  function navigate(path: string) {
+    act(() => navigateRef.current?.(path));
+  }
+
+  function setSessions(sessions: Session[]) {
+    act(() => setSessionsRef.current?.(sessions));
+  }
+
+  beforeEach(() => {
+    navigateRef.current = null;
+    setSessionsRef.current = null;
+    useWorkspaceStore.setState({
+      activeProjectId: null,
+      activeWorktreeId: null,
+      activeDirectContextId: null,
+      activeSessionId: null,
+      openDirectAgentTabsByProject: {},
+    });
+  });
+
+  it("2.1a — a hidden (superseded) sessionId in the URL on first apply falls back to the first open tab", async () => {
+    const sessions = [
+      makeSession({ id: "s1" }),
+      makeSession({ id: "s2", sortOrder: 2 }),
+      makeSession({ id: "s3", sortOrder: 3 }),
+      makeSession({ id: "s-hidden", sortOrder: 1, supersededBy: "s1" }),
+    ];
+
+    renderAt("/project/p1/s-hidden", sessions);
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeDirectContextId).toBe("p1");
+    });
+    // s-hidden is hidden (superseded) → not tab-visible → first open tab (s1).
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+  });
+
+  it("2.1b — a bogus sessionId with no visible open tabs falls back to null (project home)", async () => {
+    const sessions = [makeSession({ id: "s-only", supersededBy: "other" })];
+
+    renderAt("/project/p1/bogus", sessions);
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeDirectContextId).toBe("p1");
+    });
+    // s-only is hidden → no visible open tab → project home (null).
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("2.1c — a missing sessionId stays null (project home, R1)", async () => {
+    renderAt("/project/p1", [makeSession({ id: "s1" })]);
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeDirectContextId).toBe("p1");
+    });
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("2.6a — live deletion of the active agent re-selects the neighbor and the read effect does not overwrite it", async () => {
+    const sessionsBefore = [
+      makeSession({ id: "s1", sortOrder: 1 }),
+      makeSession({ id: "s2", sortOrder: 2 }),
+      makeSession({ id: "s3", sortOrder: 3 }),
+    ];
+
+    renderAt("/project/p1/s2", sessionsBefore);
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s2");
+    });
+
+    // Simulate the `session:deleted` WS handler: prune the tab and re-select
+    // the neighbor (s1, immediately before s2) in the STORE, then drop the
+    // deleted session from the server list.
+    act(() => {
+      useWorkspaceStore
+        .getState()
+        .removeTilesForSession("s2", [makeSession({ id: "s1", sortOrder: 1 }), makeSession({ id: "s3", sortOrder: 3 })], makeSession({ id: "s2", sortOrder: 2 }));
+    });
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+
+    // The deleted session leaves the server list; the read effect re-runs but
+    // must KEEP the store-side neighbor pick (keep-if-valid rule), not bounce
+    // to the URL's stale s2 or the first tab.
+    setSessions([makeSession({ id: "s1", sortOrder: 1 }), makeSession({ id: "s3", sortOrder: 3 })]);
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+  });
+
+  it("2.6b — deleting the last remaining agent falls back to project home (null)", async () => {
+    const sessionsBefore = [makeSession({ id: "s1", sortOrder: 1 })];
+
+    renderAt("/project/p1/s1", sessionsBefore);
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+    });
+
+    // Delete the only agent via the WS-handler-shaped store mutation.
+    act(() => {
+      useWorkspaceStore
+        .getState()
+        .removeTilesForSession("s1", [], makeSession({ id: "s1", sortOrder: 1 }));
+    });
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+
+    setSessions([]);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("2.T2a — Decision 9: a later param change to a superseded direct agent is NOT bounced", async () => {
+    const sessions = [
+      makeSession({ id: "s1" }),
+      makeSession({ id: "s-stale", supersededBy: "s1" }),
+    ];
+
+    // First apply on a visible agent.
+    renderAt("/project/p1/s1", sessions);
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+    });
+
+    // Sidebar click navigates to the superseded row as a LATER param change.
+    navigate("/project/p1/s-stale");
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s-stale");
+    });
   });
 });

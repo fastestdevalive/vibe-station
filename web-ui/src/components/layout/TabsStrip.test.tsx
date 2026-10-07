@@ -1256,6 +1256,39 @@ describe("TabsStrip", () => {
     expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
   });
 
+  it("1.T2 — a refetch keeps a superseded active session selected (Decision 9)", async () => {
+    // Decision 9: strict visibility validation applies at OPEN time only. Once
+    // a superseded session is selected (e.g. via a sidebar click on a row that
+    // is still listed), a TabsStrip refetch must NOT bounce selection off it —
+    // `fetchSessions` keeps `cur` when it is in the UNFILTERED list.
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    // The server still lists agent-2, but it is superseded (hidden from tabs).
+    const superseded = snapshot.map((s) =>
+      s.id === "sess-agent2" ? { ...s, supersededBy: "sess-agent2-new" } : s,
+    );
+    vi.spyOn(localApi, "listSessions").mockResolvedValue(superseded);
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /^main\b/i });
+
+    // The active session is a superseded-but-listed agent (sidebar-click flow).
+    act(() => useWorkspaceStore.getState().setActiveSession("sess-agent2"));
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+
+    // A refetch (ws:open) re-runs fetchSessions; `cur` is in the unfiltered
+    // list, so selection is kept — not re-picked to main.
+    await act(async () => {
+      localApi.__test.emit({ type: "ws:open" });
+    });
+
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+  });
+
   it("3.T3 — a stale (older) fetch response is discarded in favor of the newer call", async () => {
     // Two overlapping fetchSessions calls (mount racing a near-simultaneous
     // ws:open) have no ordering guarantee on which await resolves last. The
@@ -1576,11 +1609,11 @@ describe("TabsStrip", () => {
       expect(terminateSpy).toHaveBeenCalledWith("s1");
     });
     // Only after the terminate call succeeds is the id pruned from the
-    // client-only open-tab set, and the active (closed) tab clears to the
-    // Project tab sentinel (null) — kept in sync with the sidebar rather
-    // than desyncing from it.
+    // client-only open-tab set, and the active (closed) tab re-selects the
+    // neighbor (s2) rather than going bare null (Phase 2, Requirement 5) —
+    // kept in sync with the sidebar rather than desyncing from it.
     expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s2"]);
-    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s2");
     useModesStore.getState()._reset();
   });
 
