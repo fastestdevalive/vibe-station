@@ -364,3 +364,15 @@ describe("toolRunSummaryPropsEqual (rich-chat-perf Phase 1, 1.T1)", () => {
   });
 });
 
+
+describe("ToolRunSummary — MCP tool rows start collapsed", () => {
+  it("does not auto-expand the raw input JSON of an `other`-kind (e.g. Playwright) tool", () => {
+    const tools = [
+      { id: "m1", toolName: "mcp__playwright__browser_navigate", toolKind: "other", toolInput: { url: "https://example.com" } } as ToolCallEntry,
+    ];
+    render(<ToolRunSummary tools={tools} />);
+    expect(screen.queryByText(/"url"/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /browser_navigate/ }));
+    expect(screen.getByText(/"url"/)).toBeTruthy();
+  });
+});

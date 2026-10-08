@@ -188,8 +188,14 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
     tool.toolKind === "fetch" ||
     tool.toolKind === "think" ||
     READ_ONLY_TOOL_NAMES.has(name);
-  // Edit/Write/Delete/Move tools start expanded so diffs are immediately visible.
-  const [open, setOpen] = useRowOpen(`tool:${tool.id}`, !isBash && !isReadOnly);
+  const diffs = extractToolDiffs(tool);
+  const hasDiffs = !!diffs && diffs.length > 0;
+  // Only tools that show a diff (edit/write/delete/move) start expanded.
+  // Everything else — notably MCP tools (Playwright navigate/click/…, kind
+  // "other") — stays collapsed so raw input JSON doesn't flood the transcript.
+  const isMutation =
+    hasDiffs || tool.toolKind === "edit" || tool.toolKind === "delete" || tool.toolKind === "move" || isWriteToolName(tool.toolName);
+  const [open, setOpen] = useRowOpen(`tool:${tool.id}`, !isBash && !isReadOnly && isMutation);
   // For bash/execute tools, `locations` holds the cwd directory, not a file —
   // skip it so the cwd path isn't shown inline as if it were the command. No
   // known bash adapter populates locations with anything else today.
@@ -229,8 +235,6 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   const resultText = result?.content ? capForDisplay(result.content) : "";
   const hasResultBody = resultText.length > 0;
   const isError = !!result?.isError || tool.status === "failed";
-  const diffs = extractToolDiffs(tool);
-  const hasDiffs = !!diffs && diffs.length > 0;
   // Structured diffs win over the heuristic text-sniffing path (Decision 3).
   const isDiff = !hasDiffs && !isError && hasResultBody && looksLikeUnifiedDiff(resultText);
   // Phase 6 — a Task's bracketed sub-thread (Decision 4) also expands the row,

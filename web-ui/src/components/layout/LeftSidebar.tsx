@@ -2126,7 +2126,7 @@ export function LeftSidebar({
         ) : null}
         {collapsed ? (
           <CollapsedProjectRail
-            projects={visibleProjects}
+            projects={orderedTopLevelItems.flatMap((x) => (x.kind === "project" ? [x.data] : []))}
             pinnedItems={orderedPinnedItems}
             workspaces={orderedWorkspaces}
             projectById={projectById}
