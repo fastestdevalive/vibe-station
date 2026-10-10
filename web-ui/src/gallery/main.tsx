@@ -152,7 +152,6 @@ function usage(total: number): SessionMeta["usage"] {
     cacheCreateTokens: 0,
     totalTokens: total,
     contextWindow: 200000,
-    costUsd: 0.142,
     model: "claude-sonnet-4-5",
   };
 }
@@ -190,7 +189,7 @@ function Pane({ children }: { children: React.ReactNode }) {
 
 // ── Scenes ──────────────────────────────────────────────────────────────────
 
-function ChatScene({ running }: { running: boolean }) {
+function ChatScene({ running, total }: { running: boolean; total?: number }) {
   const sid = running ? "sess-running" : "sess-thread";
   // Seed inside the api factory so StrictMode's double-invocation seeds each
   // (discarded) instance exactly once — a separate memo would double-seed the
@@ -202,7 +201,7 @@ function ChatScene({ running }: { running: boolean }) {
     return a;
   }, [sid, running]);
   const session = useMemo(() => jsonSession(sid), [sid]);
-  const m = meta(sid, running ? "tool" : "idle");
+  const m = meta(sid, running ? "tool" : "idle", 0, total);
   return (
     <Pane>
       <MetaEmitter api={api} value={m} />
@@ -246,7 +245,7 @@ function StatusBarScene() {
       </div>
       <div className="gallery-label">responding (spinner + Stop)</div>
       <div id="sb-responding" className="gallery-statusbar-wrap">
-        <StatusBar meta={meta("s2", "responding")} onStop={() => {}} />
+        <StatusBar meta={meta("s2", "responding")} />
       </div>
       <div className="gallery-label">queued</div>
       <div id="sb-queued" className="gallery-statusbar-wrap">
@@ -273,7 +272,7 @@ function QueuedScene() {
         />
       </div>
       <div className="chat-pane__footer">
-        <StatusBar meta={meta(sid, "queued", 1)} queueDepth={1} onStop={() => {}} />
+        <StatusBar meta={meta(sid, "queued", 1)} queueDepth={1} />
       </div>
     </Pane>
   );
@@ -381,6 +380,62 @@ function QueueControlsScene() {
   );
 }
 
+function QueuedFailedScene() {
+  const api = useMemo(() => createMockApi(), []);
+  const noop = () => {};
+  const trayProps = {
+    api,
+    sessionId: "sess-failed",
+    rows: [] as QueuedTrayRow[],
+    onEdit: noop,
+    onSendNow: noop,
+    onCancel: noop,
+    onSave: async () => {},
+    onDiscard: noop,
+    onSalvage: noop,
+  };
+  const inAnHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const earlier = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  return (
+    <div className="gallery-stack">
+      <div className="gallery-label">Failed scheduled send — after the scheduled rows · Retry ↺ · Dismiss ✕</div>
+      <div className="gallery-pane" style={{ height: "auto" }}>
+        <div className="chat-pane__footer">
+          <QueuedTray
+            {...trayProps}
+            scheduledRows={[{ id: "sch-1", message: "Run the nightly benchmarks and summarize regressions.", fireAt: inAnHour }]}
+            failedRows={[
+              {
+                id: "sch-0",
+                message: "Check whether CI is green and rebase onto main if it is.",
+                fireAt: earlier,
+                failureReason: "Daemon restarted before delivery",
+              },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="gallery-label">Only failed rows — the tray still renders</div>
+      <div className="gallery-pane" style={{ height: "auto" }}>
+        <div className="chat-pane__footer">
+          <QueuedTray
+            {...trayProps}
+            failedRows={[
+              {
+                id: "sch-2",
+                message: "Open a PR for the composer revamp once tests pass.",
+                fireAt: earlier,
+                failureReason: "Agent could not be started: mode 'opus' no longer exists",
+              },
+            ]}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TabStripScene() {
   const api = useMemo(() => {
     const a = createMockApi();
@@ -433,12 +488,15 @@ function App() {
   let body: React.ReactNode;
   switch (scene) {
     case "chat": body = <ChatScene running={false} />; break;
+    case "chat-warn-context": body = <ChatScene running={false} total={164000} />; break;
+    case "chat-high-context": body = <ChatScene running={false} total={184000} />; break;
     case "chat-running": body = <ChatScene running />; break;
     case "empty": body = <EmptyScene />; break;
     case "loading": body = <LoadingScene />; break;
     case "statusbar": body = <StatusBarScene />; break;
     case "queued": body = <QueuedScene />; break;
     case "queue-controls": body = <QueueControlsScene />; break;
+    case "queued-failed": body = <QueuedFailedScene />; break;
     case "attachments": body = <AttachmentsScene />; break;
     case "tabstrip": body = <TabStripScene />; break;
     case "create-json": body = <CreateDialogScene />; break;

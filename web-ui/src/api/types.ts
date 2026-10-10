@@ -475,6 +475,31 @@ export interface SessionMeta {
    *  configured default. Absent (falsy) when the mode's default model is in
    *  use. */
   modelOverridden?: boolean;
+  /** Pending scheduled messages for this session, from daemon's `scheduled_messages` table. */
+  scheduledSends?: ScheduledPendingMessage[];
+  /** turnIds that were fired from scheduled sends — used to badge those messages in the transcript. */
+  scheduledTurnIds?: string[];
+  /** Scheduled sends the daemon failed to deliver. Same semantics as `scheduledSends`:
+   *  a present array (even empty) is authoritative; null/absent means "not carried". */
+  scheduledFailed?: ScheduledFailedMessage[];
+}
+
+/** A scheduled send waiting for its time. */
+export interface ScheduledPendingMessage {
+  id: string;
+  message: string;
+  attachments?: Attachment[];
+  fireAt: string; // ISO-8601 UTC
+}
+
+/** A scheduled send that failed to deliver; the user can retry or dismiss it. */
+export interface ScheduledFailedMessage {
+  id: string;
+  message: string;
+  attachments?: Attachment[];
+  fireAt: string; // ISO-8601 UTC
+  /** Human-readable reason from the daemon — shown as-is. */
+  failureReason: string;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -742,6 +767,17 @@ export type WSEvent =
       type: "session:meta";
       sessionId: string;
       meta: SessionMeta;
+    }
+  | {
+      /** Scheduled-send state changed (scheduled / cancelled / delivered /
+       *  failed / retried / dismissed). Carries ONLY the scheduled fields —
+       *  each authoritative, `[]` clears — so it can never overwrite live
+       *  turn state the way a full `session:meta` snapshot could. */
+      type: "session:scheduled";
+      sessionId: string;
+      scheduledSends: ScheduledPendingMessage[];
+      scheduledFailed: ScheduledFailedMessage[];
+      scheduledTurnIds: string[];
     }
   | {
       /** JSON agent chat: an edit-a-sent-message fork truncated these turns —

@@ -15,6 +15,7 @@ import { useGlobalDraftStore } from "@/store/globalDraftStore";
 // new-directory creation + navigation logic under test. Stub both to simple,
 // controllable controls.
 vi.mock("../chat/SkillEditor", () => ({
+  useSoftKeyboardVisible: () => false,
   SkillEditor: ({
     onChangeText,
     onSubmit,
@@ -41,6 +42,14 @@ vi.mock("./ProjectCombobox", () => ({
     </button>
   ),
 }));
+
+/** The composer-toolbar channel switch: ON = Rich Chat (json), OFF = Terminal (tmux). */
+function channelSwitch() {
+  return screen.getByRole("switch", { name: /Rich Chat/i });
+}
+function findChannelSwitch() {
+  return screen.findByRole("switch", { name: /Rich Chat/i });
+}
 
 function makeApi() {
   return createMockApi() as MockApi;
@@ -113,7 +122,7 @@ describe("DraftComposer new-directory creation", () => {
 
     // Switch to Terminal channel so the created agent must be a terminal agent.
     await act(async () => {
-      screen.getByRole("radio", { name: /Terminal/i }).click();
+      channelSwitch().click(); // Rich Chat (default) → Terminal
     });
 
     const spy = vi.spyOn(api, "createWorktree");
@@ -411,20 +420,18 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     };
   }
 
-  it("4.T1 — agy mode with no explicit channel defaults the radio to Terminal", async () => {
+  it("4.T1 — agy mode with no explicit channel defaults the switch to Terminal", async () => {
     const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
   });
 
-  it("4.T2 — claude mode defaults the radio to Rich Chat", async () => {
+  it("4.T2 — claude mode defaults the switch to Rich Chat", async () => {
     const claude = makeCli({ id: "claude" });
     renderTier2([makeMode({ id: "claude-mode", cli: "claude" })], [claude]);
-    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
-    await waitFor(() => expect(rich).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Terminal/i })).not.toBeChecked();
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).toBeChecked());
   });
 
   it("preselects settings.lastModeId when it still exists, else the first mode", async () => {
@@ -454,8 +461,8 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "agy-mode", channel: "json" },
     });
     renderTier1(session);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
   });
 
   it("4.T4 — an explicit prior channel choice (channelExplicit) is respected, not flipped", async () => {
@@ -476,9 +483,8 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       },
     });
     renderTier1(session);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
   });
 
   it("4.T3 — a manual channel pick survives a later mode change (touched ref)", async () => {
@@ -492,19 +498,20 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       [makeMode({ id: "tmux-default-mode", cli: "tmux-default" }), makeMode({ id: "claude-mode", cli: "claude" })],
       [tmuxDefault, claude],
     );
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
 
     // User explicitly picks Terminal (touches the ref), then switches to claude.
     await act(async () => {
-      screen.getByRole("radio", { name: /Rich Chat/i }).click(); // touch
-      screen.getByRole("radio", { name: /Terminal/i }).click(); // explicit Terminal
+      channelSwitch().click(); // touch → Rich Chat
+    });
+    await act(async () => {
+      channelSwitch().click(); // explicit Terminal
     });
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
     });
-    await waitFor(() => expect(screen.getByRole("radio", { name: /Terminal/i })).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+    await waitFor(() => expect(channelSwitch()).not.toBeChecked());
   });
 
   it("4.T8a — an untouched agy default flips back to Rich Chat when the mode changes to claude", async () => {
@@ -514,13 +521,13 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
       [agy, claude],
     );
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
     // No manual pick -> switching to claude follows claude's json default.
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
     });
-    await waitFor(() => expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeChecked());
+    await waitFor(() => expect(channelSwitch()).toBeChecked());
   });
 
   it("4.T8b — a CLI that can't do Rich Chat still forces Terminal via jsonSupported", async () => {
@@ -528,9 +535,9 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     // forces Terminal (independent of the mode-follow default).
     const noJson = makeCli({ id: "weird", defaultChannel: "json", supportsJson: false });
     renderTier2([makeMode({ id: "weird-mode", cli: "weird" })], [noJson]);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeDisabled();
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    expect(channelSwitch()).toBeDisabled();
   });
 
   it("4.T10 — a persisted json default override for agy is dropped (agy is terminal-only)", async () => {
@@ -539,17 +546,17 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     // as json. Rich Chat stays disabled and Terminal is forced.
     const agyJson = makeCli({ id: "agy", defaultChannel: "json", defaultChannelOverridden: true, supportsJson: false });
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agyJson]);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
-    expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeDisabled();
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
+    expect(sw).toBeDisabled();
   });
 
   it("4.T6 — Tier 2 agy mode: the default Terminal channel reaches the createWorktree payload as tmux", async () => {
     const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     const spy = vi.spyOn(api, "createWorktree");
     renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
-    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
-    await waitFor(() => expect(terminal).toBeChecked());
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).not.toBeChecked());
     await typePrompt("build the thing");
     await selectNewDirectoryAndStart();
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
@@ -568,7 +575,137 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
         <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
       </MemoryRouter>,
     );
-    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
-    await waitFor(() => expect(rich).toBeChecked());
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).toBeChecked());
+  });
+
+  // ── Shared composer (ComposerShell) in the draft ─────────────────────────
+  async function startTier1Draft() {
+    await act(async () => {
+      screen.getByTestId("start-btn").click();
+    });
+  }
+
+  it("uses the shared composer: no schedule button, no Channel radios / Use tmux / Attachments field", async () => {
+    renderTier1(makeDraftSession({}));
+    await findChannelSwitch();
+    expect(document.querySelector(".chat-composer.chat-composer--draft")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Schedule send" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Terminal|Rich Chat/i })).toBeNull();
+    expect(screen.queryByText(/Use tmux/i)).toBeNull();
+    expect(screen.queryByText("Attachments")).toBeNull();
+    expect(screen.getByRole("button", { name: "Attach files" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start agent" })).toBeTruthy();
+  });
+
+  it("toggle ON submits channel json; OFF submits channel tmux (explicit)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    const spy = vi.spyOn(api, "startDraft");
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    const sw = await findChannelSwitch();
+    await waitFor(() => expect(sw).toBeChecked());
+    await typePrompt("do it");
+    await act(async () => {
+      sw.click();
+    });
+    expect(sw).not.toBeChecked();
+    await startTier1Draft();
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const body = spy.mock.calls[0]![1] as { draftConfig: { channel?: string; channelExplicit?: boolean; useTmux?: boolean }; skipAutoTurn?: boolean };
+    expect(body.draftConfig.channel).toBe("tmux");
+    expect(body.draftConfig.channelExplicit).toBe(true);
+    expect(body.draftConfig.useTmux).toBeUndefined();
+    expect(body.skipAutoTurn).toBe(false);
+  });
+
+  it("toggle ON (default) submits channel json and doesn't mark it explicit", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    const spy = vi.spyOn(api, "startDraft");
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await waitFor(async () => expect(await findChannelSwitch()).toBeChecked());
+    await typePrompt("do it");
+    await startTier1Draft();
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const body = spy.mock.calls[0]![1] as { draftConfig: { channel?: string; channelExplicit?: boolean } };
+    expect(body.draftConfig.channel).toBe("json");
+    expect(body.draftConfig.channelExplicit).toBe(false);
+  });
+
+  it("a legacy persisted useTmux:false is ignored — Terminal always means tmux", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    const spy = vi.spyOn(api, "startDraft");
+    renderTier1(
+      makeDraftSession({
+        modeId: "claude-mode",
+        draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "claude-mode", channel: "pty", channelExplicit: true, useTmux: false },
+      }),
+    );
+    await waitFor(async () => expect(await findChannelSwitch()).not.toBeChecked());
+    await typePrompt("do it");
+    await startTier1Draft();
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const body = spy.mock.calls[0]![1] as { draftConfig: { channel?: string } };
+    expect(body.draftConfig.channel).toBe("tmux");
+  });
+
+  it("files dropped on the composer show as chips and are uploaded to the started session", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    // The mock daemon doesn't know this store-only draft; stub a successful start.
+    vi.spyOn(api, "startDraft").mockResolvedValue({ ok: true });
+    const upload = vi.spyOn(api, "uploadAttachments");
+    const send = vi.spyOn(api, "sendChat").mockResolvedValue(undefined as never);
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    await typePrompt("look at this");
+    const file = new File(["png"], "screen.png", { type: "image/png" });
+    const composer = document.querySelector(".chat-composer")!;
+    await act(async () => {
+      fireEvent.dragEnter(composer, { dataTransfer: { files: [file], types: ["Files"] } });
+    });
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(true);
+    await act(async () => {
+      fireEvent.drop(composer, { dataTransfer: { files: [file], types: ["Files"] } });
+    });
+    expect(screen.getByText("screen.png")).toBeTruthy();
+    // Staged, not uploaded yet — there's no live session until Start.
+    expect(upload).not.toHaveBeenCalled();
+    await startTier1Draft();
+    await waitFor(() => expect(upload).toHaveBeenCalledWith("t1-draft", [file]));
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(send.mock.calls[0]![2]).toHaveLength(1);
+  });
+
+  it("a staged chip can be removed before Start", async () => {
+    renderTier1(makeDraftSession({}));
+    await findChannelSwitch();
+    const file = new File(["a"], "notes.md");
+    await act(async () => {
+      fireEvent.drop(document.querySelector(".chat-composer")!, { dataTransfer: { files: [file], types: ["Files"] } });
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Remove notes.md" }).click();
+    });
+    expect(screen.queryByText("notes.md")).toBeNull();
+  });
+
+  it("Terminal disables attaching (only Rich Chat delivers attachments)", async () => {
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
+    await waitFor(async () => expect(await findChannelSwitch()).not.toBeChecked());
+    expect(screen.getByRole("button", { name: "Attach files" })).toBeDisabled();
+  });
+
+  it("the hint row renders keycaps for the draft's start shortcut", async () => {
+    renderTier1(makeDraftSession({}));
+    await findChannelSwitch();
+    const hint = document.querySelector(".chat-composer__hint")!;
+    const keys = Array.from(hint.querySelectorAll("kbd")).map((k) => k.textContent);
+    expect(keys).toEqual(["Enter", "Shift + Enter"]);
+    expect(hint.textContent).toContain("to start");
+    expect(hint.textContent).not.toContain("to queue");
   });
 });

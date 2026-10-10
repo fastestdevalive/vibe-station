@@ -139,19 +139,6 @@
   cursor: pointer;
 }
 
-.draft-composer__radio-row {
-  display: flex;
-  gap: var(--space-4);
-}
-
-.draft-composer__radio-label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-}
-
 .draft-composer__checkbox {
   display: flex;
   align-items: center;
@@ -160,12 +147,6 @@
   font-size: var(--font-size-sm);
   user-select: none;
   margin-top: var(--space-2);
-}
-
-.draft-composer__hint {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  margin-top: var(--space-1);
 }
 
 .draft-composer__project-chip {
@@ -212,14 +193,14 @@
   text-decoration: underline;
 }
 
+/* Frameless, like the chat pane footer: the shared composer shell inside is
+   the only visible frame. Horizontal padding matches `__body`'s centred
+   column so the composer lines up with the form above it. */
 .draft-composer__bar {
   flex-shrink: 0;
-  border-top: 1px solid var(--border-subtle);
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-primary);
+  padding: 0 max(var(--space-3), calc(50% - 332px)) var(--space-1);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
 

@@ -403,4 +403,10 @@ describe("mock api contract", () => {
     const ps = await api.listProjects();
     expect(ps.some((p) => p.id === "proj-a")).toBe(true);
   });
+
+  it("retry/dismiss of a failed scheduled message resolve ok", async () => {
+    const api = createMockApi();
+    await expect(api.retryScheduledMessage("sess-main", "f1")).resolves.toEqual({ ok: true });
+    await expect(api.dismissScheduledMessage("sess-main", "f1")).resolves.toEqual({ ok: true });
+  });
 });

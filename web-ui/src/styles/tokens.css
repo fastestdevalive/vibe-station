@@ -147,6 +147,13 @@
      swaps to purple (matching GitHub's merged-PR chip colour). */
   --status-working: #eab308;
   --status-waiting: #ef4444;
+  /* Context-window meter (composer status row). */
+  /* Meter fill/track follow the theme (--accent / --border-default); only the
+     warning levels (80% / 90%) are coloured. */
+  --ctx-warn: #f97316;
+  --ctx-danger: #ef4444;
+  /* Scheduled-send accent (queue-tray rail + sent-turn badge). */
+  --scheduled-color: #60a5fa;
   --pr-open: #22c55e;
   --pr-merged: #8250df;
   --pr-draft: #8a8a8a;
@@ -244,6 +251,9 @@
 
   --status-working: #a16207;
   --status-waiting: #dc2626;
+  --ctx-warn: #c2410c;
+  --ctx-danger: #dc2626;
+  --scheduled-color: #2563eb;
   --pr-open: #15803d;
   --pr-merged: #6e40c9;
   --pr-draft: #737373;

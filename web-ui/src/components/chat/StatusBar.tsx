@@ -1,43 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { SessionMeta, TurnState } from "@/api/types";
-import { ModelSwitch } from "./ModelSwitch";
 import { ChannelToggleButton } from "./ChannelToggleButton";
-import { WorkingDots } from "./WorkingDots";
 import { cliDisplayName } from "@/lib/cliNames";
 
 interface StatusBarProps {
   meta: SessionMeta | null;
   /** Optimistic queued count (pending bubbles) merged with meta.queueDepth. */
   queueDepth?: number;
-  /** Runs while a turn is active. */
-  onStop?: () => void;
-  /** True while a stop request is pending/in flight. */
-  stopPending?: boolean;
-  /** When provided (with sessionId), the model becomes a live switcher. */
+  /** When provided (with sessionId), enables the channel toggle. */
   api?: ApiInstance;
   sessionId?: string;
-  /** Whether the message list is scrolled to (or near) the live edge, mirrored
-   *  up from `MessageList` by `ChatPane`. While busy AND scrolled away, the
-   *  in-feed `WorkingIndicator` is off-screen, so the footer shows the same
-   *  animated dots next to Stop; at the bottom it stays dots-free (the in-feed
-   *  indicator already covers it). Defaults to `true` — no busy dots — so
-   *  callers that don't track scrolling are unaffected. */
-  atBottom?: boolean;
   /** Font -/+ controls rendered to the left of the channel toggle overlay. */
   fontControls?: ReactNode;
 }
-
-/** Compact token count: exact below 1000, then 1.3k / 22.8k / 999.9k / 1M. */
-export function fmt(n: number): string {
-  const trim = (x: number) => x.toFixed(1).replace(/\.0$/, "");
-  if (n < 1000) return String(n);
-  const k = Math.round(n / 100) / 10;
-  if (k < 1000) return `${trim(k)}k`;
-  return `${trim(Math.round(n / 100000) / 10)}M`;
-}
-
-const BUSY_STATES: TurnState[] = ["thinking", "responding", "tool"];
 
 /** Shared with `MessageList`'s `WorkingIndicator` (Decision 8) — one source of
  *  truth for the turn-state label text instead of duplicating this switch.
@@ -64,39 +40,19 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
 }
 
 /**
- * Composer status bar: tokens used / context %, model, mode name, and a live
- * turn-state indicator (Decision 4 — one cross-harness contract, no per-CLI
- * branching). Fields absent from `meta` (e.g. contextWindow) hide
- * gracefully.
+ * Footer row: font controls + the Rich Chat → Terminal channel toggle. Token /
+ * context-window usage lives in the composer's status row (`ContextMeter`).
  */
-export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sessionId, atBottom = true, fontControls }: StatusBarProps) {
-  const usage = meta?.usage;
+export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls }: StatusBarProps) {
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
-  const busy = state ? BUSY_STATES.includes(state) : false;
 
-  const total = usage?.totalTokens ?? 0;
-  const ctx = usage?.contextWindow;
-  const pct = ctx && ctx > 0 ? Math.round((total / ctx) * 100) : null;
-
-  const model = meta?.model ?? usage?.model;
-
-  // Channel toggle (P3, R1.1): the chat pane can switch a JSON session to a raw
-  // terminal (same agentChatId, --resume). Enabled ONLY when idle — no active,
-  // queued, or held-for-edit turn.
+  // Channel toggle: enabled only when idle — no active, queued, or held-for-edit turn.
   const canToggle = !!(api && sessionId && meta && meta.channel === "json");
   const idle = state === "idle" && queue === 0 && (meta?.editingTurnIds.length ?? 0) === 0;
 
-  // Resolve the CLI's native-history-import capability (first-class flag from
-  // GET /supported-clis) so we can warn before a lossy switch. null = unknown;
-  // we default to NOT warning until it resolves. cursor/agy → false.
   const cli = meta?.cli;
   const [importsHistory, setImportsHistory] = useState<boolean | null>(null);
-  // Same resolve-once-from-GET/supported-clis pattern as importsHistory above,
-  // for a second, independent caveat: can the terminal side actually RESUME
-  // this CLI's conversation at all (vs. just missing its terminal-phase
-  // backfill). false only for cursor today — its ACP session state lives in a
-  // store `--resume` can't read (Decision 6 follow-up, spawn.ts).
   const [supportsResume, setSupportsResume] = useState<boolean | null>(null);
   useEffect(() => {
     if (!api || !cli) return undefined;
@@ -116,89 +72,8 @@ export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sess
 
   return (
     <div className="chat-statusbar" data-turn-state={state ?? "idle"}>
-      <div className="chat-statusbar__info">
-        {usage ? (
-          <span className="chat-statusbar__tokens">
-            {ctx ? `${fmt(total)} / ${fmt(ctx)} tok` : `${fmt(total)} tok`}
-            {pct != null ? <span className="chat-statusbar__pct"> ({pct}%)</span> : null}
-          </span>
-        ) : null}
-        {api && sessionId && meta && meta.cli !== "cursor" ? (
-          <ModelSwitch api={api} sessionId={sessionId} cli={meta.cli} model={model} />
-        ) : model ? (
-          <span className="chat-statusbar__model">{model}</span>
-        ) : null}
-        {meta?.modeName ? (
-          <span
-            className={`chat-statusbar__mode${meta.modelOverridden ? " chat-statusbar__mode--overridden" : ""}`}
-            title={meta.modelOverridden ? `Started as: ${meta.modeName}` : meta.modeName}
-          >
-            {meta.modelOverridden ? `started as ${meta.modeName}` : meta.modeName}
-          </span>
-        ) : null}
-      </div>
-      <div className="chat-statusbar__turn">
-        {/* While busy, the SAME label already rides next to the in-feed
-         *  `WorkingIndicator`'s dots (Decision 8) — repeating it here, beside
-         *  the Stop button, is pure duplication, so the busy footer row is
-         *  just `[Stop]`. Non-busy states ("Ready" / "Queued (n)" / "Error")
-         *  have no in-feed counterpart and still render here. `error` is
-         *  never a busy state, so the ⚠ icon is unaffected. */}
-        {busy ? null : (
-          <span className={`chat-statusbar__state chat-statusbar__state--${state ?? "idle"}`}>
-            {state === "error" ? <span aria-hidden>⚠ </span> : null}
-            {turnLabel(state, queue)}
-          </span>
-        )}
-        {/* Dots ONLY (never the busy label — that would re-create the exact
-         *  duplication removed above), and visible only while the in-feed
-         *  indicator is actually out of view. This is the sole "still working"
-         *  affordance left for a user who has scrolled up.
-         *
-         *  The element stays MOUNTED for the whole busy period and only toggles
-         *  visibility: mounting/unmounting it would resize the row and shove
-         *  the Stop button sideways every time the user crosses the 80px
-         *  near-bottom threshold — i.e. exactly while they are scrolling.
-         *  `visibility: hidden` (not `display: none`) keeps the box, so the
-         *  reserved space is identical either way. `aria-hidden` while
-         *  invisible keeps it out of the a11y tree, matching the visual. */}
-        {busy ? (
-          <span
-            className={`chat-statusbar__busy${atBottom ? " chat-statusbar__busy--hidden" : ""}`}
-            role="status"
-            aria-label="Agent is working"
-            {...(atBottom ? { "aria-hidden": true } : {})}
-          >
-            <WorkingDots />
-          </span>
-        ) : null}
-        {/* While a turn is running, the daemon no longer flips turn_state to
-         *  "queued" (queue.rs enqueue guard) — so the busy "Queued (n)" label
-         *  above never fires mid-turn. Surface the queued count here so a user
-         *  who enqueues while the agent is still working still gets visible
-         *  confirmation their message is queued, without it looking like the
-         *  agent paused. `queue` is the max of the optimistic bubble count and
-         *  `meta.queueDepth` (SessionMeta). */}
-        {busy && queue > 0 ? (
-          <span className="chat-statusbar__queued" role="status">
-            {queue} queued
-          </span>
-        ) : null}
-        {busy && onStop ? (
-          <button
-            type="button"
-            className="chat-statusbar__stop btn btn--secondary"
-            onClick={onStop}
-            disabled={stopPending}
-          >
-            Stop
-          </button>
-        ) : null}
-      </div>
-      {/* Positioned via CSS as a top-right overlay of the whole `.chat-pane`
-          (item 4) — NOT visually anchored to this row, even though it's
-          declared here alongside the rest of the toggle's gating logic. Font
-          controls are co-located here for discoverability. */}
+      {/* Spacer: keeps the controls overlay right-aligned (space-between). */}
+      <div className="chat-statusbar__info" />
       {canToggle || fontControls ? (
         <div className="chat-font-overlay">
           {fontControls}

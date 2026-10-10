@@ -1,3 +1,4 @@
+import { Paperclip } from "lucide-react";
 import type { Attachment } from "@/api/types";
 
 function formatSize(bytes: number): string {
@@ -19,7 +20,7 @@ export function AttachmentChip({ attachment, onRemove, status }: AttachmentChipP
   const size = formatSize(attachment.size);
   return (
     <span className={`chat-attachment-chip${status === "error" ? " chat-attachment-chip--error" : ""}`}>
-      <span className="chat-attachment-chip__icon" aria-hidden>📎</span>
+      <Paperclip size={12} aria-hidden />
       <span className="chat-attachment-chip__name" title={attachment.name}>
         {attachment.name}
       </span>

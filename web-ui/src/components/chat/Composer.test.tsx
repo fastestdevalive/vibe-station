@@ -135,12 +135,13 @@ describe("Composer draft persistence (RA1)", () => {
 });
 
 describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () => {
-  it("busy=true, empty box → Stop button renders (the one real busy-with-nothing-to-send case)", () => {
+  it("busy=true, empty box → Stop button in status bar, Send is shown but disabled", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-busy-empty" onSend={vi.fn()} busy onStop={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy();
-    expect(screen.queryByLabelText("Send message")).toBeNull();
-    expect(screen.queryByLabelText(/queues after current turn/i)).toBeNull();
+    // Send is always visible; when busy+empty it is disabled (not hidden).
+    const sendBtn = screen.getByLabelText("Send message (queues after current turn)") as HTMLButtonElement;
+    expect(sendBtn.disabled).toBe(true);
   });
 
   it("renders Stop button disabled when stopPending is true", () => {
@@ -163,14 +164,13 @@ describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () =
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("busy=true, text ready → Stop button still renders (typing must not hide it)", () => {
+  it("busy=true, text ready → Stop button in status bar and Send button both render", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-busy-text" onSend={vi.fn()} busy onStop={vi.fn()} initialText="follow-up" />);
     expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy();
-    // The queue-send button is still available too — Stop and Send/queue
-    // coexist once there's text, they're no longer mutually exclusive.
-    const sendBtn = screen.getByLabelText("Send message (queues after current turn)");
-    expect(sendBtn.className).toContain("chat-composer__send--queue");
+    // Send always coexists with Stop; when busy it shows the queuing aria-label.
+    const sendBtn = screen.getByLabelText("Send message (queues after current turn)") as HTMLButtonElement;
+    expect(sendBtn.disabled).toBe(false);
   });
 
   it("busy=true, text ready → clicking Stop only stops the turn; the typed text is left in the box, untouched and unsent", () => {
@@ -300,5 +300,201 @@ describe("Composer focusOnMount (navigation-focus-change)", () => {
     // this spy cannot catch the initial call; instead confirm the component
     // still wires focus through the handle (a no-op when it never mounted).
     expect(typeof focusSpy).toBe("function");
+  });
+});
+
+describe("Composer drag-and-drop", () => {
+  const filesDrag = (files: File[] = []) => ({ dataTransfer: { files, types: ["Files"], dropEffect: "none" } });
+
+  it("shows the dragover state on enter and keeps it while crossing child boundaries", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-dnd" onSend={vi.fn()} />);
+    const composer = document.querySelector(".chat-composer")!;
+    const attach = screen.getByRole("button", { name: "Attach files" });
+
+    fireEvent.dragEnter(composer, filesDrag());
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(true);
+    // Entering a child then leaving the parent (the usual browser sequence when
+    // the pointer moves onto a child) must not drop the highlight.
+    fireEvent.dragEnter(attach, filesDrag());
+    fireEvent.dragLeave(composer, filesDrag());
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(true);
+    fireEvent.dragLeave(attach, filesDrag());
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(false);
+  });
+
+  it("ignores non-file drags (text, tabs)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-dnd-text" onSend={vi.fn()} />);
+    const composer = document.querySelector(".chat-composer")!;
+    fireEvent.dragEnter(composer, { dataTransfer: { files: [], types: ["text/plain"] } });
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(false);
+  });
+
+  it("drop prevents the browser default and uploads to the session", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "uploadAttachments");
+    render(<Composer api={api} sessionId="s-dnd-up" onSend={vi.fn()} />);
+    const composer = document.querySelector(".chat-composer")!;
+    const file = new File(["x"], "shot.png", { type: "image/png" });
+    fireEvent.dragEnter(composer, filesDrag([file]));
+    const notCancelled = fireEvent.drop(composer, filesDrag([file]));
+    expect(notCancelled).toBe(false); // preventDefault → no navigation to the file
+    expect(composer.classList.contains("chat-composer--dragover")).toBe(false);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s-dnd-up", [file]));
+    expect(await screen.findByText("shot.png")).toBeTruthy();
+  });
+
+  it("swallows a file dropped outside any drop target so the page doesn't navigate away", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-dnd-guard" onSend={vi.fn()} />);
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    const file = new File(["x"], "stray.txt");
+    expect(fireEvent.drop(outside, filesDrag([file]))).toBe(false);
+    outside.remove();
+  });
+});
+
+describe("Composer toolbar + hints", () => {
+  it("renders each shortcut combo in a keycap", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-kbd" onSend={vi.fn()} commands={[]} />);
+    const hint = document.querySelector(".chat-composer__hint")!;
+    const keys = Array.from(hint.querySelectorAll("kbd.chat-kbd")).map((k) => k.textContent);
+    expect(keys).toEqual(["Enter", "Ctrl/⌘ + Enter", "Shift + Enter"]);
+    expect(hint.textContent).toContain("to send");
+    expect(hint.textContent).toContain("to queue");
+    expect(hint.textContent).toContain("newline");
+  });
+
+  it("shows the schedule button only when onScheduleSend is provided", () => {
+    const api = createMockApi();
+    const { unmount } = render(<Composer api={api} sessionId="s-sched-a" onSend={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Schedule send" })).toBeNull();
+    unmount();
+    render(<Composer api={api} sessionId="s-sched-b" onSend={vi.fn()} onScheduleSend={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Schedule send" })).toBeTruthy();
+  });
+
+  it("keeps the outer .chat-composer frameless (no border/background rule)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const css = readFileSync(resolve(process.cwd(), "src/styles/chat.css"), "utf8");
+    const block = /\n\.chat-composer \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).not.toMatch(/(^|\s)(border|background)\s*:/);
+    expect(css).not.toMatch(/\n\.chat-pane__footer \{[^}]*border-top/);
+  });
+});
+
+describe("Composer schedule send — failure handling", () => {
+  function futureLocal(): string {
+    const d = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function openPopover(onScheduleSend: () => Promise<void>) {
+    const api = createMockApi();
+    render(
+      <Composer api={api} sessionId="s-sched-fail" onSend={vi.fn()} onScheduleSend={onScheduleSend} initialText="remind me" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Schedule send" }));
+    return screen.getByLabelText("Send at") as HTMLInputElement;
+  }
+
+  it("a rejected schedule keeps the popover open and shows the daemon's reason (no silent failure)", async () => {
+    const onScheduleSend = vi.fn(() => Promise.reject(new ApiError('{"error":"fire_at must be in the future"}', 400)));
+    const input = openPopover(onScheduleSend);
+    fireEvent.change(input, { target: { value: futureLocal() } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("fire_at must be in the future");
+    expect(screen.getByRole("dialog")).toBeTruthy(); // still open — the user can pick another time
+    expect(onScheduleSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a time that is already past without calling the daemon", () => {
+    const onScheduleSend = vi.fn(() => Promise.resolve());
+    const input = openPopover(onScheduleSend);
+    fireEvent.change(input, { target: { value: "2020-01-01T00:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Pick a time in the future");
+    expect(onScheduleSend).not.toHaveBeenCalled();
+  });
+
+  it("starts at the next whole minute (i.e. now), not an hour from now", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(2026, 2, 5, 10, 7, 30)); // local 10:07:30
+      const input = openPopover(vi.fn(() => Promise.resolve()));
+      expect(input.value).toBe("2026-03-05T10:08");
+      // Pressing Schedule without touching the picker is valid (strictly in the future).
+      expect(new Date(input.value).getTime()).toBeGreaterThan(Date.now());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the datetime input won't offer past minutes (min is set)", () => {
+    const input = openPopover(vi.fn(() => Promise.resolve()));
+    expect(input.min).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+  });
+
+  it("the clock button toggles the popover closed again (its mousedown is not an outside click)", () => {
+    openPopover(vi.fn(() => Promise.resolve()));
+    const clock = screen.getByRole("button", { name: "Schedule send" });
+    fireEvent.mouseDown(clock);
+    fireEvent.click(clock);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows an Error status label after a failed turn instead of Ready", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-err" onSend={vi.fn()} statusLabel="Error" />);
+    expect(screen.getByText("Error")).toBeTruthy();
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+});
+
+describe("Composer toolbar chips and status label (carried over from the old status bar)", () => {
+  function mount(props: Partial<React.ComponentProps<typeof Composer>> = {}) {
+    const api = createMockApi();
+    return render(<Composer api={api} sessionId="s-chips" onSend={vi.fn()} {...props} />);
+  }
+
+  it("shows the mode name as a chip, and 'started as <mode>' (with a tooltip) when the model was overridden", () => {
+    const { rerender } = mount({ modeName: "Reviewer", cli: "claude", model: "opus" });
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    rerender(
+      <Composer api={createMockApi()} sessionId="s-chips" onSend={vi.fn()} modeName="Reviewer" modelOverridden cli="claude" model="opus" />,
+    );
+    const chip = screen.getByText("started as Reviewer");
+    expect(chip.className).toContain("chat-composer__mode-chip--overridden");
+    expect(chip.getAttribute("title")).toBe("Started as: Reviewer");
+  });
+
+  it("hides the mode chip when there is no mode name", () => {
+    const { container } = mount({ cli: "claude", model: "opus" });
+    expect(container.querySelector(".chat-composer__mode-chip")).toBeNull();
+  });
+
+  it("offers the model switcher whenever the CLI supports it — even before meta reports a model — but never for cursor", () => {
+    const { container, unmount } = mount({ cli: "claude" });
+    expect(container.querySelector(".chat-model-switch")).toBeTruthy();
+    unmount();
+    const cursor = mount({ cli: "cursor", model: "auto" });
+    expect(cursor.container.querySelector(".chat-model-switch")).toBeNull();
+    expect(screen.getByText("auto")).toBeTruthy(); // plain chip instead
+  });
+
+  it("shows the queued count next to Working…, and the error/queued label when idle", () => {
+    const { rerender } = mount({ busy: true, queuedCount: 2 });
+    expect(screen.getByText("Working… · 2 queued")).toBeTruthy();
+    rerender(<Composer api={createMockApi()} sessionId="s-chips" onSend={vi.fn()} statusLabel="Queued (1)" />);
+    expect(screen.getByText("Queued (1)")).toBeTruthy();
+    rerender(<Composer api={createMockApi()} sessionId="s-chips" onSend={vi.fn()} statusLabel="⚠ Error" />);
+    expect(screen.getByText("⚠ Error")).toBeTruthy();
   });
 });

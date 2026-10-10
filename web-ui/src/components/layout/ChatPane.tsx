@@ -4,10 +4,12 @@ import type { ApiInstance } from "@/api";
 import type { Attachment, FileScope, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { apiErrorText } from "@/lib/apiErrorText";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
-import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
+import { QueuedTray, type QueuedTrayRow, type ScheduledRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
+import { ScheduleSendPopover } from "@/components/chat/ScheduleSendPopover";
 import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
@@ -159,9 +161,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // `turnActive` above stays RAW/instant — Composer's busy/Stop gating must
   // never lag behind the real state.
   // Mirrored up from `MessageList` (which stays the owner of the scroll
-  // measurement) purely so the footer `StatusBar` knows whether the in-feed
-  // working indicator is visible. Defaults to `true`, matching MessageList's
-  // own initial value, so no dots flash before the first scroll event.
+  // measurement) so `useChat` can pause live-event trimming while the user is
+  // scrolled up. Defaults to `true`, matching MessageList's own initial value.
   const [atBottom, setAtBottom] = useState(true);
   // `ChatPane` is NOT re-keyed per session — this one instance survives a pane
   // hide (`enabled` flips), a channel toggle and a session switch, while the
@@ -183,10 +184,18 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     setCanTrim(atBottom);
   }, [atBottom, setCanTrim]);
   const [steerNotice, setSteerNotice] = useState<string | null>(null);
+  const [editScheduleError, setEditScheduleError] = useState<string | null>(null);
+  const [editScheduleBusy, setEditScheduleBusy] = useState(false);
+  // Tray actions on scheduled rows (send now / cancel / retry / dismiss) report
+  // a daemon rejection in the shared notice strip instead of failing silently.
+  const reportScheduleError = (e: unknown) =>
+    setSteerNotice(apiErrorText(e, "Couldn't update the scheduled message."));
   useEffect(() => {
     setSteerNotice(null);
   }, [sessionId]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
+  const [editingScheduled, setEditingScheduled] = useState<{ id: string; row: ScheduledRow } | null>(null);
+  const editScheduledAnchorRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
     return () => clearTimeout(id);
@@ -248,6 +257,10 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
 
   // Tray rows, oldest first: queued (FIFO) → editing (appended) → optimistic
   // queued-pending not yet reflected in meta/events.
+  const scheduledTurnSet = useMemo(
+    () => (meta?.scheduledTurnIds ? new Set(meta.scheduledTurnIds) : null),
+    [meta?.scheduledTurnIds],
+  );
   const trayRows = useMemo<QueuedTrayRow[]>(() => {
     const rows: QueuedTrayRow[] = [];
     const seen = new Set<string>();
@@ -260,6 +273,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
         turnId,
         text: info?.text ?? fallback?.message ?? "",
         status: "queued",
+        ...(scheduledTurnSet?.has(turnId) ? { scheduled: true } : {}),
         ...(attachments && attachments.length ? { attachments } : {}),
       });
       seen.add(turnId);
@@ -288,7 +302,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
       seen.add(p.turnId);
     }
     return rows;
-  }, [queuedTurnIds, editingTurnIds, editingDrafts, pending, userEvents, queuedTurnsMeta]);
+  }, [queuedTurnIds, editingTurnIds, editingDrafts, pending, userEvents, queuedTurnsMeta, scheduledTurnSet]);
 
   // Only optimistic turns that AREN'T queued belong in the inline log; queued
   // optimistic bubbles are folded into the tray above.
@@ -369,6 +383,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               onAtBottomChange={setAtBottom}
               {...(meta?.cwd ? { cwd: meta.cwd } : {})}
               commands={meta?.commands}
+              scheduledTurnIds={meta?.scheduledTurnIds}
             />
           )}
         </div>
@@ -394,14 +409,44 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             onSendNoticeNow={() => {
               if (sessionId) void api.promoteNotice(sessionId);
             }}
+            scheduledRows={meta?.scheduledSends}
+            onScheduledSendNow={(id) => void api.sendScheduledNow(sessionId, id).catch(reportScheduleError)}
+            onScheduledCancel={(id) => void api.cancelScheduledMessage(sessionId, id).catch(reportScheduleError)}
+            failedRows={meta?.scheduledFailed}
+            onFailedRetry={(id) => void api.retryScheduledMessage(sessionId, id).catch(reportScheduleError)}
+            onFailedDismiss={(id) => void api.dismissScheduledMessage(sessionId, id).catch(reportScheduleError)}
+            onScheduledEdit={(id, row, anchor) => {
+              editScheduledAnchorRef.current = anchor;
+              setEditingScheduled({ id, row });
+            }}
           />
         ) : null}
+        <ScheduleSendPopover
+          open={editingScheduled !== null}
+          anchorRef={editScheduledAnchorRef}
+          initialFireAt={editingScheduled?.row.fireAt}
+          title="Reschedule"
+          error={editScheduleError}
+          busy={editScheduleBusy}
+          onSchedule={(fireAt) => {
+            if (!editingScheduled) return;
+            setEditScheduleBusy(true);
+            setEditScheduleError(null);
+            api
+              .editScheduledMessage(sessionId, editingScheduled.id, { fireAt })
+              .then(() => setEditingScheduled(null))
+              // Keep the popover open with the reason so the user can pick another time.
+              .catch((e) => setEditScheduleError(apiErrorText(e, "Couldn't reschedule the message.")))
+              .finally(() => setEditScheduleBusy(false));
+          }}
+          onClose={() => {
+            setEditingScheduled(null);
+            setEditScheduleError(null);
+          }}
+        />
         <StatusBar
           meta={meta}
           queueDepth={trayRows.length}
-          atBottom={atBottom}
-          onStop={() => void stop().catch(() => {})}
-          stopPending={stopPending}
           api={api}
           {...(sessionId ? { sessionId } : {})}
           fontControls={
@@ -460,6 +505,14 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             api={api}
             sessionId={sessionId}
             textareaRef={composerRef}
+            model={meta?.model ?? meta?.usage?.model}
+            cli={meta?.cli}
+            modeName={meta?.modeName}
+            {...(meta?.modelOverridden ? { modelOverridden: true } : {})}
+            usage={meta?.usage}
+            onScheduleSend={async (message, ids, fireAt) => {
+              await api.scheduleMessage(sessionId, message, fireAt, ids);
+            }}
             onSend={async (message, ids, queue) => {
               setSalvage(null);
               setSteerNotice(null);
@@ -483,6 +536,10 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               }
             }}
             busy={turnActive}
+            queuedCount={trayRows.length}
+            {...(!turnActive && (meta?.turnState === "error" || meta?.turnState === "queued")
+              ? { statusLabel: `${meta.turnState === "error" ? "⚠ " : ""}${turnLabel(meta.turnState, trayRows.length)}` }
+              : {})}
             // Safe fallback to false if canSteer is omitted on initial REST load;
             // live `session:meta` updates supply the authoritative value mid-turn.
             canSteer={meta?.canSteer ?? false}

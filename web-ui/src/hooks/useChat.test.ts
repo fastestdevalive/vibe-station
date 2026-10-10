@@ -838,3 +838,92 @@ describe("useChat stop turn scoping", () => {
     expect(result.current.stopPending).toBe(false);
   });
 });
+
+describe("useChat scheduledFailed meta preservation", () => {
+  const base: SessionMeta = {
+    sessionId: "s1",
+    channel: "json",
+    cli: "claude",
+    turnState: "idle",
+    queueDepth: 0,
+    queuedTurnIds: [],
+    editingTurnIds: [],
+  };
+  const failed = [{ id: "f1", message: "hi", fireAt: "2026-01-01T00:00:00Z", failureReason: "Session was archived" }];
+
+  it("keeps the previous scheduledFailed when a live meta event omits it", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, scheduledFailed: failed } });
+    });
+    expect(result.current.meta?.scheduledFailed).toEqual(failed);
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, turnState: "thinking" } });
+    });
+    expect(result.current.meta?.turnState).toBe("thinking");
+    expect(result.current.meta?.scheduledFailed).toEqual(failed);
+  });
+
+  it("clears scheduledFailed on an explicit empty array", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, scheduledFailed: failed } });
+    });
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, scheduledFailed: [] } });
+    });
+    expect(result.current.meta?.scheduledFailed).toEqual([]);
+  });
+});
+
+describe("useChat session:scheduled (slim scheduled-state event)", () => {
+  const base: SessionMeta = {
+    sessionId: "s1",
+    channel: "json",
+    cli: "claude",
+    turnState: "idle",
+    queueDepth: 0,
+    queuedTurnIds: [],
+    editingTurnIds: [],
+  };
+  const pending = [{ id: "p1", message: "later", fireAt: "2030-01-01T00:00:00Z" }];
+
+  it("patches ONLY the scheduled fields — live turn state is never overwritten", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, turnState: "thinking", queueDepth: 2 } });
+    });
+    act(() => {
+      api.emit({
+        type: "session:scheduled",
+        sessionId: "s1",
+        scheduledSends: pending,
+        scheduledFailed: [],
+        scheduledTurnIds: ["t9"],
+      });
+    });
+    expect(result.current.meta?.scheduledSends).toEqual(pending);
+    expect(result.current.meta?.scheduledTurnIds).toEqual(["t9"]);
+    expect(result.current.meta?.turnState).toBe("thinking");
+    expect(result.current.meta?.queueDepth).toBe(2);
+  });
+
+  it("an empty list clears the tray, and other sessions' events are ignored", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:meta", sessionId: "s1", meta: { ...base, scheduledSends: pending } });
+    });
+    act(() => {
+      api.emit({ type: "session:scheduled", sessionId: "other", scheduledSends: [], scheduledFailed: [], scheduledTurnIds: [] });
+    });
+    expect(result.current.meta?.scheduledSends).toEqual(pending);
+    act(() => {
+      api.emit({ type: "session:scheduled", sessionId: "s1", scheduledSends: [], scheduledFailed: [], scheduledTurnIds: [] });
+    });
+    expect(result.current.meta?.scheduledSends).toEqual([]);
+  });
+});

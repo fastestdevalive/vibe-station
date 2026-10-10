@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Clock, RotateCcw, TriangleAlert } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command } from "@/api/types";
+import type { Attachment, Command, ScheduledFailedMessage } from "@/api/types";
 import type { EditingDraft } from "@/hooks/useChat";
 import { renderSkillMessageText } from "@/lib/skillInvocation";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
@@ -12,6 +13,9 @@ export interface QueuedTrayRow {
   text: string;
   attachments?: Attachment[];
   status: QueuedTrayStatus;
+  /** This turn was originally a scheduled send that fired while the agent was
+   *  busy, so it landed in the queue — shown with a subtle clock marker. */
+  scheduled?: boolean;
   /** Present when THIS tab is editing the row (prefill for the inline editor). */
   draft?: EditingDraft;
 }
@@ -20,6 +24,13 @@ export interface QueuedTrayRow {
 export interface NoticeSlotInfo {
   children: Record<string, string>;
   running: boolean;
+}
+
+export interface ScheduledRow {
+  id: string;
+  message: string;
+  attachments?: Attachment[];
+  fireAt: string; // ISO-8601
 }
 
 export interface QueuedTrayProps {
@@ -44,6 +55,36 @@ export interface QueuedTrayProps {
   onDismissNotice?: () => void;
   /** Called when the user clicks Send now on the notice slot row. */
   onSendNoticeNow?: () => void;
+  /** Scheduled messages to show below the normal queue, sorted by fireAt ascending. */
+  scheduledRows?: ScheduledRow[];
+  onScheduledEdit?: (id: string, row: ScheduledRow, anchor: HTMLButtonElement) => void;
+  onScheduledSendNow?: (id: string) => void;
+  onScheduledCancel?: (id: string) => void;
+  /** Scheduled sends the daemon failed to deliver, shown after the scheduled rows. */
+  failedRows?: ScheduledFailedMessage[];
+  onFailedRetry?: (id: string) => void;
+  onFailedDismiss?: (id: string) => void;
+}
+
+function formatScheduleTime(fireAt: string): string {
+  const d = new Date(fireAt);
+  const now = new Date();
+  const diffMs = d.getTime() - now.getTime();
+  if (diffMs < 0) return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const diffHrs = diffMs / (1000 * 60 * 60);
+  if (diffHrs < 24) {
+    const hrs = Math.floor(diffHrs);
+    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    if (diffMs < 10 * 60 * 1000) {
+      const secs = Math.floor((diffMs % (1000 * 60)) / 1000);
+      if (mins === 0) return `in ${secs}s`;
+      return `in ${mins}m ${secs}s`;
+    }
+    if (hrs === 0) return `in ${mins}m`;
+    if (mins === 0) return `in ${hrs}h`;
+    return `in ${hrs}h ${mins}m`;
+  }
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 /**
@@ -69,6 +110,13 @@ export function QueuedTray({
   noticeSlot,
   onDismissNotice,
   onSendNoticeNow,
+  scheduledRows,
+  onScheduledEdit,
+  onScheduledSendNow,
+  onScheduledCancel,
+  failedRows,
+  onFailedRetry,
+  onFailedDismiss,
 }: QueuedTrayProps) {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -79,7 +127,25 @@ export function QueuedTray({
     if (focusedIndex > rows.length - 1) setFocusedIndex(Math.max(0, rows.length - 1));
   }, [rows.length, focusedIndex]);
 
-  if (rows.length === 0 && !noticeSlot) return null;
+  const sortedScheduled = scheduledRows
+    ? [...scheduledRows].sort((a, b) => a.fireAt.localeCompare(b.fireAt))
+    : [];
+
+  const failed = failedRows ?? [];
+
+  // Keep the "in 4m 12s" countdown live: re-render every second while the next
+  // send is under 10 minutes away, otherwise every 30s (still catches the
+  // switch to the per-second cadence). Nothing ticks without scheduled rows.
+  const [, setNowTick] = useState(0);
+  const soonestMs = sortedScheduled[0] ? Date.parse(sortedScheduled[0].fireAt) : null;
+  const imminent = soonestMs != null && soonestMs - Date.now() < 10 * 60 * 1000;
+  useEffect(() => {
+    if (soonestMs == null) return undefined;
+    const id = window.setInterval(() => setNowTick((n) => n + 1), imminent ? 1000 : 30_000);
+    return () => window.clearInterval(id);
+  }, [soonestMs, imminent]);
+
+  if (rows.length === 0 && !noticeSlot && sortedScheduled.length === 0 && failed.length === 0) return null;
 
   function moveFocus(delta: number) {
     const next = Math.min(Math.max(focusedIndex + delta, 0), rows.length - 1);
@@ -193,6 +259,15 @@ export function QueuedTray({
               />
             ) : (
               <>
+                {row.scheduled ? (
+                  <span
+                    className="chat-queued-tray__schedule-icon chat-queued-tray__schedule-icon--fired"
+                    title="Scheduled message — it was due while the agent was busy, so it's queued"
+                    aria-label="Scheduled earlier"
+                  >
+                    <Clock size={12} />
+                  </span>
+                ) : null}
                 <div className="chat-queued-tray__text" title={displayText}>
                   {displayText || "(attachments only)"}
                 </div>
@@ -233,6 +308,91 @@ export function QueuedTray({
                 )}
               </>
             )}
+          </div>
+        );
+      })}
+      {sortedScheduled.map((row) => {
+        const displayText = renderSkillMessageText(row.message);
+        return (
+          <div
+            key={row.id}
+            className="chat-queued-tray__row chat-queued-tray__row--scheduled"
+            role="listitem"
+            aria-label={`Scheduled message: ${displayText || "(attachments only)"}`}
+          >
+            <span className="chat-queued-tray__schedule-icon" aria-hidden><Clock size={13} /></span>
+            <div className="chat-queued-tray__text" title={displayText}>
+              {displayText || "(attachments only)"}
+            </div>
+            <span className="chat-queued-tray__time-label">{formatScheduleTime(row.fireAt)}</span>
+            <div className="chat-queued-tray__actions">
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Send now"
+                title="Send now"
+                onClick={() => onScheduledSendNow?.(row.id)}
+              >
+                ⏭
+              </button>
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Reschedule message"
+                title="Edit"
+                onClick={(e) => onScheduledEdit?.(row.id, row, e.currentTarget)}
+              >
+                ✎
+              </button>
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Cancel scheduled message"
+                title="Cancel"
+                onClick={() => onScheduledCancel?.(row.id)}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {failed.map((row) => {
+        const displayText = renderSkillMessageText(row.message);
+        return (
+          <div
+            key={row.id}
+            className="chat-queued-tray__row chat-queued-tray__row--failed"
+            role="listitem"
+            aria-label={`Failed scheduled message: ${displayText || "(attachments only)"} — ${row.failureReason}`}
+          >
+            <span className="chat-queued-tray__failed-icon" aria-hidden><TriangleAlert size={13} /></span>
+            <div className="chat-queued-tray__text" title={displayText}>
+              {displayText || "(attachments only)"}
+            </div>
+            <span className="chat-queued-tray__failed-reason" title={row.failureReason}>
+              {row.failureReason}
+            </span>
+            <div className="chat-queued-tray__actions">
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Retry scheduled send"
+                title="Retry now"
+                onClick={() => onFailedRetry?.(row.id)}
+              >
+                <RotateCcw size={11} aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Dismiss failed scheduled send"
+                title="Dismiss"
+                onClick={() => onFailedDismiss?.(row.id)}
+              >
+                ✕
+              </button>
+            </div>
           </div>
         );
       })}

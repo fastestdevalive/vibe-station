@@ -610,6 +610,16 @@
   color: var(--fg-muted);
   padding-right: var(--space-1);
 }
+/* "Scheduled" tag: inside the user bubble, bottom-right. */
+.chat-bubble__scheduled {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
 .chat-msg--forking {
   width: 100%;
 }
@@ -1148,6 +1158,53 @@
   color: var(--chat-accent);
   font-style: italic;
 }
+.chat-queued-tray__row--scheduled {
+  border-left: 2px solid var(--scheduled-color);
+}
+.chat-queued-tray__schedule-icon {
+  font-size: 0.85em;
+  margin-right: 4px;
+  opacity: 0.7;
+}
+/* A scheduled send that fired into the queue: same clock, quieter than the pending rows. */
+.chat-queued-tray__schedule-icon--fired {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  opacity: 0.6;
+}
+.chat-queued-tray__time-label {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+/* A scheduled send the daemon failed to deliver — an exception state, kept quiet. */
+.chat-queued-tray__row--failed {
+  border-left: 2px solid var(--destructive-soft);
+}
+.chat-queued-tray__failed-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--destructive-soft);
+}
+.chat-queued-tray__failed-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+}
+/* Lucide icons inside the glyph-sized action buttons. */
+.chat-queued-tray__action svg {
+  display: block;
+}
 
 /* ── Subagent row (parent link + live children, above the composer) ────────── */
 
@@ -1394,10 +1451,10 @@
 
 /* ── Footer: status bar + composer ────────────────────────────────────────── */
 
-.chat-pane__footer {
-  border-top: var(--border-width) solid var(--border-subtle);
-  background: var(--bg-secondary);
-}
+/* No border/background of its own: the composer shell below carries the only
+   visible frame, so the footer reads as part of the page rather than as a
+   separate band with rules above the composer. (Intentionally no
+   `.chat-pane__footer` border/background rule.) */
 
 .chat-statusbar {
   display: flex;
@@ -1407,7 +1464,6 @@
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-  border-bottom: var(--border-width) solid var(--border-subtle);
 }
 .chat-statusbar__info {
   display: flex;
@@ -1416,14 +1472,8 @@
   flex-wrap: wrap;
   min-width: 0;
 }
-.chat-statusbar__model,
-.chat-statusbar__mode {
+.chat-statusbar__model {
   color: var(--fg-secondary);
-}
-.chat-statusbar__mode--overridden {
-  /* "started as <mode>" — slightly dimmer to distinguish from the un-overridden label */
-  opacity: 0.7;
-  font-style: italic;
 }
 
 /* ── Live model switcher (status bar) ──────────────────────────────────────── */
@@ -1440,8 +1490,9 @@
   color: var(--fg-secondary);
   cursor: pointer;
   padding: 0 var(--space-1);
-  font: inherit;
+  font-size: var(--font-size-xs);
   line-height: 1.4;
+  white-space: nowrap;
 }
 .chat-model-switch__button:hover {
   border-color: var(--border-subtle);
@@ -1475,7 +1526,7 @@
   color: var(--fg-primary);
   cursor: pointer;
   padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   white-space: nowrap;
 }
 .chat-model-switch__option:hover,
@@ -1490,7 +1541,7 @@
 }
 .chat-model-switch__note {
   padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 .chat-model-switch__note--error {
@@ -1500,47 +1551,6 @@
   font-size: var(--font-size-xs);
   color: var(--destructive-soft);
 }
-.chat-statusbar__turn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-}
-/* Busy dots shown left of Stop only while the user is scrolled away from the
-   live edge. Reuses the in-feed `.chat-working-indicator__dot(s)` rules
-   verbatim — this wrapper only centers them in the footer row. */
-.chat-statusbar__busy {
-  display: inline-flex;
-  align-items: center;
-}
-/* Kept in flow (NOT `display: none`) so crossing the near-bottom threshold
-   mid-scroll only fades the dots out — it never re-lays-out the row and
-   shifts the Stop button sideways. */
-.chat-statusbar__busy--hidden {
-  visibility: hidden;
-}
-.chat-statusbar__state {
-  /* Text-only since the spinner moved out of this span; the flex box keeps it
-     vertically centered against its siblings (Stop button, queue depth). */
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-.chat-statusbar__state--error {
-  color: var(--destructive-soft);
-}
-/* Queued count shown alongside the busy dots/Stop while a turn is running and
-   more turns are waiting behind it (surfaces `queue_depth` since turn_state
-   no longer flips to "queued" mid-turn). */
-.chat-statusbar__queued {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-.chat-statusbar__stop {
-  padding: 2px var(--space-2);
-  font-size: var(--font-size-xs);
-}
-
 /* ── Composer ─────────────────────────────────────────────────────────────── */
 
 .chat-composer {
@@ -1663,10 +1673,35 @@
   color: var(--fg-primary);
   background: var(--bg-hover);
 }
-.chat-composer--dragover {
-  outline: var(--border-width-2) dashed var(--chat-accent);
-  outline-offset: -4px;
-  background: var(--bg-hover);
+/* Focus cue: the border picks up a trace of the muted foreground — present
+   (so keyboard focus is visible) but deliberately barely there. Declared
+   BEFORE the drag-over rule so a file drag-over still wins. */
+.chat-composer__shell:focus-within {
+  border-color: color-mix(in srgb, var(--border-default) 75%, var(--fg-muted));
+}
+/* Drag-over state lives on the SHELL — the outer `.chat-composer` stays
+   frameless (no background/border) in every state. */
+.chat-composer--dragover .chat-composer__shell {
+  border-style: dashed;
+  border-color: var(--chat-accent);
+  background: color-mix(in srgb, var(--chat-accent) 8%, var(--bg-input));
+}
+/* Non-interactive label over the shell while files are dragged over it.
+   `pointer-events: none` is load-bearing: the drop must land on the composer
+   (and its editor) underneath, not on this overlay. */
+.chat-composer__drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border-radius: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium, 600);
+  color: var(--chat-accent);
+  background: color-mix(in srgb, var(--bg-input) 80%, transparent);
 }
 .chat-composer--archived {
   color: var(--fg-muted);
@@ -1676,30 +1711,106 @@
   padding-top: var(--space-3);
   padding-bottom: var(--space-3);
 }
+/* Shell: single outer wrapper that carries the border/bg/radius. */
+.chat-composer__shell {
+  position: relative;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  display: flex;
+  flex-direction: column;
+}
+.chat-composer__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+/* Context-window meter — right end of the status row. */
+.ctx-meter {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+.ctx-meter__bar {
+  position: relative;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-default);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ctx-meter__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+.ctx-meter--warn {
+  color: var(--ctx-warn);
+}
+.ctx-meter--warn .ctx-meter__fill {
+  background: var(--ctx-warn);
+  opacity: 0.85;
+}
+.ctx-meter--danger {
+  color: var(--ctx-danger);
+}
+.ctx-meter--danger .ctx-meter__fill {
+  background: var(--ctx-danger);
+  opacity: 0.85;
+}
+/* Narrow panes: abbreviate "18k / 200k" to "18k" (the bar still shows the share). */
+@media (max-width: 480px) {
+  .ctx-meter__total {
+    display: none;
+  }
+}
+/* Icon-only Stop at the top right of the composer (right of the context meter)
+   while a turn is running. */
+.chat-composer__stop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 3px;
+  background: transparent;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+/* With a meter present the meter already pushes right; Stop just follows it. */
+.ctx-meter + .chat-composer__stop-btn {
+  margin-left: 0;
+}
+.chat-composer__stop-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.chat-composer__stop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .chat-composer__chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) 0;
 }
 .chat-composer__error {
   color: var(--destructive-soft);
   font-size: var(--font-size-xs);
-}
-.chat-composer__row {
-  display: flex;
-  gap: var(--space-2);
-  align-items: flex-end;
-}
-/* Field wrapper carries the border/background/radius. */
-.chat-composer__field {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-input);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-md);
-}
-.chat-composer__field:focus-within {
-  border-color: var(--chat-accent);
+  padding: 0 var(--space-2);
 }
 /* Phase 7B.8: the editor SHELL. `max-height`/`overflow-y` are set inline by
    `<SkillEditor>` (CSS-driven autosize, replacing the old JS
@@ -1712,55 +1823,199 @@
   width: 100%;
   min-height: 40px;
 }
-.chat-composer__actions {
+.chat-composer__toolbar {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  padding: 4px 8px 6px;
+  min-width: 0;
+}
+.chat-composer__spacer {
+  flex: 1;
 }
 .chat-composer__file-input {
   display: none;
 }
 .chat-composer__attach,
-.chat-composer__send,
-.chat-composer__stop {
-  border: var(--border-width) solid var(--border-default);
-  background: var(--bg-elevated);
-  color: var(--fg-primary);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
+.chat-composer__schedule-btn {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
+  padding: 4px;
   cursor: pointer;
-  min-width: 36px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
 }
-.chat-composer__send {
-  background: var(--chat-accent);
-  color: var(--fg-inverse);
-  border-color: var(--chat-accent);
-}
-.chat-composer__send:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-/* "Will queue" variant (Decision 9): busy + canSend — clicking enqueues a
-   follow-up turn rather than sending immediately. Visually distinct from the
-   solid-accent idle Send (dashed border, muted fill) so it doesn't read as
-   "sends right now". */
-.chat-composer__send--queue {
+.chat-composer__attach:hover:not(:disabled),
+.chat-composer__schedule-btn:hover:not(:disabled) {
+  color: var(--fg-primary);
   background: var(--bg-elevated);
-  color: var(--chat-accent);
-  border-style: dashed;
-  border-color: var(--chat-accent);
 }
-.chat-composer__send--queue:disabled {
+.chat-composer__attach:disabled,
+.chat-composer__schedule-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+/* Rich Chat ⇄ Terminal switch (draft composer toolbar). ON = Rich Chat. */
+.chat-composer__channel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chat-composer__channel-toggle:hover:not(:disabled) {
+  color: var(--fg-primary);
+  background: var(--bg-elevated);
+}
+.chat-composer__channel-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chat-composer__channel-toggle:focus-visible {
+  outline: var(--border-width-2) solid var(--chat-accent);
+  outline-offset: 1px;
+}
+.chat-composer__switch-track {
+  position: relative;
+  flex-shrink: 0;
+  width: 24px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-active);
+  border: var(--border-width) solid var(--border-strong);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.chat-composer__switch-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.chat-composer__channel-toggle[aria-checked="true"] .chat-composer__switch-track {
+  background: var(--chat-accent);
+  border-color: var(--chat-accent);
+}
+.chat-composer__channel-toggle[aria-checked="true"] .chat-composer__switch-thumb {
+  transform: translateX(10px);
+  background: var(--bg-primary);
+}
+/* Send/Start — colours, hover and disabled come from the shared
+   `.btn.btn--primary` (workspace.css); this only compacts it for the toolbar. */
+.btn.chat-composer__send {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-sm);
+}
+.chat-composer__model-chip {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+.chat-composer__mode-chip--overridden {
+  /* "started as <mode>" — slightly dimmer to distinguish from the un-overridden label */
+  opacity: 0.7;
+  font-style: italic;
+}
+.chat-composer__mode-chip {
+  font-size: var(--font-size-xs);
+  color: var(--fg-faint);
+  padding: 2px 6px;
+  /* One line; the mode name truncates before the toolbar ever wraps. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-composer__hint {
   font-size: var(--font-size-xs);
-  color: var(--fg-faint);
+  color: var(--fg-muted);
+  line-height: 1.8;
+  /* Always a single row: on narrow widths it scrolls sideways (no visible
+     scrollbar, no extra padding) instead of wrapping onto more lines. */
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.chat-composer__hint::-webkit-scrollbar {
+  display: none;
+}
+.chat-composer__hint-item {
+  white-space: nowrap;
+}
+/* Keycap for a shortcut combo in the hint row. */
+.chat-kbd {
+  display: inline-block;
+  padding: 0 4px;
+  min-width: 1.4em;
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--fg-secondary);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  border-bottom-width: var(--border-width-2);
+  border-radius: var(--radius-sm);
 }
 .chat-composer__hint--skills {
   font-style: italic;
+}
+/* Schedule send popover — rendered via portal at document.body; JS sets position: fixed + top/left.
+   Surface matches `.menu-pop`; field and buttons are the shared `.input` / `.btn` classes. */
+.chat-schedule-popover {
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-3);
+  width: 288px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.chat-schedule-popover__label {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.chat-schedule-popover__error {
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+}
+.chat-schedule-popover__actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.chat-schedule-popover__actions .btn {
+  padding: var(--space-1) var(--space-3);
 }
 
 /* ── Skill editor content (Phase 7B.4/7B.8) — the actual Lexical
@@ -1857,7 +2112,7 @@
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  /* Must clear .chat-pane__footer's opaque background. */
+  /* Sits above the composer chrome. */
   z-index: 60;
   padding: var(--space-1);
 }
@@ -1947,6 +2202,7 @@
 }
 .chat-attachment-chip__meta {
   color: var(--fg-muted);
+  flex-shrink: 0;
 }
 .chat-attachment-chip__remove {
   background: none;

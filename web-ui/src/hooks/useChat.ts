@@ -360,7 +360,44 @@ export function useChat(
 
     const offMeta = chatRepo.on("session:meta", (e) => {
       if (e.type !== "session:meta" || e.sessionId !== sessionId) return;
-      setMeta(e.meta);
+      // Preserve scheduled_sends when the incoming event doesn't carry it
+      // (regular turn/drain events always emit scheduled_sends: null since the
+      // live session has no store access; the scheduled state comes from the
+      // slim `session:scheduled` event and REST GET /meta). Without this guard
+      // every agent turn would wipe the scheduled tray.
+      setMeta((prev) => {
+        const merged = { ...e.meta };
+        // Preserve the scheduled fields that regular turn/drain events omit
+        // (they always emit null for these).
+        if (e.meta.scheduledSends == null && prev?.scheduledSends != null) {
+          merged.scheduledSends = prev.scheduledSends;
+        }
+        if (e.meta.scheduledTurnIds == null && prev?.scheduledTurnIds != null) {
+          merged.scheduledTurnIds = prev.scheduledTurnIds;
+        }
+        if (e.meta.scheduledFailed == null && prev?.scheduledFailed != null) {
+          merged.scheduledFailed = prev.scheduledFailed;
+        }
+        return merged;
+      });
+    });
+
+    // Scheduled-send changes arrive as their own slim event (never a full meta
+    // snapshot, which could overwrite fresher live turn state): patch only the
+    // scheduled fields. `chat:open` sends the meta first and then a
+    // `session:scheduled` with the full state, so there is always a meta to patch.
+    const offScheduled = chatRepo.on("session:scheduled", (e) => {
+      if (e.type !== "session:scheduled" || e.sessionId !== sessionId) return;
+      setMeta((prev) =>
+        prev
+          ? {
+              ...prev,
+              scheduledSends: e.scheduledSends,
+              scheduledFailed: e.scheduledFailed,
+              scheduledTurnIds: e.scheduledTurnIds,
+            }
+          : prev,
+      );
     });
 
     const offError = chatRepo.on("session:error", (e) => {
@@ -429,6 +466,7 @@ export function useChat(
       offReplay();
       offMsg();
       offMeta();
+      offScheduled();
       offError();
       offFork();
       offAuthExpired();
