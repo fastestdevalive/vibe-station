@@ -268,7 +268,7 @@ send button's `aria-label` reads "Interrupts and steers the running turn" when
 
 | CLI | Window | Knob exposed? | Notes |
 |---|---|---|---|
-| claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and the model on `session/new` | The adapter ranks `ANTHROPIC_MODEL` above everything else; inherited from the user's shell (e.g. `claude-sonnet-4-6`), it was re-asserted on `session/load`, so a `sonnet` mode ran 4-6 at 200k. `acp_model_env()` pins the var to the session's model (left alone when the mode has none). `_meta` is also ignored on load, so `acp_initial_config_option()` re-pins the model with `session/set_config_option` after every load, and a status event says so |
+| claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and the model on `session/new` (the same `_meta` also carries `extraArgs.chrome` and `env.CLAUDE_CODE_ARTIFACT=1`, giving terminal parity for Claude-in-Chrome and claude.ai Artifacts; the adapter honours those on `session/load` too) | The adapter ranks `ANTHROPIC_MODEL` above everything else; inherited from the user's shell (e.g. `claude-sonnet-4-6`), it was re-asserted on `session/load`, so a `sonnet` mode ran 4-6 at 200k. `acp_model_env()` pins the var to the session's model (left alone when the mode has none). `_meta` is also ignored on load, so `acp_initial_config_option()` re-pins the model with `session/set_config_option` after every load, and a status event says so |
 | opencode / cursor / agy | CLI-managed | None | No ACP field exposes it |
 | codex | CLI-managed | None | No ACP field exposes it |
 | pi | CLI-managed | None | Terminal only — no ACP |

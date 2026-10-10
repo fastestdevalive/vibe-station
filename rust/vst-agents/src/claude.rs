@@ -609,7 +609,15 @@ impl AgentPlugin for ClaudePlugin {
 
     fn acp_meta(&self, model: &str) -> Option<serde_json::Value> {
         let model_for_acp = model;
-        let mut options = serde_json::json!({ "betas": ["context-1m-2025-08-07"] });
+        let mut options = serde_json::json!({
+            "betas": ["context-1m-2025-08-07"],
+            // Parity with the terminal channel's `--chrome`; the adapter has no chrome option but
+            // merges `extraArgs` into the claude CLI args (null = boolean flag).
+            "extraArgs": { "chrome": null },
+            // claude.ai Artifacts / Claude Design are default-off for SDK entrypoints; this opts in
+            // (terminal sessions get them via the interactive entrypoint).
+            "env": { "CLAUDE_CODE_ARTIFACT": "1" },
+        });
         if !model_for_acp.is_empty() {
             options["model"] = serde_json::json!(model_for_acp);
         }
