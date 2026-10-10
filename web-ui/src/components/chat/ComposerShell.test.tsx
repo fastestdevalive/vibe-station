@@ -9,7 +9,7 @@ function renderShell(onFocusEditor?: () => void) {
       onRemoveAttachment={() => {}}
       onFiles={() => {}}
       {...(onFocusEditor ? { onFocusEditor } : {})}
-      status={<div data-testid="status">Ready</div>}
+      toolbarStart={<span data-testid="status">Working…</span>}
       toolbarEnd={<button type="button">Send</button>}
     >
       <div className="chat-skill-editor">

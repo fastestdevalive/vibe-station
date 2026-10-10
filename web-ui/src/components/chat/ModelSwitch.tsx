@@ -119,7 +119,7 @@ export function ModelSwitch({ api, sessionId, cli, model }: ModelSwitchProps) {
           setOpen((v) => !v);
         }}
       >
-        {shown}
+        <span className="chat-model-switch__label">{shown}</span>
         <span className="chat-model-switch__caret" aria-hidden> ▾</span>
       </button>
       {open ? (

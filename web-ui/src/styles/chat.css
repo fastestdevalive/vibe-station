@@ -1159,9 +1159,12 @@
   font-style: italic;
 }
 .chat-queued-tray__row--scheduled {
-  border-left: 2px solid var(--scheduled-color);
+  border-left: 2px solid var(--chat-accent);
 }
 .chat-queued-tray__schedule-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
   font-size: 0.85em;
   margin-right: 4px;
   opacity: 0.7;
@@ -1482,6 +1485,7 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  min-width: 0;
 }
 .chat-model-switch__button {
   background: none;
@@ -1493,6 +1497,18 @@
   font-size: var(--font-size-xs);
   line-height: 1.4;
   white-space: nowrap;
+  /* The name (not the caret) truncates with an ellipsis — see the label rule. */
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.chat-model-switch__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-model-switch__button:hover {
   border-color: var(--border-subtle);
@@ -1501,6 +1517,7 @@
 }
 .chat-model-switch__caret {
   opacity: 0.6;
+  flex-shrink: 0;
 }
 .chat-model-switch__popover {
   position: absolute;
@@ -1714,23 +1731,47 @@
 /* Shell: single outer wrapper that carries the border/bg/radius. */
 .chat-composer__shell {
   position: relative;
+  /* Toolbar density follows the COMPOSER's width (a narrow split pane on a big
+     screen), not the viewport — see the `@container composer` rules below. */
+  container: composer / inline-size;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-input);
   display: flex;
   flex-direction: column;
 }
-.chat-composer__status {
+/* Top-right cluster (context meter + Stop). A sticky FLOAT inside the editor's
+   scroll box, ahead of the content: the first lines wrap around it rather than
+   running under it. Sticky keeps it in view while a long message scrolls — but
+   text wraps around its ORIGINAL spot, so once scrolled, lines pass beneath it:
+   the opaque background keeps that readable instead of overprinting. */
+.chat-skill-editor__float {
+  float: right;
+  position: sticky;
+  top: 4px;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px 0;
+  margin: 4px 8px 2px 8px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+/* Working… / Queued (n) / ⚠ Error — only shown when not idle. */
+.chat-composer__state-label {
+  /* Holds its natural width (capped) — the model name gives way first. */
+  flex: 0 0 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
-/* Context-window meter — right end of the status row. */
+/* Context-window meter — bar, count / total, (pct) — in the top-right cluster. */
 .ctx-meter {
-  margin-left: auto;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -1769,30 +1810,40 @@
   background: var(--ctx-danger);
   opacity: 0.85;
 }
-/* Narrow panes: abbreviate "18k / 200k" to "18k" (the bar still shows the share). */
-@media (max-width: 480px) {
-  .ctx-meter__total {
+/* Narrow composer (<= 440px of the composer's own width):
+   - the token-count text goes — but only when a BAR exists to carry the signal
+     (`bar ~ count`); without a known window the count is all there is;
+   - Send becomes icon-only (its aria-label / title still say what it does). */
+@container composer (max-width: 440px) {
+  .ctx-meter__bar ~ .ctx-meter__count {
+    display: none;
+  }
+  .chat-composer__send-label {
+    display: none;
+  }
+  .btn.chat-composer__send {
+    padding: var(--space-1) var(--space-2);
+  }
+}
+@container composer (max-width: 380px) {
+  .chat-composer__mode-chip,
+  .chat-composer__state-label--working {
     display: none;
   }
 }
-/* Icon-only Stop at the top right of the composer (right of the context meter)
-   while a turn is running. */
+/* Icon-only Stop — last item of the top-right cluster; always rendered (dimmed
+   and disabled while nothing is running) so the meter beside it never shifts. */
 .chat-composer__stop-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-left: auto;
   padding: 3px;
   background: transparent;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
   cursor: pointer;
-}
-/* With a meter present the meter already pushes right; Stop just follows it. */
-.ctx-meter + .chat-composer__stop-btn {
-  margin-left: 0;
 }
 .chat-composer__stop-btn:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -1829,6 +1880,21 @@
   gap: var(--space-1);
   padding: 4px 8px 6px;
   min-width: 0;
+}
+/* Long model / mode names are capped (and ellipsised) so they can't crowd the
+   right-hand controls, whatever the width; below the cap they still give way
+   first when the toolbar is tight. */
+.chat-composer__toolbar > .chat-model-switch {
+  max-width: 11rem;
+}
+.chat-composer__toolbar > .chat-composer__mode-chip {
+  max-width: 7rem;
+}
+/* Fixed-size controls never shrink; the model name and mode chip give way. */
+.chat-composer__toolbar > .chat-composer__attach,
+.chat-composer__toolbar > .chat-composer__schedule-btn,
+.chat-composer__toolbar > .chat-composer__send {
+  flex-shrink: 0;
 }
 .chat-composer__spacer {
   flex: 1;
@@ -2190,6 +2256,12 @@
   background: var(--bg-elevated);
   font-size: var(--font-size-xs);
   max-width: 220px;
+}
+/* In the composer the chip must read as a chip: the generic `--bg-elevated` is
+   the same colour as the composer's `--bg-input` in dark themes. */
+.chat-composer__chips .chat-attachment-chip {
+  background: color-mix(in srgb, var(--fg-primary) 8%, var(--bg-input));
+  border-color: var(--border-default);
 }
 .chat-attachment-chip--error {
   border-color: var(--destructive-soft);

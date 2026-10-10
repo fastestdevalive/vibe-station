@@ -27,7 +27,7 @@ describe("ContextMeter", () => {
     const { container } = render(<ContextMeter usage={usage(18_240, 200_000)} />);
     const meter = screen.getByRole("meter", { name: "Context window used" });
     expect(meter.getAttribute("aria-valuenow")).toBe("9");
-    expect(meter.textContent).toBe("18.2k / 200k");
+    expect(meter.textContent).toBe("18.2k / 200k (9%)");
     expect((container.querySelector(".ctx-meter__fill") as HTMLElement).style.width).toBe("9%");
     expect(meter.className).toBe("ctx-meter");
     expect(meter.getAttribute("title")).toContain("18,240 / 200,000");
@@ -51,6 +51,13 @@ describe("ContextMeter", () => {
     expect(container.querySelector(".ctx-meter__bar")).toBeNull();
     expect(screen.queryByRole("meter")).toBeNull();
     expect(container.textContent).toBe("1.3M");
+  });
+
+  it("shows the percentage as text in parentheses next to the count", () => {
+    const { container } = render(<ContextMeter usage={usage(100_000, 200_000)} />);
+    expect(container.querySelector(".ctx-meter__pct")!.textContent).toBe(" (50%)");
+    // No window known -> no percentage to show.
+    expect(render(<ContextMeter usage={usage(5_000)} />).container.querySelector(".ctx-meter__pct")).toBeNull();
   });
 
   it("never renders cost", () => {

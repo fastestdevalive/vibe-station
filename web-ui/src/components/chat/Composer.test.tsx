@@ -208,9 +208,14 @@ describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () =
     await waitFor(() =>
       expect((screen.getByLabelText("Send message (queues after current turn)") as HTMLButtonElement).disabled).toBe(true),
     );
-    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
-    // Once the settle window elapses, Stop becomes reachable again.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy(), { timeout: 2000 });
+    // Stop is always rendered now (so the meter beside it never shifts), but it
+    // must be DISABLED — not clickable — during the settle window.
+    expect((screen.getByRole("button", { name: "Stop turn" }) as HTMLButtonElement).disabled).toBe(true);
+    // Once the settle window elapses, Stop becomes clickable again.
+    await waitFor(
+      () => expect((screen.getByRole("button", { name: "Stop turn" }) as HTMLButtonElement).disabled).toBe(false),
+      { timeout: 2000 },
+    );
   });
 
   it("busy=false, text ready → plain Send renders (no queue class)", () => {
@@ -273,7 +278,10 @@ describe("Composer editor autosize (Phase 7B.8 — CSS max-height, replaces JS a
     render(<Composer api={api} sessionId="s-autosize" onSend={vi.fn()} />);
     const shell = document.querySelector(".chat-composer__textarea.chat-skill-editor") as HTMLElement;
     expect(shell.style.overflowY).toBe("auto");
-    expect(shell.style.maxHeight).toContain("10");
+    // Capped by BOTH a line count and a fraction of the hosting pane's height.
+    expect(shell.style.maxHeight).toContain("min(");
+    expect(shell.style.maxHeight).toContain("8 *");
+    expect(shell.style.maxHeight).toContain("--chat-pane-h");
     // No JS-driven inline `height` — that mechanism was deleted.
     expect(shell.style.height).toBe("");
   });
@@ -496,5 +504,88 @@ describe("Composer toolbar chips and status label (carried over from the old sta
     expect(screen.getByText("Queued (1)")).toBeTruthy();
     rerender(<Composer api={createMockApi()} sessionId="s-chips" onSend={vi.fn()} statusLabel="⚠ Error" />);
     expect(screen.getByText("⚠ Error")).toBeTruthy();
+  });
+});
+
+describe("Composer toolbar — status folded into the bottom row", () => {
+  const usage = {
+    inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreateTokens: 0,
+    totalTokens: 100_000, contextWindow: 200_000, model: "sonnet",
+  };
+
+  it("has no separate status row; the idle composer shows no 'Ready' text", () => {
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} usage={usage} />,
+    );
+    expect(container.querySelector(".chat-composer__status")).toBeNull();
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(container.querySelector(".chat-composer__state-label")).toBeNull();
+  });
+
+  it("puts the context meter in the top-right overlay, bar included, percentage in parentheses", () => {
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} usage={usage} />,
+    );
+    const overlay = container.querySelector(".chat-skill-editor__float")!;
+    const meter = overlay.querySelector(".ctx-meter")!;
+    expect(meter).toBeTruthy();
+    expect(meter.textContent).toBe("100k / 200k (50%)");
+    expect(meter.querySelector(".ctx-meter__bar")).toBeTruthy();
+    // It is a float ahead of the editor (so text wraps around it), not in the toolbar.
+    expect(container.querySelector(".chat-composer__toolbar .ctx-meter")).toBeNull();
+    expect(overlay.parentElement!.classList.contains("chat-skill-editor")).toBe(true);
+    expect(overlay.parentElement!.firstElementChild).toBe(overlay);
+  });
+
+  it("while working: the state label stays in the toolbar and the icon-only Stop joins the top-right cluster", () => {
+    const onStop = vi.fn();
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} busy onStop={onStop} usage={usage} />,
+    );
+    expect(container.querySelector(".chat-composer__toolbar .chat-composer__state-label")!.textContent).toBe("Working…");
+    const stop = container.querySelector(".chat-skill-editor__float .chat-composer__stop-btn") as HTMLButtonElement;
+    expect(stop).toBeTruthy();
+    expect(container.querySelector(".chat-composer__toolbar .chat-composer__stop-btn")).toBeNull();
+    // Cluster order: meter first, Stop last.
+    const kids = [...container.querySelector(".chat-skill-editor__float")!.children];
+    expect(kids[0]!.classList.contains("ctx-meter")).toBe(true);
+    expect(kids[kids.length - 1]).toBe(stop);
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalled();
+  });
+
+  it("idle: the Stop button is still there (disabled) so the meter never shifts; it enables while working", () => {
+    const { container, rerender } = render(
+      <Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} usage={usage} />,
+    );
+    const idleStop = container.querySelector(".chat-skill-editor__float .chat-composer__stop-btn") as HTMLButtonElement;
+    expect(idleStop).toBeTruthy();
+    expect(idleStop.disabled).toBe(true);
+    rerender(<Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} usage={usage} busy onStop={vi.fn()} />);
+    const workingStop = container.querySelector(".chat-skill-editor__float .chat-composer__stop-btn") as HTMLButtonElement;
+    expect(workingStop.disabled).toBe(false);
+  });
+
+  it("the cluster order is bar, then count / total, then (pct), then Stop", () => {
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-merged" onSend={vi.fn()} usage={usage} busy onStop={vi.fn()} />,
+    );
+    const order = [...container.querySelector(".chat-skill-editor__float .ctx-meter")!.children].map((e) => e.className.split(" ")[0]);
+    expect(order).toEqual(["ctx-meter__bar", "ctx-meter__count", "ctx-meter__pct"]);
+    const cluster = container.querySelector(".chat-skill-editor__float")!;
+    expect(cluster.lastElementChild!.classList.contains("chat-composer__stop-btn")).toBe(true);
+  });
+});
+
+describe("Composer toolbar — long model / mode names", () => {
+  it("renders the model name in its own truncating label, separate from the caret", () => {
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-long" onSend={vi.fn()} cli="claude" model="a-very-long-model-identifier-1234567890" />,
+    );
+    const label = container.querySelector(".chat-model-switch__label")!;
+    expect(label.textContent).toBe("a-very-long-model-identifier-1234567890");
+    // The caret is a sibling, so an ellipsis on the label can never swallow it.
+    expect(container.querySelector(".chat-model-switch__caret")).toBeTruthy();
+    expect(label.contains(container.querySelector(".chat-model-switch__caret"))).toBe(false);
   });
 });

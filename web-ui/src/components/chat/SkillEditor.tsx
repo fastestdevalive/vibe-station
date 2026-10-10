@@ -47,6 +47,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type { Command } from "@/api/types";
 import { escapeSkillArgs, escapeSkillText, filterCommands, parseSkillSegments } from "@/lib/skillInvocation";
@@ -63,7 +64,13 @@ import { useEventTargets } from "@/context/DemoEnv";
  *  — enforced purely via CSS (`max-height` + `overflow-y: auto`) since a
  *  contenteditable autosizes its own height natively; no JS measurement
  *  loop needed (Phase 7B.8, replaces `autosizeComposerTextarea`). */
-export const COMPOSER_MAX_GROW_LINES = 10;
+export const COMPOSER_MAX_GROW_LINES = 8;
+
+/** ...and never taller than this fraction of the hosting chat pane's height, so
+ *  a small pane isn't outgrown by its own input. `--chat-pane-h` is published
+ *  by `ChatPane` (ResizeObserver); outside a chat pane it falls back to the
+ *  viewport height. */
+export const COMPOSER_MAX_PANE_FRACTION = 0.4;
 
 /** Private clipboard MIME carrying the raw `{/name args}` wire fragment for
  *  a copied/cut range — read back on paste so an in-app paste restores real
@@ -95,6 +102,12 @@ interface SkillEditorProps {
   disabled?: boolean;
   ariaLabel: string;
   placeholder?: string;
+  /** Rendered as a sticky float in the editor's top-right corner, INSIDE the
+   *  scroll box and ahead of the content — the text's first lines wrap around
+   *  it instead of running under it, and it stays put while a long message
+   *  scrolls. (A float placed outside the scroll box can't work: the box is a
+   *  block formatting context, so it would be pushed below the float.) */
+  topRight?: ReactNode;
   className: string;
   /** Fires on every content change with the serialized string and whether
    *  the editor currently "has content" (Phase 7B.9: any chip node present
@@ -630,6 +643,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     disabled,
     ariaLabel,
     placeholder,
+    topRight,
     className,
     onChangeText,
     onSubmit,
@@ -792,10 +806,11 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
           <div
             className={`${className} chat-skill-editor`}
             style={{
-              maxHeight: `calc(${COMPOSER_MAX_GROW_LINES} * var(--line-height-normal, 1.4) * 1em)`,
+              maxHeight: `min(calc(${COMPOSER_MAX_GROW_LINES} * var(--line-height-normal, 1.4) * 1em), calc(var(--chat-pane-h, 100vh) * ${COMPOSER_MAX_PANE_FRACTION}))`,
               overflowY: "auto",
             }}
           >
+            {topRight ? <div className="chat-skill-editor__float">{topRight}</div> : null}
             <PlainTextPlugin
               contentEditable={
                 <ContentEditable

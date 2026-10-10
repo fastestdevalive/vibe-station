@@ -547,3 +547,36 @@ describe("ChatPane failed scheduled sends", () => {
     expect(dismiss).toHaveBeenCalledWith("js-fail2", "f1");
   });
 });
+
+describe("ChatPane publishes its height for the composer's max-height", () => {
+  it("sets --chat-pane-h on .chat-pane (and keeps it current via ResizeObserver)", async () => {
+    const callbacks: Array<() => void> = [];
+    class FakeRO {
+      constructor(cb: () => void) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeRO);
+    try {
+      const api = createMockApi();
+      const { container } = render(<ChatPane api={api} session={jsonSession("js-pane-h")} visible />);
+      const pane = container.querySelector(".chat-pane") as HTMLElement;
+      // jsdom lays nothing out (clientHeight 0) → nothing is published yet, so the
+      // editor keeps its viewport-height fallback instead of a 0px cap.
+      expect(pane.style.getPropertyValue("--chat-pane-h")).toBe("");
+      // Once the pane has a real height (a resize), it is published.
+      Object.defineProperty(pane, "clientHeight", { value: 321, configurable: true });
+      act(() => callbacks.forEach((cb) => cb()));
+      expect(pane.style.getPropertyValue("--chat-pane-h")).toBe("321px");
+      // A transient 0 (hidden / not laid out) must not collapse the editor's cap.
+      Object.defineProperty(pane, "clientHeight", { value: 0, configurable: true });
+      act(() => callbacks.forEach((cb) => cb()));
+      expect(pane.style.getPropertyValue("--chat-pane-h")).toBe("321px");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
