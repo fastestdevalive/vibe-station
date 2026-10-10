@@ -506,6 +506,30 @@ pub enum TurnState {
     Error,
 }
 
+/// A pending scheduled send, surfaced in `SessionMeta`.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledMessageMeta {
+    pub id: String,
+    pub message: String,
+    pub attachments: Option<Vec<Attachment>>,
+    pub fire_at: String, // ISO-8601 UTC
+}
+
+/// A scheduled send that could not be delivered, surfaced in `SessionMeta` so
+/// the UI can offer Retry / Dismiss instead of the message vanishing silently.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledFailedMeta {
+    pub id: String,
+    pub message: String,
+    pub attachments: Option<Vec<Attachment>>,
+    pub fire_at: String, // ISO-8601 UTC
+    pub failure_reason: String,
+}
+
 /// Cross-harness session meta feeding the composer status bar.
 #[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -542,6 +566,12 @@ pub struct SessionMeta {
     /// (e.g. "via <mode>") to signal that the active model no longer matches the
     /// mode's configured default.
     pub model_overridden: Option<bool>,
+    /// Pending scheduled sends for this session (wall-clock deferred messages).
+    pub scheduled_sends: Option<Vec<ScheduledMessageMeta>>,
+    /// turnIds of messages that were fired from scheduled sends (for UI badge).
+    pub scheduled_turn_ids: Option<Vec<String>>,
+    /// Scheduled sends that failed to deliver (retry / dismiss in the UI).
+    pub scheduled_failed: Option<Vec<ScheduledFailedMeta>>,
 }
 
 /// The `noticeSlot` sub-object of `SessionMeta`.

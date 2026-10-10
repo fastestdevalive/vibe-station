@@ -167,6 +167,18 @@ pub enum ServerEvent {
     /// OOBE onboarding state changed.
     #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]
     OobeStateUpdated { completed: bool },
+    /// A session's scheduled-send state changed (scheduled / cancelled /
+    /// delivered / failed / retried / dismissed). Deliberately NOT a full
+    /// `SessionMeta`: a snapshot of turn state taken here could arrive after a
+    /// fresher live `session:meta` and overwrite it. Carries only the
+    /// store-backed fields, each authoritative (empty = cleared).
+    #[serde(rename = "session:scheduled-changed", rename_all = "camelCase")]
+    SessionScheduledChanged {
+        session_id: String,
+        scheduled_sends: Vec<crate::domain::ScheduledMessageMeta>,
+        scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
+        scheduled_turn_ids: Vec<String>,
+    },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

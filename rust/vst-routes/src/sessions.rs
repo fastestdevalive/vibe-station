@@ -47,10 +47,9 @@ use vst_agents::context::{
     BuildVstEnvOptions,
 };
 use vst_agents::json_agent_chat::{
-    enqueue_chat_turn, find_json_session_context, read_session_meta, read_session_page_before,
-    read_session_since, read_session_tail, read_session_transcript, resolve_json_agent,
-    start_json_create_turn, EnqueueChatTurnOpts, EnqueueDelivery, ResolveJsonAgentError,
-    StartJsonCreateTurnOpts,
+    enqueue_chat_turn, find_json_session_context, read_session_page_before, read_session_since,
+    read_session_tail, read_session_transcript, resolve_json_agent, start_json_create_turn,
+    EnqueueChatTurnOpts, EnqueueDelivery, ResolveJsonAgentError, StartJsonCreateTurnOpts,
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
@@ -78,12 +77,13 @@ use vst_store::global_drafts::{GlobalDraftPatch, GlobalDraftRow};
 use vst_store::{StoreError, StoreHandle};
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::sessions::{
-    AllEvents, ChatBody, CreateDraftSessionBody, CreateSessionBody, CreateTarget, DelinkResult,
-    Delivery, DraftTarget, EditQueuedResult, EnqueueChatResult, HandoffResult, InputBody,
-    PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody, PatchModelResult,
-    PinResult, RenameSessionResult, ReorderSessionResult, ResetBody, ResetResult, ResubmitBody,
-    SessionOutput, SincePage, StartDraftBody, StartDraftResult, StopTurnResult, TranscriptPage,
-    TurnActionResult,
+    AllEvents, ChatBody, CreateDraftSessionBody, CreateScheduledMessageBody,
+    CreateScheduledMessageResponse, CreateSessionBody, CreateTarget, DelinkResult, Delivery,
+    DraftTarget, EditQueuedResult, EditScheduledMessageBody, EnqueueChatResult, HandoffResult,
+    InputBody, PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody,
+    PatchModelResult, PinResult, RenameSessionResult, ReorderSessionResult, ResetBody, ResetResult,
+    ResubmitBody, SessionOutput, SincePage, StartDraftBody, StartDraftResult, StopTurnResult,
+    TranscriptPage, TurnActionResult,
 };
 use vst_types::rest::shared::{GlobalDraft, Mode, Session};
 use vst_types::{
@@ -1461,6 +1461,8 @@ impl SessionRoutes {
                     .await
                     .map_err(delete_err)?;
                 self.prune_notice_and_forget(id, session.parent_session_id.as_deref());
+                // No FK to cascade — drop the session's scheduled messages here.
+                let _ = self.store.delete_scheduled_messages_for_session(id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.to_string(),
                 });
@@ -1599,6 +1601,8 @@ impl SessionRoutes {
                     });
                 }
                 self.prune_notice_and_forget(&id, session.parent_session_id.as_deref());
+                // No FK to cascade — drop the session's scheduled messages here.
+                let _ = self.store.delete_scheduled_messages_for_session(&id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.clone(),
                 });
@@ -3220,6 +3224,18 @@ impl SessionRoutes {
 
         self.subagent_notify.forget_subagent_notify(&old_id);
 
+        // Scheduled messages follow the user to the replacement session — they
+        // would otherwise fire at the archived one and fail out of sight.
+        if let Ok(n) = self
+            .store
+            .reassign_scheduled_messages(&old_id, &new_id, &now_iso())
+            .await
+        {
+            if n > 0 {
+                self.broadcast_scheduled_meta(&new_id).await;
+            }
+        }
+
         let wt_id_for_serialize = worktree.as_ref().map(|w| w.id.clone());
         // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
         // (the former cross-part gap noted here is closed — see the field's
@@ -4211,6 +4227,9 @@ impl SessionRoutes {
                         } else {
                             None
                         },
+                        scheduled_sends: None,
+                        scheduled_turn_ids: None,
+                        scheduled_failed: None,
                     }
                 }
             }
@@ -4247,6 +4266,9 @@ impl SessionRoutes {
                 } else {
                     None
                 },
+                scheduled_sends: None,
+                scheduled_turn_ids: None,
+                scheduled_failed: None,
             }
         };
 
@@ -4406,7 +4428,271 @@ impl SessionRoutes {
         let ctx = find_json_session_context(&self.store, id)
             .await
             .ok_or_else(|| TranscriptError::NotFound(format!("Session '{id}' not found")))?;
-        Ok(read_session_meta(&ctx, &self.json_registry).await)
+        let meta = vst_agents::json_agent_chat::read_session_meta_with_schedule(
+            &self.store,
+            &ctx,
+            &self.json_registry,
+        )
+        .await;
+        Ok(meta)
+    }
+
+    // ── Scheduled messages ────────────────────────────────────────────────────
+
+    /// Broadcast the session's meta (with fresh scheduled-send state) to all clients.
+    async fn broadcast_scheduled_meta(&self, session_id: &str) {
+        vst_agents::json_agent_chat::broadcast_scheduled_meta(
+            &self.store,
+            &self.broadcaster,
+            session_id,
+        )
+        .await;
+    }
+
+    /// `POST /sessions/:id/schedule` — create a wall-clock deferred message.
+    /// Returns `202 { id, fireAt }`.
+    pub async fn schedule_create(
+        &self,
+        id: &str,
+        body: CreateScheduledMessageBody,
+    ) -> Result<CreateScheduledMessageResponse, ChatRouteError> {
+        let pre_ctx = find_session_context(&self.store, id)
+            .await
+            .ok_or_else(|| ChatRouteError::NotFound(format!("Session '{id}' not found")))?;
+        if matches!(pre_ctx, SessionContext::Global { .. }) {
+            return Err(ChatRouteError::NotFound(format!(
+                "Session '{id}' not found"
+            )));
+        }
+        let pre_session = match &pre_ctx {
+            SessionContext::Worktree { session, .. } | SessionContext::Direct { session, .. } => {
+                session
+            }
+            SessionContext::Global { .. } => unreachable!(),
+        };
+        if pre_session.archived_at.is_some() {
+            return Err(ChatRouteError::Archived(
+                "Session is archived — cannot schedule a message".to_string(),
+            ));
+        }
+
+        if session_channel(pre_session.channel, Some(pre_session.use_tmux)) != Channel::Json {
+            return Err(ChatRouteError::NotJson(
+                "Scheduling requires a Rich Chat (json) session".to_string(),
+            ));
+        }
+        if body.message.len() > MAX_SCHEDULED_MESSAGE_BYTES {
+            return Err(ChatRouteError::BadRequest(format!(
+                "A scheduled message can be at most {} KB",
+                MAX_SCHEDULED_MESSAGE_BYTES / 1024
+            )));
+        }
+        if body.message.trim().is_empty() && body.attachment_ids.is_empty() {
+            return Err(ChatRouteError::BadRequest(
+                "A scheduled message needs text or an attachment".to_string(),
+            ));
+        }
+        let now_str = vst_lifecycle::util::now_iso();
+        let fire_at = normalize_future_fire_at(&body.fire_at, &now_str)?;
+        let pending = self
+            .store
+            .list_pending_scheduled_messages(id)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        if pending.len() >= vst_store::MAX_PENDING_SCHEDULED as usize {
+            return Err(ChatRouteError::BadRequest(format!(
+                "Too many scheduled messages for this session (max {})",
+                vst_store::MAX_PENDING_SCHEDULED
+            )));
+        }
+
+        // Resolve attachments (stored as JSON blob).
+        let attachments_vec = self
+            .resolve_attachments(
+                id,
+                if body.attachment_ids.is_empty() {
+                    None
+                } else {
+                    Some(&body.attachment_ids)
+                },
+            )
+            .await?;
+        let attachments_json: Option<String> = if attachments_vec.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&attachments_vec)
+                    .map_err(|e| ChatRouteError::Internal(format!("serialize attachments: {e}")))?,
+            )
+        };
+
+        let msg_id = uuid::Uuid::new_v4().to_string();
+        self.store
+            .insert_scheduled_message(
+                &msg_id,
+                id,
+                &body.message,
+                attachments_json.as_deref(),
+                &fire_at,
+                &now_str,
+            )
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+
+        self.broadcast_scheduled_meta(id).await;
+
+        Ok(CreateScheduledMessageResponse {
+            id: msg_id,
+            fire_at,
+        })
+    }
+
+    /// `DELETE /sessions/:id/schedule/:msgId` — cancel a pending scheduled
+    /// message. Returns `200 { ok: true }` or `404`.
+    pub async fn schedule_cancel(
+        &self,
+        session_id: &str,
+        msg_id: &str,
+    ) -> Result<(), ChatRouteError> {
+        let cancelled = self
+            .store
+            .cancel_scheduled_message(msg_id, session_id)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        if !cancelled {
+            return Err(ChatRouteError::TurnNotFound(format!(
+                "Scheduled message '{msg_id}' not found or not pending"
+            )));
+        }
+        self.broadcast_scheduled_meta(session_id).await;
+        Ok(())
+    }
+
+    /// `POST /sessions/:id/schedule/:msgId/edit` — reschedule a pending
+    /// scheduled message (only the fire time is editable). Returns
+    /// `200 { ok: true }` or `404`.
+    pub async fn schedule_edit(
+        &self,
+        session_id: &str,
+        msg_id: &str,
+        body: EditScheduledMessageBody,
+    ) -> Result<(), ChatRouteError> {
+        let now_str = vst_lifecycle::util::now_iso();
+        let fire_at = normalize_future_fire_at(&body.fire_at, &now_str)?;
+        let updated = self
+            .store
+            .reschedule_scheduled_message(msg_id, session_id, &fire_at, &now_str)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        if !updated {
+            return Err(ChatRouteError::TurnNotFound(format!(
+                "Scheduled message '{msg_id}' not found or not pending"
+            )));
+        }
+        self.broadcast_scheduled_meta(session_id).await;
+        Ok(())
+    }
+
+    /// `POST /sessions/:id/schedule/:msgId/send-now` — deliver a pending
+    /// scheduled message immediately, bypassing the wall-clock delay. Behaves
+    /// exactly like the user pressing Send on freshly typed text (steer a
+    /// running turn when possible, otherwise queue).
+    pub async fn schedule_send_now(
+        &self,
+        session_id: &str,
+        msg_id: &str,
+    ) -> Result<(), ChatRouteError> {
+        // Atomic claim: the poller can't deliver the same row concurrently.
+        let row = self
+            .store
+            .claim_scheduled_message(msg_id, session_id, &vst_lifecycle::util::now_iso())
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?
+            .ok_or_else(|| {
+                ChatRouteError::TurnNotFound(format!(
+                    "Scheduled message '{msg_id}' not found or not pending"
+                ))
+            })?;
+
+        // Same bound as the poller: a stuck agent must not hold the claim forever
+        // (the row would then be neither pending nor failed until the next boot).
+        let outcome = match tokio::time::timeout(
+            std::time::Duration::from_secs(vst_lifecycle::schedule_poller::DELIVERY_TIMEOUT_SECS),
+            vst_agents::json_agent_chat::deliver_scheduled_message(
+                &row,
+                self.daemon_port,
+                &self.store,
+                &self.broadcaster,
+                &self.json_registry,
+            ),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(vst_lifecycle::schedule_poller::delivery_timeout_reason()),
+        };
+        let now_str = vst_lifecycle::util::now_iso();
+        let result = match outcome {
+            Ok(r) => {
+                let _ = self
+                    .store
+                    .mark_scheduled_message_sent(msg_id, &r.turn_id, &now_str)
+                    .await;
+                Ok(())
+            }
+            Err(reason) => {
+                // Keep the message (as failed → Retry / Dismiss) rather than losing it.
+                let _ = self
+                    .store
+                    .mark_scheduled_message_failed(msg_id, &reason, &now_str)
+                    .await;
+                Err(ChatRouteError::BadRequest(reason))
+            }
+        };
+        self.broadcast_scheduled_meta(session_id).await;
+        result
+    }
+
+    /// `POST /sessions/:id/schedule/:msgId/retry` — re-queue a failed
+    /// scheduled message to fire immediately (the poller picks it up next tick).
+    pub async fn schedule_retry(
+        &self,
+        session_id: &str,
+        msg_id: &str,
+    ) -> Result<(), ChatRouteError> {
+        let retried = self
+            .store
+            .retry_failed_scheduled_message(msg_id, session_id, &vst_lifecycle::util::now_iso())
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        if !retried {
+            return Err(ChatRouteError::TurnNotFound(format!(
+                "Scheduled message '{msg_id}' not found or not failed"
+            )));
+        }
+        self.broadcast_scheduled_meta(session_id).await;
+        Ok(())
+    }
+
+    /// `POST /sessions/:id/schedule/:msgId/dismiss` — delete a failed
+    /// scheduled message.
+    pub async fn schedule_dismiss(
+        &self,
+        session_id: &str,
+        msg_id: &str,
+    ) -> Result<(), ChatRouteError> {
+        let dismissed = self
+            .store
+            .dismiss_failed_scheduled_message(msg_id, session_id)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        if !dismissed {
+            return Err(ChatRouteError::TurnNotFound(format!(
+                "Scheduled message '{msg_id}' not found or not failed"
+            )));
+        }
+        self.broadcast_scheduled_meta(session_id).await;
+        Ok(())
     }
 
     /// Resolve `attachmentIds` → `Attachment` records (D5). Shared by `/send`,
@@ -4438,20 +4724,8 @@ impl SessionRoutes {
     /// Persist the session's lifecycle axis to `working` and broadcast the
     /// state change (JSON lifecycle, D11). Mirrors `persistLifecycleState`.
     async fn persist_working(&self, ctx: &vst_agents::json_agent_chat::JsonSessionContext) {
-        let lifecycle = SessionLifecycle {
-            state: LifecycleState::Working,
-            reason: None,
-            last_transition_at: now_iso(),
-        };
-        let _ = self
-            .store
-            .update_session_lifecycle(&ctx.project.id, &ctx.session.id, lifecycle)
+        vst_agents::json_agent_chat::persist_session_working(&self.store, &self.broadcaster, ctx)
             .await;
-        self.broadcaster.send(ServerEvent::SessionState {
-            session_id: ctx.session.id.clone(),
-            state: LifecycleState::Working,
-            reason: None,
-        });
     }
 
     /// Apply a mutation closure to a worktree or direct session. The closure
@@ -5180,12 +5454,39 @@ pub struct ChatActionResult {
     pub ok: bool,
 }
 
+/// Largest scheduled message accepted. Every schedule change re-sends the
+/// session's whole scheduled state to its subscribers, so bodies are bounded.
+const MAX_SCHEDULED_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// Parse an RFC 3339 timestamp (any UTC offset), normalise it to the
+/// `YYYY-MM-DDTHH:MM:SSZ` form the store compares as text against
+/// `now_iso()`, and require that it lies in the future.
+fn normalize_future_fire_at(raw: &str, now_str: &str) -> Result<String, ChatRouteError> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(raw.trim()).map_err(|_| {
+        ChatRouteError::BadRequest(format!(
+            "fire_at must be an RFC 3339 timestamp (e.g. 2026-10-07T18:30:00Z), got: {raw}"
+        ))
+    })?;
+    let fire_at = parsed
+        .with_timezone(&chrono::Utc)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    if fire_at.as_str() <= now_str {
+        return Err(ChatRouteError::BadRequest(format!(
+            "fire_at must be in the future (got: {fire_at}, now: {now_str})"
+        )));
+    }
+    Ok(fire_at)
+}
+
 /// Error for the Group C chat/send/queue handlers, mapping to HTTP status at
 /// the wiring layer.
 #[derive(Debug)]
 pub enum ChatRouteError {
     /// 404 — session not found / not a JSON session.
     NotFound(String),
+    /// 400 — malformed or invalid request input.
+    BadRequest(String),
     /// 400 — session is archived (read-only).
     Archived(String),
     /// 400 — an attachment id didn't resolve.
@@ -5442,5 +5743,49 @@ mod tests {
             ]
         );
         assert!(parts.iter().all(|p| p != "-lc"));
+    }
+}
+
+#[cfg(test)]
+mod schedule_fire_at_tests {
+    use super::normalize_future_fire_at;
+
+    const NOW: &str = "2026-10-07T01:55:29Z";
+
+    #[test]
+    fn normalises_offsets_and_fractions_to_utc_seconds() {
+        // +05:30 → UTC, fractional seconds dropped.
+        assert_eq!(
+            normalize_future_fire_at("2026-10-07T08:00:00.750+05:30", NOW).unwrap(),
+            "2026-10-07T02:30:00Z"
+        );
+        assert_eq!(
+            normalize_future_fire_at(" 2026-10-07T03:00:00.000Z ", NOW).unwrap(),
+            "2026-10-07T03:00:00Z"
+        );
+    }
+
+    #[test]
+    fn rejects_past_equal_and_malformed_times() {
+        for bad in [
+            "2026-10-07T01:55:00.000Z",
+            "2026-10-07T01:55:29Z",
+            "tomorrow",
+            "2026-10-07",
+            "",
+        ] {
+            assert!(
+                normalize_future_fire_at(bad, NOW).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn an_offset_that_is_earlier_in_utc_is_not_mistaken_for_the_future() {
+        // Textually "…T09:00:00+05:30" > NOW, but it is 03:30Z — in the past relative to 05:00Z.
+        assert!(
+            normalize_future_fire_at("2026-10-07T09:00:00+05:30", "2026-10-07T05:00:00Z").is_err()
+        );
     }
 }

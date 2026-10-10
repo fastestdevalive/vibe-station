@@ -190,6 +190,9 @@ fn session_meta_roundtrips_notice_slot_shape() {
         notice_slot: None,
         active_turn_id: None,
         model_overridden: None,
+        scheduled_sends: None,
+        scheduled_turn_ids: None,
+        scheduled_failed: None,
     };
     meta.notice_slot = Some(vst_types::NoticeSlot {
         children: BTreeMap::from([("c1".into(), "Child One".into())]),
@@ -221,6 +224,9 @@ fn session_meta_omits_active_turn_id_when_none() {
         notice_slot: None,
         active_turn_id: None,
         model_overridden: None,
+        scheduled_sends: None,
+        scheduled_turn_ids: None,
+        scheduled_failed: None,
     };
     let json = serde_json::to_string(&meta).unwrap();
     assert!(!json.contains("activeTurnId"));

@@ -105,7 +105,40 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
       draftConfig TEXT,
       createdAt  TEXT NOT NULL
     );
+
+    -- NO foreign key to sessions on purpose: every project save deletes and
+    -- re-inserts that project's sessions (see `save_project`), and an
+    -- `ON DELETE CASCADE` here silently wiped every pending scheduled message.
+    -- Rows for genuinely deleted sessions are purged explicitly
+    -- (`purge_scheduled_messages_for_missing_sessions`).
+    CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id            TEXT PRIMARY KEY,
+      sessionId     TEXT NOT NULL,
+      message       TEXT NOT NULL,
+      attachments   TEXT,
+      fireAt        TEXT NOT NULL,
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','sent','cancelled','failed')),
+      sentAt        TEXT,
+      sentTurnId    TEXT,
+      failureReason TEXT,
+      claimedAt     TEXT
+    );
   ",
+    )?;
+
+    db.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_messages_sessionId ON scheduled_messages(sessionId);",
+    )?;
+    // Delivery claim (set while a delivery is in flight) — added as a column so
+    // databases that already created the table pick it up.
+    add_column_if_missing(db, "scheduled_messages", "claimedAt", "TEXT")?;
+    drop_scheduled_messages_session_fk(db)?;
+    // The poller's due-scan: `status = 'pending' AND fireAt <= now`.
+    db.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages(status, fireAt);",
     )?;
 
     add_column_if_missing(db, "global_drafts", "name", "TEXT")?;
@@ -141,6 +174,50 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
 
 /// Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's
 /// absent. Idempotent — skipped once present.
+/// Early dev builds created `scheduled_messages` with
+/// `sessionId REFERENCES sessions(id) ON DELETE CASCADE`; because a project
+/// save deletes and re-inserts its sessions, that cascade wiped every pending
+/// scheduled message. Rebuild such a table without the foreign key (rows kept).
+fn drop_scheduled_messages_session_fk(db: &Connection) -> rusqlite::Result<()> {
+    let sql: Option<String> = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_messages'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if !sql.is_some_and(|s| s.contains("REFERENCES")) {
+        return Ok(());
+    }
+    db.execute_batch(
+        "
+    BEGIN;
+    ALTER TABLE scheduled_messages RENAME TO scheduled_messages_old;
+    CREATE TABLE scheduled_messages (
+      id            TEXT PRIMARY KEY,
+      sessionId     TEXT NOT NULL,
+      message       TEXT NOT NULL,
+      attachments   TEXT,
+      fireAt        TEXT NOT NULL,
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','sent','cancelled','failed')),
+      sentAt        TEXT,
+      sentTurnId    TEXT,
+      failureReason TEXT,
+      claimedAt     TEXT
+    );
+    INSERT INTO scheduled_messages
+      (id, sessionId, message, attachments, fireAt, createdAt, updatedAt, status, sentAt, sentTurnId, failureReason, claimedAt)
+      SELECT id, sessionId, message, attachments, fireAt, createdAt, updatedAt, status, sentAt, sentTurnId, failureReason, claimedAt
+      FROM scheduled_messages_old;
+    DROP TABLE scheduled_messages_old;
+    COMMIT;
+    ",
+    )
+}
+
 fn add_column_if_missing(
     db: &Connection,
     table: &str,

@@ -1248,6 +1248,12 @@ impl WorktreeRoutes {
             })
             .await;
 
+        // No FK to cascade: drop the scheduled messages of the sessions just removed.
+        let _ = self
+            .store
+            .purge_scheduled_messages_for_missing_sessions()
+            .await;
+
         for session in &worktree.sessions {
             self.broadcaster.send(ServerEvent::SessionDeleted {
                 session_id: session.id.clone(),

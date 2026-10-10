@@ -83,11 +83,12 @@ use vst_types::rest::projects::{
     OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult, TreeEntry,
 };
 use vst_types::rest::sessions::{
-    ChatBody, DelinkResult, EditQueuedResult, EnqueueChatResult, HandoffResult, InputBody,
-    PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody, PatchModelResult,
-    PinBody, PinResult, RenameSessionBody, RenameSessionResult, ReorderSessionBody,
-    ReorderSessionResult, ResetBody, ResubmitBody, SessionListItem, SessionOrDraft, SessionOutput,
-    StartDraftBody, StartDraftResult, StopTurnResult, TurnActionResult,
+    ChatBody, CreateScheduledMessageBody, DelinkResult, EditQueuedResult, EditScheduledMessageBody,
+    EnqueueChatResult, HandoffResult, InputBody, PatchChannelBody, PatchChannelResult,
+    PatchDraftBody, PatchModelBody, PatchModelResult, PinBody, PinResult, RenameSessionBody,
+    RenameSessionResult, ReorderSessionBody, ReorderSessionResult, ResetBody, ResubmitBody,
+    SessionListItem, SessionOrDraft, SessionOutput, StartDraftBody, StartDraftResult,
+    StopTurnResult, TurnActionResult,
 };
 use vst_types::rest::settings::{PatchSettingsBody, PatchSettingsResult, Settings};
 use vst_types::rest::shared::{Mode, Project, Worktree};
@@ -790,6 +791,28 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             get(handle_get_session_transcript),
         )
         .route("/sessions/:id/meta", get(handle_get_session_meta))
+        // Scheduled messages
+        .route("/sessions/:id/schedule", post(handle_schedule_create))
+        .route(
+            "/sessions/:id/schedule/:msgId",
+            delete(handle_schedule_cancel),
+        )
+        .route(
+            "/sessions/:id/schedule/:msgId/edit",
+            post(handle_schedule_edit),
+        )
+        .route(
+            "/sessions/:id/schedule/:msgId/retry",
+            post(handle_schedule_retry),
+        )
+        .route(
+            "/sessions/:id/schedule/:msgId/dismiss",
+            post(handle_schedule_dismiss),
+        )
+        .route(
+            "/sessions/:id/schedule/:msgId/send-now",
+            post(handle_schedule_send_now),
+        )
         // Attachments
         //
         // `route_layer` (not `layer`) so this only widens the limit for this
@@ -3521,13 +3544,96 @@ async fn handle_get_session_meta(
         })
 }
 
+// ── Scheduled-message handlers ────────────────────────────────────────────────
+
+async fn handle_schedule_create(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<CreateScheduledMessageBody>,
+) -> Result<
+    (
+        StatusCode,
+        Json<vst_types::rest::sessions::CreateScheduledMessageResponse>,
+    ),
+    (StatusCode, Json<serde_json::Value>),
+> {
+    state
+        .session_routes
+        .schedule_create(&id, body)
+        .await
+        .map(|res| (StatusCode::ACCEPTED, Json(res)))
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_schedule_cancel(
+    State(state): State<AppState>,
+    axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .schedule_cancel(&id, &msg_id)
+        .await
+        .map(|_| Json(OkResult { ok: true }))
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_schedule_edit(
+    State(state): State<AppState>,
+    axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
+    Json(body): Json<EditScheduledMessageBody>,
+) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .schedule_edit(&id, &msg_id, body)
+        .await
+        .map(|_| Json(OkResult { ok: true }))
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_schedule_retry(
+    State(state): State<AppState>,
+    axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .schedule_retry(&id, &msg_id)
+        .await
+        .map(|_| Json(OkResult { ok: true }))
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_schedule_dismiss(
+    State(state): State<AppState>,
+    axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .schedule_dismiss(&id, &msg_id)
+        .await
+        .map(|_| Json(OkResult { ok: true }))
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_schedule_send_now(
+    State(state): State<AppState>,
+    axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .schedule_send_now(&id, &msg_id)
+        .await
+        .map(|_| Json(OkResult { ok: true }))
+        .map_err(chat_err_to_response)
+}
+
 fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         ChatRouteError::NotFound(m) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": m })),
         ),
-        ChatRouteError::Archived(m)
+        ChatRouteError::BadRequest(m)
+        | ChatRouteError::Archived(m)
         | ChatRouteError::AttachmentNotFound(m)
         | ChatRouteError::AttachmentsRequireJson(m)
         | ChatRouteError::NotJson(m)

@@ -350,6 +350,449 @@ impl StoreHandle {
         .map_err(|e| StoreError::Mutation(e.to_string()))?
     }
 
+    // ── Scheduled messages ─────────────────────────────────────────────────────
+    //
+    // Lifecycle: `pending` (claimedAt NULL) → claimed (`pending`, claimedAt set —
+    // delivery in flight) → `sent` | `failed`. A claim is atomic, so the poller
+    // and "send now" can never deliver the same row twice, and a row that was
+    // claimed when the daemon died is recoverable (see
+    // `fail_orphaned_scheduled_messages`). Failed rows can be retried (back to
+    // `pending`) or dismissed (deleted); cancelling a pending message deletes it.
+
+    /// Insert a new `pending` scheduled message row.
+    pub async fn insert_scheduled_message(
+        &self,
+        id: &str,
+        session_id: &str,
+        message: &str,
+        attachments_json: Option<&str>,
+        fire_at: &str,
+        now: &str,
+    ) -> StoreResult<()> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let message = message.to_string();
+        let attachments_json = attachments_json.map(|s| s.to_string());
+        let fire_at = fire_at.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<()> {
+            let conn = inner.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO scheduled_messages (id, sessionId, message, attachments, fireAt, createdAt, updatedAt, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
+                params![id, session_id, message, attachments_json, fire_at, now, now],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// List a session's `pending` scheduled messages, ordered by fireAt. Rows whose
+    /// delivery is in flight are excluded — they can no longer be edited,
+    /// cancelled or sent now, so they must not be offered as actionable.
+    pub async fn list_pending_scheduled_messages(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Vec<vst_types::rest::sessions::ScheduledMessageRow>> {
+        self.query_scheduled(
+            format!("SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE sessionId = ?1 AND status = 'pending' AND claimedAt IS NULL ORDER BY fireAt ASC LIMIT {MAX_PENDING_SCHEDULED}"),
+            session_id.to_string(),
+        )
+        .await
+    }
+
+    /// List the most recent `failed` scheduled messages for a session (newest
+    /// first, capped) so the UI can offer Retry / Dismiss.
+    pub async fn list_failed_scheduled_messages(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<Vec<vst_types::rest::sessions::ScheduledMessageRow>> {
+        self.query_scheduled(
+            format!("SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE sessionId = ?1 AND status = 'failed' ORDER BY updatedAt DESC LIMIT {MAX_FAILED_SCHEDULED_SHOWN}"),
+            session_id.to_string(),
+        )
+        .await
+    }
+
+    async fn query_scheduled(
+        &self,
+        sql: String,
+        arg: String,
+    ) -> StoreResult<Vec<vst_types::rest::sessions::ScheduledMessageRow>> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<Vec<_>> {
+            let conn = inner.conn.lock().unwrap();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(params![arg], scheduled_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Atomically claim the OLDEST due, unclaimed `pending` row, if any, skipping
+    /// rows of `exclude_sessions` (sessions whose agent just proved unresponsive —
+    /// see the poller). Claimed one at a time, right before it is delivered: a
+    /// row sitting claimed while earlier rows deliver could neither be cancelled
+    /// by the user nor survive a crash without being mislabelled "may have been
+    /// sent". A claimed row is owned by the caller until it is marked sent /
+    /// failed; nobody else (poller tick, "send now") can claim it.
+    pub async fn claim_next_due_scheduled_message(
+        &self,
+        now_iso: &str,
+        exclude_sessions: &[String],
+    ) -> StoreResult<Option<vst_types::rest::sessions::ScheduledMessageRow>> {
+        let now_iso = now_iso.to_string();
+        let exclude: Vec<String> = exclude_sessions.to_vec();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<Option<_>> {
+            let mut conn = inner.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            // `?1` = now; `?2..` = excluded session ids.
+            let not_in = if exclude.is_empty() {
+                String::new()
+            } else {
+                let marks: Vec<String> = (0..exclude.len()).map(|i| format!("?{}", i + 2)).collect();
+                format!(" AND sessionId NOT IN ({})", marks.join(", "))
+            };
+            let sql = format!(
+                "SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE status = 'pending' AND claimedAt IS NULL AND fireAt <= ?1{not_in} ORDER BY fireAt ASC LIMIT 1"
+            );
+            let mut args: Vec<&dyn rusqlite::ToSql> = vec![&now_iso];
+            args.extend(exclude.iter().map(|e| e as &dyn rusqlite::ToSql));
+            let row = tx
+                .query_row(&sql, args.as_slice(), scheduled_from_row)
+                .optional()?;
+            if let Some(r) = &row {
+                tx.execute(
+                    "UPDATE scheduled_messages SET claimedAt = ?2, updatedAt = ?2 WHERE id = ?1",
+                    params![r.id, now_iso],
+                )?;
+            }
+            tx.commit()?;
+            Ok(row)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Everything a client needs to render a session's scheduled-send state
+    /// (pending, failed, sent turn ids), read in ONE transaction so a concurrent
+    /// change can't produce a mixed snapshot (e.g. a row in neither list).
+    pub async fn read_schedule_snapshot(&self, session_id: &str) -> StoreResult<ScheduleSnapshot> {
+        let session_id = session_id.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<ScheduleSnapshot> {
+            let mut conn = inner.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            let rows = |sql: String| -> StoreResult<Vec<vst_types::rest::sessions::ScheduledMessageRow>> {
+                let mut stmt = tx.prepare(&sql)?;
+                let v = stmt
+                    .query_map(params![session_id], scheduled_from_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(v)
+            };
+            let pending = rows(format!("SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE sessionId = ?1 AND status = 'pending' AND claimedAt IS NULL ORDER BY fireAt ASC LIMIT {MAX_PENDING_SCHEDULED}"))?;
+            let failed = rows(format!("SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE sessionId = ?1 AND status = 'failed' ORDER BY updatedAt DESC LIMIT {MAX_FAILED_SCHEDULED_SHOWN}"))?;
+            let sent_turn_ids = {
+                let mut stmt = tx.prepare(&format!("SELECT sentTurnId FROM scheduled_messages WHERE sessionId = ?1 AND status = 'sent' AND sentTurnId IS NOT NULL ORDER BY sentAt DESC LIMIT {MAX_SENT_TURN_IDS}"))?;
+                let v = stmt
+                    .query_map(params![session_id], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                v
+            };
+            Ok(ScheduleSnapshot { pending, failed, sent_turn_ids })
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Atomically claim ONE specific unclaimed `pending` row ("send now").
+    /// `None` when it doesn't exist, belongs to another session, was already
+    /// claimed (the poller got there first) or is no longer pending.
+    pub async fn claim_scheduled_message(
+        &self,
+        id: &str,
+        session_id: &str,
+        now: &str,
+    ) -> StoreResult<Option<vst_types::rest::sessions::ScheduledMessageRow>> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<Option<_>> {
+            let mut conn = inner.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            let row = tx
+                .query_row(
+                    &format!("SELECT {SCHEDULED_COLS} FROM scheduled_messages WHERE id = ?1 AND sessionId = ?2 AND status = 'pending' AND claimedAt IS NULL"),
+                    params![id, session_id],
+                    scheduled_from_row,
+                )
+                .optional()?;
+            if row.is_some() {
+                tx.execute(
+                    "UPDATE scheduled_messages SET claimedAt = ?2, updatedAt = ?2 WHERE id = ?1",
+                    params![id, now],
+                )?;
+            }
+            tx.commit()?;
+            Ok(row)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Boot recovery: rows still claimed when the daemon died are ambiguous
+    /// (the turn may or may not have reached the agent), so they are failed —
+    /// visibly, with a Retry — rather than silently re-sent (possible
+    /// duplicate) or dropped. Returns how many rows were affected.
+    pub async fn fail_orphaned_scheduled_messages(&self, now: &str) -> StoreResult<usize> {
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<usize> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "UPDATE scheduled_messages SET status = 'failed', failureReason = 'The daemon restarted while this message was being delivered — it may or may not have been sent. Retry to send it again.', updatedAt = ?1 WHERE status = 'pending' AND claimedAt IS NOT NULL",
+                params![now],
+            )?;
+            Ok(n)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Move a session's not-yet-delivered scheduled messages (pending and
+    /// failed, not in flight) to its replacement — used by session reset, which
+    /// archives the old session under a NEW id. Without this the messages would
+    /// fire at the archived session and fail where the user can no longer see
+    /// them. Returns how many rows moved.
+    pub async fn reassign_scheduled_messages(
+        &self,
+        from_session_id: &str,
+        to_session_id: &str,
+        now: &str,
+    ) -> StoreResult<usize> {
+        let from = from_session_id.to_string();
+        let to = to_session_id.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<usize> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "UPDATE scheduled_messages SET sessionId = ?2, updatedAt = ?3 WHERE sessionId = ?1 AND ((status = 'pending' AND claimedAt IS NULL) OR status = 'failed')",
+                params![from, to, now],
+            )?;
+            Ok(n)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Delete every scheduled-message row of a session (used when the session is
+    /// deleted — there is no FK to cascade, see the schema comment).
+    pub async fn delete_scheduled_messages_for_session(
+        &self,
+        session_id: &str,
+    ) -> StoreResult<usize> {
+        let session_id = session_id.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<usize> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "DELETE FROM scheduled_messages WHERE sessionId = ?1",
+                params![session_id],
+            )?;
+            Ok(n)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Delete scheduled-message rows whose session no longer exists. There is
+    /// deliberately no foreign key (a project save re-inserts its sessions), so
+    /// rows of sessions that were genuinely deleted are purged here instead.
+    /// Returns how many rows were removed.
+    pub async fn purge_scheduled_messages_for_missing_sessions(&self) -> StoreResult<usize> {
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<usize> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "DELETE FROM scheduled_messages WHERE sessionId NOT IN (SELECT id FROM sessions)",
+                [],
+            )?;
+            Ok(n)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// List the `sentTurnId`s of the most recent sent scheduled messages for a
+    /// session (newest first, capped). Used to badge those turns in the chat
+    /// transcript and mark them in the queued tray.
+    pub async fn list_sent_scheduled_turn_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
+        let session_id = session_id.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<Vec<String>> {
+            let conn = inner.conn.lock().unwrap();
+            let mut stmt = conn.prepare(&format!(
+                "SELECT sentTurnId FROM scheduled_messages WHERE sessionId = ?1 AND status = 'sent' AND sentTurnId IS NOT NULL ORDER BY sentAt DESC LIMIT {MAX_SENT_TURN_IDS}"
+            ))?;
+            let rows = stmt
+                .query_map(params![session_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Mark a claimed scheduled message as sent after successful delivery.
+    pub async fn mark_scheduled_message_sent(
+        &self,
+        id: &str,
+        turn_id: &str,
+        now: &str,
+    ) -> StoreResult<()> {
+        let id = id.to_string();
+        let turn_id = turn_id.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<()> {
+            let conn = inner.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE scheduled_messages SET status = 'sent', sentAt = ?2, sentTurnId = ?3, updatedAt = ?2 WHERE id = ?1 AND status = 'pending' AND claimedAt IS NOT NULL",
+                params![id, now, turn_id],
+            )?;
+            // Sent rows only feed the "Scheduled" badges (newest MAX_SENT_TURN_IDS
+            // per session) — don't let the table grow forever.
+            conn.execute(
+                &format!("DELETE FROM scheduled_messages WHERE status = 'sent' AND sessionId = (SELECT sessionId FROM scheduled_messages WHERE id = ?1) AND id NOT IN (SELECT id FROM scheduled_messages WHERE status = 'sent' AND sessionId = (SELECT sessionId FROM scheduled_messages WHERE id = ?1) ORDER BY sentAt DESC LIMIT {MAX_SENT_TURN_IDS})"),
+                params![id],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Mark a scheduled message as failed with a human-readable reason.
+    pub async fn mark_scheduled_message_failed(
+        &self,
+        id: &str,
+        reason: &str,
+        now: &str,
+    ) -> StoreResult<()> {
+        let id = id.to_string();
+        let reason = reason.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<()> {
+            let conn = inner.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE scheduled_messages SET status = 'failed', failureReason = ?2, updatedAt = ?3 WHERE id = ?1 AND status = 'pending' AND claimedAt IS NOT NULL",
+                params![id, reason, now],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Re-queue a `failed` scheduled message to fire immediately. Returns
+    /// `true` if a row was updated (id AND session must match).
+    pub async fn retry_failed_scheduled_message(
+        &self,
+        id: &str,
+        session_id: &str,
+        now: &str,
+    ) -> StoreResult<bool> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "UPDATE scheduled_messages SET status = 'pending', claimedAt = NULL, failureReason = NULL, fireAt = ?3, updatedAt = ?3 WHERE id = ?1 AND sessionId = ?2 AND status = 'failed'",
+                params![id, session_id, now],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Dismiss (delete) a `failed` scheduled message. Returns `true` if a row
+    /// was deleted (id AND session must match).
+    pub async fn dismiss_failed_scheduled_message(
+        &self,
+        id: &str,
+        session_id: &str,
+    ) -> StoreResult<bool> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "DELETE FROM scheduled_messages WHERE id = ?1 AND sessionId = ?2 AND status = 'failed'",
+                params![id, session_id],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Cancel (delete) a pending scheduled message. Returns `true` if a row was removed
+    /// (ownership guard: must match both `id` AND `session_id`; a row whose
+    /// delivery is already in flight can no longer be cancelled).
+    pub async fn cancel_scheduled_message(&self, id: &str, session_id: &str) -> StoreResult<bool> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "DELETE FROM scheduled_messages WHERE id = ?1 AND sessionId = ?2 AND status = 'pending' AND claimedAt IS NULL",
+                params![id, session_id],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
+    /// Change the fire time of a pending (not in-flight) scheduled message.
+    /// Returns `true` if a row was updated.
+    pub async fn reschedule_scheduled_message(
+        &self,
+        id: &str,
+        session_id: &str,
+        fire_at: &str,
+        now: &str,
+    ) -> StoreResult<bool> {
+        let id = id.to_string();
+        let session_id = session_id.to_string();
+        let fire_at = fire_at.to_string();
+        let now = now.to_string();
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let n = conn.execute(
+                "UPDATE scheduled_messages SET fireAt = ?3, updatedAt = ?4 WHERE id = ?1 AND sessionId = ?2 AND status = 'pending' AND claimedAt IS NULL",
+                params![id, session_id, fire_at, now],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
     /// Boot migration: migrate every project's `manifest.json` under
     /// `projects_dir` into the store, then drop the read cache.
     pub async fn migrate_manifests(&self, projects_dir: impl AsRef<Path>) -> StoreResult<()> {
@@ -391,6 +834,43 @@ fn pr_state_str(s: vst_types::PrState) -> &'static str {
 }
 
 // --- SQL helpers (all invoked from within spawn_blocking) ---
+
+const SCHEDULED_COLS: &str = "id, sessionId, message, attachments, fireAt, createdAt, updatedAt, status, sentAt, sentTurnId, failureReason";
+
+/// Most pending scheduled messages per session (creation is rejected beyond
+/// this, and meta never ships more).
+pub const MAX_PENDING_SCHEDULED: u32 = 100;
+
+/// Cap on failed scheduled sends surfaced per session (newest first).
+const MAX_FAILED_SCHEDULED_SHOWN: u32 = 20;
+
+/// Cap on sent-scheduled turn ids shipped in `SessionMeta` per session.
+const MAX_SENT_TURN_IDS: u32 = 200;
+
+/// A session's scheduled-send state, read atomically (see `read_schedule_snapshot`).
+pub struct ScheduleSnapshot {
+    pub pending: Vec<vst_types::rest::sessions::ScheduledMessageRow>,
+    pub failed: Vec<vst_types::rest::sessions::ScheduledMessageRow>,
+    pub sent_turn_ids: Vec<String>,
+}
+
+fn scheduled_from_row(
+    r: &rusqlite::Row,
+) -> rusqlite::Result<vst_types::rest::sessions::ScheduledMessageRow> {
+    Ok(vst_types::rest::sessions::ScheduledMessageRow {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        message: r.get(2)?,
+        attachments: r.get(3)?,
+        fire_at: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
+        status: r.get(7)?,
+        sent_at: r.get(8)?,
+        sent_turn_id: r.get(9)?,
+        failure_reason: r.get(10)?,
+    })
+}
 
 const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon";
 

@@ -2,14 +2,14 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
-pub(crate) fn now_iso() -> String {
+pub fn now_iso() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -25,7 +25,7 @@ pub(crate) fn now_iso() -> String {
     )
 }
 
-pub(crate) fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+pub fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     let mut y = 1970u64;
     let mut rem = days;
     loop {

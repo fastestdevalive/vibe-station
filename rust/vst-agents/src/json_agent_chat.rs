@@ -13,7 +13,8 @@ use vst_store::transcript::{SincePage, TranscriptMeta, TranscriptPage};
 use vst_store::StoreHandle;
 use vst_types::domain::{
     Attachment, Channel, CliId, LifecycleState, NormalizedEventProvider, ProjectRecord,
-    SessionLifecycle, SessionMeta, SessionRecord, WorktreeRecord,
+    ScheduledFailedMeta, ScheduledMessageMeta, SessionLifecycle, SessionMeta, SessionRecord,
+    WorktreeRecord,
 };
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::shared::Mode;
@@ -537,6 +538,163 @@ pub fn read_session_since(
         return live.since(since_seq, None);
     }
     read_since_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id, since_seq)
+}
+
+/// Rebuild a session's meta with the store-backed scheduled-send fields filled
+/// in. `scheduled_sends` is ALWAYS `Some` (an empty list when nothing is
+/// pending): the client treats `None` as "this event doesn't carry the field,
+/// keep what you have", so an empty `Some([])` is the only way to clear the
+/// tray after the last pending message fires or is cancelled.
+pub async fn read_session_meta_with_schedule(
+    store: &StoreHandle,
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+) -> SessionMeta {
+    let mut meta = read_session_meta(ctx, registry).await;
+    apply_schedule_state(store, &ctx.session.id, &mut meta).await;
+    meta
+}
+
+/// The store-backed scheduled-send state of a session — each list authoritative
+/// (empty = nothing; a client treats an absent field as "keep what you have").
+pub struct ScheduleState {
+    pub sends: Vec<ScheduledMessageMeta>,
+    pub failed: Vec<ScheduledFailedMeta>,
+    pub turn_ids: Vec<String>,
+}
+
+pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> ScheduleState {
+    // One transaction, so pending / failed / sent can't be a mixed snapshot.
+    let snap = store
+        .read_schedule_snapshot(session_id)
+        .await
+        .unwrap_or_else(|_| vst_store::ScheduleSnapshot {
+            pending: vec![],
+            failed: vec![],
+            sent_turn_ids: vec![],
+        });
+    ScheduleState {
+        sends: snap
+            .pending
+            .into_iter()
+            .map(|r| ScheduledMessageMeta {
+                attachments: parse_attachments_json(r.attachments.as_deref()),
+                id: r.id,
+                message: r.message,
+                fire_at: r.fire_at,
+            })
+            .collect(),
+        failed: snap
+            .failed
+            .into_iter()
+            .map(|r| ScheduledFailedMeta {
+                attachments: parse_attachments_json(r.attachments.as_deref()),
+                id: r.id,
+                message: r.message,
+                fire_at: r.fire_at,
+                failure_reason: r
+                    .failure_reason
+                    .unwrap_or_else(|| "Delivery failed".to_string()),
+            })
+            .collect(),
+        turn_ids: snap.sent_turn_ids,
+    }
+}
+
+/// Fill the store-backed scheduled-send fields of `meta`. Live agent meta never
+/// carries them, so any path that hands a client a FRESH full snapshot —
+/// `chat:open`, `GET /meta` — must apply this. (Schedule *changes* go out as
+/// the slim `session:scheduled` event instead; see `broadcast_scheduled_meta`.)
+pub async fn apply_schedule_state(store: &StoreHandle, session_id: &str, meta: &mut SessionMeta) {
+    let st = read_schedule_state(store, session_id).await;
+    meta.scheduled_sends = Some(st.sends);
+    meta.scheduled_failed = Some(st.failed);
+    meta.scheduled_turn_ids = Some(st.turn_ids);
+}
+
+fn parse_attachments_json(json: Option<&str>) -> Option<Vec<Attachment>> {
+    json.and_then(|s| serde_json::from_str::<Vec<Attachment>>(s).ok())
+}
+
+/// Persist the session's lifecycle axis to `working` and broadcast the state
+/// change (JSON lifecycle, D11) — what every human-originated turn does once
+/// it has been handed to the agent.
+pub async fn persist_session_working(
+    store: &StoreHandle,
+    broadcaster: &Broadcaster,
+    ctx: &JsonSessionContext,
+) {
+    let lifecycle = SessionLifecycle {
+        state: LifecycleState::Working,
+        reason: None,
+        last_transition_at: now_iso_8601(),
+    };
+    let _ = store
+        .update_session_lifecycle(&ctx.project.id, &ctx.session.id, lifecycle)
+        .await;
+    broadcaster.send(ServerEvent::SessionState {
+        session_id: ctx.session.id.clone(),
+        state: LifecycleState::Working,
+        reason: None,
+    });
+}
+
+/// Deliver a claimed scheduled message exactly as if the user had pressed
+/// Send on freshly typed text: `submit()` steers a running turn when it can
+/// and otherwise queues, and the session is marked working. Returns a
+/// human-readable reason on failure (shown to the user with Retry / Dismiss).
+pub async fn deliver_scheduled_message(
+    row: &vst_types::rest::sessions::ScheduledMessageRow,
+    daemon_port: u16,
+    store: &StoreHandle,
+    broadcaster: &Broadcaster,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+) -> Result<EnqueueChatResult, String> {
+    let ctx = find_json_session_context(store, &row.session_id)
+        .await
+        .ok_or_else(|| "The session no longer exists.".to_string())?;
+    if ctx.session.archived_at.is_some() {
+        return Err("The session was archived before this message was due.".to_string());
+    }
+    let result = enqueue_chat_turn(
+        EnqueueChatTurnOpts {
+            session_id: row.session_id.clone(),
+            message: row.message.clone(),
+            attachments: parse_attachments_json(row.attachments.as_deref()).unwrap_or_default(),
+            daemon_port,
+            steer: Some(true),
+            store: store.clone(),
+            broadcaster: broadcaster.clone(),
+        },
+        registry,
+    )
+    .await
+    .map_err(|e| match e {
+        ResolveJsonAgentError::NotFound { .. } => "The session no longer exists.".to_string(),
+        ResolveJsonAgentError::NotJson { .. } => {
+            "The session is no longer a Rich Chat session.".to_string()
+        }
+        ResolveJsonAgentError::ModeError(m) => format!("The agent could not be started: {m}"),
+    })?;
+    persist_session_working(store, broadcaster, &ctx).await;
+    Ok(result)
+}
+
+/// Tell every client a session's scheduled-send state changed. Sends only the
+/// scheduled fields (never a full `SessionMeta`): a turn-state snapshot taken
+/// here could land after a fresher live `session:meta` and overwrite it.
+pub async fn broadcast_scheduled_meta(
+    store: &StoreHandle,
+    broadcaster: &Broadcaster,
+    session_id: &str,
+) {
+    let st = read_schedule_state(store, session_id).await;
+    broadcaster.send(ServerEvent::SessionScheduledChanged {
+        session_id: session_id.to_string(),
+        scheduled_sends: st.sends,
+        scheduled_failed: st.failed,
+        scheduled_turn_ids: st.turn_ids,
+    });
 }
 
 /// Latest meta for a session (live if registered, else rebuilt from transcript).
