@@ -89,8 +89,13 @@ jobs:
       # when the daemon was still the Node/TS build under cli/. That tree was
       # hard-removed (7bfa386c); prep-sidecar.sh is the current single source
       # of truth for staging every sidecar binary before Tauri bundles them.
+      # Pinned (same as release.yml's adapter-compile job): an unpinned bun
+      # picked up 1.4.3, whose `bun build --compile` output (codex-acp) makes
+      # `ldd` exit 1 and aborts linuxdeploy's gtk plugin during AppImage bundling.
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
 
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app
