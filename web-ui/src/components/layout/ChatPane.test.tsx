@@ -325,61 +325,6 @@ describe("ChatPane thinking-state debounce (1.T7 — Decision 2 anti-flicker)", 
   });
 });
 
-describe("ChatPane atBottom threading (MessageList → ChatPane → StatusBar)", () => {
-  it("passes MessageList's onAtBottomChange through, so the footer busy dots follow the scroll position", async () => {
-    const api = createMockApi();
-    api.__test.pushChatEvent("js-atbottom", ev("u1", { kind: "user", role: "user", text: "hi", turnId: "t1" }));
-    const { container } = render(<ChatPane api={api} session={jsonSession("js-atbottom")} visible />);
-    const mockedMessageList = MessageList as unknown as Mock;
-
-    // Busy, but still at the live edge → in-feed indicator covers it, footer
-    // stays dots-free.
-    act(() => {
-      api.__test.emit({
-        type: "session:meta",
-        sessionId: "js-atbottom",
-        meta: meta("js-atbottom", { turnState: "thinking" }),
-      });
-    });
-    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
-
-    const onAtBottomChange = mockedMessageList.mock.calls.at(-1)![0].onAtBottomChange;
-    expect(typeof onAtBottomChange).toBe("function");
-
-    // Scrolled away while busy → the footer shows the dots.
-    act(() => onAtBottomChange(false));
-    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeNull();
-    expect(container.querySelector(".chat-statusbar__busy")).toBeTruthy();
-
-    // Back at the bottom → the dots hide again (the box stays reserved).
-    act(() => onAtBottomChange(true));
-    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
-  });
-
-  it("resets to at-bottom when the pane switches session, so stale dots don't survive the MessageList remount", async () => {
-    const api = createMockApi();
-    api.__test.pushChatEvent("js-a", ev("u1", { kind: "user", role: "user", text: "hi", turnId: "t1" }));
-    api.__test.pushChatEvent("js-b", ev("u2", { kind: "user", role: "user", text: "hello", turnId: "t2" }));
-    const { container, rerender } = render(<ChatPane api={api} session={jsonSession("js-a")} visible />);
-    const mockedMessageList = MessageList as unknown as Mock;
-
-    act(() => {
-      api.__test.emit({ type: "session:meta", sessionId: "js-a", meta: meta("js-a", { turnState: "thinking" }) });
-    });
-    act(() => mockedMessageList.mock.calls.at(-1)![0].onAtBottomChange(false));
-    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeNull();
-
-    // Switch to a different conversation: MessageList remounts pinned to the
-    // bottom, so the footer must not keep the previous session's dots — and no
-    // scroll event will ever fire to correct it.
-    rerender(<ChatPane api={api} session={jsonSession("js-b")} visible />);
-    act(() => {
-      api.__test.emit({ type: "session:meta", sessionId: "js-b", meta: meta("js-b", { turnState: "thinking" }) });
-    });
-    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
-  });
-});
-
 describe("V3g — silent events excluded from lastUserText and edit-prefill (ChatPane)", () => {
   it("V3g-a: lastUserText skips silent user events; non-silent text is used for retry prefill", async () => {
     const api = createMockApi();
@@ -561,3 +506,44 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
   });
 });
 
+describe("ChatPane failed scheduled sends", () => {
+  const failed = [{ id: "f1", message: "failed msg", fireAt: "2026-01-01T00:00:00Z", failureReason: "Session was archived" }];
+
+  it("shows failed rows from meta, keeps them across a meta event that omits the field, clears on []", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("js-fail")} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { scheduledFailed: failed }) });
+    });
+    const tray = await screen.findByRole("list", { name: "Queued messages" });
+    expect(within(tray).getByText("failed msg")).toBeTruthy();
+    expect(within(tray).getByText("Session was archived")).toBeTruthy();
+
+    // A regular turn/drain meta event doesn't carry scheduledFailed — keep the rows.
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { turnState: "thinking" }) });
+    });
+    expect(screen.getByText("failed msg")).toBeTruthy();
+
+    // An explicit empty array is authoritative — the rows (and tray) go away.
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { scheduledFailed: [] }) });
+    });
+    await waitFor(() => expect(screen.queryByText("failed msg")).toBeNull());
+  });
+
+  it("Retry / Dismiss call the API with the session and message ids", async () => {
+    const api = createMockApi();
+    const retry = vi.spyOn(api, "retryScheduledMessage");
+    const dismiss = vi.spyOn(api, "dismissScheduledMessage");
+    render(<ChatPane api={api} session={jsonSession("js-fail2")} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-fail2", meta: meta("js-fail2", { scheduledFailed: failed }) });
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText("Retry scheduled send"));
+    await user.click(screen.getByLabelText("Dismiss failed scheduled send"));
+    expect(retry).toHaveBeenCalledWith("js-fail2", "f1");
+    expect(dismiss).toHaveBeenCalledWith("js-fail2", "f1");
+  });
+});

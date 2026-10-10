@@ -2000,6 +2000,39 @@ export function createMockApi(seed: MockSeed = {}) {
       };
     },
 
+    async scheduleMessage(
+      _sessionId: string,
+      _message: string,
+      fireAt: string,
+      _attachmentIds?: string[],
+    ): Promise<{ id: string; fireAt: string }> {
+      return { id: `sched-${Date.now()}`, fireAt };
+    },
+
+    async cancelScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async editScheduledMessage(
+      _sessionId: string,
+      _scheduleId: string,
+      _patch: { fireAt: string },
+    ): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async sendScheduledNow(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async retryScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async dismissScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
     subscribe(sessionIds: string[]): () => void {
       for (const id of sessionIds) {
         subscribed.add(id);

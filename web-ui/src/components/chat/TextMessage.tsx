@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { Clock } from "lucide-react";
 import type { Attachment } from "@/api/types";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -16,6 +17,8 @@ interface TextMessageProps {
   api?: ApiInstance | null;
   worktreeId?: string | null;
   scope?: FileScope;
+  /** This user message was delivered by a scheduled send — tag it inside the bubble. */
+  scheduled?: boolean;
 }
 
 /**
@@ -23,7 +26,7 @@ interface TextMessageProps {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled }: TextMessageProps) {
   const isUser = role === "user";
   return (
     <div
@@ -66,6 +69,12 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
             {attachments.map((a) => (
               <AttachmentChip key={a.id} attachment={a} />
             ))}
+          </div>
+        ) : null}
+        {isUser && scheduled ? (
+          <div className="chat-bubble__scheduled" title="This message was sent via schedule">
+            <Clock size={11} aria-hidden />
+            Scheduled
           </div>
         ) : null}
       </div>

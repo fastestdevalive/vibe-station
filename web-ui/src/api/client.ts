@@ -1642,6 +1642,80 @@ export function createClientApi() {
       return parseJson<TranscriptResponse>(res);
     },
 
+    /** Schedule a message for future delivery. */
+    async scheduleMessage(
+      sessionId: string,
+      message: string,
+      fireAt: string,
+      attachmentIds?: string[],
+    ): Promise<{ id: string; fireAt: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, fireAt, ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+      });
+      return parseJson<{ id: string; fireAt: string }>(res);
+    },
+
+    /** Cancel a scheduled message. */
+    async cancelScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/schedule/${encodeURIComponent(scheduleId)}`,
+        { method: "DELETE" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Reschedule a pending scheduled message (only the fire time is editable). */
+    async editScheduledMessage(
+      sessionId: string,
+      scheduleId: string,
+      patch: { fireAt: string },
+    ): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/schedule/${encodeURIComponent(scheduleId)}/edit`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Fire a scheduled message immediately (send-now). */
+    async sendScheduledNow(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/schedule/${encodeURIComponent(scheduleId)}/send-now`,
+        { method: "POST" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Re-queue a failed scheduled message to fire immediately. */
+    async retryScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/schedule/${encodeURIComponent(scheduleId)}/retry`,
+        { method: "POST" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Dismiss (delete) a failed scheduled message. */
+    async dismissScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/schedule/${encodeURIComponent(scheduleId)}/dismiss`,
+        { method: "POST" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
     /** Latest cross-harness meta (usage/model/turn-state). */
     async getMeta(sessionId: string): Promise<SessionMeta> {
       const root = baseUrl();

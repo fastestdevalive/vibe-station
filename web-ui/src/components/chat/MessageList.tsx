@@ -514,6 +514,8 @@ interface MessageListProps {
   /** Session's slash-command/skill catalog, threaded into the fork editor's
    *  `QueuedTurnEditor` mount. */
   commands?: Command[];
+  /** turnIds that came from scheduled sends — those user bubbles get a clock badge. */
+  scheduledTurnIds?: string[];
 }
 
 export function MessageList({
@@ -536,7 +538,12 @@ export function MessageList({
   onAtBottomChange,
   cwd,
   commands,
+  scheduledTurnIds,
 }: MessageListProps) {
+  const scheduledTurnIdSet = useMemo(
+    () => (scheduledTurnIds ? new Set(scheduledTurnIds) : null),
+    [scheduledTurnIds],
+  );
   // Which answered user turn (if any) this tab is editing → fork. Local to the
   // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
   const [forkEditingTurnId, setForkEditingTurnId] = useState<string | null>(null);
@@ -1014,6 +1021,7 @@ export function MessageList({
           );
         }
         const forkable = canFork && !!item.turnId;
+        const isScheduled = !!item.turnId && !!scheduledTurnIdSet?.has(item.turnId);
         if (forkable && forkEditingTurnId === item.turnId) {
           return (
             <div className="chat-msg chat-msg--user chat-msg--forking" data-role="user">
@@ -1035,7 +1043,7 @@ export function MessageList({
         } else if (forkable) {
           return (
             <div className="chat-user-turn">
-              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
+              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />
               <button
                 type="button"
                 className="chat-user-turn__edit"
@@ -1048,7 +1056,7 @@ export function MessageList({
             </div>
           );
         }
-        return <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />;
+        return <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />;
       }
       case "assistant":
         return <TextMessage role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} />;

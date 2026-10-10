@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Clock, SendHorizontal, Square } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command } from "@/api/types";
+import type { Attachment, Command, UsageInfo } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
 import { loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
+import { apiErrorText } from "@/lib/apiErrorText";
 import { migrateV1Draft } from "@/lib/skillInvocation";
-import { AttachmentChip } from "./AttachmentChip";
+import { ContextMeter } from "./ContextMeter";
+import { ComposerHint, ComposerShell, type HintItem } from "./ComposerShell";
+import { ModelSwitch } from "./ModelSwitch";
+import { ScheduleSendPopover } from "./ScheduleSendPopover";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "./SkillEditor";
 
 /** How long the Send button is held (disabled) at its position after OUR OWN
@@ -42,9 +47,28 @@ interface ComposerProps {
    *  `false` in canvas mode or on a touch device, so focus is never yanked
    *  onto a pane that shouldn't pop the IME. */
   focusOnMount?: boolean;
+  /** Current model for this session, shown as a live-switching dropdown in the toolbar. */
+  model?: string;
+  /** CLI id for the model dropdown (required to enable ModelSwitch). */
+  cli?: string;
+  /** Mode name shown as a secondary chip in the toolbar. */
+  modeName?: string;
+  /** The user switched the model away from the mode's default — the chip reads
+   *  "started as <mode>" so it doesn't claim the mode's model is in use. */
+  modelOverridden?: boolean;
+  /** Overrides the idle "Ready" label (e.g. "⚠ Error" after a failed turn). */
+  statusLabel?: string;
+  /** Turns waiting in the queue — shown next to "Working…" while busy. */
+  queuedCount?: number;
+  /** Session usage — drives the context-window meter in the status row. */
+  usage?: UsageInfo;
+  /** Called when the user confirms a scheduled send. If not provided, the schedule button is hidden. */
+  onScheduleSend?: (message: string, attachmentIds: string[], fireAt: string) => Promise<void>;
 }
 
-/** Message composer: skill-aware editor + send/stop + drag-drop / picker attachments. */
+/** Rich Chat message composer: skill-aware editor + send/stop/schedule, with
+ *  attachments uploaded immediately to the session. Layout, chips and
+ *  drag-drop live in the shared `ComposerShell` (also used by DraftComposer). */
 export function Composer({
   api,
   sessionId,
@@ -59,6 +83,14 @@ export function Composer({
   textareaRef,
   commands,
   focusOnMount = true,
+  model,
+  cli,
+  modeName,
+  modelOverridden,
+  usage,
+  statusLabel,
+  queuedCount = 0,
+  onScheduleSend,
 }: ComposerProps) {
   const commandNames = (commands ?? []).map((c) => c.name);
 
@@ -78,9 +110,10 @@ export function Composer({
     sessionId,
     initialAttachments,
   );
-  const [dragOver, setDragOver] = useState(false);
   const [sending, setSending] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const scheduleAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const [schedulePopoverOpen, setSchedulePopoverOpen] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const internalEditorRef = useRef<SkillEditorHandle | null>(null);
   const setEditorRef = useCallback(
     (el: SkillEditorHandle | null) => {
@@ -92,7 +125,6 @@ export function Composer({
 
   const hasAnyContent = hasContent || readyAttachments.length > 0;
   const canSend = !disabled && !sending && hasAnyContent;
-  const nothingTyped = !hasAnyContent;
 
   // A successful send CLEARS the box while the turn may still be busy —
   // hold the Send branch, disabled, for a short settle window after our own
@@ -143,139 +175,184 @@ export function Composer({
     }
   }
 
+  async function handleSchedule(fireAt: string) {
+    if (!onScheduleSend || sending) return;
+    const message = internalEditorRef.current?.getText().trim() ?? text.trim();
+    const ids = readyAttachments.map((a) => a.id);
+    // `sending` also blocks Enter-to-send while the request is in flight, so
+    // the same text can't be both scheduled and sent.
+    setSending(true);
+    setScheduleError(null);
+    try {
+      await onScheduleSend(message, ids, fireAt);
+    } catch (e) {
+      // Keep the popover open and the text untouched so the user can fix the
+      // time and try again — never leave them believing it was scheduled.
+      setScheduleError(apiErrorText(e, "Couldn't schedule the message."));
+      return;
+    } finally {
+      setSending(false);
+    }
+    setSchedulePopoverOpen(false);
+    internalEditorRef.current?.clear();
+    setText("");
+    setHasContent(false);
+    draft.clear();
+    reset();
+    // The popover held focus; hand it back so the user can keep typing.
+    internalEditorRef.current?.focus();
+  }
+
+  const hintItems: HintItem[] = argFocused
+    ? [
+        { keys: ["Enter", "→"], label: "exits to the message" },
+        { keys: ["Backspace"], label: "removes an argument, then the skill" },
+        { keys: ["Ctrl/⌘ + Enter"], label: "queues" },
+      ]
+    : softKeyboardVisible
+      ? [
+          { keys: ["Enter"], label: "newline" },
+          { keys: ["Ctrl/⌘ + Enter"], label: "to queue & send" },
+        ]
+      : [
+          { keys: ["Enter"], label: "to send" },
+          { keys: ["Ctrl/⌘ + Enter"], label: "to queue" },
+          { keys: ["Shift + Enter"], label: "newline" },
+        ];
+
   return (
-    <div
-      className={`chat-composer${dragOver ? " chat-composer--dragover" : ""}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        const files = Array.from(e.dataTransfer.files);
-        void uploadFiles(files);
-      }}
-    >
-      {drafts.length > 0 ? (
-        <div className="chat-composer__chips">
-          {drafts.map((d) => (
-            <AttachmentChip
-              key={d.attachment.id}
-              attachment={d.attachment}
-              status={d.status}
-              onRemove={removeDraft}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      {error ? <div className="chat-composer__error">{error}</div> : null}
-
-      <div className="chat-composer__row">
-        <div className="chat-composer__field">
-          <SkillEditor
-            ref={setEditorRef}
-            editorKey={sessionId}
-            initialText={text}
-            commands={commands}
-            disabled={disabled}
-            ariaLabel="Message"
-            placeholder="Type a message…"
-            className="chat-composer__textarea"
-            onChangeText={(next, content) => {
-              setText(next);
-              draft.save(next);
-              setHasContent(content);
-            }}
-            onSubmit={() => void handleSend(false)}
-            onCtrlEnter={() => void handleSend(true)}
-            onArgFocusChange={setArgFocused}
-          />
-        </div>
-        <div className="chat-composer__actions">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="chat-composer__file-input"
-            aria-label="Attach files"
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              void uploadFiles(files);
-              e.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            className="chat-composer__attach"
-            aria-label="Attach files"
-            title="Attach files"
-            disabled={disabled}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            📎
-          </button>
+    <ComposerShell
+      attachments={drafts}
+      onRemoveAttachment={removeDraft}
+      error={error}
+      onFiles={(files) => void uploadFiles(files)}
+      onFocusEditor={() => internalEditorRef.current?.focus()}
+      attachDisabled={disabled}
+      status={
+        <div className="chat-composer__status">
+          <span>{busy && !justSent ? (queuedCount > 0 ? `Working… · ${queuedCount} queued` : "Working…") : (statusLabel ?? "Ready")}</span>
+          <ContextMeter usage={usage} />
           {busy && !justSent ? (
             <button
               type="button"
-              className="chat-composer__stop"
+              className="chat-composer__stop-btn"
               onClick={onStop}
               aria-label="Stop turn"
+              title="Stop"
               disabled={stopPending}
             >
-              Stop
+              <Square size={10} fill="currentColor" />
             </button>
           ) : null}
-          {/* Hidden only in the "busy + empty box" case, where Stop alone
-           *  occupies this slot — typed text must never make Stop disappear,
-           *  or a user aiming for Stop lands on Send/queue instead. */}
-          {busy && nothingTyped && !justSent ? null : (
-            <button
-              type="button"
-              className={`chat-composer__send${busy && !canSteer ? " chat-composer__send--queue" : ""}`}
-              aria-label={
-                busy && canSteer
-                  ? "Interrupts and steers the running turn"
-                  : busy
-                    ? "Send message (queues after current turn)"
-                    : "Send message"
-              }
-              title={
-                busy && canSteer
-                  ? "Interrupts and steers the running turn"
-                  : busy
-                    ? "Sends after the current turn finishes"
-                    : undefined
-              }
-              disabled={!canSend}
-              onClick={() => void handleSend(false)}
+        </div>
+      }
+      toolbarStart={
+        <>
+          {cli && cli !== "cursor" ? (
+            <ModelSwitch api={api} sessionId={sessionId} cli={cli} model={model} />
+          ) : model ? (
+            <span className="chat-composer__model-chip" title={model}>
+              {model}
+            </span>
+          ) : null}
+          {modeName ? (
+            <span
+              className={`chat-composer__mode-chip${modelOverridden ? " chat-composer__mode-chip--overridden" : ""}`}
+              title={modelOverridden ? `Started as: ${modeName}` : modeName}
             >
-              ▶
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="chat-composer__hint">
-        {argFocused ? (
-          <>Enter or → exits to the message · Backspace removes an argument, then the skill · Ctrl/Cmd+Enter queues</>
-        ) : (
-          <>
-            <span aria-hidden>⤓</span> Drop files here ·{" "}
-            {softKeyboardVisible
-              ? "Enter for newline · Ctrl/Cmd+Enter to queue & send"
-              : "Enter to send · Ctrl/Cmd+Enter to queue · Shift+Enter or Alt+Enter for newline"}
-          </>
-        )}
-      </div>
-      {commands === undefined ? (
-        // Requirement 11 / Decision "catalog-unloaded": no row, no popover —
-        // "/" renders as plain text until the session's command catalog loads.
-        <div className="chat-composer__hint chat-composer__hint--skills">
-          Skills loading… “/” inserts plain text until the catalog is ready.
-        </div>
-      ) : null}
-    </div>
+              {modelOverridden ? `started as ${modeName}` : modeName}
+            </span>
+          ) : null}
+        </>
+      }
+      toolbarEnd={
+        <>
+          {onScheduleSend ? (
+            <>
+              <button
+                ref={scheduleAnchorRef}
+                type="button"
+                className="chat-composer__schedule-btn"
+                aria-label="Schedule send"
+                title="Schedule send"
+                disabled={disabled || !hasAnyContent}
+                onClick={() => setSchedulePopoverOpen((v) => !v)}
+              >
+                <Clock size={14} />
+              </button>
+              <ScheduleSendPopover
+                open={schedulePopoverOpen}
+                anchorRef={scheduleAnchorRef}
+                error={scheduleError}
+                busy={sending}
+                onSchedule={(fireAt) => void handleSchedule(fireAt)}
+                onClose={() => {
+                  setSchedulePopoverOpen(false);
+                  setScheduleError(null);
+                  internalEditorRef.current?.focus();
+                }}
+              />
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn--primary chat-composer__send"
+            aria-label={
+              busy && canSteer
+                ? "Interrupts and steers the running turn"
+                : busy
+                  ? "Send message (queues after current turn)"
+                  : "Send message"
+            }
+            title={
+              busy && canSteer
+                ? "Interrupts and steers the running turn"
+                : busy
+                  ? "Sends after the current turn finishes"
+                  : undefined
+            }
+            disabled={!canSend}
+            onClick={() => void handleSend(false)}
+          >
+            <SendHorizontal size={13} />
+            <span>Send</span>
+          </button>
+        </>
+      }
+      hint={
+        <ComposerHint
+          items={hintItems}
+          {...(argFocused ? {} : { prefix: <><span aria-hidden>⤓</span> Drop files here</> })}
+        />
+      }
+      footer={
+        commands === undefined ? (
+          // Requirement 11 / Decision "catalog-unloaded": no row, no popover —
+          // "/" renders as plain text until the session's command catalog loads.
+          <div className="chat-composer__hint chat-composer__hint--skills">
+            Skills loading… "/" inserts plain text until the catalog is ready.
+          </div>
+        ) : null
+      }
+    >
+      <SkillEditor
+        ref={setEditorRef}
+        editorKey={sessionId}
+        initialText={text}
+        commands={commands}
+        disabled={disabled}
+        ariaLabel="Message"
+        placeholder="Type a message…"
+        className="chat-composer__textarea"
+        onChangeText={(next, content) => {
+          setText(next);
+          draft.save(next);
+          setHasContent(content);
+        }}
+        onSubmit={() => void handleSend(false)}
+        onCtrlEnter={() => void handleSend(true)}
+        onArgFocusChange={setArgFocused}
+      />
+    </ComposerShell>
   );
 }

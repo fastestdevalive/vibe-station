@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Play } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
+import type { DraftAttachment } from "@/hooks/useAttachmentDrafts";
 import type { CreateWorktreeBody, DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
 import { ModeIcon } from "../agent/ModeIcon";
-import { SkillEditor, type SkillEditorHandle } from "../chat/SkillEditor";
-import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "../chat/SkillEditor";
+import { ComposerHint, ComposerShell, type HintItem } from "../chat/ComposerShell";
+import { RichChatToggle } from "../chat/RichChatToggle";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import { NewModeDialog } from "../dialogs/NewModeDialog";
 import { NonGitWorktreeDialog } from "../dialogs/NonGitWorktreeDialog";
@@ -27,6 +30,16 @@ interface DraftComposerProps {
   draftSessionId: string | null;
   onStarted: (result: { worktreeId?: string; sessionId?: string }) => void;
   onDiscard: () => void;
+}
+
+const startHintItems: HintItem[] = [
+  { keys: ["Enter"], label: "to start" },
+  { keys: ["Shift + Enter"], label: "newline" },
+];
+
+/** Positional id for a staged (not-yet-uploaded) attachment chip. */
+function stagedId(i: number): string {
+  return `staged-${i}`;
 }
 
 function errorMessage(err: unknown, fallback: string): string {
@@ -165,7 +178,8 @@ function DraftComposerInner({
   const [channel, setChannel] = useState<"json" | "terminal">(
     initialConfig?.channel && initialConfig.channel !== "json" ? "terminal" : "json",
   );
-  const [useTmux, setUseTmux] = useState(initialConfig?.useTmux ?? true);
+  // Terminal always means tmux now — the plain-pty option is gone from the UI.
+  // A persisted `initialConfig.useTmux` (older drafts) is deliberately ignored.
   const [worktreeChoice, setWorktreeChoice] = useState<"new" | "existing">(initialConfig?.worktreeChoice ?? "new");
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [existingWorktreeId, setExistingWorktreeId] = useState(initialConfig?.existingWorktreeId ?? "");
@@ -199,6 +213,7 @@ function DraftComposerInner({
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const { skillCommands, editorSeq, editorReady } = useSkillCommands(true, api);
+  const softKeyboardVisible = useSoftKeyboardVisible();
 
   // Debounced save timer for prompt/config changes.
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -310,7 +325,7 @@ function DraftComposerInner({
     const base: DraftConfig = {
       entryPoint,
       modeId,
-      channel: isJson ? "json" : useTmux ? "tmux" : "pty",
+      channel: isJson ? "json" : "tmux",
       channelExplicit: channelTouchedRef.current,
     };
     if (entryPoint === "worktree") {
@@ -321,7 +336,6 @@ function DraftComposerInner({
         if (branch.trim()) base.branch = branch.trim();
         if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
       }
-      base.useTmux = useTmux;
     } else if (entryPoint === "global" || entryPoint === "direct") {
       base.useWorktree = useWorktree;
       if (useWorktree) {
@@ -348,12 +362,9 @@ function DraftComposerInner({
           if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
         }
       }
-      base.useTmux = useTmux;
-    } else if (entryPoint === "tab") {
-      base.useTmux = useTmux;
     }
     return base;
-  }, [entryPoint, modeId, isJson, useTmux, worktreeChoice, existingWorktreeId, branch, baseBranch, useWorktree]);
+  }, [entryPoint, modeId, isJson, worktreeChoice, existingWorktreeId, branch, baseBranch, useWorktree]);
 
   // Keep the unmount flush's source of truth in sync with the live values.
   useEffect(() => {
@@ -860,6 +871,19 @@ function DraftComposerInner({
 
   const showWorktreeFields = entryPoint !== "tab" && useWorktree;
 
+  // Staged attachments: drafts have no live session to upload into (Tier 2
+  // has no session at all), so files stay as `File`s until Start, where
+  // `sendJsonFirstTurn` uploads them against the started session — the same
+  // contract the old AttachmentPicker had. Chips reuse the composer's
+  // `DraftAttachment` shape with a positional id.
+  const stagedChips: DraftAttachment[] = files.map((f, i) => ({
+    attachment: { id: stagedId(i), name: f.name, path: "", size: f.size, mime: f.type || "application/octet-stream" },
+  }));
+  // Only Rich Chat delivers a first-turn upload; a Terminal agent gets the
+  // prompt alone, so say so rather than silently dropping staged files.
+  const attachmentNotice =
+    !isJson && files.length > 0 ? "Attachments are only sent to Rich Chat agents — switch Rich Chat on or remove them." : null;
+
   return (
     <div className="draft-composer">
       {isTier1 ? (
@@ -1081,56 +1105,6 @@ function DraftComposerInner({
               </button>
             </div>
           </div>
-
-          {/* Channel field — keep existing markup verbatim */}
-          <div className="draft-composer__field">
-            <div className="draft-composer__field-label">Channel</div>
-            <div role="radiogroup" aria-label="Channel" className="draft-composer__radio-row">
-              <label
-                className="draft-composer__radio-label"
-                style={{ opacity: jsonSupported ? 1 : 0.5, cursor: jsonSupported ? "pointer" : "not-allowed" }}
-              >
-                <input
-                  type="radio"
-                  name="draft-channel"
-                  checked={channel === "json"}
-                  disabled={!jsonSupported}
-                  onChange={() => {
-                    channelTouchedRef.current = true;
-                    setChannel("json");
-                  }}
-                />
-                💬 Rich Chat (json based)
-              </label>
-              <label className="draft-composer__radio-label">
-                <input
-                  type="radio"
-                  name="draft-channel"
-                  checked={channel === "terminal"}
-                  onChange={() => {
-                    channelTouchedRef.current = true;
-                    setChannel("terminal");
-                  }}
-                />
-                ⌨ Terminal
-              </label>
-            </div>
-            {!jsonSupported ? (
-              <div className="draft-composer__hint">Rich Chat not available for {selectedCli} yet.</div>
-            ) : null}
-            {!isJson ? (
-              <label className="draft-composer__checkbox">
-                <input type="checkbox" checked={useTmux} onChange={(e) => setUseTmux(e.target.checked)} />
-                Use tmux (recommended — survives daemon restart, better concurrent device support)
-              </label>
-            ) : null}
-          </div>
-
-          {/* Attachments */}
-          <div className="draft-composer__field">
-            <div className="draft-composer__field-label">Attachments</div>
-            <AttachmentPicker files={files} onChange={setFiles} />
-          </div>
         </div>
 
         {error ? <div className="draft-composer__error">{error}</div> : null}
@@ -1138,33 +1112,67 @@ function DraftComposerInner({
 
       <div className="draft-composer__bar">
         {editorReady ? (
-          <div className="chat-composer__row">
-            <div className="chat-composer__field">
-              <SkillEditor
-                ref={editorRef}
-                editorKey={`draft-${draftSessionId ?? "new"}-${editorSeq}`}
-                initialText={prompt}
-                commands={skillCommands}
-                ariaLabel="Prompt"
-                placeholder="What should this agent do?"
-                className="chat-composer__textarea"
-                onChangeText={handlePromptChange}
-                onSubmit={() => void handleStart()}
-                disabled={submitting}
+          <ComposerShell
+            className="chat-composer--draft"
+            attachments={stagedChips}
+            onRemoveAttachment={(id) => setFiles((prev) => prev.filter((_, i) => stagedId(i) !== id))}
+            onFocusEditor={() => editorRef.current?.focus()}
+            error={attachmentNotice}
+            onFiles={(added) => setFiles((prev) => [...prev, ...added])}
+            attachDisabled={submitting || !isJson}
+            attachTitle={isJson ? "Attach files" : "Attachments are only sent to Rich Chat agents"}
+            toolbarStart={
+              <RichChatToggle
+                checked={isJson}
+                disabled={!jsonSupported || submitting}
+                {...(!jsonSupported
+                  ? { disabledReason: `Rich Chat not available for ${selectedCli ?? "this CLI"} yet — this agent will run in a Terminal` }
+                  : {})}
+                onChange={(on) => {
+                  channelTouchedRef.current = true;
+                  setChannel(on ? "json" : "terminal");
+                }}
               />
-            </div>
-            <div className="chat-composer__actions">
+            }
+            toolbarEnd={
               <button
                 type="button"
-                className="chat-composer__send"
+                className="btn btn--primary chat-composer__send"
                 onClick={() => void handleStart()}
                 disabled={submitting || !prompt.trim()}
                 aria-label="Start agent"
               >
-                {submitting ? "…" : "▶"}
+                <Play size={12} />
+                <span>{submitting ? "Starting…" : "Start"}</span>
               </button>
-            </div>
-          </div>
+            }
+            hint={
+              <ComposerHint
+                items={
+                  softKeyboardVisible
+                    ? [
+                        { keys: ["Enter"], label: "newline" },
+                        { keys: ["Ctrl/⌘ + Enter"], label: "to start" },
+                      ]
+                    : startHintItems
+                }
+                {...(isJson ? { prefix: <><span aria-hidden>⤓</span> Drop files here</> } : {})}
+              />
+            }
+          >
+            <SkillEditor
+              ref={editorRef}
+              editorKey={`draft-${draftSessionId ?? "new"}-${editorSeq}`}
+              initialText={prompt}
+              commands={skillCommands}
+              ariaLabel="Prompt"
+              placeholder="What should this agent do?"
+              className="chat-composer__textarea"
+              onChangeText={handlePromptChange}
+              onSubmit={() => void handleStart()}
+              disabled={submitting}
+            />
+          </ComposerShell>
         ) : null}
       </div>
 
