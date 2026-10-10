@@ -20,8 +20,6 @@ const INTERACTIVE_SELECTOR =
 interface ComposerShellProps {
   /** Extra modifier class on the outer `.chat-composer` (e.g. `chat-composer--draft`). */
   className?: string;
-  /** Optional row rendered at the top of the shell (e.g. "Working… ■ Stop"). */
-  status?: ReactNode;
   /** Attachment chips (uploaded or staged). */
   attachments: DraftAttachment[];
   onRemoveAttachment: (id: string) => void;
@@ -58,7 +56,6 @@ interface ComposerShellProps {
  */
 export function ComposerShell({
   className,
-  status,
   attachments,
   onRemoveAttachment,
   error,
@@ -149,8 +146,6 @@ export function ComposerShell({
             Drop files to attach
           </div>
         ) : null}
-        {status}
-
         {attachments.length > 0 ? (
           <div className="chat-composer__chips">
             {attachments.map((d) => (

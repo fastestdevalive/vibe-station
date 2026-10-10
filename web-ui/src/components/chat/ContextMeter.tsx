@@ -6,8 +6,9 @@ const WARN_CONTEXT_PCT = 80;
 const DANGER_CONTEXT_PCT = 90;
 
 /**
- * Context-window meter shown at the right of the composer's status row: a thin
- * fill bar + "18k / 200k". Stays theme-coloured until 80% (orange), then 90% (red) as a
+ * Context-window meter, shown in the composer's top-right corner: a fill bar,
+ * then "18k / 200k", then "(9%)". The bar is the primary signal and is never
+ * hidden. Stays theme-coloured until 80% (orange), then 90% (red) as a
  * heads-up before the window is exhausted. Without a known window there is nothing to fill, so only the
  * token count renders. Cost is deliberately never shown.
  */
@@ -36,10 +37,11 @@ export function ContextMeter({ usage }: { usage: UsageInfo | undefined }) {
           <span className="ctx-meter__fill" style={{ width: `${pct}%` }} />
         </span>
       ) : null}
-      <span className="ctx-meter__text">
+      <span className="ctx-meter__count">
         {fmt(total)}
         {hasWindow ? <span className="ctx-meter__total"> / {fmt(ctx)}</span> : null}
       </span>
+      {pct != null ? <span className="ctx-meter__pct"> ({pct}%)</span> : null}
     </div>
   );
 }

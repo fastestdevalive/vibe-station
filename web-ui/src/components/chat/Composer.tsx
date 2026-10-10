@@ -131,6 +131,17 @@ export function Composer({
   // send so the same screen position can't flip to Stop under the user's
   // still-descending click.
   const [justSent, setJustSent] = useState(false);
+  // Show the working affordances (label, Stop) — not for the settle window right
+  // after our own send, so the control under a descending click can't flip.
+  const working = !!busy && !justSent;
+  const workingLabel = working
+    ? queuedCount > 0
+      ? `Working… · ${queuedCount} queued`
+      : "Working…"
+    : undefined;
+  // The idle "Ready" label is gone with the status row; only non-idle states
+  // (working / queued / error) take toolbar space.
+  const stateLabel = workingLabel ?? statusLabel;
   useEffect(() => {
     if (!justSent) return;
     const id = window.setTimeout(() => setJustSent(false), SEND_SETTLE_MS);
@@ -228,24 +239,6 @@ export function Composer({
       onFiles={(files) => void uploadFiles(files)}
       onFocusEditor={() => internalEditorRef.current?.focus()}
       attachDisabled={disabled}
-      status={
-        <div className="chat-composer__status">
-          <span>{busy && !justSent ? (queuedCount > 0 ? `Working… · ${queuedCount} queued` : "Working…") : (statusLabel ?? "Ready")}</span>
-          <ContextMeter usage={usage} />
-          {busy && !justSent ? (
-            <button
-              type="button"
-              className="chat-composer__stop-btn"
-              onClick={onStop}
-              aria-label="Stop turn"
-              title="Stop"
-              disabled={stopPending}
-            >
-              <Square size={10} fill="currentColor" />
-            </button>
-          ) : null}
-        </div>
-      }
       toolbarStart={
         <>
           {cli && cli !== "cursor" ? (
@@ -267,6 +260,16 @@ export function Composer({
       }
       toolbarEnd={
         <>
+          {stateLabel ? (
+            <span
+              // Plain "Working…" is redundant with the Stop icon in the top-right
+              // cluster, so narrow composers hide it; queued / error labels stay.
+              className={`chat-composer__state-label${stateLabel === workingLabel && queuedCount === 0 ? " chat-composer__state-label--working" : ""}`}
+              role="status"
+            >
+              {stateLabel}
+            </span>
+          ) : null}
           {onScheduleSend ? (
             <>
               <button
@@ -315,7 +318,7 @@ export function Composer({
             onClick={() => void handleSend(false)}
           >
             <SendHorizontal size={13} />
-            <span>Send</span>
+            <span className="chat-composer__send-label">Send</span>
           </button>
         </>
       }
@@ -341,6 +344,23 @@ export function Composer({
         initialText={text}
         commands={commands}
         disabled={disabled}
+        topRight={
+          <>
+            <ContextMeter usage={usage} />
+            {/* Always rendered (dimmed + disabled when nothing is running) so the
+                meter beside it never shifts when a turn starts or ends. */}
+            <button
+              type="button"
+              className="chat-composer__stop-btn"
+              onClick={onStop}
+              aria-label="Stop turn"
+              title={working ? "Stop" : "Stop (nothing is running)"}
+              disabled={!working || stopPending}
+            >
+              <Square size={10} fill="currentColor" />
+            </button>
+          </>
+        }
         ariaLabel="Message"
         placeholder="Type a message…"
         className="chat-composer__textarea"

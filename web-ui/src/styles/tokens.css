@@ -91,6 +91,21 @@
   --kind-neutral: #a3a3a3;
 }
 
+/* Feature tokens that must exist in EVERY theme. Themes are generated per theme
+   from the registry (themes.generated.css) and know nothing about these, so they
+   live on :root (all themes) with a light-appearance override — `data-appearance`
+   is written on <html> by useTheme for every theme. */
+:root {
+  /* Context-window meter: fill/track follow the theme; only the warning levels
+     (>= 80% / >= 90%) are coloured. */
+  --ctx-warn: #f97316;
+  --ctx-danger: #ef4444;
+}
+[data-appearance="light"] {
+  --ctx-warn: #c2410c;
+  --ctx-danger: #dc2626;
+}
+
 [data-theme="vibestation-dark"] {
   --accent: #a78bfa;
   /* Quiet, chat-scoped accent (user bubble border, spinners, throttle badge).
@@ -147,13 +162,6 @@
      swaps to purple (matching GitHub's merged-PR chip colour). */
   --status-working: #eab308;
   --status-waiting: #ef4444;
-  /* Context-window meter (composer status row). */
-  /* Meter fill/track follow the theme (--accent / --border-default); only the
-     warning levels (80% / 90%) are coloured. */
-  --ctx-warn: #f97316;
-  --ctx-danger: #ef4444;
-  /* Scheduled-send accent (queue-tray rail + sent-turn badge). */
-  --scheduled-color: #60a5fa;
   --pr-open: #22c55e;
   --pr-merged: #8250df;
   --pr-draft: #8a8a8a;
@@ -251,9 +259,6 @@
 
   --status-working: #a16207;
   --status-waiting: #dc2626;
-  --ctx-warn: #c2410c;
-  --ctx-danger: #dc2626;
-  --scheduled-color: #2563eb;
   --pr-open: #15803d;
   --pr-merged: #6e40c9;
   --pr-draft: #737373;

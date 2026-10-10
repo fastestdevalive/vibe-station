@@ -120,6 +120,27 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     [bumpTerminalFont],
   );
 
+  // Publish the pane's own height as `--chat-pane-h` so the composer's editor can
+  // be bounded by it (see `COMPOSER_MAX_PANE_FRACTION` in SkillEditor): a tiny
+  // pane must not be outgrown by its input. Set straight on the element (not via
+  // React style) so the `chatFontVars` re-renders don't fight it.
+  const paneObserverRef = useRef<ResizeObserver | null>(null);
+  const setPaneRef = useCallback((el: HTMLDivElement | null) => {
+    paneObserverRef.current?.disconnect();
+    paneObserverRef.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const apply = () => {
+      const h = el.clientHeight;
+      // 0 means "not laid out / display:none right now" — keep the previous value
+      // (or the editor's viewport fallback) rather than capping the input at 0px.
+      if (h > 0) el.style.setProperty("--chat-pane-h", `${h}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    paneObserverRef.current = ro;
+  }, []);
+
   const {
     events,
     meta,
@@ -344,7 +365,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   }
 
   return (
-    <div className="chat-pane" style={chatFontVars}>
+    <div className="chat-pane" style={chatFontVars} ref={setPaneRef}>
       <OfflineOverlay api={api} />
       {/* Non-scrolling wrapper whose box is exactly the scroll VIEWPORT — it,
           not `.chat-pane`, is the containing block for the floating
