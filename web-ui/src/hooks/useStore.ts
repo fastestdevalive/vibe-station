@@ -2031,7 +2031,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // Project-scope direct-agent tabs render only ids in the open-tab
             // set, so the replacement must take the archived session's slot
             // there too — otherwise the tab vanishes on reset (the old id is
-            // filtered out as superseded) while the sidebar still lists it.
+            // filtered out as superseded) while it is still reachable via Previous sessions.
             let openTabsChanged = false;
             const nextOpenTabs = { ...s.openDirectAgentTabsByProject };
             for (const [projectId, ids] of Object.entries(s.openDirectAgentTabsByProject)) {

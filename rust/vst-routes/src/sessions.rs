@@ -3042,9 +3042,11 @@ impl SessionRoutes {
         if handoff_text.is_none() && body.handoff.unwrap_or(false) {
             let handoff_path = handoff_path_for(&session.id);
             let instruction = handoff_instruction(&handoff_path);
-            handoff_text = self
-                .run_handoff(&session, &handoff_path, &instruction)
-                .await;
+            handoff_text = Some(
+                self.run_handoff(&session, &handoff_path, &instruction)
+                    .await
+                    .map_err(|f| ResetError::HandoffFailed(f.message()))?,
+            );
         }
 
         // Kill the process/pane BEFORE the archive. (forceCloseSessionStreams
@@ -3321,7 +3323,10 @@ impl SessionRoutes {
 
         let handoff_path = handoff_path_for(&session.id);
         let instruction = handoff_instruction(&handoff_path);
-        let summary = self.run_handoff(session, &handoff_path, &instruction).await;
+        let summary = self
+            .run_handoff(session, &handoff_path, &instruction)
+            .await
+            .ok();
         Ok(HandoffResult {
             ok: true,
             handoff_summary: summary,
@@ -3338,13 +3343,16 @@ impl SessionRoutes {
         session: &SessionRecord,
         path: &Path,
         instruction: &str,
-    ) -> Option<String> {
+    ) -> Result<String, HandoffFailure> {
         let channel = session_channel(session.channel, Some(session.use_tmux));
         match channel {
             Channel::Json => self.run_json_handoff_turn(session, path, instruction).await,
             _ => match run_handoff_turn(&session.tmux_name, channel, path, instruction).await {
-                Ok(true) => read_handoff_file_or_null(path).await.ok().flatten(),
-                _ => None,
+                Ok(true) => match read_handoff_file_or_null(path).await {
+                    Ok(Some(text)) if !text.is_empty() => Ok(text),
+                    _ => Err(HandoffFailure::NoSummary),
+                },
+                _ => Err(HandoffFailure::NoSummary),
             },
         }
     }
@@ -3354,11 +3362,11 @@ impl SessionRoutes {
         session: &SessionRecord,
         path: &Path,
         instruction: &str,
-    ) -> Option<String> {
+    ) -> Result<String, HandoffFailure> {
         // An archived session must not get a live runtime spun back up for it
         // (`resolve_json_agent` re-creates released agents).
         if session.archived_at.is_some() {
-            return None;
+            return Err(HandoffFailure::EnqueueFailed);
         }
         if path.exists() {
             let _ = tokio::fs::remove_file(path).await;
@@ -3371,21 +3379,47 @@ impl SessionRoutes {
             daemon_port: self.daemon_port,
             // FIFO, never steer: the instruction waits behind any running turn.
             // (A UI reset on a busy agent therefore waits for that turn, bounded
-            // by `handoff_timeout`.)
+            // separately by HANDOFF_QUEUE_WAIT.)
             steer: Some(false),
             store: self.store.clone(),
             broadcaster: self.broadcaster.clone(),
         };
 
-        if let Err(e) = enqueue_chat_turn(opts, &self.json_registry).await {
-            eprintln!("handoff: {}: {:?}", session.id, e);
-            return None;
+        let enqueue_res = match enqueue_chat_turn(opts, &self.json_registry).await {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("handoff: {}: {:?}", session.id, e);
+                return Err(HandoffFailure::EnqueueFailed);
+            }
+        };
+        let turn_id = enqueue_res.turn_id;
+
+        let agent = match self.json_registry.get(&session.id) {
+            Some(a) => a,
+            None => return Err(HandoffFailure::EnqueueFailed),
+        };
+
+        let phase = || {
+            let meta = agent.get_meta();
+            if meta.active_turn_id.as_deref() == Some(&turn_id) {
+                HandoffTurnPhase::Running
+            } else if meta.queued_turn_ids.iter().any(|id| id == &turn_id)
+                || meta.editing_turn_ids.iter().any(|id| id == &turn_id)
+            {
+                HandoffTurnPhase::Queued
+            } else {
+                HandoffTurnPhase::Gone
+            }
+        };
+
+        let started =
+            wait_for_turn_start(phase, HANDOFF_QUEUE_WAIT, Duration::from_millis(250)).await;
+
+        if !started {
+            cleanup_failed_handoff(&agent, &turn_id, path).await;
+            return Err(HandoffFailure::QueueTimeout);
         }
 
-        let agent = self.json_registry.get(&session.id)?;
-        // Note on timeout: if it hits, the turn may still be queued. In
-        // reset_session it dies with release_session_runtime; in handoff_session
-        // it may run later and write an unread temp file (accepted).
         let summary = wait_for_handoff_file(
             path,
             self.handoff_timeout,
@@ -3394,10 +3428,15 @@ impl SessionRoutes {
             || agent.settled(),
         )
         .await;
-        if summary.is_none() {
-            eprintln!("handoff: {}: no summary written", session.id);
+
+        match summary {
+            Some(s) => Ok(s),
+            None => {
+                eprintln!("handoff: {}: no summary written", session.id);
+                cleanup_failed_handoff(&agent, &turn_id, path).await;
+                Err(HandoffFailure::NoSummary)
+            }
         }
-        summary
     }
 
     // -----------------------------------------------------------------------
@@ -5244,6 +5283,62 @@ fn provider_to_cli(p: NormalizedEventProvider) -> CliId {
 /// file" — covers the window between enqueue and the drain actually starting.
 const HANDOFF_IDLE_GRACE: Duration = Duration::from_secs(3);
 
+/// Upper bound on how long a handoff turn may wait in the queue behind a busy
+/// running turn before `run_json_handoff_turn` gives up (the handoff budget,
+/// `handoff_timeout`, only starts once the turn leaves the queue and runs).
+pub const HANDOFF_QUEUE_WAIT: Duration = Duration::from_secs(600);
+
+/// Phase of a handoff turn relative to the agent's queue, as seen via
+/// `JsonAgentSession::get_meta()`. `Gone` means the turn is neither queued nor
+/// active — it finished (between polls) or was dropped, and the file check next
+/// resolves whether a summary landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffTurnPhase {
+    Queued,
+    Running,
+    Gone,
+}
+
+/// Wait for a json handoff turn to leave the queue and start running (or vanish).
+///
+/// Returns `true` as soon as `phase()` is no longer `Queued` (i.e. `Running` or
+/// `Gone`); returns `false` if the turn stays `Queued` past `timeout`.
+///
+/// `phase` is an injected closure so this is unit-testable without a live agent
+/// (mirrors `wait_for_handoff_file`'s injected `is_settled`/`wait_settled`).
+pub async fn wait_for_turn_start<P>(phase: P, timeout: Duration, poll: Duration) -> bool
+where
+    P: Fn() -> HandoffTurnPhase,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if phase() != HandoffTurnPhase::Queued {
+            return true;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        tokio::time::sleep(poll.min(deadline - now)).await;
+    }
+}
+
+/// Clean up a handoff turn that did not produce a summary so it does not linger
+/// on a session that stays live (Decision 3).
+async fn cleanup_failed_handoff(agent: &JsonAgentSession, turn_id: &str, path: &Path) {
+    if !agent.cancel_queued_turn(turn_id) && !agent.stop_active_turn(Some(turn_id)) {
+        // Drain-loop gap: turn was dequeued but active_turn not yet set.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let meta = agent.get_meta();
+        if meta.active_turn_id.as_deref() == Some(turn_id) {
+            agent.stop_active_turn(Some(turn_id));
+        }
+    }
+    if path.exists() {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
 /// Wait for a json-channel handoff turn to produce `path`.
 ///
 /// - File appears → wait (bounded) for the turn to finish so a multi-step write
@@ -5428,6 +5523,38 @@ pub enum ResumeError {
     Internal(String),
 }
 
+/// Why a handoff turn did not produce a summary. Channel-neutral: messages
+/// must NOT quote a timeout in seconds, because the tmux/pty path uses a fixed
+/// 30s poll (`vst_lifecycle::handoff::TIMEOUT_MS`), not `handoff_timeout`.
+#[derive(Debug)]
+pub enum HandoffFailure {
+    /// The handoff instruction could not be queued on the agent.
+    EnqueueFailed,
+    /// The handoff turn waited behind a busy running turn past the queue cap.
+    QueueTimeout,
+    /// The handoff turn ran but no summary file was written in time.
+    NoSummary,
+}
+
+impl HandoffFailure {
+    pub fn message(&self) -> String {
+        match self {
+            HandoffFailure::EnqueueFailed => {
+                "Handoff failed: could not send the handoff request to the agent, so the session was NOT reset."
+                    .to_string()
+            }
+            HandoffFailure::QueueTimeout => {
+                "Handoff failed: the agent is still busy with its current turn, so the session was NOT reset. Stop the running turn or wait for it to finish, then try again."
+                    .to_string()
+            }
+            HandoffFailure::NoSummary => {
+                "Handoff failed: the agent did not write a handoff summary in time, so the session was NOT reset. Try again, or reset without handoff."
+                    .to_string()
+            }
+        }
+    }
+}
+
 /// Error for `POST /sessions/:id/reset`.
 #[derive(Debug)]
 pub enum ResetError {
@@ -5436,6 +5563,7 @@ pub enum ResetError {
     Archived(String),
     NoMode(String),
     ModeNotFound(String),
+    HandoffFailed(String),
     Internal(String),
 }
 

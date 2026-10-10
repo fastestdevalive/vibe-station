@@ -33,6 +33,7 @@ import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
+import { PreviousSessionsMenu } from "@/components/layout/PreviousSessionsMenu";
 import { createProjectDirectDraft } from "@/lib/projectDraft";
 import { useTopRightInset } from "@/context/TopRightInsetContext";
 
@@ -316,6 +317,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     [isProject, worktreeId, serverSessions, kind, openAgentTabIds],
   );
   const sessions = isProject ? projectSessions : localSessions;
+  const historySessions = isProject ? serverSessions : sessions;
   // Keep the ref in step so the WS `session:created` effect — whose deps are
   // deliberately stable — can tell whether the currently-active id still
   // refers to a session that exists.
@@ -1042,6 +1044,13 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           <Plus size={14} />
         </button>
       </div>
+      {isAgent ? (
+        <PreviousSessionsMenu
+          sessions={historySessions}
+          activeSession={historySessions.find((s) => s.id === activeSessionId) ?? null}
+          onOpen={(id) => setActiveSession(id)}
+        />
+      ) : null}
       <PaneTools fsTarget={fsTarget} onCloseDock={!isAgent ? () => toggleTerminalDock() : undefined} />
 
       {isAgent ? null : (

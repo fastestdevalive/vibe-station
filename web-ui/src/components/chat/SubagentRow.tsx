@@ -12,6 +12,7 @@ import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
 import { sessionLabel } from "@/lib/sessionLabel";
+import { ancestorIds } from "@/lib/sessionVisibility";
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
 const MAX_ROWS = 5;
@@ -111,17 +112,7 @@ function ChipIcon({ session, api }: { session: Session; api?: ApiInstance }) {
   );
 }
 
-export function ancestorIds(session: Session, all: Session[]): Set<string> {
-  const ids = new Set<string>([session.id]);
-  let cur = session;
-  for (let i = 0; i < all.length; i++) {
-    const pred = all.find((s) => s.supersededBy === cur.id && !ids.has(s.id));
-    if (!pred) break;
-    ids.add(pred.id);
-    cur = pred;
-  }
-  return ids;
-}
+export { ancestorIds } from "@/lib/sessionVisibility";
 
 /**
  * Resolve a (possibly reset) session id FORWARD through `supersededBy` to its

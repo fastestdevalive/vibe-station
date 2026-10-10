@@ -56,8 +56,8 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
       lastParamsRef.current.sessionId === sessionId;
     if (paramsUnchanged) return;
     // Decision 9 — strict visibility validation applies on FIRST apply only
-    // (mount, re-entry, full reload). Later param changes (a sidebar click on a
-    // superseded row) accept any listed agent of the worktree instead.
+    // (mount, re-entry, full reload). Later param changes (a Previous-sessions
+    // menu pick on a superseded row) accept any listed agent of the worktree instead.
     const firstApply = lastParamsRef.current === null;
     lastParamsRef.current = { wtId, sessionId };
 
@@ -70,7 +70,7 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
         let pickedSessionId: string | null;
         if (!firstApply && sessionId && wtSessions.some((s) => s.type === "agent" && s.id === sessionId)) {
           // Later param change to a listed agent of this worktree — keep it
-          // (Decision 9; sidebar lists superseded rows too).
+          // (Decision 9; Previous-sessions menu picks superseded rows too).
           pickedSessionId = sessionId;
         } else {
           pickedSessionId = pickWorktreeAgent(wtSessions, { explicitId: sessionId, lastId: lastSessionId });

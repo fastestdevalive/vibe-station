@@ -27,8 +27,9 @@ use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
 use vst_routes::modes::json_unsupported_cli;
 use vst_routes::sessions::{
-    find_session_context, wait_for_handoff_file, DoneError, DoneResult, HandoffRouteError,
-    ResetError, ResumeError, SessionContext, SessionRoutes, StartError,
+    find_session_context, wait_for_handoff_file, wait_for_turn_start, DoneError, DoneResult,
+    HandoffRouteError, HandoffTurnPhase, ResetError, ResumeError, SessionContext, SessionRoutes,
+    StartError,
 };
 use vst_routes::settings::load_default_channel_overrides;
 use vst_store::StoreHandle;
@@ -531,7 +532,7 @@ async fn reset_persists_handoff_summary_on_archived_row() {
 }
 
 #[tokio::test]
-async fn reset_json_channel_with_handoff_timeout_still_archives_and_spawns() {
+async fn reset_json_handoff_without_summary_fails_and_leaves_session_live() {
     let (_home, _guard) = home_with_mode();
     let (_d, store) = store();
     let mut p = make_project("p1");
@@ -549,21 +550,54 @@ async fn reset_json_channel_with_handoff_timeout_still_archives_and_spawns() {
     let r = routes(store.clone()).with_handoff_timeout(Duration::from_millis(100));
     let mut body = reset_body();
     body.handoff = Some(true);
-    let res = r.reset_session("s-old", &body).await.unwrap();
-    assert_eq!(res.archived_session_id, "s-old");
-    assert!(!res.new_session_id.is_empty());
+    let err = r.reset_session("s-old", &body).await.unwrap_err();
+    assert!(matches!(err, ResetError::HandoffFailed(_)));
 
     let project = store.get_project("p1").await.unwrap();
     let sessions = &project.worktrees[0].sessions;
-    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions.len(), 1);
     let old = sessions.iter().find(|s| s.id == "s-old").unwrap();
-    assert!(old.archived_at.is_some());
+    assert!(old.archived_at.is_none());
+    assert!(old.superseded_by.is_none());
+    assert!(old.is_main);
     assert_eq!(old.handoff_summary, None);
-    let new = sessions
-        .iter()
-        .find(|s| s.id == res.new_session_id)
-        .unwrap();
-    assert_eq!(new.initial_prompt, None);
+
+    assert!(r.json_registry.get("s-old").map_or(true, |a| {
+        let m = a.get_meta();
+        m.queued_turn_ids.is_empty() && m.editing_turn_ids.is_empty()
+    }));
+}
+
+#[tokio::test]
+async fn reset_json_handoff_enqueue_failure_fails_reset() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s1 = json_session("s1", "p1");
+    s1.mode_id = None;
+    p.direct_sessions.push(s1);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut body = reset_body();
+    body.handoff = Some(true);
+    body.mode_id = Some("my-mode".into());
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    match err {
+        ResetError::HandoffFailed(m) => {
+            assert!(
+                m.contains("could not send"),
+                "expected 'could not send' in error message: {m}"
+            );
+        }
+        other => panic!("expected ResetError::HandoffFailed, got {:?}", other),
+    }
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(project.direct_sessions.len(), 1);
+    let s1 = &project.direct_sessions[0];
+    assert!(s1.archived_at.is_none());
+    assert!(s1.superseded_by.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -644,6 +678,44 @@ async fn wait_for_handoff_file_treats_an_empty_file_as_no_summary() {
     )
     .await;
     assert_eq!(out, None);
+}
+
+#[tokio::test]
+async fn wait_for_turn_start_returns_true_when_phase_flips_to_running() {
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let phase = || {
+        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+            HandoffTurnPhase::Queued
+        } else {
+            HandoffTurnPhase::Running
+        }
+    };
+    let ok = wait_for_turn_start(phase, Duration::from_secs(2), Duration::from_millis(20)).await;
+    assert!(ok);
+}
+
+#[tokio::test]
+async fn wait_for_turn_start_returns_true_immediately_on_gone() {
+    let ok = wait_for_turn_start(
+        || HandoffTurnPhase::Gone,
+        Duration::from_secs(2),
+        Duration::from_millis(20),
+    )
+    .await;
+    assert!(ok);
+}
+
+#[tokio::test]
+async fn wait_for_turn_start_returns_false_when_staying_queued_past_timeout() {
+    let started = std::time::Instant::now();
+    let ok = wait_for_turn_start(
+        || HandoffTurnPhase::Queued,
+        Duration::from_millis(200),
+        Duration::from_millis(20),
+    )
+    .await;
+    assert!(!ok);
+    assert!(started.elapsed() >= Duration::from_millis(190));
 }
 
 #[tokio::test]

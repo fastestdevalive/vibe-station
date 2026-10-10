@@ -76,6 +76,9 @@ export function useSessionReset(
           onDone?.();
         })
         .finally(() => {
+          // On success, error, or handoff failure (409 handoff_failed), clear
+          // the in-flight lock and finish the progress tracker so the
+          // overlay and chip always clear.
           inFlightResets.delete(sessionId);
           useResetProgress.getState().finish(sessionId);
         });

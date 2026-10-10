@@ -3272,6 +3272,10 @@ async fn handle_reset_session(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m, "code": "mode_not_found" })),
             ),
+            ResetError::HandoffFailed(m) => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": m, "code": "handoff_failed" })),
+            ),
             ResetError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),

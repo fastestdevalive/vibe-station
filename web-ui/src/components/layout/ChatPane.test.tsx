@@ -6,6 +6,7 @@ import { describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi } from "@/api/mock";
 import type { NormalizedEvent, Session, SessionMeta } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { ChatPane } from "./ChatPane";
 
@@ -578,5 +579,33 @@ describe("ChatPane publishes its height for the composer's max-height", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("ChatPane empty state with predecessors (3.T5)", () => {
+  it("empty replacement session shows 'View previous session' and clicking sets active session to predecessor", async () => {
+    const api = createMockApi();
+    const oldSession: Session = {
+      ...jsonSession("sess-prev"),
+      supersededBy: "sess-curr",
+      archivedAt: new Date().toISOString(),
+    };
+    const currentSession: Session = {
+      ...jsonSession("sess-curr"),
+    };
+
+    useServerStore.setState({ sessions: [oldSession, currentSession] });
+    useWorkspaceStore.setState({ activeSessionId: "sess-curr" });
+
+    render(<ChatPane api={api} session={currentSession} visible />);
+
+    expect(await screen.findByText("Start chatting")).toBeInTheDocument();
+    const linkBtn = await screen.findByRole("button", { name: "View previous session" });
+    expect(linkBtn).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(linkBtn);
+
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-prev");
   });
 });

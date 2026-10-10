@@ -970,6 +970,52 @@ describe("TabsStrip", () => {
     });
   });
 
+  it("after a reset, the Previous sessions menu lists the superseded session, it is still not a tab, and picking it sets activeSessionId to the old id", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+
+    await act(async () => {
+      await localApi.resetSession("sess-agent2", { handoff: false });
+    });
+
+    // Verify still exactly 2 tabs (superseded session is not a tab)
+    await waitFor(() => {
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs).toHaveLength(2);
+    });
+
+    // Previous sessions menu button is present
+    const historyBtn = await screen.findByRole("button", { name: "Previous sessions" });
+    expect(historyBtn).toBeInTheDocument();
+
+    // Open menu
+    await act(async () => {
+      fireEvent.click(historyBtn);
+    });
+
+    const menu = screen.getByRole("menu", { name: "Previous sessions" });
+    expect(menu).toBeInTheDocument();
+
+    // It lists the superseded session
+    const oldItem = screen.getByRole("menuitem", { name: /agent-2/i });
+    expect(oldItem).toBeInTheDocument();
+
+    // Picking it sets activeSessionId to the old id
+    await act(async () => {
+      fireEvent.click(oldItem);
+    });
+
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+    // And tabs count is still 2
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+  });
+
   it("a session with supersededBy set is absent from the rendered tab list", async () => {
     const localApi = createMockApi();
     render(

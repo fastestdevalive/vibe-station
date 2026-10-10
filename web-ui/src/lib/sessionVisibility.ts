@@ -11,10 +11,64 @@ import type { Session } from "@/api/types";
  *   - `type === "agent"`, and
  *   - `supersededBy == null` (hidden from the tab strip on reset/supersede).
  *
+ * Predecessors are previous agent sessions in the supersededBy chain (Decision 5).
+ *
  * Deleted sessions are absent from the server list entirely; superseded ones
  * linger in the list but are hidden from tabs — visibility, not list
  * membership, is the axis this module operates on (Decision 1).
  */
+
+/**
+ * Cycle-guarded backward walk from `session` across `supersededBy`, newest-first.
+ * Returns a Set containing `session.id` and the ids of all its predecessors.
+ */
+export function ancestorIds(session: Session, all: Session[]): Set<string> {
+  const ids = new Set<string>([session.id]);
+  let cur = session;
+  for (let i = 0; i < all.length; i++) {
+    const pred = all.find((s) => s.supersededBy === cur.id && !ids.has(s.id));
+    if (!pred) break;
+    ids.add(pred.id);
+    cur = pred;
+  }
+  return ids;
+}
+
+/**
+ * List predecessors of `headId` in the supersededBy chain, newest-first.
+ * Excludes `headId` itself, ignores non-agent sessions, and guards against cycles.
+ */
+export function listPredecessors(headId: string, sessions: Session[]): Session[] {
+  const head = sessions.find((s) => s.id === headId);
+  if (!head) return [];
+  const result: Session[] = [];
+  const seen = new Set<string>([headId]);
+  let cur = head;
+  for (let i = 0; i < sessions.length; i++) {
+    const pred = sessions.find((s) => s.supersededBy === cur.id && !seen.has(s.id));
+    if (!pred) break;
+    seen.add(pred.id);
+    if (pred.type === "agent") {
+      result.push(pred);
+    }
+    cur = pred;
+  }
+  return result;
+}
+
+
+/**
+ * True iff `s` has been superseded by a newer session (e.g. via reset) and
+ * that replacement session still exists.
+ *
+ * If the replacement was deleted/terminated, `s.supersededBy` points at a
+ * missing id (orphan/dangling reference). In that case, `s` is no longer
+ * superseded by an existing session and remains visible so it does not become
+ * hidden everywhere and unreachable.
+ */
+export function isSupersededSession(s: Session, byId: ReadonlyMap<string, Session>): boolean {
+  return s.supersededBy != null && byId.has(s.supersededBy);
+}
 
 /** True iff `s` is an agent session that belongs in the tab strip. */
 export function isTabVisibleAgent(s: Session): boolean {
@@ -34,8 +88,10 @@ export function compareTabOrder(a: Session, b: Session): number {
 }
 
 /**
- * Follow the `supersededBy` chain from `id` to its final replacement. If `id`
- * is not superseded (or not found), returns `id` unchanged.
+ * Follow the `supersededBy` chain from `id` to its final replacement, stopping
+ * at the last session that EXISTS in `sessions`. If `id` is not superseded, not
+ * found, or its replacement points at a missing id, returns the current (last
+ * existing) id instead of the missing one.
  */
 export function resolveSupersededChain(id: string, sessions: Session[]): string {
   const byId = new Map(sessions.map((s) => [s.id, s]));
@@ -44,6 +100,7 @@ export function resolveSupersededChain(id: string, sessions: Session[]): string 
   while (seen.size <= sessions.length) {
     const s = byId.get(cur);
     if (!s || !s.supersededBy) return cur;
+    if (!byId.has(s.supersededBy)) return cur;
     if (seen.has(cur)) return cur; // cycle guard — never infinite-loop
     seen.add(cur);
     cur = s.supersededBy;

@@ -111,6 +111,46 @@ describe("useSessionReset", () => {
     await userEvent.click(screen.getByText("go"));
     await waitFor(() => expect(alert).toHaveBeenCalledWith("Session already archived"));
   });
+
+  it("alerts the handoff_failed message, clears the progress overlay and does not open the mode dialog", async () => {
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const resetSession = vi.fn().mockRejectedValue(
+      new ApiError(
+        JSON.stringify({ error: "Handoff failed: the agent did not write a handoff summary in time", code: "handoff_failed" }),
+        409,
+        "handoff_failed",
+      ),
+    );
+    const onDone = vi.fn();
+    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} onDone={onDone} />);
+    await userEvent.click(screen.getByText("go"));
+    await waitFor(() =>
+      expect(alert).toHaveBeenCalledWith("Handoff failed: the agent did not write a handoff summary in time"),
+    );
+    expect(useResetProgress.getState().active.s1).toBeUndefined();
+    expect(screen.queryByText("Reset with this mode")).toBeNull();
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it("accepts a second reset for the same session after handoff_failed releases in-flight lock", async () => {
+    vi.spyOn(window, "alert").mockImplementation(() => {});
+    const resetSession = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError(
+          JSON.stringify({ error: "Handoff failed: timeout", code: "handoff_failed" }),
+          409,
+          "handoff_failed",
+        ),
+      )
+      .mockResolvedValueOnce({ ok: true });
+    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    const btn = screen.getByText("go");
+    await userEvent.click(btn);
+    await waitFor(() => expect(resetSession).toHaveBeenCalledTimes(1));
+    await userEvent.click(btn);
+    await waitFor(() => expect(resetSession).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe("resetErrorText", () => {

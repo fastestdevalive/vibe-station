@@ -2688,7 +2688,369 @@ describe("LeftSidebar - global Workspaces section", () => {
     });
   });
 
+  describe("superseded sessions visibility", () => {
+    it("renders only the live agent when a worktree has a live agent and a superseded agent", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi({
+        sessions: [
+          {
+            id: "sess-live",
+            worktreeId: "wt-1",
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "live-agent",
+            isMain: true,
+            state: "working",
+            lifecycleState: "working",
+            tmuxName: "sess-live",
+            createdAt: new Date().toISOString(),
+            sortOrder: 1,
+            supersededBy: null,
+          },
+          {
+            id: "sess-superseded",
+            worktreeId: "wt-1",
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "old-agent",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-superseded",
+            createdAt: new Date(0).toISOString(),
+            sortOrder: 2,
+            supersededBy: "sess-live",
+          },
+        ],
+      });
 
+      render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByText("Proj A");
+      const wt1Link = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      await user.click(wt1Link);
+
+      expect(await screen.findByRole("link", { name: /Open session live-agent/i })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /Open session old-agent/i })).toBeNull();
+      // Only 1 agent counted in group header
+      expect(screen.getByText("1 agent")).toBeInTheDocument();
+    });
+
+    it("does not render a direct project session with supersededBy set, but renders one with archivedAt set and supersededBy null with archived badge", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi({
+        sessions: [
+          {
+            id: "sess-direct-superseded",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "superseded-direct",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-direct-superseded",
+            createdAt: new Date(0).toISOString(),
+            sortOrder: 1,
+            supersededBy: "sess-other",
+            archivedAt: new Date(0).toISOString(),
+          },
+          {
+            id: "sess-other",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "other-direct",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "sess-other",
+            createdAt: new Date().toISOString(),
+            sortOrder: 3,
+            supersededBy: null,
+          },
+          {
+            id: "sess-direct-archived",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "done-direct",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-direct-archived",
+            createdAt: new Date().toISOString(),
+            sortOrder: 2,
+            supersededBy: null,
+            archivedAt: new Date().toISOString(),
+          },
+        ],
+      });
+
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByText("Proj A");
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
+
+      expect(await screen.findByRole("link", { name: /^Open direct session done-direct$/i })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /^Open direct session superseded-direct$/i })).toBeNull();
+
+      const archivedLink = screen.getByRole("link", { name: /^Open direct session done-direct$/i });
+      const row = archivedLink.closest(".tree-row")!;
+      expect(within(row as HTMLElement).getByText("archived")).toBeInTheDocument();
+      // Count is 2 direct agents (done-direct and other-direct)
+      expect(screen.getByText("2 direct agents")).toBeInTheDocument();
+    });
+
+    it("does not render a pinned superseded direct session", async () => {
+      const localApi = createMockApi({
+        sessions: [
+          {
+            id: "sess-pinned-superseded",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "pinned-superseded-agent",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-pinned-superseded",
+            createdAt: new Date().toISOString(),
+            pinnedAt: new Date().toISOString(),
+            sortOrder: 1,
+            supersededBy: "sess-replacement",
+          },
+          {
+            id: "sess-replacement",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "replacement-agent",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "sess-replacement",
+            createdAt: new Date().toISOString(),
+            sortOrder: 2,
+            supersededBy: null,
+          },
+        ],
+      });
+
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByText("Proj A");
+      // Pinned region should not show the superseded direct session
+      expect(screen.queryByRole("link", { name: /Open pinned direct session pinned-superseded-agent/i })).toBeNull();
+      expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
+    });
+
+    it("renders worktree agent and direct agent whose supersededBy points at a missing id (with archived badge for archived ones)", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi({
+        sessions: [
+          {
+            id: "sess-wt-orphan",
+            worktreeId: "wt-1",
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "orphan-wt-agent",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-wt-orphan",
+            createdAt: new Date().toISOString(),
+            sortOrder: 1,
+            supersededBy: "missing-replacement-1",
+          },
+          {
+            id: "sess-direct-orphan",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "orphan-direct-agent",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "sess-direct-orphan",
+            createdAt: new Date().toISOString(),
+            sortOrder: 2,
+            supersededBy: "missing-replacement-2",
+            archivedAt: new Date().toISOString(),
+          },
+        ],
+      });
+
+      render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByText("Proj A");
+      // Worktree agent with dangling supersededBy still renders
+      const wt1Link = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      await user.click(wt1Link);
+
+      const wtAgentLink = await screen.findByRole("link", { name: /Open session orphan-wt-agent/i });
+      expect(wtAgentLink).toBeInTheDocument();
+
+      // Direct agent with dangling supersededBy still renders (with archived badge)
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
+      const directAgentLink = await screen.findByRole("link", { name: /^Open direct session orphan-direct-agent$/i });
+      expect(directAgentLink).toBeInTheDocument();
+      const directRow = directAgentLink.closest(".tree-row")!;
+      expect(within(directRow as HTMLElement).getByText("archived")).toBeInTheDocument();
+    });
+
+    it("search: a query matching ONLY a superseded session's name (replacement exists) does not make that worktree row appear/match", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi({
+        worktrees: [
+          {
+            id: "wt-1",
+            name: "wt-1",
+            projectId: "proj-a",
+            branch: "feature-a",
+            baseBranch: "main",
+            createdAt: new Date().toISOString(),
+            pinnedAt: null,
+            hiddenAt: null,
+            lspEnabled: false,
+            sortOrder: 1,
+          },
+          {
+            id: "wt-2",
+            name: "wt-2",
+            projectId: "proj-a",
+            branch: "feature-b",
+            baseBranch: "main",
+            createdAt: new Date().toISOString(),
+            pinnedAt: null,
+            hiddenAt: null,
+            lspEnabled: false,
+            sortOrder: 2,
+          },
+        ],
+        sessions: [
+          {
+            id: "sess-superseded",
+            worktreeId: "wt-1",
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "unique-superseded-needle",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-superseded",
+            createdAt: new Date(0).toISOString(),
+            sortOrder: 1,
+            supersededBy: "sess-live",
+          },
+          {
+            id: "sess-live",
+            worktreeId: "wt-1",
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "regular-agent",
+            isMain: true,
+            state: "working",
+            lifecycleState: "working",
+            tmuxName: "sess-live",
+            createdAt: new Date().toISOString(),
+            sortOrder: 2,
+            supersededBy: null,
+          },
+        ],
+      });
+
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByText("Proj A");
+      // Search for the unique name of the superseded session
+      const searchInput = screen.getByPlaceholderText(/search/i);
+      await user.type(searchInput, "unique-superseded-needle");
+
+      // wt-1 should NOT match because its only match is a superseded session whose replacement exists
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Open worktree wt-2/i })).toBeNull();
+    });
+
+    it("a pinned archived-but-not-superseded direct session still shows in the Pinned section", async () => {
+      const localApi = createMockApi({
+        sessions: [
+          {
+            id: "sess-pinned-archived",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: null,
+            type: "agent",
+            name: "pinned-archived-agent",
+            isMain: false,
+            state: "done",
+            lifecycleState: "done",
+            tmuxName: "sess-pinned-archived",
+            createdAt: new Date().toISOString(),
+            pinnedAt: new Date().toISOString(),
+            sortOrder: 1,
+            supersededBy: null,
+            archivedAt: new Date().toISOString(),
+          },
+        ],
+      });
+
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      // Pinned region should show the pinned archived direct session
+      const pinnedLink = await screen.findByRole("link", { name: /Open pinned direct session pinned-archived-agent/i });
+      expect(pinnedLink).toBeInTheDocument();
+      const pinnedRow = pinnedLink.closest(".tree-row")!;
+      expect(within(pinnedRow as HTMLElement).getByText("archived")).toBeInTheDocument();
+    });
+  });
 });
 
 describe("LeftSidebar - DemoEnv portal root and event root", () => {

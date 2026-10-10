@@ -4,6 +4,8 @@ import type { ApiInstance } from "@/api";
 import type { Attachment, FileScope, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
+import { listPredecessors } from "@/lib/sessionVisibility";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
@@ -350,6 +352,11 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const isEmpty = !loading && events.length === 0 && pending.length === 0;
   const archived = session?.archivedAt != null;
 
+  const serverSessions = useServerStore((s) => s.sessions);
+  const predecessors = useMemo(() => {
+    return session ? listPredecessors(session.id, serverSessions) : [];
+  }, [session, serverSessions]);
+
   // Keep the pane mounted even when hidden (Decision 14) — the terminal beside it
   // must never remount. `hidden` also stops the offscreen list from scrolling.
   if (!enabled) {
@@ -383,6 +390,18 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               <div className="chat-pane__empty-icon" aria-hidden>💬</div>
               <div className="chat-pane__empty-title">Start chatting</div>
               <div className="chat-pane__empty-sub">with the agent</div>
+              {!archived && predecessors.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn--subtle"
+                  style={{ marginTop: "var(--space-2)", fontSize: "var(--font-size-xs)" }}
+                  onClick={() => {
+                    useWorkspaceStore.getState().setActiveSession(predecessors[0]!.id);
+                  }}
+                >
+                  View previous session
+                </button>
+              ) : null}
             </div>
           ) : (
             <MessageList

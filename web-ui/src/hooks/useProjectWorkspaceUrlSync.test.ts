@@ -368,4 +368,25 @@ describe("useProjectWorkspaceUrlSync - Phase 2 (direct agents)", () => {
       expect(useWorkspaceStore.getState().activeSessionId).toBe("s-stale");
     });
   });
+
+  it("3.T4b — setActiveSession(supersededDirectId) sticks and the URL becomes /project/:pid/:supersededId", async () => {
+    const sessions = [
+      makeSession({ id: "s1" }),
+      makeSession({ id: "s-stale", supersededBy: "s1" }),
+    ];
+
+    renderAt("/project/p1/s1", sessions);
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
+    });
+
+    // Directly set active session to superseded id (as Previous sessions menu does)
+    act(() => {
+      useWorkspaceStore.getState().setActiveSession("s-stale");
+    });
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("s-stale");
+    });
+  });
 });

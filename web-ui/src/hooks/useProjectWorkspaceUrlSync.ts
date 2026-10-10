@@ -72,7 +72,7 @@ export function useProjectWorkspaceUrlSync(
     }
     // Resolve the sessionId to apply. Decision 9: strict tab-visibility
     // validation on FIRST apply only (mount, re-entry, full reload); later
-    // param changes (a sidebar click on a superseded row) accept any listed
+    // param changes (a Previous-sessions menu pick on a superseded row) accept any listed
     // direct agent of this project.
     const firstApply = lastAppliedRef.current === null;
     const store = useWorkspaceStore.getState();

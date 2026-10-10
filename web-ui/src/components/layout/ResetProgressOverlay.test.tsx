@@ -42,4 +42,13 @@ describe("ResetProgressOverlay", () => {
     // still tracked as in flight — the reset itself carries on in the background
     expect(useResetProgress.getState().active.s1).toBe("dismissed");
   });
+
+  it("renders accurate copy explaining reset is cancelled if no summary is written", () => {
+    useResetProgress.getState().start("s1");
+    render(<ResetProgressOverlay sessionId="s1" />);
+    expect(
+      screen.getByText(/If no summary is written the reset is cancelled and this session keeps running/),
+    ).toBeTruthy();
+    expect(screen.getByText(/reset is cancelled/)).toBeTruthy();
+  });
 });

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "@/api/types";
 import {
   compareTabOrder,
+  isSupersededSession,
   isTabVisibleAgent,
+  listPredecessors,
   pickFirstDirectAgent,
   pickNextDirectAgent,
   pickWorktreeAgent,
@@ -27,6 +29,31 @@ function makeSession(overrides: Partial<Session>): Session {
 
 const agent = (id: string, overrides: Partial<Session> = {}) =>
   makeSession({ id, ...overrides });
+
+describe("isSupersededSession", () => {
+  it("is true when supersededBy is set and replacement exists in byId", () => {
+    const a = agent("a", { supersededBy: "a-new" });
+    const aNew = agent("a-new");
+    const byId = new Map([["a", a], ["a-new", aNew]]);
+    expect(isSupersededSession(a, byId)).toBe(true);
+  });
+  it("is false when supersededBy is null or undefined", () => {
+    const a = agent("a");
+    const byId = new Map([["a", a]]);
+    expect(isSupersededSession(a, byId)).toBe(false);
+    expect(isSupersededSession(agent("a", { supersededBy: null }), byId)).toBe(false);
+  });
+  it("is false for archived sessions without supersededBy", () => {
+    const a = agent("a", { archivedAt: new Date().toISOString(), supersededBy: null });
+    const byId = new Map([["a", a]]);
+    expect(isSupersededSession(a, byId)).toBe(false);
+  });
+  it("is false for a dangling supersededBy when replacement does not exist", () => {
+    const a = agent("a", { supersededBy: "missing-id" });
+    const byId = new Map([["a", a]]);
+    expect(isSupersededSession(a, byId)).toBe(false);
+  });
+});
 
 describe("isTabVisibleAgent", () => {
   it("is true for a live agent", () => {
@@ -76,6 +103,18 @@ describe("resolveSupersededChain", () => {
   it("returns the id when the target is missing from the list", () => {
     expect(resolveSupersededChain("zzz", [agent("a")])).toBe("zzz");
   });
+  it("returns the last existing id when supersededBy points at a missing id", () => {
+    const sessions = [
+      agent("a", { supersededBy: "missing-b" }),
+    ];
+    expect(resolveSupersededChain("a", sessions)).toBe("a");
+
+    const multiHopSessions = [
+      agent("a", { supersededBy: "b" }),
+      agent("b", { supersededBy: "missing-c" }),
+    ];
+    expect(resolveSupersededChain("a", multiHopSessions)).toBe("b");
+  });
   it("does not infinite-loop on a cycle", () => {
     const sessions = [
       agent("a", { supersededBy: "b" }),
@@ -83,6 +122,48 @@ describe("resolveSupersededChain", () => {
     ];
     // No terminal element — the cycle guard returns the input id defensively.
     expect(resolveSupersededChain("a", sessions)).toBe("a");
+  });
+});
+
+describe("listPredecessors", () => {
+  it("returns [B, A] for chain A->B->C with head C", () => {
+    const a = agent("a", { supersededBy: "b" });
+    const b = agent("b", { supersededBy: "c" });
+    const c = agent("c");
+    const sessions = [a, b, c];
+    const preds = listPredecessors("c", sessions);
+    expect(preds.map((s) => s.id)).toEqual(["b", "a"]);
+  });
+
+  it("returns [] for no predecessors", () => {
+    const c = agent("c");
+    expect(listPredecessors("c", [c])).toEqual([]);
+  });
+
+  it("terminates on a cycle", () => {
+    const a = agent("a", { supersededBy: "b" });
+    const b = agent("b", { supersededBy: "a" });
+    const sessions = [a, b];
+    // Walking predecessors from b (supersededBy a, but a supersededBy b)
+    const preds = listPredecessors("b", sessions);
+    expect(preds.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("ignores terminal-type sessions", () => {
+    const t = agent("t", { type: "terminal", supersededBy: "c" });
+    const a = agent("a", { type: "agent", supersededBy: "t" });
+    const c = agent("c", { type: "agent" });
+    const sessions = [a, t, c];
+    const preds = listPredecessors("c", sessions);
+    // 't' is predecessor of 'c', but t.type is terminal; then 'a' is predecessor of 't'
+    expect(preds.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("confirms isTabVisibleAgent and pickWorktreeAgent still exclude/skip superseded A", () => {
+    const a = agent("a", { supersededBy: "b" });
+    const b = agent("b");
+    expect(isTabVisibleAgent(a)).toBe(false);
+    expect(pickWorktreeAgent([a, b], { explicitId: "a" })).toBe("b");
   });
 });
 

@@ -40,7 +40,7 @@ import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
-import { pickNextDirectAgent } from "@/lib/sessionVisibility";
+import { pickNextDirectAgent, isSupersededSession } from "@/lib/sessionVisibility";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
@@ -307,6 +307,11 @@ export function LeftSidebar({
     }
     return m;
   }, [sessions]);
+  /** Lookup map for session existence by id (used e.g. for checking supersededBy validity). */
+  const sessionById = useMemo(
+    () => new Map<string, Session>(sessions.map((s) => [s.id, s])),
+    [sessions],
+  );
   /**
    * Direct *agent* sessions grouped by projectId.
    *
@@ -321,7 +326,14 @@ export function LeftSidebar({
     for (const s of sessions) {
       // Skip drafts (state === "drafting") — they render as their own Tier 1
       // draft rows appended after this list, not as regular direct rows.
-      if (s.worktreeId === null && s.projectId && s.type === "agent" && s.state !== "drafting") {
+      // Skip superseded sessions (supersededBy != null) — reachable via 'Previous sessions'.
+      if (
+        s.worktreeId === null &&
+        s.projectId &&
+        s.type === "agent" &&
+        s.state !== "drafting" &&
+        !isSupersededSession(s, sessionById)
+      ) {
         (m[s.projectId] ??= []).push(s);
       }
     }
@@ -336,7 +348,7 @@ export function LeftSidebar({
       });
     }
     return m;
-  }, [sessions]);
+  }, [sessions, sessionById]);
   /** Project lookup for the project-name subheader on pinned rows. */
   const projectById = useMemo(() => {
     const m: Record<string, Project> = {};
@@ -383,11 +395,12 @@ export function LeftSidebar({
             s.type === "agent" &&
             s.pinnedAt != null &&
             s.projectId != null &&
-            !hiddenProjectIds.has(s.projectId),
+            !hiddenProjectIds.has(s.projectId) &&
+            !isSupersededSession(s, sessionById),
         )
         .slice()
         .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
-    [sessions, hiddenProjectIds],
+    [sessions, hiddenProjectIds, sessionById],
   );
   const hasPinned = pinnedWorktrees.length > 0 || pinnedDirectSessions.length > 0;
 
@@ -1467,9 +1480,9 @@ export function LeftSidebar({
         return true;
       }
       const wtSessions = sessionMap[w.id] ?? [];
-      return wtSessions.some(sessionMatchesQuery);
+      return wtSessions.some((s) => !isSupersededSession(s, sessionById) && sessionMatchesQuery(s));
     },
-    [trimmedQuery, matchText, sessionMap, sessionMatchesQuery],
+    [trimmedQuery, matchText, sessionMap, sessionMatchesQuery, sessionById],
   );
 
   const filteredPinnedItems = useMemo(() => {
@@ -2778,7 +2791,7 @@ export function LeftSidebar({
                                   {openWorktrees.has(w.id) || (trimmedQuery.length > 0)
                                     ? (() => {
                                         const wtAgents = (sessionMap[w.id] ?? []).filter((s) => {
-                                          if (s.type !== "agent") return false;
+                                          if (s.type !== "agent" || isSupersededSession(s, sessionById)) return false;
                                           if (!trimmedQuery || matchText(worktreeLabel(w)) || matchText(w.branch) || projectDirectlyMatches(p)) return true;
                                           return sessionMatchesQuery(s);
                                         });

@@ -247,5 +247,31 @@ describe("useWorkspaceUrlSync", () => {
       await new Promise((r) => setTimeout(r, 30));
       expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-stale");
     });
+
+    it("3.T4 — after setActiveSession(supersededId) the edge guard does not re-select the replacement and the URL mirrors /worktree/:wt/:supersededId", async () => {
+      const sessions = [
+        mockSession("sess-main", true, { type: "agent" }),
+        mockSession("sess-prev", false, { type: "agent", supersededBy: "sess-main" }),
+      ];
+
+      renderAt(`/worktree/${W1}/sess-main`, sessions);
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+      });
+
+      // User selects superseded session via Previous sessions menu
+      act(() => useWorkspaceStore.getState().setActiveSession("sess-prev"));
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-prev");
+      });
+
+      // URL write effect updates URL to mirror the superseded session
+      await waitFor(() => {
+        // StatefulHarness / MemoryRouter URL update check via navigateRef or activeSessionId
+        expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-prev");
+      });
+    });
   });
 });

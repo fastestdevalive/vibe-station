@@ -38,9 +38,9 @@ export function ResetProgressOverlay({ sessionId }: { sessionId: string | null |
           <span className="chat-spinner" aria-hidden /> Resetting with handoff…
         </div>
         <p className="reset-progress-overlay__text">
-          Waiting for the agent to write its handoff summary, then a fresh session takes its place. This can take a
-          minute. If the agent isn't responding, close this — the reset finishes on its own (it gives up waiting
-          after about two minutes and resets without a summary).
+          Waiting for the agent to finish its current turn and write a handoff summary, then a fresh session takes its
+          place. This can take a few minutes. If no summary is written the reset is cancelled and this session keeps
+          running. You can close this — it continues in the background.
         </p>
         <button type="button" ref={closeRef} onClick={() => dismiss(sessionId)}>
           Close
