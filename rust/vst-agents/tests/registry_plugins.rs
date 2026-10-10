@@ -184,6 +184,23 @@ mod claude_plugin {
     }
 
     #[test]
+    fn acp_meta_enables_chrome_and_artifacts_for_every_model() {
+        let plugin = create_claude_plugin();
+        // The empty-model branch (account default) must carry both keys too.
+        for model in ["sonnet", ""] {
+            let options =
+                &plugin.acp_meta(model).expect("should have acp_meta")["claudeCode"]["options"];
+            assert!(
+                options["extraArgs"]
+                    .get("chrome")
+                    .is_some_and(serde_json::Value::is_null),
+                "extraArgs.chrome must be present and null (boolean flag) for model {model:?}"
+            );
+            assert_eq!(options["env"]["CLAUDE_CODE_ARTIFACT"], "1");
+        }
+    }
+
+    #[test]
     fn opencode_sets_model_over_acp_but_never_an_empty_one() {
         let p = create_opencode_plugin();
         assert_eq!(
