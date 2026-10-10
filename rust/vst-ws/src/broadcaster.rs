@@ -266,6 +266,17 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
         ServerEvent::OobeStateUpdated { completed } => {
             ServerMessage::OobeStateUpdated { completed }
         }
+        ServerEvent::SessionScheduledChanged {
+            session_id,
+            scheduled_sends,
+            scheduled_failed,
+            scheduled_turn_ids,
+        } => ServerMessage::SessionScheduled {
+            session_id,
+            scheduled_sends,
+            scheduled_failed,
+            scheduled_turn_ids,
+        },
     }
 }
 
@@ -302,7 +313,14 @@ pub fn spawn_event_fanout(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             let msg: ServerMessage = server_event_to_message(event);
-            hub.broadcast_all(&msg);
+            // Scheduled-send state is only meaningful to clients looking at that
+            // session (chat open or explicit subscribe) — and can be sizeable —
+            // so it is NOT fanned out to every connection.
+            if let ServerMessage::SessionScheduled { session_id, .. } = &msg {
+                hub.notify_session(session_id, &msg);
+            } else {
+                hub.broadcast_all(&msg);
+            }
         }
     })
 }

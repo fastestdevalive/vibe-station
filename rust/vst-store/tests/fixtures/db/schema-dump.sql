@@ -4,6 +4,8 @@ CREATE TABLE global_drafts (
       draftConfig TEXT,
       createdAt  TEXT NOT NULL
     , name TEXT, nameSource TEXT, sortOrder REAL);
+CREATE INDEX idx_scheduled_messages_due ON scheduled_messages(status, fireAt);
+CREATE INDEX idx_scheduled_messages_sessionId ON scheduled_messages(sessionId);
 CREATE INDEX idx_sessions_projectId ON sessions(projectId);
 CREATE INDEX idx_sessions_worktreeId ON sessions(worktreeId);
 CREATE INDEX idx_worktrees_projectId ON worktrees(projectId);
@@ -24,6 +26,21 @@ CREATE TABLE projects (
       directSessionSeq INTEGER NOT NULL DEFAULT 0,
       nextWorktreeNum INTEGER NOT NULL DEFAULT 1
     , lspEnabled INTEGER, openFiles TEXT);
+CREATE TABLE scheduled_messages (
+      id            TEXT PRIMARY KEY,
+      sessionId     TEXT NOT NULL,
+      message       TEXT NOT NULL,
+      attachments   TEXT,
+      fireAt        TEXT NOT NULL,
+      createdAt     TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','sent','cancelled','failed')),
+      sentAt        TEXT,
+      sentTurnId    TEXT,
+      failureReason TEXT,
+      claimedAt     TEXT
+    );
 CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       worktreeId TEXT REFERENCES worktrees(id) ON DELETE CASCADE,

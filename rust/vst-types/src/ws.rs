@@ -258,6 +258,15 @@ pub enum ServerMessage {
         session_id: String,
         meta: Box<SessionMeta>,
     },
+    /// Scheduled-send state only (pending / failed / sent-turn ids), each
+    /// authoritative — see `ServerEvent::SessionScheduledChanged`.
+    #[serde(rename = "session:scheduled", rename_all = "camelCase")]
+    SessionScheduled {
+        session_id: String,
+        scheduled_sends: Vec<crate::domain::ScheduledMessageMeta>,
+        scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
+        scheduled_turn_ids: Vec<String>,
+    },
     #[serde(rename = "session:fork", rename_all = "camelCase")]
     SessionFork {
         session_id: String,

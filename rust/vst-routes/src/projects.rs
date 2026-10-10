@@ -1419,6 +1419,11 @@ impl ProjectRoutes {
         }
 
         let _ = tokio::fs::remove_dir_all(&data_dir).await;
+        // No FK to cascade: drop the scheduled messages of the project's sessions.
+        let _ = self
+            .store
+            .purge_scheduled_messages_for_missing_sessions()
+            .await;
 
         for session in &project.direct_sessions {
             self.broadcaster.send(ServerEvent::SessionDeleted {

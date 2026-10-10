@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use vst_agents::json_agent_chat::{
-    find_json_session_context, read_session_meta, read_session_since, read_session_tail,
-    resolve_json_agent, JsonSessionContext,
+    find_json_session_context, read_schedule_state, read_session_meta, read_session_since,
+    read_session_tail, resolve_json_agent, JsonSessionContext,
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
@@ -76,6 +76,7 @@ pub async fn handle_chat_open(
             session_id: session_id.clone(),
             meta: Box::new(meta),
         });
+        send_schedule_state(conn, store, &session_id).await;
         return;
     }
 
@@ -137,10 +138,28 @@ pub async fn handle_chat_open(
 
     // Snapshot AFTER attach — synchronous, so nothing interleaves (R2.7).
     send_snapshot(conn, &ctx, registry, &session_id, since_seq);
+    // The meta MUST go out with no await between `get_meta()` and `send`: the
+    // live listener is already attached, so awaiting here would let a fresher
+    // live `session:meta` arrive first and then be overwritten by this older
+    // snapshot (R2.7). The store-backed scheduled fields follow as their own
+    // slim event, which patches only those fields.
     let meta = resolved.agent.get_meta();
     conn.send(ServerMessage::SessionMetaEvent {
         session_id: session_id.clone(),
         meta: Box::new(meta),
+    });
+    send_schedule_state(conn, store, &session_id).await;
+}
+
+/// Send the session's scheduled-send state as a slim `session:scheduled` event
+/// (the same message live changes use), so it can't clobber turn state.
+async fn send_schedule_state(conn: &WsConnection, store: &StoreHandle, session_id: &str) {
+    let st = read_schedule_state(store, session_id).await;
+    conn.send(ServerMessage::SessionScheduled {
+        session_id: session_id.to_string(),
+        scheduled_sends: st.sends,
+        scheduled_failed: st.failed,
+        scheduled_turn_ids: st.turn_ids,
     });
 }
 

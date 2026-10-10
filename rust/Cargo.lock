@@ -3147,6 +3147,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
+ "vst-agents",
  "vst-git",
  "vst-proc",
  "vst-store",
@@ -3191,6 +3192,7 @@ version = "0.0.1-beta"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "chrono",
  "ring",
  "serde",
  "serde_json",
@@ -3200,6 +3202,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "vst-agents",
  "vst-git",
  "vst-lifecycle",

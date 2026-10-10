@@ -37,6 +37,7 @@ use vst_git::DirectPtyRegistry;
 use vst_lifecycle::cloudflared;
 use vst_lifecycle::lifecycle::LifecyclePollerHandle;
 use vst_lifecycle::pr_poller::PrPollerHandle;
+use vst_lifecycle::schedule_poller::SchedulePollerHandle;
 use vst_lifecycle::tailscale_serve;
 use vst_proc::tmux::Tmux;
 use vst_routes::auth::{mint_token, AuthState};
@@ -540,7 +541,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         persist_epoch: Some(persist_epoch_fn),
         store: store.clone(),
         broadcaster: broadcaster.clone(),
-        json_registry,
+        json_registry: json_registry.clone(),
         tmux: tmux.clone(),
         started_at: Instant::now(),
         version: crate::version::current().to_string(),
@@ -556,6 +557,16 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
 
     let pr_poller = Arc::new(PrPollerHandle::new(store.clone(), broadcaster.clone()));
     let pr_handle = pr_poller.clone().start();
+
+    let schedule_poller = Arc::new(SchedulePollerHandle::new(
+        store.clone(),
+        broadcaster.clone(),
+        json_registry.clone(),
+        port,
+    ));
+    // Before the listener serves: fail rows a previous daemon left mid-delivery.
+    schedule_poller.recover_orphans().await;
+    let schedule_handle = schedule_poller.clone().start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────────
     // A `watch` (not a one-shot `Notify`) so every waiter — the supervisor's
@@ -584,6 +595,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         // Abort pollers and any still-running post-bind boot work.
         lifecycle_handle.abort();
         pr_handle.abort();
+        schedule_handle.abort();
         background_boot_for_shutdown.abort_all().await;
         // Kill cloudflared but preserve `enabled` flag so restore_on_boot
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).

@@ -400,3 +400,44 @@ pub struct StopTurnResult {
     pub ok: bool,
     pub stopped: bool,
 }
+
+/// Body for `POST /sessions/:id/schedule`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateScheduledMessageBody {
+    pub message: String,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
+    pub fire_at: String, // ISO-8601 UTC
+}
+
+/// Response for `POST /sessions/:id/schedule`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateScheduledMessageResponse {
+    pub id: String,
+    pub fire_at: String,
+}
+
+/// Body for `POST /sessions/:id/schedule/:msgId/edit` (reschedule).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditScheduledMessageBody {
+    pub fire_at: String, // ISO-8601 / RFC 3339
+}
+
+/// A row from `scheduled_messages`.
+#[derive(Debug, Clone)]
+pub struct ScheduledMessageRow {
+    pub id: String,
+    pub session_id: String,
+    pub message: String,
+    pub attachments: Option<String>, // JSON blob
+    pub fire_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub status: String,
+    pub sent_at: Option<String>,
+    pub sent_turn_id: Option<String>,
+    pub failure_reason: Option<String>,
+}

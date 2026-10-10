@@ -99,5 +99,8 @@ pub fn assemble_meta(opts: &MetaOptions, found: &TranscriptMeta) -> SessionMeta 
         } else {
             None
         },
+        scheduled_sends: None,
+        scheduled_turn_ids: None,
+        scheduled_failed: None,
     }
 }
