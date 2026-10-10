@@ -11,6 +11,66 @@ invariant no longer applies — find its Rust equivalent instead of skipping the
 
 ---
 
+## Architecture — modular, contained, boring (read before adding any feature)
+
+**Files:** `rust/*/Cargo.toml` (crate graph) · `rust/vst-daemon/src/run.rs` (wiring) · `rust/vst-agents/src/plugin.rs` · `web-ui/src/components/<area>/` · `web-ui/src/api/types.ts`
+
+### The invariant
+
+A feature should be removable or replaceable by touching one owner plus one line of wiring. These are
+defaults, not dogma: deviate for a concrete reason and record it in the PRD/plan. Bullets marked
+**(target)** describe new code; older code that predates them is not a licence to copy it, nor a mandate
+to refactor it in an unrelated PR.
+
+### Backend (Rust)
+
+- **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
+  `vst-proc`/`vst-store`/`vst-rpc` ← `vst-git` ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. No library crate depends on `vst-routes`/`vst-daemon`.
+- **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
+  scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
+- **New feature crates stay CLI-agnostic (target):** take per-CLI behaviour by injection (closure/trait
+  object built in `run.rs`) rather than adding another `vst-agents` dep edge.
+- **CLI-specific behaviour** follows "Agent plugin" above. A new per-harness query is one `AgentPlugin`
+  method with a safe default, shaped like `list_models()` → `{ models, error: Option<String> }`.
+- **Routes are thin (target):** parse, call the owner, serialise. `projects.rs`/`worktrees.rs`/
+  `tailscale.rs` still spawn processes directly — don't add more.
+- **Single writer per field** — the general form of the lifecycle/PR split in "Status indicators".
+
+### Data flow & contracts
+
+- **Push, don't poll (target):** fetch on connect/reconnect, then follow `ServerEvent`s sent only on real
+  change (cf. `pr_status_equivalent`). Existing client `setInterval` polls (`useLspStatus`,
+  `useDoctorStatus`, `DashboardPanel`) predate this. The requester still uses its HTTP response ("Draft promotion").
+- **Pollers copy `PrPollerHandle`** (`vst-lifecycle/src/pr_poller.rs`): `new(store, broadcaster)`,
+  `start(self: Arc<Self>)` from `run.rs`, in-flight guard, `MissedTickBehavior::Skip`, broadcast on change
+  only, last-known value kept on transient error.
+- **External probes are bounded** (timeout, kill-on-drop, backoff). "Unknown / unsupported / signed out"
+  are distinct visible states, never a fake `0` or blank.
+- **Wire types are hand-mirrored:** `vst-types` is the source of truth, no codegen — a REST/WS type change
+  updates `web-ui/src/api/types.ts` in the same commit.
+- **Persisted data stays readable:** new stored fields are `Option`/`#[serde(default)]`; never rename or
+  repurpose a persisted value (cf. `channel: "json"`).
+- **Vendors:** use their own binary/documented API; never read credential files/keychains, reuse tokens, or
+  edit users' CLI config. Unstable surfaces live behind one file each, parse tolerantly, have a fixture test.
+
+### Web UI
+
+- **One folder per feature area** (`components/<area>/` + tests, hook beside it or in `hooks/`). Shared
+  shells (`Layout`, `GlobalStatusBar`, `TabsStrip`) get a mount, not feature logic.
+- **One source per piece of server state.** A component keeping its own copy (like `TabsStrip`'s
+  `localSessions`) must handle every WS event that mutates it — see "Session status".
+
+### What to watch for
+
+- **"Just add it to the nearest big file"** — check the owner and dependency direction first.
+- **A second writer or second poll loop for the same data** — fold it into the existing owner.
+- **A `vst-types` change without `api/types.ts`**, or a persisted field without a serde default.
+- **Tests:** a new owner is tested at its public handle; a new route's tests mount it under `/api` ("CLI").
+  Large features go PRD → plan (`.vibekit/feature-plans/`) first.
+
+---
+
 ## CLI — every REST route lives under `/api`; the CLI must prefix every path with it
 
 **Files:** `rust/vst-daemon/src/server.rs` (`.nest("/api", api)`) · `rust/vst-cli/src/client.rs` (`api_path`)
