@@ -13,6 +13,23 @@ export function sanitizeSvg(svg: string): string {
   });
 }
 
+/**
+ * Re-serialize sanitized SVG markup as well-formed XML. DOMPurify returns
+ * HTML-style markup (`<br>`, no xmlns on foreignObject children) which an
+ * `<img src=blob:…>` rejects, because images parse SVG strictly as XML.
+ * Parsing as HTML and running XMLSerializer closes void tags and emits the
+ * svg / xhtml namespaces.
+ */
+export function svgToXml(svg: string): string {
+  const doc = new DOMParser().parseFromString(svg, "text/html");
+  const root = doc.querySelector("svg");
+  if (!root) return svg;
+  // The HTML parser keeps literal xmlns attributes as plain attributes, which
+  // the serializer would emit a second time next to the namespace it derives.
+  for (const el of [root, ...root.querySelectorAll("*")]) el.removeAttribute("xmlns");
+  return new XMLSerializer().serializeToString(root);
+}
+
 interface MermaidViewProps {
   chart: string;
   theme: "dark" | "light";
@@ -89,7 +106,7 @@ export function MermaidView({ chart, theme }: MermaidViewProps) {
 
   const openFullscreen = () => {
     if (!svgString) return;
-    setFullscreenSrc(URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml" })));
+    setFullscreenSrc(URL.createObjectURL(new Blob([svgToXml(svgString)], { type: "image/svg+xml" })));
   };
   const closeFullscreen = () => setFullscreenSrc(null);
 

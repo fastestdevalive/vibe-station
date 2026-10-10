@@ -88,6 +88,37 @@ describe("MermaidView fullscreen (4.T1)", () => {
     expect(document.body.querySelector(".image-zoom-overlay img")).toBeTruthy();
   });
 
+  it("fullscreen blob is well-formed XML for <br/> labels (no broken image)", async () => {
+    mockedMermaid.render.mockResolvedValueOnce({
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml"><span class="nodeLabel">claude<br />live Rich Chat session</span></div></foreignObject></svg>',
+    });
+    const blobs: Blob[] = [];
+    const create = vi.fn((b: Blob) => (blobs.push(b), "blob:mock"));
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = create as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const { container } = render(<MermaidView chart="graph TD; A[claude<br/>x]-->B" theme="dark" />);
+      await waitFor(() => expect(container.querySelector(".mermaid-view--clickable")).toBeTruthy());
+      fireEvent.click(container.querySelector(".mermaid-view--clickable") as HTMLElement);
+      expect(blobs).toHaveLength(1);
+      const text = await new Promise<string>((res) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result));
+        r.readAsText(blobs[0] as Blob);
+      });
+      const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      expect(doc.querySelector("parsererror"), text).toBeNull();
+      expect(doc.documentElement.namespaceURI).toBe("http://www.w3.org/2000/svg");
+      expect(text).toContain("live Rich Chat session");
+      expect(text).toContain("<br");
+    } finally {
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+    }
+  });
+
   it("does NOT open fullscreen from a failed render (<pre> fallback not clickable)", async () => {
     mockedMermaid.render.mockRejectedValueOnce(new Error("boom"));
     const { container } = render(<MermaidView chart="not a diagram" theme="dark" />);
