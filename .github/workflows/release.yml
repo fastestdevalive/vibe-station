@@ -380,8 +380,12 @@ jobs:
             libayatana-appindicator3-dev
 
       # ── Bun (prep-sidecar claude-acp vendor dependency) ───────────────────
+      # Pinned: an unpinned bun (1.4.3) produced a codex-acp binary that makes
+      # linuxdeploy's `ldd` scan abort the AppImage bundle (see desktop-build.yml).
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
 
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app
