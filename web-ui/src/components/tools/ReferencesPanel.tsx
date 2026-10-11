@@ -467,7 +467,11 @@ export function ReferencesPanel({
     ],
   );
   const serverName = lspStatus.displayName ?? lspStatus.language ?? "Language server";
-  const chip = chipFor(panelState, { serverName, lspStatus: lspStatus.status });
+  const chip = chipFor(panelState, {
+    serverName,
+    lspStatus: lspStatus.status,
+    label: lspStatus.label,
+  });
   const headerAction = headerActionFor(panelState);
 
   // Any explicit (re-)run is a references query — including "Find
@@ -494,11 +498,14 @@ export function ReferencesPanel({
     await lspStatus.onClick();
     rerun();
   };
+  // Button text is the daemon's own `actionLabel` (Turn on / Start / Start now)
+  // so this panel and the status-bar popup always say the same thing. The
+  // literal is only a pre-poll fallback for the disabled state.
   const statusActionLabel =
-    lspStatus.status === "disabled" || lspStatus.action === "enable"
-      ? "Enable"
-      : lspStatus.action === "resume" || lspStatus.status === "stopped" || lspStatus.status === "idle"
-        ? "Resume"
+    lspStatus.action === "enable" || lspStatus.action === "resume"
+      ? (lspStatus.actionLabel ?? (lspStatus.action === "enable" ? "Turn on" : "Start"))
+      : lspStatus.status === "disabled"
+        ? "Turn on"
         : null;
   const chipClickable =
     !!statusActionLabel &&
@@ -620,17 +627,15 @@ export function ReferencesPanel({
         return renderStateBlock("Code navigation is off.", {
           actions: (
             <button type="button" className="references-panel__btn references-panel__btn--primary" onClick={() => void runStatusAction()}>
-              Enable
+              {statusActionLabel ?? "Turn on"}
             </button>
           ),
         });
       case "not_found":
-        return renderStateBlock(
-          lspStatus.displayName || lspStatus.language
-            ? `No ${lspStatus.displayName ?? lspStatus.language} language server on this host.`
-            : "No language server on this host.",
-          { hint: lspStatus.text ?? "Install a language server to enable code navigation." },
-        );
+        // Same sentence the popup shows ("<server> isn't installed.").
+        return renderStateBlock(lspStatus.text ?? "The language server isn't installed.", {
+          hint: "Install it to enable code navigation.",
+        });
       case "unsupported":
         return renderStateBlock("No code navigation for this file type.");
       case "error":

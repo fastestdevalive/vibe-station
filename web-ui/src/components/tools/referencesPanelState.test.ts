@@ -39,7 +39,7 @@ describe("derivePanelState", () => {
   it("S13: results stay results while loading more; the chip is unchanged", () => {
     const st = derivePanelState({ ...base, totalCount: 3, hasMore: true, loadingMore: true });
     expect(st).toMatchObject({ kind: "results", loadingMore: true });
-    expect(chipFor(st, { ...ctx, lspStatus: "indexing" })?.word).toBe("LSP");
+    expect(chipFor(st, { ...ctx, lspStatus: "indexing" })?.word).toBe("Ready");
     expect(headerActionFor(st)).toBe("cancel");
   });
 
@@ -51,14 +51,14 @@ describe("derivePanelState", () => {
 
   it("S15: degraded results are Partial", () => {
     const st = derivePanelState({ ...base, totalCount: 2, degraded: "cargo metadata failed" });
-    expect(chipFor(st, ctx)).toMatchObject({ tone: "warn", word: "Partial" });
+    expect(chipFor(st, ctx)).toMatchObject({ tone: "warn", word: "Limited" });
   });
 
   it("S16: a no-definition query is no_definition whether or not it has run", () => {
     const q = { symbol: "oneshot", intent: "no-definition" as const };
     expect(derivePanelState({ ...base, query: q, outcome: { kind: "idle" } }).kind).toBe("no_definition");
     expect(derivePanelState({ ...base, query: q }).kind).toBe("no_definition");
-    expect(chipFor(derivePanelState({ ...base, query: q }), ctx)?.word).toBe("LSP");
+    expect(chipFor(derivePanelState({ ...base, query: q }), ctx)?.word).toBe("Ready");
   });
 
   it("S3: starting while retrying shows a spinner chip and a cancel action", () => {
@@ -68,7 +68,7 @@ describe("derivePanelState", () => {
     expect(headerActionFor(st)).toBe("cancel");
   });
 
-  it("every chip word is a single short word (never a sentence)", () => {
+  it("every chip word is a short label (never a sentence)", () => {
     const states = [
       derivePanelState({ ...base, outcome: { kind: "loading" } }),
       derivePanelState({ ...base, outcome: { kind: "error", message: "x".repeat(500) } }),
@@ -78,7 +78,7 @@ describe("derivePanelState", () => {
     ];
     for (const st of states) {
       const chip = chipFor(st, ctx)!;
-      expect(chip.word.length).toBeLessThanOrEqual(10);
+      expect(chip.word.length).toBeLessThanOrEqual(16);
       expect(chip.tooltip.length).toBeLessThanOrEqual(220);
     }
   });
@@ -118,7 +118,11 @@ describe("S17 server_failed", () => {
 
   for (const kind of kinds) {
     const failure = failureOf(kind);
-    const wantChip = isDep(kind) ? { tone: "warn", word: "Setup" } : { tone: "error", word: "Error" };
+    const wantChip = isDep(kind)
+      ? { tone: "warn", word: "Setup needed" }
+      : kind === "crashed"
+        ? { tone: "error", word: "Crashed" }
+        : { tone: "error", word: "Failed to start" };
 
     it(`${kind}: a 503 (no fallback possible) is S17 with ${wantChip.word}, refresh action`, () => {
       const st = derivePanelState({ ...base, query: sfQuery, outcome: { kind: "server_failed", failure } });

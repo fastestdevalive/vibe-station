@@ -3720,7 +3720,9 @@
 
 .references-panel__chip {
   flex-shrink: 0;
-  max-width: 11ch;
+  /* Fits the daemon's longest chip label ("Failed to start") — the chip uses the
+     same words as the status-bar popup. */
+  max-width: 17ch;
   display: inline-flex;
   align-items: center;
   gap: 4px;

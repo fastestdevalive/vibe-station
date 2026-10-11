@@ -92,7 +92,7 @@ describe("ReferencesPanel", () => {
 
     // Header: symbol + count pill + status chip — no sentence.
     await expectResults("run", "2");
-    expect(chipWord()).toBe("LSP");
+    expect(chipWord()).toBe("Ready");
   });
 
   // "Find references" on an EXTERNAL file (opened via go-to-definition into
@@ -394,7 +394,7 @@ describe("ReferencesPanel", () => {
       expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
     });
 
-    it("renders 'No language server on this host' from the polled not_found status when the query finds nothing", async () => {
+    it("renders the daemon's \"isn't installed\" sentence from the polled not_found status when the query finds nothing", async () => {
       // A missing server binary is reported through the polled `not_found`
       // status, not a 404: the query came back empty (no text fallback either).
       vi.spyOn(lspApi, "getReferences").mockResolvedValue({
@@ -406,9 +406,9 @@ describe("ReferencesPanel", () => {
         status: "not_found",
         language: "rust",
         displayName: "Rust",
-        label: "Unavailable",
-        severity: "neutral",
-        detail: "No language server installed for Rust",
+        label: "Not installed",
+        severity: "warn",
+        detail: "rust-analyzer isn't installed.",
         action: null,
         actionLabel: null,
       });
@@ -423,9 +423,9 @@ describe("ReferencesPanel", () => {
 
       render(<ReferencesPanel api={{}} worktreeId={W1} />);
 
-      expect(await screen.findByText("No Rust language server on this host.")).toBeInTheDocument();
-      expect(chipWord()).toBe("No server");
-      expect(screen.getByText("No language server installed for Rust")).toBeInTheDocument();
+      expect(await screen.findByText("rust-analyzer isn't installed.")).toBeInTheDocument();
+      expect(chipWord()).toBe("Not installed");
+      expect(screen.getByText("Install it to enable code navigation.")).toBeInTheDocument();
     });
 
     it("maps a 404 to 'File or workspace not found', not the missing-server banner", async () => {
@@ -903,7 +903,7 @@ describe("ReferencesPanel", () => {
       expect(await screen.findByText(/resolve/)).toBeInTheDocument();
       expect(screen.getByText("oneshot", { selector: "code" })).toBeInTheDocument();
       await waitFor(() => expect(screen.getByText(/Failed to read Cargo metadata/)).toBeInTheDocument());
-      expect(chipWord()).toBe("Partial");
+      expect(chipWord()).toBe("Limited");
       expect(getRefs).not.toHaveBeenCalled();
       expect(screen.queryByText(/No references/)).not.toBeInTheDocument();
 
@@ -940,11 +940,11 @@ describe("ReferencesPanel", () => {
       });
       render(<ReferencesPanel api={{}} worktreeId={W1} />);
       await expectResults("run", "1+");
-      await waitFor(() => expect(chipWord()).toBe("LSP"));
+      await waitFor(() => expect(chipWord()).toBe("Ready"));
 
       fireEvent.click(screen.getByRole("button", { name: "Show more" }));
       expect(await screen.findByText("Loading more…")).toBeInTheDocument();
-      expect(chipWord()).toBe("LSP");
+      expect(chipWord()).toBe("Ready");
       expect(screen.queryByText(/index/i)).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 
@@ -981,7 +981,7 @@ describe("ReferencesPanel", () => {
       });
       render(<ReferencesPanel api={{}} worktreeId={W1} />);
       expect(await screen.findByText("Results may be incomplete")).toBeInTheDocument();
-      expect(chipWord()).toBe("Partial");
+      expect(chipWord()).toBe("Limited");
     });
 
     it("S3: keeps auto-retrying past 5 attempts while the status poll says starting", async () => {
@@ -1048,7 +1048,7 @@ describe("ReferencesPanel", () => {
       render(<ReferencesPanel api={{}} worktreeId={W1} />);
 
       expect(await screen.findByText("TypeScript / JavaScript code navigation is unavailable.")).toBeInTheDocument();
-      expect(chipWord()).toBe("Setup");
+      expect(chipWord()).toBe("Setup needed");
       expect(screen.getByText(failure.summary)).toBeInTheDocument();
       expect(screen.getByText(command, { selector: "code" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Copy install command" })).toBeInTheDocument();
@@ -1177,7 +1177,7 @@ describe("ReferencesPanel", () => {
     render(<ReferencesPanel api={{}} worktreeId={W1} />);
     await expectResults("useStore", "1");
     await waitFor(() => expect(lspApi.getLspStatus).toHaveBeenCalled());
-    expect(chipWord()).toBe("LSP");
+    expect(chipWord()).toBe("Ready");
     expect(screen.queryByText("Results may be incomplete")).not.toBeInTheDocument();
   });
 });

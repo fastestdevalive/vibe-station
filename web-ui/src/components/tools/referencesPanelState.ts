@@ -163,12 +163,25 @@ export interface ChipContext {
   /** Server display name, e.g. "rust-analyzer" / "Rust". */
   serverName: string;
   lspStatus: LspStatus | null;
+  /** The daemon's own one-word label for the polled status ("Setup needed",
+   *  "Failed to start", …) — the same word the status-bar popup shows. Preferred
+   *  over the local fallbacks below whenever it is present. */
+  label?: string | null;
+}
+
+/** Chip word for a latched server failure when the poll hasn't delivered the
+ *  daemon's `label` yet (a 503 body arrives before the first poll). Mirrors
+ *  `vst_lsp::status::describe_failure` so the chip and the popup agree. */
+function failureWord(failure: LspFailure): string {
+  if (isDependencyFailure(failure)) return "Setup needed";
+  if (failure.kind === "crashed") return failure.autoRetry ? "Restarting" : "Crashed";
+  return "Failed to start";
 }
 
 const FALLBACK_REASON_TEXT: Record<LspFallbackReason, string> = {
   disabled: "Code navigation is off",
   starting: "Language server starting",
-  not_found: "No language server on this host",
+  not_found: "Language server isn't installed",
   unsupported: "No language server for this file type",
   // Generic: callers prefer the failure's own headline when they have it.
   server_failed: "Language server failed to start",
@@ -218,15 +231,19 @@ export function chipFor(state: PanelState, ctx: ChipContext): PanelChip | null {
     case "disabled":
       return { tone: "muted", word: "Off", tooltip: "Code navigation is disabled for this workspace", spinner: false };
     case "not_found":
-      return { tone: "muted", word: "No server", tooltip: `${name} not found on this host`, spinner: false };
+      return { tone: "muted", word: "Not installed", tooltip: `${name} isn't installed on this host`, spinner: false };
     case "unsupported":
       return { tone: "muted", word: "N/A", tooltip: "No language server for this file type", spinner: false };
     case "error":
       return { tone: "error", word: "Error", tooltip: truncate(state.message, 200), spinner: false };
-    case "server_failed":
-      return isDependencyFailure(state.failure)
-        ? { tone: "warn", word: "Setup", tooltip: truncate(state.failure.summary, 200), spinner: false }
-        : { tone: "error", word: "Error", tooltip: truncate(state.failure.summary, 200), spinner: false };
+    case "server_failed": {
+      const word = (ctx.lspStatus === "error" && ctx.label) || failureWord(state.failure);
+      const restarting = state.failure.kind === "crashed" && state.failure.autoRetry;
+      const tooltip = truncate(state.failure.summary, 200);
+      return isDependencyFailure(state.failure) || restarting
+        ? { tone: "warn", word, tooltip, spinner: restarting }
+        : { tone: "error", word, tooltip, spinner: false };
+    }
     case "no_results":
       if (state.failure) {
         return {
@@ -238,11 +255,11 @@ export function chipFor(state: PanelState, ctx: ChipContext): PanelChip | null {
       }
       return state.fallback
         ? { tone: "warn", word: "Text", tooltip: `${fallbackReasonText(state.fallback)} — text search`, spinner: false }
-        : { tone: "ok", word: "LSP", tooltip: `${name}: ready`, spinner: false };
+        : { tone: "ok", word: "Ready", tooltip: `${name}: ready`, spinner: false };
     case "no_definition":
       return state.degraded
-        ? { tone: "warn", word: "Partial", tooltip: `${name}: ${truncate(state.degraded, 200)}`, spinner: false }
-        : { tone: "ok", word: "LSP", tooltip: `${name}: ready`, spinner: false };
+        ? { tone: "warn", word: "Limited", tooltip: `${name}: ${truncate(state.degraded, 200)}`, spinner: false }
+        : { tone: "ok", word: "Ready", tooltip: `${name}: ready`, spinner: false };
     case "results":
       if (state.textOnly) {
         return {
@@ -253,9 +270,9 @@ export function chipFor(state: PanelState, ctx: ChipContext): PanelChip | null {
         };
       }
       if (state.degraded) {
-        return { tone: "warn", word: "Partial", tooltip: `${name}: ${truncate(state.degraded, 200)}`, spinner: false };
+        return { tone: "warn", word: "Limited", tooltip: `${name}: ${truncate(state.degraded, 200)}`, spinner: false };
       }
-      return { tone: "ok", word: "LSP", tooltip: `${name}: ready`, spinner: false };
+      return { tone: "ok", word: "Ready", tooltip: `${name}: ready`, spinner: false };
   }
 }
 
