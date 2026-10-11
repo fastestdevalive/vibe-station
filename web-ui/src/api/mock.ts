@@ -33,6 +33,9 @@ import type {
   FsCompleteResponse,
   GutterResult,
   HealthResponse,
+  LimitSlotRef,
+  LimitsRefreshResult,
+  LimitsSnapshot,
   Mode,
   NetworkAccess,
   Project,
@@ -66,6 +69,62 @@ import type { ConnectionState } from "./client";
 function nowIso() {
   return new Date().toISOString();
 }
+
+/** Module-local harness-limits snapshot (host "demo-host", claude five_hour
+ *  42% + seven_day 61%, codex primary 4% cadence 43200). Kept per-module so
+ *  `setLimitSlots` mutates the same object the mock returns and emits. */
+const mockLimits: LimitsSnapshot = {
+  host: "demo-host",
+  slots: [
+    { harness: "claude", windowId: "five_hour" },
+    { harness: "claude", windowId: "seven_day" },
+  ],
+  harnesses: [
+    {
+      harness: "claude",
+      status: "ok",
+      message: null,
+      asOf: new Date().toISOString(),
+      windows: [
+        {
+          harness: "claude",
+          windowId: "five_hour",
+          cadenceMinutes: 300,
+          usedPct: 42,
+          resetsAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+        {
+          harness: "claude",
+          windowId: "seven_day",
+          cadenceMinutes: 10080,
+          usedPct: 61,
+          resetsAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+      ],
+    },
+    {
+      harness: "codex",
+      status: "ok",
+      message: null,
+      asOf: new Date().toISOString(),
+      windows: [
+        {
+          harness: "codex",
+          windowId: "primary",
+          cadenceMinutes: 43200,
+          usedPct: 4,
+          resetsAt: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+      ],
+    },
+  ],
+};
 
 const PRESET_BUG_FIX =
   "You are fixing a bug. Open a PR when done. Run tests before committing.";
@@ -1627,6 +1686,22 @@ export function createMockApi(seed: MockSeed = {}) {
         });
       }
       return { ok: true };
+    },
+
+    // ── Harness limits ──────────────────────────────────────────────────────────
+
+    async getLimits(): Promise<LimitsSnapshot> {
+      return mockLimits;
+    },
+
+    async refreshLimits(): Promise<LimitsRefreshResult> {
+      return { started: true, retryAfterSecs: null, snapshot: mockLimits };
+    },
+
+    async setLimitSlots(slots: [LimitSlotRef, LimitSlotRef]): Promise<LimitsSnapshot> {
+      mockLimits.slots = slots;
+      emit({ type: "limits:updated", limits: mockLimits });
+      return mockLimits;
     },
 
     // ── Skills ──────────────────────────────────────────────────────────────────

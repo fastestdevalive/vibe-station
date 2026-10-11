@@ -9,6 +9,7 @@ import { useModesStore, __resetForDemo as resetModes } from "@/store/modesStore"
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { useThemeStore, DEFAULT_FONT } from "@/hooks/useThemeStore";
 import { useResetProgress } from "@/hooks/useResetProgress";
+import { useLimitsStore, __resetLimitsBootForTests as resetLimits } from "@/hooks/useLimits";
 import { __resetForDemo as resetSessionReset } from "@/hooks/useSessionReset";
 import { useMarkdownStyleStore, __resetForDemo as resetMarkdownStyle, reapplyMarkdownStyle } from "@/hooks/useMarkdownStyle";
 import { __resetForDemo as resetTheme } from "@/hooks/useTheme";
@@ -29,6 +30,7 @@ export const APP_STORES = [
   useThemeStore,
   useMarkdownStyleStore,
   useResetProgress,
+  useLimitsStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */
@@ -40,6 +42,7 @@ export function resetAppSingletons(): void {
   resetDiffViews();
   resetTabsStrip();
   resetSessionReset();
+  resetLimits();
   resetWorkspaceModule();
   chatSnapshotCache.clear();
   // zustand `persist` writes through on every `setState` — resetting would overwrite the freshly seeded

@@ -650,6 +650,46 @@ export interface GutterResult {
   modified: number[];
 }
 
+// --- Harness limits (mirrors rust/vst-types/src/limits.rs) ---
+
+export type LimitStatus =
+  | "ok" | "not_installed" | "signed_out" | "no_plan_limits" | "no_data" | "error" | "unsupported";
+
+export interface LimitWindow {
+  harness: string;
+  windowId: string;
+  cadenceMinutes: number | null;
+  usedPct: number | null;
+  resetsAt: string | null;
+  asOf: string;
+  status: LimitStatus;
+}
+
+export interface LimitsResult {
+  harness: string;
+  status: LimitStatus;
+  message: string | null;
+  asOf: string;
+  windows: LimitWindow[];
+}
+
+export interface LimitSlotRef {
+  harness: string;
+  windowId: string;
+}
+
+export interface LimitsSnapshot {
+  host: string;
+  slots: [LimitSlotRef, LimitSlotRef];
+  harnesses: LimitsResult[];
+}
+
+export interface LimitsRefreshResult {
+  started: boolean;
+  retryAfterSecs: number | null;
+  snapshot: LimitsSnapshot;
+}
+
 export type WSEvent =
   | {
       type: "session:created";
@@ -872,6 +912,11 @@ export type WSEvent =
       /** Broadcast after `POST /api/oobe/complete` succeeds. */
       type: "oobe:state-updated";
       completed: boolean;
+    }
+  | {
+      /** Broadcast when cached harness limits or the pinned slots change (full snapshot, replace). */
+      type: "limits:updated";
+      limits: LimitsSnapshot;
     }
   | {
       type: "pong";

@@ -32,6 +32,9 @@ import type {
   FsCheckResponse,
   FsCompleteResponse,
   HealthResponse,
+  LimitSlotRef,
+  LimitsRefreshResult,
+  LimitsSnapshot,
   Mode,
   NetworkAccess,
   Project,
@@ -1285,6 +1288,27 @@ export function createClientApi() {
         body: JSON.stringify(body),
       });
       return parseJson<{ ok: true }>(res);
+    },
+
+    // ── Harness limits ──────────────────────────────────────────────────────────
+
+    async getLimits(): Promise<LimitsSnapshot> {
+      const res = await apiFetch(`${baseUrl()}/limits`);
+      return parseJson<LimitsSnapshot>(res);
+    },
+
+    async refreshLimits(): Promise<LimitsRefreshResult> {
+      const res = await apiFetch(`${baseUrl()}/limits/refresh`, { method: "POST" });
+      return parseJson<LimitsRefreshResult>(res);
+    },
+
+    async setLimitSlots(slots: [LimitSlotRef, LimitSlotRef]): Promise<LimitsSnapshot> {
+      const res = await apiFetch(`${baseUrl()}/limits/slots`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slots }),
+      });
+      return parseJson<LimitsSnapshot>(res);
     },
 
     // ── Skills ──────────────────────────────────────────────────────────────────

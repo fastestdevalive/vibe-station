@@ -3,6 +3,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useVirtualKeyboardVisible } from "@/hooks/useVirtualKeyboardVisible";
 import { LspStatusRow } from "@/components/layout/LspStatusRow";
+import { LimitsBar } from "@/components/limits/LimitsBar";
 
 interface GlobalStatusBarProps {
   /** Untyped like `LspStatusRow`'s own `api` — this component only forwards
@@ -59,6 +60,7 @@ export function GlobalStatusBar({ api, projects, worktrees }: GlobalStatusBarPro
         </span>
       )}
       <div className="global-status-bar__spacer" />
+      <LimitsBar />
       {activeWorktreeId != null || activeProjectId != null ? (
         <LspStatusRow api={api} worktreeId={lspWorktreeId} scope={scope} />
       ) : null}
