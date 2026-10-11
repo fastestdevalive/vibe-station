@@ -203,13 +203,13 @@ fn get_configs() -> &'static [LanguageServerConfig] {
             LanguageServerConfig {
                 language: "kotlin",
                 display_name: "Kotlin",
-                command: "kotlin-language-server",
-                args: vec![],
+                command: "kotlin-lsp",
+                args: vec!["--stdio".to_string()],
                 extensions: &["kt", "kts"],
                 init_options: None,
                 extra_env: vec![],
                 install_command: None,
-                install_note: Some("brew install kotlin-language-server, or see https://github.com/fwcd/kotlin-language-server#installation"),
+                install_note: Some("macOS: brew install JetBrains/utils/kotlin-lsp — Linux/Windows: download the standalone archive from https://github.com/Kotlin/kotlin-lsp/releases and put bin/intellij-server on PATH as kotlin-lsp"),
                 dependency: None,
             },
             LanguageServerConfig {

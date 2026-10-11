@@ -278,7 +278,7 @@ _(Continuing the numbering of `plan-code-nav-lsp-outline.md`'s Key Decisions, wh
   | HTML | `vscode-html-language-server` | `["--stdio"]` | `html, htm` |
   | CSS | `vscode-css-language-server` | `["--stdio"]` | `css, scss, less` |
   | JSON | `vscode-json-language-server` | `["--stdio"]` | `json, jsonc` |
-  | Kotlin | `kotlin-language-server` | `[]` (stdio default) | `kt, kts` |
+  | Kotlin | `kotlin-lsp` (JetBrains) | `["--stdio"]` | `kt, kts` |
   | Bash | `bash-language-server` | `["start"]` (subcommand, not a flag) | `sh, bash` |
 
 - **Rationale:** 4 of these (`solargraph`, `bash-language-server`, plus Java/C# below) do NOT follow the existing 4 entries' `--stdio`-flag-or-nothing pattern — `solargraph`/`bash-language-server` require a positional subcommand, `omnisharp` requires `-lsp`, `jdtls` requires a per-workspace data directory it cannot get from a static `args` list at all. Assuming a uniform template (the risk flagged in the task brief) would silently break these 4.
@@ -381,7 +381,7 @@ return { ...history, peekFile: peekValue };
 
 | # | Question | Notes |
 |---|----------|-------|
-| 1 | **`jdtls`/`omnisharp`/`kotlin-language-server` binary availability is far less common on a typical daemon host than `rust-analyzer`/`gopls`.** | Out of scope to bundle installers (matches original plan's Non-goals); these 11 languages will mostly show `not_found` until a host has them installed — acceptable, same as any of the original 4. |
+| 1 | **`jdtls`/`omnisharp`/`kotlin-lsp` binary availability is far less common on a typical daemon host than `rust-analyzer`/`gopls`.** | Out of scope to bundle installers (matches original plan's Non-goals); these 11 languages will mostly show `not_found` until a host has them installed — acceptable, same as any of the original 4. |
 | 2 | **Does the `rg_search` fallback respect `.gitignore`/binary-file exclusion the same way LSP results would?** | `rg`'s defaults already exclude `.gitignore`d paths and binary files (existing behavior, unchanged) — a fallback match is therefore already scoped sensibly, no extra filtering needed. |
 | 3 | **Toggle default OFF changes existing behavior for the 4 already-shipped languages too** — a worktree that was getting LSP nav for free (unconditional spawn) now sees it silently stop until the user opts in. | Confirmed intentional by the report (item 6's mitigation) — flagged here only so it isn't mistaken for a regression during verification; no migration path to "auto-enable for existing worktrees" is in scope. |
 | 4 | **Fallback definition results can include up to 50 whole-word text matches, unranked, possibly including the clicked occurrence itself.** | Acceptable for a low-confidence secondary path (explicitly lower-quality than LSP by design) — no dedup/ranking logic beyond `rg`'s own match order is in scope; flagged so verification doesn't mistake a noisy fallback result set for a bug. |
