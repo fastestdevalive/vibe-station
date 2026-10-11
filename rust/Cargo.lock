@@ -3105,6 +3105,7 @@ dependencies = [
  "tracing-subscriber",
  "vst-agents",
  "vst-git",
+ "vst-harness-limits",
  "vst-lifecycle",
  "vst-lsp",
  "vst-proc",
@@ -3129,6 +3130,16 @@ dependencies = [
  "vst-proc",
  "vst-store",
  "vst-testkit",
+ "vst-types",
+]
+
+[[package]]
+name = "vst-harness-limits"
+version = "0.0.1-beta"
+dependencies = [
+ "chrono",
+ "tokio",
+ "tracing",
  "vst-types",
 ]
 
@@ -3205,6 +3216,7 @@ dependencies = [
  "uuid",
  "vst-agents",
  "vst-git",
+ "vst-harness-limits",
  "vst-lifecycle",
  "vst-lsp",
  "vst-proc",

@@ -379,6 +379,10 @@ impl AgentPlugin for CodexPlugin {
         })
     }
 
+    fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::codex_limits::probe_codex_limits())
+    }
+
     /// Reads the thread id the `SessionStart` hook recorded for THIS session, then
     /// deletes the file.
     fn capture_chat_id(&self, args: CaptureArgs<'_>) -> AsyncResult<Option<String>> {

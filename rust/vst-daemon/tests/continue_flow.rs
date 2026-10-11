@@ -44,6 +44,10 @@ fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServe
         started_at: Instant::now(),
         version: "test".to_string(),
         paths,
+        limits: vst_harness_limits::LimitsHandle::inert(
+            vst_types::events::Broadcaster::new(16),
+            "test".to_string(),
+        ),
     }
 }
 

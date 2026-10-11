@@ -10,6 +10,7 @@ members = [
     "vst-agents",
     "vst-agy-acp",
     "vst-lifecycle",
+    "vst-harness-limits",
     "vst-ws",
     "vst-routes",
     "vst-daemon",
@@ -53,6 +54,7 @@ vst-rpc = { path = "vst-rpc" }
 vst-agents = { path = "vst-agents" }
 vst-agy-acp = { path = "vst-agy-acp" }
 vst-lifecycle = { path = "vst-lifecycle" }
+vst-harness-limits = { path = "vst-harness-limits" }
 vst-ws = { path = "vst-ws" }
 vst-routes = { path = "vst-routes" }
 vst-daemon = { path = "vst-daemon" }

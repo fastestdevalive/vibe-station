@@ -12,6 +12,7 @@ pub mod auth;
 pub mod file_serving;
 pub mod fs;
 pub mod health;
+pub mod limits;
 pub mod lsp;
 pub mod mobile_auth;
 pub mod model_catalog;

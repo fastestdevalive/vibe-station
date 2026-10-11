@@ -28,6 +28,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
+use vst_harness_limits::LimitsHandle;
 use vst_lifecycle::subagent_notify::{
     NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle,
 };
@@ -42,6 +43,7 @@ use vst_routes::auth::{
 };
 use vst_routes::fs::FsRoutes;
 use vst_routes::health::HealthRoutes;
+use vst_routes::limits::LimitsRoutes;
 use vst_routes::lsp::{lsp_err_to_response, LspRoutes};
 use vst_routes::mobile_auth::{MobileAuthRouteError, MobileAuthRoutes, OneTimeCodeStore};
 use vst_routes::modes::{json_unsupported_cli, ModeRouteError, ModeRoutes};
@@ -61,6 +63,7 @@ use vst_routes::worktrees::{DiffResponse, FileResponse, WorktreeRouteError, Work
 use vst_store::StoreHandle;
 use vst_types::domain::{TokenPayload, TokenScope, VerifyResult};
 use vst_types::events::Broadcaster;
+use vst_types::limits::{LimitsRefreshResult, LimitsSnapshot, PutLimitSlotsBody};
 use vst_types::rest::attachments::{AttachmentsResult, DeleteAttachmentResult};
 use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
 use vst_types::rest::doctor::DoctorReport;
@@ -133,6 +136,7 @@ pub struct BuildServerOptions {
     pub started_at: Instant,
     pub version: String,
     pub paths: Paths,
+    pub limits: LimitsHandle,
 }
 
 /// Shared application state accessible to Axum request handlers and middleware.
@@ -170,6 +174,7 @@ pub struct AppState {
     pub oobe_routes: OobeRoutes,
     pub skills_routes: SkillsRoutes,
     pub ordered_lists_routes: OrderedListsRoutes,
+    pub limits_routes: LimitsRoutes,
     pub fs_routes: FsRoutes,
     pub auth_routes: Option<AuthRoutes>,
     pub mobile_auth_routes: MobileAuthRoutes,
@@ -383,6 +388,13 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     spawn_event_fanout(ws_hub.clone(), opts.broadcaster.clone());
     spawn_auth_expiry_sweep(ws_hub.clone());
 
+    {
+        // harness-limits "any client?" gate (see Decision 8)
+        let hub = ws_hub.clone();
+        opts.limits
+            .bind_client_counter(Arc::new(move || hub.connection_count()));
+    }
+
     let code_store = OneTimeCodeStore::new();
 
     let health_routes = HealthRoutes::new(opts.version.clone(), opts.port as i64, opts.started_at);
@@ -459,6 +471,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     let skills_routes = SkillsRoutes::new();
     let ordered_lists_routes =
         OrderedListsRoutes::new(opts.store.clone(), opts.broadcaster.clone());
+    let limits_routes = LimitsRoutes::new(opts.limits.clone(), opts.store.clone());
     let fs_routes = FsRoutes::new();
 
     let auth_routes = if let Some(ref auth_state) = opts.auth_state {
@@ -556,6 +569,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         oobe_routes,
         skills_routes,
         ordered_lists_routes,
+        limits_routes,
         fs_routes,
         auth_routes,
         mobile_auth_routes,
@@ -868,6 +882,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/user/ordered-lists/:scopeKey",
             get(handle_get_ordered_list).put(handle_put_ordered_list),
         )
+        // Harness limits
+        .route("/limits", get(handle_get_limits))
+        .route("/limits/refresh", post(handle_refresh_limits))
+        .route("/limits/slots", put(handle_put_limit_slots))
         // Filesystem
         .route("/fs/check", get(handle_fs_check))
         .route("/fs/complete", get(handle_fs_complete))
@@ -4070,6 +4088,33 @@ async fn handle_put_ordered_list(
     state
         .ordered_lists_routes
         .put_ordered_list(&scope_key, body)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })
+}
+
+// ── Limits ────────────────────────────────────────────────────────────────
+
+async fn handle_get_limits(State(state): State<AppState>) -> Json<LimitsSnapshot> {
+    Json(state.limits_routes.get_limits())
+}
+
+async fn handle_refresh_limits(State(state): State<AppState>) -> Json<LimitsRefreshResult> {
+    Json(state.limits_routes.refresh().await)
+}
+
+async fn handle_put_limit_slots(
+    State(state): State<AppState>,
+    Json(body): Json<PutLimitSlotsBody>,
+) -> Result<Json<LimitsSnapshot>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .limits_routes
+        .put_slots(body)
         .await
         .map(Json)
         .map_err(|e| {

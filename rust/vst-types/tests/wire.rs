@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use vst_types::limits::LimitsSnapshot;
 use vst_types::rest::sessions::EnqueueChatResult;
 use vst_types::rest::shared::{GlobalDraft, Mode, Project, Session, Worktree};
 use vst_types::ws::{ClientMessage, ServerMessage, SessionCreatedSnapshot};
@@ -231,4 +232,9 @@ fn enqueue_chat_result_roundtrips() {
     let v = serde_json::json!({ "turnId": "turn-1", "queuePosition": 0 });
     let deserialized: EnqueueChatResult = serde_json::from_value(v.clone()).unwrap();
     assert_eq!(serde_json::to_value(&deserialized).unwrap(), v);
+}
+
+#[test]
+fn limits_snapshot_fixture_roundtrips() {
+    assert_roundtrip::<LimitsSnapshot>("limits-snapshot.json");
 }

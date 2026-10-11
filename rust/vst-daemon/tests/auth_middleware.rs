@@ -58,6 +58,10 @@ fn make_opts_with_dist(
         started_at: Instant::now(),
         version: "test".to_string(),
         paths,
+        limits: vst_harness_limits::LimitsHandle::inert(
+            vst_types::events::Broadcaster::new(16),
+            "test".to_string(),
+        ),
     }
 }
 

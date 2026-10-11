@@ -536,6 +536,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // `allowNetworkAccess`. `swap_rx` is consumed by the supervisor below.
     let (swap_tx, swap_rx) = tokio::sync::mpsc::channel(4);
     let network = crate::network::NetworkControl::new(initial, swap_tx, config_path.clone());
+    let limits = crate::limits_wiring::build_limits_handle(&store, &broadcaster).await;
     let router = build_app(BuildServerOptions {
         network,
         port,
@@ -551,6 +552,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         started_at: Instant::now(),
         version: crate::version::current().to_string(),
         paths: paths.clone(),
+        limits: limits.clone(),
     });
 
     // ── Pollers ───────────────────────────────────────────────────────────────
@@ -572,6 +574,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Before the listener serves: fail rows a previous daemon left mid-delivery.
     schedule_poller.recover_orphans().await;
     let schedule_handle = schedule_poller.clone().start();
+    let limits_handle = limits.start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────────
     // A `watch` (not a one-shot `Notify`) so every waiter — the supervisor's
@@ -601,6 +604,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         lifecycle_handle.abort();
         pr_handle.abort();
         schedule_handle.abort();
+        limits_handle.abort();
         background_boot_for_shutdown.abort_all().await;
         // Kill cloudflared but preserve `enabled` flag so restore_on_boot
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).

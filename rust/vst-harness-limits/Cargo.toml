@@ -1,0 +1,18 @@
+[package]
+name = "vst-harness-limits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vst-types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "test-util"] }
+
+[lints]
+workspace = true

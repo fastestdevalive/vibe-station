@@ -1,0 +1,20 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "vst-limits-1",
+    "response": {
+      "session": {},
+      "subscription_type": "max",
+      "rate_limits_available": true,
+      "rate_limits": {
+        "five_hour": {
+          "utilization": 7,
+          "resets_at": "2026-10-11T02:10:00.386866+00:00",
+          "limit_dollars": null
+        },
+        "seven_day": null
+      }
+    }
+  }
+}

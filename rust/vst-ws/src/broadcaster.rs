@@ -64,6 +64,12 @@ impl WsHub {
         self.connections.write().unwrap().remove(conn);
     }
 
+    /// Number of live WS connections (used by the harness-limits scheduler's
+    /// "any client?" gate).
+    pub fn connection_count(&self) -> usize {
+        self.connections.read().unwrap().len()
+    }
+
     /// Invoke `f` for every live connection.
     pub fn for_each_connection(&self, f: impl Fn(&WsConnection)) {
         for conn in self.connections.read().unwrap().iter() {
@@ -277,6 +283,7 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             scheduled_failed,
             scheduled_turn_ids,
         },
+        ServerEvent::LimitsUpdated { limits } => ServerMessage::LimitsUpdated { limits },
     }
 }
 
@@ -329,9 +336,12 @@ pub fn spawn_event_fanout(
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use vst_types::events::ServerEvent;
+    use vst_types::limits::LimitsSnapshot;
+
     use crate::connection::{WsConnection, WsSinkHandle};
 
-    use super::{close_auth_expired, WsHub, AUTH_EXPIRED_CLOSE_CODE};
+    use super::{close_auth_expired, server_event_to_message, WsHub, AUTH_EXPIRED_CLOSE_CODE};
 
     // Test-only helper; the nested Option<(u16, String)> is just "the close
     // frame the mock sink captured, if any" and isn't worth a named type here.
@@ -408,5 +418,43 @@ mod tests {
             )),
             "close code/reason from the original close must be preserved"
         );
+    }
+
+    #[test]
+    fn limits_updated_event_maps_to_server_message() {
+        let snapshot = LimitsSnapshot {
+            host: "flat-box".into(),
+            slots: vst_types::limits::default_slots(),
+            harnesses: vec![],
+        };
+        let msg = server_event_to_message(ServerEvent::LimitsUpdated {
+            limits: snapshot.clone(),
+        });
+        match msg {
+            vst_types::ws::ServerMessage::LimitsUpdated { limits } => {
+                assert_eq!(limits, snapshot, "payload must be preserved verbatim")
+            }
+            other => panic!("expected LimitsUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connection_count_tracks_register_unregister() {
+        let hub = WsHub::new();
+        assert_eq!(hub.connection_count(), 0);
+
+        let (conn, _closed) = conn_with_expiry(None);
+        hub.register_connection(&conn);
+        assert_eq!(hub.connection_count(), 1);
+
+        let (conn2, _closed2) = conn_with_expiry(None);
+        hub.register_connection(&conn2);
+        assert_eq!(hub.connection_count(), 2);
+
+        hub.unregister_connection(&conn);
+        assert_eq!(hub.connection_count(), 1);
+
+        hub.unregister_connection(&conn2);
+        assert_eq!(hub.connection_count(), 0);
     }
 }

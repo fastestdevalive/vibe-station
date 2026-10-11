@@ -13,6 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{LifecycleState, PrStatus};
+use crate::limits::LimitsSnapshot;
 use crate::rest::settings::MarkdownStyle;
 
 /// A broadcastable daemon event. This is the *internal* event the daemon
@@ -181,6 +182,10 @@ pub enum ServerEvent {
         scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
         scheduled_turn_ids: Vec<String>,
     },
+    /// Cached harness limits changed (or the pinned slots changed). Full
+    /// snapshot, replace-not-diff.
+    #[serde(rename = "limits:updated", rename_all = "camelCase")]
+    LimitsUpdated { limits: LimitsSnapshot },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

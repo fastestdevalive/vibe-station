@@ -166,6 +166,14 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | PATCH | `/settings` | `{ defaultProjectsDir?, skillPaths?, defaultChannelByCli? }` | `{ ok }` | `defaultProjectsDir`/`skillPaths` must be absolute paths — 400 otherwise. `skillPaths` is deduped on write and triggers an immediate rescan + rewatch of the new directory set (awaited, so a following `GET /skills` sees the fresh scan). `defaultChannelByCli` is a **per-key merge**: `{ cli: "tmux"\|"json" }` sets that CLI's override, `{ cli: null }` clears it, and other keys are untouched. Values are limited to `{tmux, json}` (`pty` is rejected, 400); a `json` override for a CLI whose plugin can't run Rich Chat is also rejected (400). |
 | GET | `/skills` | — | `{ skills: Skill[], directories: SkillDirectory[] }` | Settings-panel view of the DIRECTORY-scanned user skill catalog (`<dir>/<name>/SKILL.md` under each `skillPaths` entry). `Skill = { name, description, argumentHint?, path }`. **Never returns a 4xx/5xx for a scan problem** — a per-directory outcome is reported in `directories[]` instead: `{ path, skillCount, error?, missing? }`, where `missing: true` (directory absent) is normal for a shipped default whose CLI is not installed and is not an error. The composer's `/` popover does NOT read this route — it reads `SessionMeta.commands`, which is the merged (ACP + directory) view. |
 
+### Harness limits
+
+| Method | Path | Query / Body | Returns | Notes |
+|---|---|---|---|---|
+| GET | `/limits` | — | `LimitsSnapshot` | Cached harness subscription-limit snapshot: `{ host, slots: [LimitSlotRef, LimitSlotRef], harnesses: LimitsResult[] }`. `LimitSlotRef = { harness, windowId }`; `LimitsResult = { harness, status, message: string \| null, asOf, windows[] }`; `LimitWindow = { harness, windowId, cadenceMinutes: number \| null, usedPct: number \| null, resetsAt: string \| null, asOf, status }` (nullable fields are always present, `null` when unknown) where `status` is `ok \| not_installed \| signed_out \| no_plan_limits \| no_data \| error` (internal `unsupported` harnesses are hidden). A stale (`>5 min`) or never-probed cache kicks a background probe — the fresh value arrives over WS as `limits:updated`. |
+| POST | `/limits/refresh` | — | `LimitsRefreshResult = { started, retryAfterSecs?, snapshot }` | Awaits the probes (each plugin self-bounds at 20 s). `started:false` + `retryAfterSecs` (1..30) when inside the 30 s cooldown (snapshot = current cache). |
+| PUT | `/limits/slots` | `{ slots: [{ harness, windowId }, { harness, windowId }] }` | `LimitsSnapshot` | Persists the two pinned slots (scope `limits-slots`), then broadcasts `limits:updated` to all clients. 400 `{ error: "validation_error: …" }` when `slots` length ≠ 2, any harness/windowId empty or containing `/`, or the two slots are identical. |
+
 ### Modes
 
 | Method | Path | Query / Body | Returns | Notes |
@@ -262,6 +270,7 @@ Coalescing: server debounces rapid changes (~200ms) so 5 saves in a burst → 1 
 | `mode:created` | `{ mode }` |
 | `mode:updated` | `{ mode }` |
 | `mode:deleted` | `{ modeId }` |
+| `limits:updated` | `{ limits: LimitsSnapshot }` |
 | `pong` | — |
 
 ---

@@ -55,6 +55,7 @@ via tmux (session processes) + SQLite (metadata).
 | `rust/vst-git` | Worktree/session path helpers, worktree service, recovery-on-boot logic. |
 | `rust/vst-store` | SQLite-backed state store. |
 | `rust/vst-lifecycle` | 1s lifecycle poller (`session.lifecycle.state` — busy?) and 30s PR poller (`session.pr` — what happened to the branch?); deliberately separate axes, see `docs/STATUS-INDICATORS.md`. |
+| `rust/vst-harness-limits` | Claude/Codex subscription-limit scheduler + cache: probes each vendor's own binary via `AgentPlugin::get_limits()` (injected from `vst-daemon`), pushes `limits:updated` over WS. CLI-agnostic. |
 | `rust/vst-lsp`, `rust/vst-proc`, `rust/vst-ws`, `rust/vst-rpc`, `rust/vst-types` | Language-server integration, process/tmux control, WebSocket plumbing, internal RPC, shared types. |
 | `rust/vst-cli` | The `vst` CLI binary — full scripting surface, drives the same REST API the UI uses. |
 | `web-ui/` | React 19 + Vite frontend (`@vibestation/web`). Served by the daemon; renders identically in the desktop shell and the browser. |
@@ -66,7 +67,7 @@ Entry: `rust/vst-daemon/src/main.rs` → `server.rs`. On boot it acquires a PID-
 lock (`~/.vibe-station/.daemon.lock`), migrates any legacy JSON state into
 SQLite, recovers sessions that didn't shut down cleanly, picks a port, mints
 an in-memory `daemonToken` plus scoped `cliToken`/`tauriToken` (persisted to
-`config.json`, mode `0o600`), starts the lifecycle/PR pollers, and serves.
+`config.json`, mode `0o600`), starts the lifecycle/PR pollers and the harness-limits scheduler, and serves.
 
 Two transports:
 - **REST** — every CLI and UI action is an HTTP call to the daemon.

@@ -29,7 +29,9 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{Channel, NormalizedEvent, ProjectRecord, SessionRecord, WorktreeRecord};
+use vst_types::{
+    Channel, LimitsResult, NormalizedEvent, ProjectRecord, SessionRecord, WorktreeRecord,
+};
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_transport::AcpTransportError;
@@ -287,6 +289,15 @@ pub trait AgentPlugin: Send + Sync {
 
     /// Return the list of models available for this CLI.
     fn list_models(&self) -> AsyncResult<ListModelsResult>;
+
+    /// Read this CLI's subscription limit windows through the CLI's OWN binary
+    /// (never tokens, credential files or user config). Default: `unsupported`
+    /// (hidden by the scheduler). Contract: never panics, bounded by a timeout,
+    /// failures are `LimitsResult.status`.
+    fn get_limits(&self) -> AsyncResult<LimitsResult> {
+        let harness = self.name().to_string();
+        Box::pin(async move { LimitsResult::unsupported(&harness, &crate::util::now_iso_8601()) })
+    }
 
     /// The binary name to check for on PATH (`which <binary_name()>`) when
     /// deciding whether this CLI is "detected" (R10). Defaults to `self.name()`

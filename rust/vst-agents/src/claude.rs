@@ -461,6 +461,10 @@ impl AgentPlugin for ClaudePlugin {
         true
     }
 
+    fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::claude_limits::probe_claude_limits())
+    }
+
     fn resolve_starter_model(&self, name: &str, live_models: &[String]) -> Option<String> {
         if let Some(exact) = live_models.iter().find(|m| m.as_str() == name) {
             return Some(exact.clone());

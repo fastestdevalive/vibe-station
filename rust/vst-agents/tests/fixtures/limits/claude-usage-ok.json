@@ -1,0 +1,32 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "vst-limits-1",
+    "response": {
+      "session": { "total_cost_usd": 0 },
+      "subscription_type": "max",
+      "rate_limits_available": true,
+      "rate_limits": {
+        "five_hour": {
+          "utilization": 21,
+          "resets_at": "2026-10-11T02:10:00.386866+00:00",
+          "limit_dollars": null
+        },
+        "seven_day": {
+          "utilization": 21.5,
+          "resets_at": "2026-10-14T18:00:00.504414+00:00",
+          "limit_dollars": null
+        },
+        "iguana_necktie": {
+          "utilization": 0.46689959999999997,
+          "resets_at": "2026-11-05T07:59:00+00:00",
+          "limit_dollars": 250
+        },
+        "limits": [
+          { "kind": "session", "group": "session" }
+        ]
+      }
+    }
+  }
+}

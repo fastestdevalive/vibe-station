@@ -1,0 +1,52 @@
+{
+  "host": "flat-box",
+  "slots": [
+    { "harness": "claude", "windowId": "five_hour" },
+    { "harness": "claude", "windowId": "seven_day" }
+  ],
+  "harnesses": [
+    {
+      "harness": "claude",
+      "status": "ok",
+      "message": null,
+      "asOf": "2026-10-11T00:41:50.000Z",
+      "windows": [
+        {
+          "harness": "claude",
+          "windowId": "five_hour",
+          "cadenceMinutes": 300,
+          "usedPct": 21.0,
+          "resetsAt": "2026-10-11T02:10:00.386Z",
+          "asOf": "2026-10-11T00:41:50.000Z",
+          "status": "ok"
+        },
+        {
+          "harness": "claude",
+          "windowId": "seven_day",
+          "cadenceMinutes": 10080,
+          "usedPct": 21.0,
+          "resetsAt": "2026-10-14T18:00:00.386Z",
+          "asOf": "2026-10-11T00:41:50.000Z",
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "status": "ok",
+      "message": null,
+      "asOf": "2026-10-11T00:41:51.000Z",
+      "windows": [
+        {
+          "harness": "codex",
+          "windowId": "primary",
+          "cadenceMinutes": 43200,
+          "usedPct": 4.0,
+          "resetsAt": "2026-11-01T00:00:00.000Z",
+          "asOf": "2026-10-11T00:41:51.000Z",
+          "status": "ok"
+        }
+      ]
+    }
+  ]
+}

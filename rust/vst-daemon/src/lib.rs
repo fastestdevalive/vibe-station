@@ -2,6 +2,7 @@
 
 pub mod doctor;
 pub mod env_setup;
+pub mod limits_wiring;
 pub mod lock;
 pub mod network;
 pub mod origin_policy;

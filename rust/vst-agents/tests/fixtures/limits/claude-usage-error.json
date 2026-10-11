@@ -1,0 +1,8 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "error",
+    "request_id": "vst-limits-1",
+    "error": "boom"
+  }
+}

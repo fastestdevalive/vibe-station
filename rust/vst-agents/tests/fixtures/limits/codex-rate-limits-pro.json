@@ -1,0 +1,12 @@
+{
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitId": "codex",
+      "primary": { "usedPercent": 37, "windowDurationMins": 300, "resetsAt": 1793561922 },
+      "secondary": { "usedPercent": 12, "windowDurationMins": 10080, "resetsAt": 1793561922 },
+      "planType": "pro"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": 2,
+  "result": {
+    "ordinaryUsageAllowed": true,
+    "rateLimits": {
+      "limitId": "codex",
+      "primary": { "usedPercent": 4, "windowDurationMins": 43200, "resetsAt": 1793561922 },
+      "secondary": null,
+      "planType": "free"
+    }
+  }
+}

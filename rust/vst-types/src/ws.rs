@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Channel, LifecycleState, NormalizedEvent, PrStatus, SessionMeta};
+use crate::limits::LimitsSnapshot;
 use crate::rest::settings::MarkdownStyle;
 
 /// Client-to-server message. Tagged on `type`.
@@ -239,6 +240,8 @@ pub enum ServerMessage {
     },
     #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]
     OobeStateUpdated { completed: bool },
+    #[serde(rename = "limits:updated", rename_all = "camelCase")]
+    LimitsUpdated { limits: LimitsSnapshot },
     #[serde(rename = "chat:replay", rename_all = "camelCase")]
     ChatReplay {
         session_id: String,

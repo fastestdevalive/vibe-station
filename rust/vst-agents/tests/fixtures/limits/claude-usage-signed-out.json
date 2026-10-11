@@ -1,0 +1,13 @@
+{
+  "type": "control_response",
+  "response": {
+    "subtype": "success",
+    "request_id": "vst-limits-1",
+    "response": {
+      "session": {},
+      "subscription_type": null,
+      "rate_limits_available": false,
+      "rate_limits": null
+    }
+  }
+}
