@@ -57,16 +57,16 @@ describe("useLspStatus", () => {
     expect(hoverSpy).toHaveBeenCalled();
   });
 
-  it("onClick dispatches to the enable path when action is 'enable'", async () => {
+  it("onClick dispatches to the enable path when action is 'enable', chaining start (getHover)", async () => {
     vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({
       status: "disabled",
       language: null,
-      label: "Disabled",
+      label: "Off",
       displayName: null,
       severity: "neutral",
-      detail: "LSP is disabled for this workspace — click to enable.",
+      detail: "Code navigation is off for this workspace.",
       action: "enable",
-      actionLabel: "Enable",
+      actionLabel: "Turn on",
     });
     const setWorktreeLspEnabled = vi.fn().mockResolvedValue(undefined);
     const hoverSpy = vi.spyOn(lspApi, "getHover").mockResolvedValue({ empty: true });
@@ -81,7 +81,14 @@ describe("useLspStatus", () => {
     });
 
     expect(setWorktreeLspEnabled).toHaveBeenCalledWith("wt-1", true);
-    expect(hoverSpy).not.toHaveBeenCalled();
+    expect(hoverSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "worktree",
+      "wt-1",
+      { kind: "workspace", path: "main.rs" },
+      0,
+      0,
+    );
   });
 
   it("onClick is a no-op when action is null", async () => {

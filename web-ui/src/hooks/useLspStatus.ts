@@ -36,6 +36,8 @@ export interface UseLspStatusResult {
   info: string | null;
   /** Why the server is not up, with its remediation actions. */
   failure: LspFailure | null;
+  /** True while an action (enable/resume/retry/onClick) is in flight. */
+  busy: boolean;
   onClick: () => Promise<void>;
   /** Clear the daemon's latched failure and respawn, then re-poll. */
   retry: () => Promise<void>;
@@ -67,6 +69,11 @@ export function useLspStatus(
   const [degraded, setDegraded] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [failure, setFailure] = useState<LspFailure | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Which file an in-flight action started on. A 5s tick for THAT file landing
+  // mid-action must not overwrite the optimistic state (Off → Starting → Off
+  // flicker); polls for any other file are never paused.
+  const busyKeyRef = useRef<string | null>(null);
 
   const applyResult = (res: Awaited<ReturnType<typeof getLspStatus>> | null) => {
     setStatus(res?.status ?? null);
@@ -109,13 +116,14 @@ export function useLspStatus(
     }
 
     let cancelled = false;
+    const pollKey = `${scope}|${worktreeId}|${path}`;
 
     const poll = async () => {
       try {
         const res = await getLspStatus(api, scope, worktreeId, path);
-        if (!cancelled) applyResult(res);
+        if (!cancelled && busyKeyRef.current !== pollKey) applyResult(res);
       } catch {
-        if (!cancelled) applyResult(null);
+        if (!cancelled && busyKeyRef.current !== pollKey) applyResult(null);
       }
     };
 
@@ -134,12 +142,19 @@ export function useLspStatus(
   // client-side.
   const retry = async () => {
     if (!api || !worktreeId || !language) return;
+    busyKeyRef.current = targetKey;
+    setBusy(true);
     try {
-      await restartLsp(api, scope, worktreeId, language);
-    } catch {
-      // Ignored: the re-poll below reports whatever state the server is in.
+      try {
+        await restartLsp(api, scope, worktreeId, language);
+      } catch {
+        // Ignored: the re-poll below reports whatever state the server is in.
+      }
+      await checkStatus();
+    } finally {
+      busyKeyRef.current = null;
+      setBusy(false);
     }
-    await checkStatus();
   };
 
   const onClick = async () => {
@@ -148,30 +163,53 @@ export function useLspStatus(
       await retry();
       return;
     }
-    if (action === "enable") {
-      try {
-        const client = api as {
-          setWorktreeLspEnabled?: (id: string, enabled: boolean) => Promise<unknown>;
-          setProjectLspEnabled?: (id: string, enabled: boolean) => Promise<unknown>;
-        };
-        if (scope === "project" && typeof client.setProjectLspEnabled === "function") {
-          await client.setProjectLspEnabled(worktreeId, true);
-        } else if (typeof client.setWorktreeLspEnabled === "function") {
-          await client.setWorktreeLspEnabled(worktreeId, true);
+    busyKeyRef.current = targetKey;
+    setBusy(true);
+    try {
+      if (action === "enable") {
+        // Optimistic placeholder — replaced by the daemon's own presentation on the
+        // re-poll below; polls are suppressed while `busy` so it can't flicker.
+        setStatus("starting");
+        setLabel("Starting");
+        setSeverity("warn");
+        setText("Launching the language server.");
+        setAction(null);
+        setActionLabel(null);
+
+        try {
+          const client = api as {
+            setWorktreeLspEnabled?: (id: string, enabled: boolean) => Promise<unknown>;
+            setProjectLspEnabled?: (id: string, enabled: boolean) => Promise<unknown>;
+          };
+          if (scope === "project" && typeof client.setProjectLspEnabled === "function") {
+            await client.setProjectLspEnabled(worktreeId, true);
+          } else if (typeof client.setWorktreeLspEnabled === "function") {
+            await client.setWorktreeLspEnabled(worktreeId, true);
+          }
+        } catch {
+          // Ignored
         }
+
+        // Chain the start call immediately
+        try {
+          await getHover(api, scope, worktreeId, { kind: "workspace", path }, 0, 0);
+        } catch {
+          // Ignored: triggers spawn-on-first-request
+        }
+        await checkStatus();
+        return;
+      }
+      // action === "resume" (stopped/idle) — unchanged getHover spawn-trigger call
+      try {
+        await getHover(api, scope, worktreeId, { kind: "workspace", path }, 0, 0);
       } catch {
-        // Ignored
+        // Ignored: triggers spawn-on-first-request
       }
       await checkStatus();
-      return;
+    } finally {
+      busyKeyRef.current = null;
+      setBusy(false);
     }
-    // action === "resume" (stopped/idle) — unchanged getHover spawn-trigger call
-    try {
-      await getHover(api, scope, worktreeId, { kind: "workspace", path }, 0, 0);
-    } catch {
-      // Ignored: triggers spawn-on-first-request
-    }
-    await checkStatus();
   };
 
   return {
@@ -186,6 +224,7 @@ export function useLspStatus(
     degraded,
     info,
     failure,
+    busy,
     onClick,
     retry,
     refresh: checkStatus,
