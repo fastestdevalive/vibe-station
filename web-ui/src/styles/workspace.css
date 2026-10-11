@@ -6460,6 +6460,19 @@ button.dashboard-card {
   z-index: 10;
 }
 
+/* While any pane is fullscreen, raise the bar above it (`.pane-viewport-fullscreen`
+   and the workspace-canvas fullscreen tile are both z-index 200) so popups anchored
+   to this bar — the LSP status popup and the harness-limits popup — render on top of
+   the fullscreen pane instead of underneath it. The bar's own 24px strip sits below
+   the fullscreen pane's covered area (its inset stops at --global-status-bar-h), so
+   only the upward-opening popups are affected. Scoped via :has() so the bar stays at
+   its normal z-index (10) otherwise — that keeps the mobile sidebar drawer
+   (.sidebar-backdrop 40 / .pane-left--mobile 50) covering the bar as designed, and
+   avoids tying with .image-zoom-overlay (300). */
+.app-shell:has(.pane-viewport-fullscreen, .workspace-canvas__tile--fullscreen) .global-status-bar {
+  z-index: 300;
+}
+
 .global-status-bar__crumb {
   display: inline-flex;
   align-items: center;
