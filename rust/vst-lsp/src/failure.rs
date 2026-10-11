@@ -81,7 +81,7 @@ fn first_line(message: &str) -> String {
     }
 }
 
-fn remediation(install: Option<String>) -> Vec<LspRemediation> {
+fn remediation(install: Option<String>, retry_label: &str) -> Vec<LspRemediation> {
     let mut out = Vec::new();
     if let Some(command) = install {
         out.push(LspRemediation {
@@ -92,7 +92,7 @@ fn remediation(install: Option<String>) -> Vec<LspRemediation> {
     }
     out.push(LspRemediation {
         kind: LspRemediationKind::Retry,
-        label: "Retry".to_string(),
+        label: retry_label.to_string(),
         command: None,
     });
     out
@@ -111,7 +111,7 @@ pub fn dependency_failure(
         summary,
         message,
         exit_code: None,
-        remediation: remediation(install),
+        remediation: remediation(install, "Check again"),
         auto_retry: true,
     }
 }
@@ -148,7 +148,7 @@ pub fn phase_failure(
         summary,
         message: compose_message(server_error, log_tail),
         exit_code,
-        remediation: remediation(None),
+        remediation: remediation(None, "Restart"),
         auto_retry: false,
     }
 }
@@ -177,7 +177,7 @@ pub fn crash_failure(
         summary,
         message: compose_message(None, log_tail),
         exit_code,
-        remediation: remediation(None),
+        remediation: remediation(None, "Restart"),
         auto_retry,
     }
 }
@@ -257,6 +257,7 @@ mod tests {
         assert!(!f.auto_retry);
         assert_eq!(f.remediation.len(), 1);
         assert_eq!(f.remediation[0].kind, LspRemediationKind::Retry);
+        assert_eq!(f.remediation[0].label, "Restart");
     }
 
     #[test]
@@ -321,6 +322,7 @@ mod tests {
             f.remediation[0].command.as_deref(),
             Some("npm i -D \"typescript@<7\"")
         );
+        assert_eq!(f.remediation[1].label, "Check again");
     }
 
     #[test]

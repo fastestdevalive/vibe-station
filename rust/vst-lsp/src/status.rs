@@ -12,9 +12,8 @@ use crate::registry;
 /// bottom bar, tools-pane side panel, per-language popup rows) renders these
 /// fields — none of them re-derive text/color/action from the raw enum.
 pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentation {
-    let display_name = language.and_then(|lang| {
-        registry::lookup_by_language(lang).map(|cfg| cfg.display_name.to_string())
-    });
+    let cfg = language.and_then(registry::lookup_by_language);
+    let display_name = cfg.map(|c| c.display_name.to_string());
 
     let (label, severity, detail, action, action_label): (
         &str,
@@ -26,54 +25,52 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
         LspStatus::Ready => (
             "Ready",
             LspSeverity::Ok,
-            "LSP: ready".to_string(),
+            "Language server is ready.".to_string(),
             None,
             None,
         ),
         LspStatus::Starting => (
             "Starting",
             LspSeverity::Warn,
-            "LSP: starting…".to_string(),
+            "Launching the language server.".to_string(),
             None,
             None,
         ),
         LspStatus::Indexing => (
             "Indexing",
             LspSeverity::Warn,
-            "LSP: indexing…".to_string(),
+            "Results may be incomplete until indexing finishes.".to_string(),
             None,
             None,
         ),
         LspStatus::Idle => (
-            "Idle",
+            "Sleeping",
             LspSeverity::Neutral,
-            "LSP: idle".to_string(),
+            "Wakes when you use code navigation.".to_string(),
             Some(LspAction::Resume),
-            Some("Resume"),
+            Some("Start now"),
         ),
         LspStatus::Stopped => (
-            "Stopped",
+            "Not running",
             LspSeverity::Neutral,
-            "LSP: stopped — click to resume".to_string(),
+            "Start to enable code navigation.".to_string(),
             Some(LspAction::Resume),
-            Some("Resume"),
+            Some("Start"),
         ),
         LspStatus::Disabled => (
-            "Disabled",
+            "Off",
             LspSeverity::Neutral,
-            "LSP is disabled for this workspace — click to enable.".to_string(),
+            "Code navigation is off for this workspace.".to_string(),
             Some(LspAction::Enable),
-            Some("Enable"),
+            Some("Turn on"),
         ),
         LspStatus::NotFound => {
-            let detail = match &display_name {
-                Some(name) => format!("LSP: not available for {name} — server not found on host"),
-                None => "LSP: not available — server not found on host".to_string(),
+            let detail = match cfg {
+                Some(c) => format!("{} isn't installed.", c.command),
+                None => "The language server isn't installed.".to_string(),
             };
-            // Neutral, not Warn — "server not installed on host" is a steady-state fact about
-            // this host, not a transient condition like Starting/Indexing (also Warn). Matches
-            // the pre-consolidation frontend, which colored this state gray.
-            ("Unavailable", LspSeverity::Neutral, detail, None, None)
+            // Warn, not Neutral — "server not installed on host" needs user attention
+            ("Not installed", LspSeverity::Warn, detail, None, None)
         }
         LspStatus::Unsupported => {
             // `LspManager::status` only ever returns `Unsupported` with `language: None` (no
@@ -84,7 +81,7 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
             (
                 "N/A",
                 LspSeverity::Neutral,
-                "LSP: unsupported file type".to_string(),
+                "No language server for this file type.".to_string(),
                 None,
                 None,
             )
@@ -92,9 +89,9 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
         LspStatus::Error => (
             "Error",
             LspSeverity::Error,
-            "LSP: server error".to_string(),
-            None,
-            None,
+            "No details available.".to_string(),
+            Some(LspAction::Retry),
+            Some("Restart"),
         ),
     };
 
@@ -114,15 +111,25 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
 /// "Restarting". `detail` is always the failure's own summary.
 pub fn describe_failure(failure: &LspFailure, language: Option<&str>) -> LspStatusPresentation {
     let base = describe(LspStatus::Error, language);
-    let retry = (Some(LspAction::Retry), Some("Retry".to_string()));
     let (label, severity, (action, action_label)) = match failure.kind {
-        LspFailureKind::MissingDependency | LspFailureKind::IncompatibleDependency => {
-            ("Setup needed", LspSeverity::Warn, retry)
-        }
+        LspFailureKind::MissingDependency | LspFailureKind::IncompatibleDependency => (
+            "Setup needed",
+            LspSeverity::Warn,
+            (Some(LspAction::Retry), Some("Check again".to_string())),
+        ),
         LspFailureKind::Crashed if failure.auto_retry => {
             ("Restarting", LspSeverity::Warn, (None, None))
         }
-        _ => ("Error", LspSeverity::Error, retry),
+        LspFailureKind::Crashed => (
+            "Crashed",
+            LspSeverity::Error,
+            (Some(LspAction::Retry), Some("Restart".to_string())),
+        ),
+        _ => (
+            "Failed to start",
+            LspSeverity::Error,
+            (Some(LspAction::Retry), Some("Restart".to_string())),
+        ),
     };
     LspStatusPresentation {
         label: label.to_string(),
@@ -171,16 +178,17 @@ mod tests {
             let p = describe_failure(&f, Some("typescript"));
             assert_eq!(p.detail, f.summary, "{kind:?}: detail == summary");
             assert_eq!(p.display_name.as_deref(), Some("TypeScript / JavaScript"));
-            let (label, severity) = match kind {
+            let (label, severity, action_label) = match kind {
                 LspFailureKind::MissingDependency | LspFailureKind::IncompatibleDependency => {
-                    ("Setup needed", LspSeverity::Warn)
+                    ("Setup needed", LspSeverity::Warn, "Check again")
                 }
-                _ => ("Error", LspSeverity::Error),
+                LspFailureKind::Crashed => ("Crashed", LspSeverity::Error, "Restart"),
+                _ => ("Failed to start", LspSeverity::Error, "Restart"),
             };
             assert_eq!(p.label, label, "{kind:?}");
             assert_eq!(p.severity, severity, "{kind:?}");
             assert_eq!(p.action, Some(LspAction::Retry), "{kind:?}");
-            assert_eq!(p.action_label.as_deref(), Some("Retry"));
+            assert_eq!(p.action_label.as_deref(), Some(action_label));
         }
         let p = describe_failure(&failure(LspFailureKind::Crashed, true), Some("rust"));
         assert_eq!(
@@ -191,6 +199,7 @@ mod tests {
         let p = describe_failure(&failure(LspFailureKind::MissingDependency, true), None);
         assert_eq!(p.label, "Setup needed");
         assert_eq!(p.action, Some(LspAction::Retry));
+        assert_eq!(p.action_label.as_deref(), Some("Check again"));
     }
 
     #[test]
@@ -198,8 +207,9 @@ mod tests {
         let p = describe_failure(&failure(LspFailureKind::InitFailed, false), Some("rust"));
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["action"], "retry");
-        assert_eq!(v["actionLabel"], "Retry");
+        assert_eq!(v["actionLabel"], "Restart");
         assert_eq!(v["severity"], "error");
+        assert_eq!(v["label"], "Failed to start");
     }
 
     const ALL_STATUSES: [LspStatus; 9] = [
@@ -244,13 +254,16 @@ mod tests {
             describe(LspStatus::Idle, Some("rust")).action,
             Some(LspAction::Resume)
         );
+        assert_eq!(
+            describe(LspStatus::Error, Some("rust")).action,
+            Some(LspAction::Retry)
+        );
         for status in [
             LspStatus::Ready,
             LspStatus::Starting,
             LspStatus::Indexing,
             LspStatus::NotFound,
             LspStatus::Unsupported,
-            LspStatus::Error,
         ] {
             assert_eq!(
                 describe(status, Some("rust")).action,
@@ -261,12 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn not_found_and_unsupported_are_neutral_not_warn() {
-        // Regression guard: these are steady-state "not on this host" facts, not transient
-        // busy-states like Starting/Indexing (which ARE Warn) — see the comment in `describe()`.
+    fn not_found_is_warn_and_unsupported_is_neutral() {
         assert_eq!(
             describe(LspStatus::NotFound, Some("rust")).severity,
-            LspSeverity::Neutral
+            LspSeverity::Warn
         );
         assert_eq!(
             describe(LspStatus::Unsupported, None).severity,
@@ -279,18 +290,18 @@ mod tests {
         // `Unsupported` is never actually reached with a language (see the comment in
         // `describe()`), but if it ever were, the message must not claim "not available for X".
         let p = describe(LspStatus::Unsupported, Some("rust"));
-        assert_eq!(p.detail, "LSP: unsupported file type");
+        assert_eq!(p.detail, "No language server for this file type.");
     }
 
     #[test]
     fn json_shape_matches_frontend_camel_case_contract() {
         let p = describe(LspStatus::Idle, Some("rust"));
         let value = serde_json::to_value(&p).expect("LspStatusPresentation must serialize");
-        assert_eq!(value["label"], "Idle");
+        assert_eq!(value["label"], "Sleeping");
         assert_eq!(value["displayName"], "Rust");
         assert_eq!(value["severity"], "neutral");
         assert_eq!(value["action"], "resume");
-        assert_eq!(value["actionLabel"], "Resume");
+        assert_eq!(value["actionLabel"], "Start now");
     }
 
     #[test]
@@ -313,12 +324,15 @@ mod tests {
             describe(LspStatus::Indexing, Some("rust")).label,
             "Indexing"
         );
-        assert_eq!(describe(LspStatus::Idle, Some("rust")).label, "Idle");
-        assert_eq!(describe(LspStatus::Stopped, Some("rust")).label, "Stopped");
-        assert_eq!(describe(LspStatus::Disabled, None).label, "Disabled");
+        assert_eq!(describe(LspStatus::Idle, Some("rust")).label, "Sleeping");
+        assert_eq!(
+            describe(LspStatus::Stopped, Some("rust")).label,
+            "Not running"
+        );
+        assert_eq!(describe(LspStatus::Disabled, None).label, "Off");
         assert_eq!(
             describe(LspStatus::NotFound, Some("rust")).label,
-            "Unavailable"
+            "Not installed"
         );
         assert_eq!(describe(LspStatus::Unsupported, None).label, "N/A");
         assert_eq!(describe(LspStatus::Error, Some("rust")).label, "Error");

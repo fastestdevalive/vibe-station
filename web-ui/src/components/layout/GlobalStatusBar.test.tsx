@@ -65,12 +65,12 @@ describe("GlobalStatusBar", () => {
       label: "Ready",
       displayName: "Rust",
       severity: "ok",
-      detail: "LSP: ready",
+      detail: "Language server is ready.",
       action: null,
       actionLabel: null,
     });
     render(<GlobalStatusBar api={{}} projects={projects} worktrees={worktrees} />);
-    expect(await screen.findByText("Rust LSP: Ready")).toBeInTheDocument();
+    expect(await screen.findByText("Rust")).toBeInTheDocument();
   });
 
   it("scopes the LSP status to the active project for a direct session (no worktree)", async () => {
@@ -82,14 +82,14 @@ describe("GlobalStatusBar", () => {
       label: "Ready",
       displayName: "Rust",
       severity: "ok",
-      detail: "LSP: ready",
+      detail: "Language server is ready.",
       action: null,
       actionLabel: null,
     });
 
     render(<GlobalStatusBar api={{}} projects={projects} worktrees={[]} />);
 
-    fireEvent.click(await screen.findByText("Rust LSP: Ready"));
+    fireEvent.click(await screen.findByText("Rust"));
     await waitFor(() => expect(statusesSpy).toHaveBeenCalledWith({}, "project", "proj-1"));
   });
 });
