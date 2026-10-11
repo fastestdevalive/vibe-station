@@ -215,6 +215,41 @@ describe("mock api contract", () => {
     offCreated();
   });
 
+  it("resetSession carries the pin to the replacement, in daemon event order", async () => {
+    const api = createMockApi();
+    await api.pinSession("sess-main", true);
+    const pinnedAt = (await api.listSessions("wt-1")).find((s) => s.id === "sess-main")?.pinnedAt;
+    expect(pinnedAt).toBeTruthy();
+    // The mock's pinSession doesn't touch the list; seed the daemon's pinned-all slot directly.
+    await api.setOrderedList("pinned-all", ["x", "sess-main"]);
+
+    const order: string[] = [];
+    const offs = [
+      api.on("orderedList:updated", (ev) => {
+        if (ev.type === "orderedList:updated" && ev.scopeKey === "pinned-all") order.push("list");
+      }),
+      api.on("session:created", () => order.push("created")),
+      api.on("session:updated", (ev) => {
+        if (ev.type === "session:updated" && ev.sessionId === "sess-main") {
+          order.push(ev.pinnedAt === null ? "old-cleared" : "old");
+        }
+      }),
+    ];
+    const res = await api.resetSession("sess-main");
+    offs.forEach((off) => off());
+
+    const sessions = await api.listSessions("wt-1");
+    expect(sessions.find((s) => s.id === "sess-main")?.pinnedAt).toBeNull();
+    expect(sessions.find((s) => s.id === res.newSessionId)?.pinnedAt).toBe(pinnedAt);
+    expect(order).toEqual(["list", "created", "old-cleared"]);
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual(["x", res.newSessionId]);
+
+    // pin on the superseded id acts on the live head
+    await api.pinSession("sess-main", false);
+    const after = await api.listSessions("wt-1");
+    expect(after.find((s) => s.id === res.newSessionId)?.pinnedAt).toBeNull();
+  });
+
   it("resetSession rejects an already-archived session", async () => {
     const api = createMockApi();
     const first = await api.resetSession("sess-main");

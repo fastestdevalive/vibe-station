@@ -561,6 +561,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
           if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
           if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
+          if (ev.supersededBy) patch.pinnedAt = null; // pin moves to the replacement
           if (ev.isMain !== undefined) patch.isMain = ev.isMain;
           // Keep the draft's chosen mode current: `sessionModeId` reads it, and it
           // is what keeps the tab icon right after the draft is promoted.

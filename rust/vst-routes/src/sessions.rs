@@ -76,6 +76,7 @@ use vst_proc::tmux::{CapturePaneOptions, NewSessionOptions, Tmux};
 use vst_store::global_drafts::{GlobalDraftPatch, GlobalDraftRow};
 use vst_store::{StoreError, StoreHandle};
 use vst_types::events::{Broadcaster, ServerEvent};
+use vst_types::rest::ordered_lists::PINNED_ALL;
 use vst_types::rest::sessions::{
     AllEvents, ChatBody, CreateDraftSessionBody, CreateScheduledMessageBody,
     CreateScheduledMessageResponse, CreateSessionBody, CreateTarget, DelinkResult, Delivery,
@@ -155,6 +156,150 @@ pub async fn find_session_context(store: &StoreHandle, session_id: &str) -> Opti
         .get_global_draft(session_id)
         .await
         .map(|row| SessionContext::Global { row })
+}
+
+/// Every session record in a project (worktree sessions, then direct).
+fn project_sessions(p: &ProjectRecord) -> impl Iterator<Item = &SessionRecord> {
+    p.worktrees
+        .iter()
+        .flat_map(|w| w.sessions.iter())
+        .chain(p.direct_sessions.iter())
+}
+
+/// Max `superseded_by` hops followed when resolving a chain head.
+const SUPERSEDED_HOP_CAP: usize = 32;
+
+/// Walk `superseded_by` from `start_id` to the live head of its reset chain:
+/// the last EXISTING row (a dangling pointer stops the walk on the row that
+/// holds it). `None` iff `start_id` itself does not exist in the project.
+fn resolve_superseded_head(p: &ProjectRecord, start_id: &str) -> Option<String> {
+    let mut cur = project_sessions(p).find(|s| s.id == start_id)?;
+    for _ in 0..SUPERSEDED_HOP_CAP {
+        let next = cur
+            .superseded_by
+            .as_deref()
+            .and_then(|nid| project_sessions(p).find(|s| s.id == nid));
+        match next {
+            Some(n) => cur = n,
+            None => break,
+        }
+    }
+    Some(cur.id.clone())
+}
+
+/// Replace `old_id` with `new_id` in a `pinned-all` id list. `None` when
+/// `old_id` is absent (nothing to do); if `new_id` is already present, only
+/// `old_id` is removed.
+fn swap_pinned_all_id(ids: &[String], old_id: &str, new_id: &str) -> Option<Vec<String>> {
+    let pos = ids.iter().position(|i| i == old_id)?;
+    let mut out = ids.to_vec();
+    if ids.iter().any(|i| i == new_id) {
+        out.remove(pos);
+    } else {
+        out[pos] = new_id.to_string();
+    }
+    Some(out)
+}
+
+/// Move pins stranded on hidden superseded rows to their chain head. A row is
+/// a candidate iff it is pinned AND its `superseded_by` resolves to an
+/// existing row; the head takes the latest candidate `pinned_at` unless it is
+/// already pinned. Every candidate's pin is cleared (single pin owner).
+/// Returns the `(old_id, head_id)` pairs applied (empty = no-op).
+fn repair_pins_in_project(p: &mut ProjectRecord) -> Vec<(String, String)> {
+    let candidates: Vec<(String, String, String)> = project_sessions(p)
+        .filter_map(|s| {
+            let pinned = s.pinned_at.clone()?;
+            let next = s.superseded_by.as_deref()?;
+            project_sessions(p).find(|x| x.id == next)?;
+            let head = resolve_superseded_head(p, &s.id)?;
+            // Cycle: the walk came back to the start — leave the pin alone.
+            if head == s.id {
+                return None;
+            }
+            // Hop cap exhausted (overlong chain / cycle): the "head" is still
+            // superseded by an existing row, so it is not a real head.
+            let head_row = project_sessions(p).find(|x| x.id == head)?;
+            if let Some(n) = head_row.superseded_by.as_deref() {
+                if project_sessions(p).any(|x| x.id == n) {
+                    return None;
+                }
+            }
+            Some((s.id.clone(), head, pinned))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut head_pin: HashMap<String, String> = HashMap::new();
+    for (_, head, pinned) in &candidates {
+        let e = head_pin
+            .entry(head.clone())
+            .or_insert_with(|| pinned.clone());
+        if pinned > e {
+            *e = pinned.clone();
+        }
+    }
+    for s in p
+        .worktrees
+        .iter_mut()
+        .flat_map(|w| w.sessions.iter_mut())
+        .chain(p.direct_sessions.iter_mut())
+    {
+        if candidates.iter().any(|(id, _, _)| *id == s.id) {
+            s.pinned_at = None;
+        }
+        if s.pinned_at.is_none() {
+            if let Some(pin) = head_pin.get(&s.id) {
+                s.pinned_at = Some(pin.clone());
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .map(|(old, head, _)| (old, head))
+        .collect()
+}
+
+/// One-shot boot repair for resets that predate pin carry: a pin stranded on
+/// a hidden superseded row moves to the live head of its chain, and the
+/// `pinned-all` slot follows. Idempotent; best-effort per project — returns
+/// one message per project that failed so the caller can log them. No
+/// broadcast (runs before any client can connect).
+pub async fn repair_superseded_pins(store: &StoreHandle) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut pairs_all: Vec<(String, String)> = Vec::new();
+    for project in store.get_all_projects().await {
+        let mut probe = project.clone();
+        let pairs = repair_pins_in_project(&mut probe);
+        if pairs.is_empty() {
+            continue;
+        }
+        match store
+            .mutate_project(&project.id, |p| {
+                repair_pins_in_project(p);
+                Ok(p.clone())
+            })
+            .await
+        {
+            Ok(_) => pairs_all.extend(pairs),
+            Err(e) => failures.push(format!("{}: {e}", project.id)),
+        }
+    }
+    if !pairs_all.is_empty() {
+        let mut ids = store.get_ordered_list(PINNED_ALL).await.item_ids;
+        let mut changed = false;
+        for (old, head) in &pairs_all {
+            if let Some(next) = swap_pinned_all_id(&ids, old, head) {
+                ids = next;
+                changed = true;
+            }
+        }
+        if changed {
+            store.set_ordered_list(PINNED_ALL, ids).await;
+        }
+    }
+    failures
 }
 
 /// Locate a worktree across all projects. Mirrors the TS `findWorktreeContext`.
@@ -2342,35 +2487,73 @@ impl SessionRoutes {
     }
 
     /// `PATCH /sessions/:id/pin` — idempotent toggle of `pinnedAt`.
+    ///
+    /// A superseded id (reset replaced it) acts on the live head of its
+    /// `superseded_by` chain: head resolution and the write both happen under
+    /// the project lock, so a hidden row never becomes a second pin owner.
     pub async fn pin_session(&self, id: &str, pinned: bool) -> Result<PinResult, MutateError> {
         let ctx = find_session_context(&self.store, id)
             .await
             .ok_or_else(|| MutateError::NotFound(format!("Session '{id}' not found")))?;
-        if matches!(ctx, SessionContext::Global { .. }) {
-            return Err(MutateError::NotFound(format!("Session '{id}' not found")));
-        }
-        let session = match &ctx {
-            SessionContext::Worktree { session, .. } | SessionContext::Direct { session, .. } => {
-                session
+        let project = match &ctx {
+            SessionContext::Worktree { project, .. } | SessionContext::Direct { project, .. } => {
+                project
             }
-            SessionContext::Global { .. } => unreachable!(),
+            SessionContext::Global { .. } => {
+                return Err(MutateError::NotFound(format!("Session '{id}' not found")));
+            }
         };
-        let already = session.pinned_at.is_some();
-        if already == pinned {
-            return Ok(PinResult {
-                ok: true,
-                pinned_at: session.pinned_at.clone(),
-            });
+        // Fast path (no write, no broadcast) decided on the head of the
+        // pre-lock snapshot; the authoritative decision repeats under the lock.
+        if let Some(head) = resolve_superseded_head(project, id)
+            .and_then(|hid| project_sessions(project).find(|s| s.id == hid))
+        {
+            if head.pinned_at.is_some() == pinned {
+                return Ok(PinResult {
+                    ok: true,
+                    pinned_at: head.pinned_at.clone(),
+                });
+            }
         }
-        let next_pinned_at = if pinned { Some(now_iso()) } else { None };
-        let pin_value = next_pinned_at.clone();
-        let f: Arc<dyn Fn(&mut SessionRecord) + Send + Sync> = Arc::new(move |s| {
-            s.pinned_at = pin_value.clone();
-        });
-        self.apply_session_mutation(&ctx, id, f).await?;
+        let project_id = project.id.clone();
+        let start_id = id.to_string();
+        let now = now_iso();
+        let updated = self
+            .store
+            .mutate_project(&project_id, move |p| {
+                let head_id = resolve_superseded_head(p, &start_id).ok_or_else(|| {
+                    StoreError::Mutation(format!("Session '{start_id}' not found"))
+                })?;
+                let head = p
+                    .worktrees
+                    .iter_mut()
+                    .flat_map(|w| w.sessions.iter_mut())
+                    .chain(p.direct_sessions.iter_mut())
+                    .find(|s| s.id == head_id);
+                if let Some(head) = head {
+                    if pinned {
+                        if head.pinned_at.is_none() {
+                            head.pinned_at = Some(now.clone());
+                        }
+                    } else {
+                        head.pinned_at = None;
+                    }
+                }
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::Mutation(m) => MutateError::NotFound(m),
+                other => MutateError::Internal(other.to_string()),
+            })?;
+        let head_id = resolve_superseded_head(&updated, id)
+            .ok_or_else(|| MutateError::NotFound(format!("Session '{id}' not found")))?;
+        let head_pinned_at = project_sessions(&updated)
+            .find(|s| s.id == head_id)
+            .and_then(|s| s.pinned_at.clone());
         self.broadcaster.send(ServerEvent::SessionUpdated {
-            session_id: id.to_string(),
-            pinned_at: next_pinned_at.clone(),
+            session_id: head_id,
+            pinned_at: Some(head_pinned_at.clone()),
             channel: None,
             name: None,
             archived_at: None,
@@ -2385,7 +2568,7 @@ impl SessionRoutes {
         });
         Ok(PinResult {
             ok: true,
-            pinned_at: next_pinned_at,
+            pinned_at: head_pinned_at,
         })
     }
 
@@ -3104,7 +3287,7 @@ impl SessionRoutes {
             session.use_tmux
         };
 
-        let new_session = SessionRecord {
+        let mut new_session = SessionRecord {
             id: new_id.clone(),
             worktree_id: session.worktree_id.clone(),
             project_id: project.id.clone(),
@@ -3163,13 +3346,16 @@ impl SessionRoutes {
         let archived_at_c = archived_at.clone();
         let new_id_c = new_id.clone();
         let handoff_text_c = handoff_text.clone();
-        self.store
+        let updated_project = self
+            .store
             .mutate_project(&project_id, move |p| {
                 // Re-check inside the locked mutation: a handoff can hold this reset
                 // open for up to `handoff_timeout`, so a concurrent reset/terminate
                 // may have archived or removed the row since it was read — never
                 // archive twice or push a second replacement.
-                let archive = |s: &mut SessionRecord| -> Result<(), StoreError> {
+                // Returns the old row's pin, which moves to the replacement in
+                // this same locked mutation (single pin owner).
+                let archive = |s: &mut SessionRecord| -> Result<Option<String>, StoreError> {
                     if s.archived_at.is_some() {
                         return Err(StoreError::Mutation("Session already archived".to_string()));
                     }
@@ -3177,23 +3363,26 @@ impl SessionRoutes {
                     s.handoff_summary = handoff_text_c.clone();
                     s.is_main = false;
                     s.superseded_by = Some(new_id_c.clone());
-                    Ok(())
+                    Ok(s.pinned_at.take())
                 };
                 let missing = || StoreError::Mutation("Session already archived".to_string());
                 if let Some(wt_id) = &wt_id_opt {
                     for w in &mut p.worktrees {
                         if w.id == *wt_id {
+                            let mut carried = None;
                             let mut found = false;
                             for s in &mut w.sessions {
                                 if s.id == old_id_c {
-                                    archive(s)?;
+                                    carried = archive(s)?;
                                     found = true;
                                 }
                             }
                             if !found {
                                 return Err(missing());
                             }
-                            w.sessions.push(new_rec.clone());
+                            let mut rec = new_rec.clone();
+                            rec.pinned_at = carried;
+                            w.sessions.push(rec);
                             return Ok(p.clone());
                         }
                     }
@@ -3201,17 +3390,20 @@ impl SessionRoutes {
                         "worktree '{wt_id}' not found"
                     )));
                 }
+                let mut carried = None;
                 let mut found = false;
                 for s in &mut p.direct_sessions {
                     if s.id == old_id_c {
-                        archive(s)?;
+                        carried = archive(s)?;
                         found = true;
                     }
                 }
                 if !found {
                     return Err(missing());
                 }
-                p.direct_sessions.push(new_rec.clone());
+                let mut rec = new_rec.clone();
+                rec.pinned_at = carried;
+                p.direct_sessions.push(rec);
                 Ok(p.clone())
             })
             .await
@@ -3223,6 +3415,14 @@ impl SessionRoutes {
                     ResetError::Internal(msg)
                 }
             })?;
+
+        // The pin the locked mutation actually moved is authoritative for
+        // everything downstream (swap, snapshot, spawn opts) — not the
+        // pre-read `session.pinned_at`.
+        let carried: Option<String> = project_sessions(&updated_project)
+            .find(|s| s.id == new_id)
+            .and_then(|s| s.pinned_at.clone());
+        new_session.pinned_at = carried.clone();
 
         self.subagent_notify.forget_subagent_notify(&old_id);
 
@@ -3238,10 +3438,33 @@ impl SessionRoutes {
             }
         }
 
+        // The replacement takes the old id's `pinned-all` slot BEFORE it is
+        // announced, so it first renders already in position. Only a moved pin
+        // touches the list (an unpinned old id is never in it).
+        if carried.is_some() {
+            let ids = self.store.get_ordered_list(PINNED_ALL).await.item_ids;
+            if let Some(next) = swap_pinned_all_id(&ids, &old_id, &new_id) {
+                let list = self.store.set_ordered_list(PINNED_ALL, next).await;
+                self.broadcaster.send(ServerEvent::OrderedListUpdated {
+                    scope_key: PINNED_ALL.to_string(),
+                    item_ids: list.item_ids,
+                    updated_at: list.updated_at.unwrap_or_default(),
+                });
+            }
+        }
+
         let wt_id_for_serialize = worktree.as_ref().map(|w| w.id.clone());
         // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
         // (the former cross-part gap noted here is closed — see the field's
         // doc comment in `vst-types/src/events.rs`).
+        // Re-read the pin right before snapshotting: a `pin_session` landing
+        // after the locked mutation must not be lost from the announcement.
+        let latest_pin = match find_session_context(&self.store, &new_id).await {
+            Some(SessionContext::Worktree { session, .. })
+            | Some(SessionContext::Direct { session, .. }) => session.pinned_at,
+            _ => carried.clone(),
+        };
+        new_session.pinned_at = latest_pin;
         let new_session_serialized =
             serialize_session(wt_id_for_serialize.as_deref(), &project.id, &new_session);
         self.broadcaster.send(ServerEvent::SessionCreated {
@@ -3258,14 +3481,15 @@ impl SessionRoutes {
         // already be in their session list or they fall back to the project home.
         self.broadcaster.send(ServerEvent::SessionUpdated {
             session_id: old_id.clone(),
-            pinned_at: None,
+            // `Some(None)` clears the old row's pin — only when one moved.
+            pinned_at: carried.is_some().then_some(None),
             channel: None,
             name: None,
             archived_at: Some(archived_at),
             sort_order: None,
             pr: None,
             superseded_by: Some(new_id.clone()),
-            is_main: None,
+            is_main: Some(false),
             parent_session_id: None,
             worktree_id: None,
             draft_prompt: None,

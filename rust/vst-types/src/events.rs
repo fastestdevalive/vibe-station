@@ -55,8 +55,10 @@ pub enum ServerEvent {
     #[serde(rename = "session:updated", rename_all = "camelCase")]
     SessionUpdated {
         session_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pinned_at: Option<String>,
+        /// Tri-state: `None` = no change (key omitted), `Some(Some(ts))` =
+        /// pinned, `Some(None)` = cleared (serializes `"pinnedAt": null`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pinned_at: Option<Option<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         channel: Option<crate::domain::Channel>,
         #[serde(skip_serializing_if = "Option::is_none")]

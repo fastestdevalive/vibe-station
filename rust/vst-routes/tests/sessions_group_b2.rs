@@ -27,13 +27,14 @@ use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
 use vst_routes::modes::json_unsupported_cli;
 use vst_routes::sessions::{
-    find_session_context, wait_for_handoff_file, wait_for_turn_start, DoneError, DoneResult,
-    HandoffRouteError, HandoffTurnPhase, ResetError, ResumeError, SessionContext, SessionRoutes,
-    StartError,
+    find_session_context, repair_superseded_pins, wait_for_handoff_file, wait_for_turn_start,
+    DoneError, DoneResult, HandoffRouteError, HandoffTurnPhase, ResetError, ResumeError,
+    SessionContext, SessionRoutes, StartError,
 };
 use vst_routes::settings::load_default_channel_overrides;
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
+use vst_types::rest::ordered_lists::PINNED_ALL;
 use vst_types::rest::sessions::{
     HandoffResult, ResetBody, ResetResult, SessionOrDraft, StartDraftBody, StartDraftResult,
 };
@@ -499,6 +500,49 @@ async fn reset_archives_old_and_creates_new_in_worktree() {
 }
 
 #[tokio::test]
+async fn reset_broadcasts_old_row_is_main_false() {
+    // Live clients pick the PR source by `isMain`; the superseded row must be
+    // announced as no longer main or the worktree PR colour freezes on it.
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut w = make_worktree("w1");
+    let mut main = make_session("s-old", "p1");
+    main.is_main = true;
+    main.worktree_id = Some("w1".into());
+    main.channel = Some(Channel::Json);
+    main.use_tmux = false;
+    main.initial_prompt = Some("old".into());
+    w.sessions.push(main);
+    p.worktrees.push(w);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    r.reset_session("s-old", &reset_body()).await.unwrap();
+
+    let mut found = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            is_main,
+            superseded_by,
+            ..
+        } = ev
+        {
+            if session_id == "s-old" && superseded_by.is_some() {
+                found = Some(is_main);
+            }
+        }
+    }
+    assert_eq!(
+        found,
+        Some(Some(false)),
+        "old-row session:updated must carry isMain: false"
+    );
+}
+
+#[tokio::test]
 async fn reset_persists_handoff_summary_on_archived_row() {
     let (_home, _guard) = home_with_mode();
     let (_d, store) = store();
@@ -908,6 +952,384 @@ async fn reset_returns_both_ids() {
     assert_eq!(res.archived_session_id, "s1");
     assert!(!res.new_session_id.is_empty());
     assert_ne!(res.archived_session_id, res.new_session_id);
+}
+
+// ---------------------------------------------------------------------------
+// Reset carries the pin (+ pinned-all swap, event order), pin chain, repair
+// ---------------------------------------------------------------------------
+
+const PIN_TS: &str = "2026-02-02T00:00:00.000Z";
+
+/// Drain every event currently buffered on `rx`.
+fn drain(rx: &mut tokio::sync::broadcast::Receiver<ServerEvent>) -> Vec<ServerEvent> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        out.push(ev);
+    }
+    out
+}
+
+fn persisted<'a>(p: &'a ProjectRecord, id: &str) -> &'a SessionRecord {
+    p.worktrees
+        .iter()
+        .flat_map(|w| w.sessions.iter())
+        .chain(p.direct_sessions.iter())
+        .find(|s| s.id == id)
+        .unwrap_or_else(|| panic!("session {id} not persisted"))
+}
+
+#[tokio::test]
+async fn reset_carries_pin_to_replacement_in_worktree() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut w = make_worktree("w1");
+    let mut main = json_session("s-old", "p1");
+    main.is_main = true;
+    main.worktree_id = Some("w1".into());
+    main.pinned_at = Some(PIN_TS.into());
+    w.sessions.push(main);
+    p.worktrees.push(w);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let res = r.reset_session("s-old", &reset_body()).await.unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    let new = persisted(&project, &res.new_session_id);
+    let old = persisted(&project, "s-old");
+    assert_eq!(new.pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(old.pinned_at, None);
+    assert_eq!(
+        old.superseded_by.as_deref(),
+        Some(res.new_session_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn reset_carries_pin_to_replacement_direct() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = json_session("s1", "p1");
+    s.pinned_at = Some(PIN_TS.into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let res = r.reset_session("s1", &reset_body()).await.unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(
+        persisted(&project, &res.new_session_id)
+            .pinned_at
+            .as_deref(),
+        Some(PIN_TS)
+    );
+    assert_eq!(persisted(&project, "s1").pinned_at, None);
+    assert_eq!(
+        persisted(&project, "s1").superseded_by.as_deref(),
+        Some(res.new_session_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn reset_unpinned_stays_unpinned() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+    store
+        .set_ordered_list(PINNED_ALL, vec!["other".into()])
+        .await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let res = r.reset_session("s1", &reset_body()).await.unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(persisted(&project, &res.new_session_id).pinned_at, None);
+    assert_eq!(persisted(&project, "s1").pinned_at, None);
+    assert_eq!(
+        store.get_ordered_list(PINNED_ALL).await.item_ids,
+        vec!["other".to_string()]
+    );
+    let events = drain(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ServerEvent::OrderedListUpdated { .. })),
+        "unpinned reset must not touch the ordered list"
+    );
+    let upd = events
+        .iter()
+        .find_map(|e| match e {
+            ServerEvent::SessionUpdated {
+                session_id,
+                pinned_at,
+                superseded_by: Some(_),
+                ..
+            } if session_id == "s1" => Some(pinned_at.clone()),
+            _ => None,
+        })
+        .expect("old-row session:updated");
+    assert_eq!(upd, None, "no pinnedAt key when no pin moved");
+}
+
+#[tokio::test]
+async fn reset_pinned_swaps_id_and_orders_events() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = json_session("s1", "p1");
+    s.pinned_at = Some(PIN_TS.into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+    store
+        .set_ordered_list(PINNED_ALL, vec!["x".into(), "s1".into(), "y".into()])
+        .await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let res = r.reset_session("s1", &reset_body()).await.unwrap();
+    let new_id = res.new_session_id.clone();
+
+    assert_eq!(
+        store.get_ordered_list(PINNED_ALL).await.item_ids,
+        vec!["x".to_string(), new_id.clone(), "y".to_string()]
+    );
+
+    let events = drain(&mut rx);
+    let pos = |pred: &dyn Fn(&ServerEvent) -> bool| events.iter().position(|e| pred(e));
+    let list_at = pos(&|e| {
+        matches!(e, ServerEvent::OrderedListUpdated { scope_key, item_ids, .. }
+            if scope_key == PINNED_ALL && item_ids.contains(&new_id))
+    })
+    .expect("orderedList:updated");
+    let created_at = pos(&|e| match e {
+        ServerEvent::SessionCreated {
+            session_id,
+            snapshot,
+            ..
+        } => {
+            session_id == &new_id
+                && snapshot.as_ref().and_then(|s| s.pinned_at.as_deref()) == Some(PIN_TS)
+        }
+        _ => false,
+    })
+    .expect("session:created with carried pinnedAt");
+    let updated_at = pos(&|e| {
+        matches!(e, ServerEvent::SessionUpdated {
+            session_id, superseded_by: Some(_), pinned_at: Some(None), ..
+        } if session_id == "s1")
+    })
+    .expect("old-row session:updated with pinnedAt null");
+    assert!(
+        list_at < created_at && created_at < updated_at,
+        "order must be orderedList → created → updated, got {list_at}/{created_at}/{updated_at}"
+    );
+}
+
+#[tokio::test]
+async fn reset_of_a_reset_moves_pin_to_c() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = json_session("a", "p1");
+    s.pinned_at = Some(PIN_TS.into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let b = r
+        .reset_session("a", &reset_body())
+        .await
+        .unwrap()
+        .new_session_id;
+    let c = r
+        .reset_session(&b, &reset_body())
+        .await
+        .unwrap()
+        .new_session_id;
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(persisted(&project, &c).pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(persisted(&project, &b).pinned_at, None);
+    assert_eq!(persisted(&project, "a").pinned_at, None);
+}
+
+#[tokio::test]
+async fn pin_superseded_id_pins_live_head() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("a", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let b = r
+        .reset_session("a", &reset_body())
+        .await
+        .unwrap()
+        .new_session_id;
+    let mut rx = r.broadcaster.subscribe();
+    let res = r.pin_session("a", true).await.unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    let head = persisted(&project, &b);
+    assert!(head.pinned_at.is_some());
+    assert_eq!(res.pinned_at, head.pinned_at);
+    assert_eq!(persisted(&project, "a").pinned_at, None, "no second owner");
+    let ev = drain(&mut rx)
+        .into_iter()
+        .find_map(|e| match e {
+            ServerEvent::SessionUpdated {
+                session_id,
+                pinned_at,
+                ..
+            } => Some((session_id, pinned_at)),
+            _ => None,
+        })
+        .expect("pin broadcast");
+    assert_eq!(ev.0, b);
+    assert_eq!(ev.1, Some(head.pinned_at.clone()));
+}
+
+#[tokio::test]
+async fn unpin_superseded_id_unpins_head() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = json_session("a", "p1");
+    s.pinned_at = Some(PIN_TS.into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let b = r
+        .reset_session("a", &reset_body())
+        .await
+        .unwrap()
+        .new_session_id;
+    let res = r.pin_session("a", false).await.unwrap();
+    assert_eq!(res.pinned_at, None);
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(persisted(&project, &b).pinned_at, None);
+    assert_eq!(persisted(&project, "a").pinned_at, None);
+}
+
+#[tokio::test]
+async fn repair_moves_stranded_pin_to_head_idempotently() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    // a → b (b unpinned): stranded pin on hidden a.
+    let mut a = make_session("a", "p1");
+    a.archived_at = Some("2026-01-02T00:00:00.000Z".into());
+    a.superseded_by = Some("b".into());
+    a.pinned_at = Some(PIN_TS.into());
+    // c → d where d already holds its own pin: head kept, stale pin cleared.
+    let mut c = make_session("c", "p1");
+    c.archived_at = Some("2026-01-02T00:00:00.000Z".into());
+    c.superseded_by = Some("d".into());
+    c.pinned_at = Some("2026-03-03T00:00:00.000Z".into());
+    let mut d = make_session("d", "p1");
+    d.pinned_at = Some("2026-04-04T00:00:00.000Z".into());
+    // Visible pinned row with a dangling pointer: never a candidate.
+    let mut e = make_session("e", "p1");
+    e.superseded_by = Some("gone".into());
+    e.pinned_at = Some("2026-05-05T00:00:00.000Z".into());
+    p.direct_sessions
+        .extend([a, make_session("b", "p1"), c, d, e]);
+    add_project(&store, p).await;
+    store
+        .set_ordered_list(PINNED_ALL, vec!["a".into(), "d".into(), "e".into()])
+        .await;
+
+    assert!(repair_superseded_pins(&store).await.is_empty());
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(persisted(&project, "b").pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(persisted(&project, "a").pinned_at, None);
+    assert_eq!(persisted(&project, "c").pinned_at, None);
+    assert_eq!(
+        persisted(&project, "d").pinned_at.as_deref(),
+        Some("2026-04-04T00:00:00.000Z")
+    );
+    assert_eq!(
+        persisted(&project, "e").pinned_at.as_deref(),
+        Some("2026-05-05T00:00:00.000Z")
+    );
+    assert_eq!(
+        store.get_ordered_list(PINNED_ALL).await.item_ids,
+        vec!["b".to_string(), "d".to_string(), "e".to_string()]
+    );
+
+    // Second run: nothing to do, list and rows untouched.
+    let before = store.get_project("p1").await.unwrap();
+    assert!(repair_superseded_pins(&store).await.is_empty());
+    let after = store.get_project("p1").await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap()
+    );
+    assert_eq!(
+        store.get_ordered_list(PINNED_ALL).await.item_ids,
+        vec!["b".to_string(), "d".to_string(), "e".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn repair_leaves_cycles_and_overlong_chains_alone() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    // Self-cycle.
+    let mut s = make_session("s", "p1");
+    s.superseded_by = Some("s".into());
+    s.pinned_at = Some(PIN_TS.into());
+    // Two-cycle x <-> y.
+    let mut x = make_session("x", "p1");
+    x.superseded_by = Some("y".into());
+    x.pinned_at = Some(PIN_TS.into());
+    let mut y = make_session("y", "p1");
+    y.superseded_by = Some("x".into());
+    // Overlong chain: l0 -> ... -> l40 (head past the 32-hop cap).
+    let mut chain = Vec::new();
+    for i in 0..=40 {
+        let mut r = make_session(&format!("l{i}"), "p1");
+        if i < 40 {
+            r.superseded_by = Some(format!("l{}", i + 1));
+        }
+        if i == 0 {
+            r.pinned_at = Some(PIN_TS.into());
+        }
+        chain.push(r);
+    }
+    p.direct_sessions.extend([s, x, y]);
+    p.direct_sessions.extend(chain);
+    add_project(&store, p).await;
+    store
+        .set_ordered_list(PINNED_ALL, vec!["s".into(), "x".into(), "l0".into()])
+        .await;
+
+    let before = store.get_project("p1").await.unwrap();
+    assert!(repair_superseded_pins(&store).await.is_empty());
+    let after = store.get_project("p1").await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap()
+    );
+    assert_eq!(persisted(&after, "s").pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(persisted(&after, "x").pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(persisted(&after, "l0").pinned_at.as_deref(), Some(PIN_TS));
+    assert_eq!(persisted(&after, "l40").pinned_at, None);
+
+    // Idempotent.
+    assert!(repair_superseded_pins(&store).await.is_empty());
+    assert_eq!(
+        store.get_ordered_list(PINNED_ALL).await.item_ids,
+        vec!["s".to_string(), "x".to_string(), "l0".to_string()]
+    );
 }
 
 // ---------------------------------------------------------------------------

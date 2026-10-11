@@ -2689,6 +2689,82 @@ describe("LeftSidebar - global Workspaces section", () => {
   });
 
   describe("superseded sessions visibility", () => {
+    const rollupSessions = (liveState: "done" | "idle", oldState: "exited" | "working") => [
+      {
+        id: "sess-live",
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        modeId: null,
+        type: "agent" as const,
+        name: "live-agent",
+        isMain: true,
+        state: liveState,
+        lifecycleState: liveState,
+        tmuxName: "sess-live",
+        createdAt: new Date().toISOString(),
+        sortOrder: 1,
+        supersededBy: null,
+      },
+      {
+        id: "sess-old",
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        modeId: null,
+        type: "agent" as const,
+        name: "old-agent",
+        isMain: false,
+        state: oldState,
+        lifecycleState: oldState,
+        tmuxName: "sess-old",
+        createdAt: new Date(0).toISOString(),
+        sortOrder: 2,
+        supersededBy: "sess-live",
+      },
+    ];
+
+    it("2.T3 — hides a worktree under Hide done when only a superseded exited row is not done", async () => {
+      useWorkspaceStore.setState({ hideInactiveWorktrees: true });
+      const localApi = createMockApi({ sessions: rollupSessions("done", "exited") });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+      expect(screen.queryByRole("link", { name: /^Open worktree wt-1$/i })).toBeNull();
+    });
+
+    it("2.T3 — positive control: same data with Hide done off renders the worktree link", async () => {
+      useWorkspaceStore.setState({ hideInactiveWorktrees: false });
+      const localApi = createMockApi({ sessions: rollupSessions("done", "exited") });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      expect(await screen.findByRole("link", { name: /^Open worktree wt-1$/i })).toBeInTheDocument();
+    });
+
+    it("2.T3 — worktree dot shows the replacement's status, not the superseded row's", async () => {
+      const localApi = createMockApi({ sessions: rollupSessions("idle", "working") });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /^Open worktree wt-1$/i });
+      const row = link.closest(".tree-row") as HTMLElement;
+      expect(within(row).getByLabelText("status: idle")).toBeInTheDocument();
+      expect(within(row).queryByLabelText("status: working")).toBeNull();
+    });
+
     it("renders only the live agent when a worktree has a live agent and a superseded agent", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi({

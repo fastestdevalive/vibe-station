@@ -412,6 +412,11 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         tracing::warn!("[vst] mode-icon backfill failed (non-fatal): {failure}");
     }
 
+    // Move pins stranded on hidden superseded (reset) rows to the live head.
+    for failure in vst_routes::sessions::repair_superseded_pins(&store).await {
+        tracing::warn!("[vst] superseded-pin repair failed (non-fatal): {failure}");
+    }
+
     // ── Boot recovery ─────────────────────────────────────────────────────────
     let tmux = Tmux::new();
     let direct_pty = DirectPtyRegistry::new();

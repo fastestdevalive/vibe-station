@@ -1,4 +1,5 @@
 import type { PrStatus, Session } from "@/api/types";
+import { excludeSuperseded } from "@/lib/sessionVisibility";
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
 /**
@@ -15,7 +16,7 @@ import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
  * switch must never show a stale PR colour before the next poll tick).
  */
 export function worktreePrStatus(sessions: Session[], currentBranch: string): PrStatus | null {
-  const main = sessions.find((s) => s.isMain);
+  const main = excludeSuperseded(sessions).find((s) => s.isMain);
   const pr = main?.pr;
   if (!pr) return null;
   if (pr.prBranch !== currentBranch) return null;

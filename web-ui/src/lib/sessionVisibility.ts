@@ -70,6 +70,17 @@ export function isSupersededSession(s: Session, byId: ReadonlyMap<string, Sessio
   return s.supersededBy != null && byId.has(s.supersededBy);
 }
 
+/**
+ * Drop sessions that are superseded by a replacement present in `sessions`.
+ * Shared by the status rollups so a hidden superseded row never drives a
+ * worktree dot / "Hide done". Resolves against the list it is GIVEN; a
+ * dangling `supersededBy` keeps the session. Pure — does not mutate input.
+ */
+export function excludeSuperseded(sessions: Session[]): Session[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  return sessions.filter((s) => !isSupersededSession(s, byId));
+}
+
 /** True iff `s` is an agent session that belongs in the tab strip. */
 export function isTabVisibleAgent(s: Session): boolean {
   return s.type === "agent" && s.supersededBy == null;

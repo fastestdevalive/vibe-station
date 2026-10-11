@@ -4,6 +4,7 @@ import { createMockApi } from "@/api/mock";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useServerSync } from "./useServerSync";
+import { worktreePrStatus } from "@/lib/statusColor";
 import { useServerStore } from "./useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "./useStore";
 
@@ -106,6 +107,38 @@ describe("useServerSync — session:updated reconciliation", () => {
     const after = useServerStore.getState().sessions.find((x) => x.id === "sess-main");
     expect(after?.name).toBe(before?.name);
     expect(after?.archivedAt).toBe(before?.archivedAt);
+  });
+
+  it("2.T1 — pinnedAt: null clears a pin; supersededBy also clears it", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    const pinned = () => useServerStore.getState().sessions.find((x) => x.id === "sess-main")?.pinnedAt;
+
+    act(() => {
+      api.__test.emit({ type: "session:updated", sessionId: "sess-main", pinnedAt: "2026-01-01T00:00:00.000Z" });
+    });
+    await waitFor(() => expect(pinned()).toBe("2026-01-01T00:00:00.000Z"));
+
+    act(() => {
+      api.__test.emit({ type: "session:updated", sessionId: "sess-main", pinnedAt: null });
+    });
+    await waitFor(() => expect(pinned()).toBeNull());
+
+    act(() => {
+      api.__test.emit({ type: "session:updated", sessionId: "sess-main", pinnedAt: "2026-01-02T00:00:00.000Z" });
+    });
+    await waitFor(() => expect(pinned()).toBe("2026-01-02T00:00:00.000Z"));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        supersededBy: "sess-new",
+        archivedAt: "2026-01-03T00:00:00.000Z",
+      });
+    });
+    await waitFor(() => expect(pinned()).toBeNull());
   });
 });
 
@@ -801,6 +834,58 @@ describe("useServerSync — Phase 2 prune ghost tiles on refetch", () => {
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
     expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+  });
+  it("reset: worktreePrStatus follows the replacement's pr once the old row is isMain:false", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    const base = useServerStore.getState().sessions.find((x) => x.id === "sess-main")!;
+    const branch = "feat-reset";
+    act(() => {
+      useServerStore.setState({
+        sessions: useServerStore
+          .getState()
+          .sessions.map((s) =>
+            s.id === "sess-main"
+              ? { ...s, isMain: true, pr: { state: "merged", checkedAt: "t", prBranch: branch } }
+              : s,
+          ),
+      });
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "sess-new",
+        worktreeId: base.worktreeId,
+        projectId: base.projectId,
+        sessionType: "agent",
+        snapshot: {
+          ...base,
+          id: "sess-new",
+          isMain: true,
+          supersededBy: null,
+          archivedAt: null,
+          pr: { state: "open", checkedAt: "t", prBranch: branch },
+        },
+      });
+      api.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        archivedAt: "2026-01-01T00:00:00.000Z",
+        supersededBy: "sess-new",
+        isMain: false,
+      });
+    });
+
+    await waitFor(() => {
+      const wtSessions = useServerStore
+        .getState()
+        .sessions.filter((s) => s.worktreeId === base.worktreeId);
+      expect(wtSessions.find((s) => s.id === "sess-main")?.isMain).toBe(false);
+      expect(worktreePrStatus(wtSessions, branch)?.state).toBe("open");
+    });
   });
 });
 

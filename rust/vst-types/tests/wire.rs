@@ -168,6 +168,31 @@ fn session_updated_omits_unchanged_optionals() {
 }
 
 #[test]
+fn session_updated_pinned_at_is_tri_state() {
+    let mk = |pinned_at: Option<Option<String>>| ServerMessage::SessionUpdated {
+        session_id: "s".into(),
+        pinned_at,
+        channel: None,
+        name: None,
+        archived_at: None,
+        sort_order: None,
+        pr: None,
+        superseded_by: None,
+        is_main: None,
+        parent_session_id: None,
+        worktree_id: None,
+        draft_prompt: None,
+        draft_config: None,
+    };
+    let v = serde_json::to_value(mk(Some(None))).unwrap();
+    assert_eq!(v.get("pinnedAt"), Some(&serde_json::Value::Null));
+    let v = serde_json::to_value(mk(None)).unwrap();
+    assert!(!v.as_object().unwrap().contains_key("pinnedAt"));
+    let v = serde_json::to_value(mk(Some(Some("t".into())))).unwrap();
+    assert_eq!(v.get("pinnedAt").unwrap(), "t");
+}
+
+#[test]
 fn session_updated_delink_serializes_parent_session_id_null() {
     let msg = ServerMessage::SessionUpdated {
         session_id: "s-child".into(),

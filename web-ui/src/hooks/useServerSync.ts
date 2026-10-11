@@ -397,6 +397,9 @@ export function useServerSync(api: ApiInstance): void {
         if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
         if (ev.pr !== undefined) patch.pr = ev.pr ?? undefined;
         if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
+        // A superseded row never holds a pin (the daemon moves it to the replacement);
+        // belt-and-braces for an older daemon / event ordering.
+        if (ev.supersededBy) patch.pinnedAt = null;
         if (ev.isMain !== undefined) patch.isMain = ev.isMain;
         if (ev.parentSessionId === null) patch.parentSessionId = null;
         if (ev.worktreeId !== undefined) patch.worktreeId = ev.worktreeId ?? null;

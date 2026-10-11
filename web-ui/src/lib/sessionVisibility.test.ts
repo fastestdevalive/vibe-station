@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Session } from "@/api/types";
 import {
   compareTabOrder,
+  excludeSuperseded,
   isSupersededSession,
   isTabVisibleAgent,
   listPredecessors,
@@ -280,5 +281,24 @@ describe("pickNextDirectAgent", () => {
 
   it("works when sessions is post-deletion (closed absent)", () => {
     expect(pickNextDirectAgent(["a", "b", "c"], c, [a, b])).toBe("b");
+  });
+});
+
+describe("excludeSuperseded", () => {
+  it("drops superseded-with-replacement, keeps dangling and plain sessions", () => {
+    const old = agent("old", { supersededBy: "new" });
+    const next = agent("new");
+    const dangling = agent("dangling", { supersededBy: "gone" });
+    const plain = agent("plain");
+    const input = [old, next, dangling, plain];
+    expect(excludeSuperseded(input).map((s) => s.id)).toEqual(["new", "dangling", "plain"]);
+  });
+
+  it("does not mutate its input", () => {
+    const input = [agent("old", { supersededBy: "new" }), agent("new")];
+    const copy = [...input];
+    excludeSuperseded(input);
+    expect(input).toEqual(copy);
+    expect(input).toHaveLength(2);
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach } from "vitest";
@@ -7,6 +7,7 @@ import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
 import { DashboardPanel, bucketForRollup, useSessionBuckets } from "./DashboardPanel";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerSync } from "@/hooks/useServerSync";
 import { useModesStore } from "@/store/modesStore";
 
@@ -731,6 +732,48 @@ describe("DashboardPanel", () => {
       expect(projLink).not.toBeNull();
       expect(projLink).toHaveClass("dashboard-card--project");
     });
+  });
+
+  it("project card's active count uses live sessionStates, agent sessions only", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    const link = await waitFor(() => {
+      const el = document.querySelector('a[href="/project/proj-a"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    const wtIds = new Set(
+      useServerStore.getState().worktrees.filter((w) => w.projectId === "proj-a").map((w) => w.id),
+    );
+    const agents = useServerStore
+      .getState()
+      .sessions.filter((s) => s.worktreeId && wtIds.has(s.worktreeId) && s.type === "agent");
+    expect(agents.length).toBeGreaterThan(0);
+
+    // Live map says every agent is done → no "active" suffix, even if the
+    // record's own `.state` is working/idle.
+    act(() => {
+      useWorkspaceStore.setState({
+        sessionStates: Object.fromEntries(agents.map((s) => [s.id, "done"])),
+      });
+    });
+    await waitFor(() => expect(link.textContent).not.toMatch(/active/));
+
+    // One agent goes live → exactly one worktree counts as active.
+    act(() => {
+      useWorkspaceStore.setState({
+        sessionStates: Object.fromEntries(
+          agents.map((s, i) => [s.id, i === 0 ? "working" : "done"]),
+        ),
+      });
+    });
+    await waitFor(() => expect(link.textContent).toMatch(/1 active/));
   });
 
   it("renders kanban column headers with minimal icons, uncapitalized labels, and counts without brackets", async () => {

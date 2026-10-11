@@ -40,7 +40,7 @@ import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
-import { pickNextDirectAgent, isSupersededSession } from "@/lib/sessionVisibility";
+import { pickNextDirectAgent, isSupersededSession, excludeSuperseded } from "@/lib/sessionVisibility";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
@@ -190,7 +190,7 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
 }
 
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
-  const agents = sessions.filter((s) => s.type === "agent");
+  const agents = excludeSuperseded(sessions).filter((s) => s.type === "agent");
   if (agents.length === 0) return true;
   // "Hide done" hides only worktrees the user explicitly marked done — NOT
   // `exited`. Exited is involuntary (agent crashed, tmux pane died, or the

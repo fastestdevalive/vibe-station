@@ -76,3 +76,32 @@ describe("worktreeRolledUpStatus", () => {
     expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
   });
 });
+
+describe("worktreeRolledUpStatus — superseded sessions", () => {
+  const superseded = (id: string, state: Session["state"], by: string): Session => ({
+    ...sess(id, state),
+    isMain: false,
+    supersededBy: by,
+  });
+
+  it("ignores a superseded working row when its replacement exists", () => {
+    const sessions = [superseded("old", "working", "new"), sess("new", "idle")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("idle");
+  });
+
+  it("lets a done replacement win over a superseded exited row", () => {
+    const sessions = [superseded("old", "exited", "new"), sess("new", "done")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("done");
+  });
+
+  it("still counts a row whose supersededBy dangles", () => {
+    const sessions = [superseded("old", "working", "gone")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("working");
+  });
+
+  it("ignores the live-map value of a superseded row", () => {
+    const sessions = [superseded("old", "idle", "new"), sess("new", "done")];
+    const live = { old: "working" } as Record<string, SessionState>;
+    expect(worktreeRolledUpStatus(sessions, live)).toBe("done");
+  });
+});

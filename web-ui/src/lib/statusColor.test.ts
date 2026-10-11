@@ -115,3 +115,22 @@ describe("worktreePrStatus (D20 — branch-keyed)", () => {
     expect(worktreePrStatus(sessions, "feature-x")).toBeNull();
   });
 });
+
+describe("worktreePrStatus — superseded backstop", () => {
+  it("ignores a superseded isMain row when its replacement is in the list", () => {
+    const old = session({ id: "old", isMain: true, supersededBy: "new", pr: pr("merged") });
+    const next = session({ id: "new", isMain: true, pr: pr("open") });
+    expect(worktreePrStatus([old, next], "feature-x")?.state).toBe("open");
+  });
+
+  it("ignores a superseded isMain row (no PR from it) when replacement has no PR", () => {
+    const old = session({ id: "old", isMain: true, supersededBy: "new", pr: pr("merged") });
+    const next = session({ id: "new", isMain: true });
+    expect(worktreePrStatus([old, next], "feature-x")).toBeNull();
+  });
+
+  it("still counts a dangling supersededBy (replacement missing)", () => {
+    const old = session({ id: "old", isMain: true, supersededBy: "gone", pr: pr("merged") });
+    expect(worktreePrStatus([old], "feature-x")?.state).toBe("merged");
+  });
+});

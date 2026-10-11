@@ -1,4 +1,5 @@
 import type { Session, SessionState } from "@/api/types";
+import { excludeSuperseded } from "@/lib/sessionVisibility";
 
 export type WorktreeRolledUpStatus =
   | "waiting_for_human"
@@ -57,12 +58,16 @@ export function sessionStatus(state: SessionState): WorktreeRolledUpStatus {
  * Only agent sessions contribute. Terminal sessions don't have user-meaningful
  * lifecycle states — including them lets a transiently-idle terminal dominate
  * a fully-done worktree (idle outranks done in the rollup).
+ *
+ * Superseded sessions (reset replaced them, replacement present in `sessions`)
+ * are hidden everywhere, so they contribute nothing; a dangling `supersededBy`
+ * still counts.
  */
 export function worktreeRolledUpStatus(
   sessions: Session[],
   live: Record<string, SessionState>,
 ): WorktreeRolledUpStatus {
-  const agents = sessions.filter((s) => s.type === "agent");
+  const agents = excludeSuperseded(sessions).filter((s) => s.type === "agent");
   if (agents.length === 0) return "none";
 
   let best: WorktreeRolledUpStatus = "none";

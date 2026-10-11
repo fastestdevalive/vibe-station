@@ -678,7 +678,11 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
                 const wts = worktrees.filter((w) => w.projectId === p.id);
                 const activeCount = wts.filter((w) =>
                   sessions.some(
-                    (s) => s.worktreeId === w.id && (s.state === "working" || s.state === "idle"),
+                    (s) =>
+                      s.worktreeId === w.id &&
+                      s.type === "agent" &&
+                      s.archivedAt == null &&
+                      ["working", "idle"].includes(sessionStates[s.id] ?? s.state),
                   ),
                 ).length;
                 const href = `/project/${p.id}`;

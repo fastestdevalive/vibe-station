@@ -132,6 +132,23 @@ done.
 | Agent pane border | `AgentPaneSlot.tsx` | single session, so no rollup |
 | VCS panel PR pill | `workspace.css` `.vcs-pr--*` | must use the same `--pr-*` tokens |
 
+### Superseded sessions are excluded from rollups
+
+- `worktreeRolledUpStatus` and the sidebar's `worktreeIsInactive` ("Hide done") ignore a session
+  that is **superseded with its replacement present** (`supersededBy != null` AND that id exists in
+  the list the rollup is given). Reset hides the old row everywhere, so it must not drive a
+  worktree/project dot or block a worktree from being "inactive".
+- One shared helper: `excludeSuperseded()` in `web-ui/src/lib/sessionVisibility.ts`, applied inside
+  those two functions — callers of `worktreeRolledUpStatus`/`worktreeIsInactive` (sidebar,
+  `CollapsedProjectRail`, canvas) need no per-site filter. **Hand-rolled rollups do:**
+  `StorageSetting.isWorktreeDone` and its status dot call `excludeSuperseded` themselves.
+- The lookup is per list given (per worktree / per project); equivalent to the sidebar's global
+  lookup because reset never moves a session across worktrees/projects.
+- A **dangling** `supersededBy` (replacement deleted) still counts — the row is visible again.
+- `done` / `archived` semantics are unchanged; superseded rows are never `isMain` (reset
+  broadcasts `isMain: false` on the old row), and `worktreePrStatus` also excludes them via
+  `excludeSuperseded()` as a backstop, so the worktree PR colour/bucket follows the replacement.
+
 ## Per-session vs per-worktree
 
 - The **dot** is always per session.

@@ -4,6 +4,7 @@ import type { DiskUsageResponse, Session, Worktree } from "@/api/types";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { sessionStatus } from "@/lib/worktreeStatus";
+import { excludeSuperseded } from "@/lib/sessionVisibility";
 
 interface StorageSettingProps {
   api: ApiInstance;
@@ -21,8 +22,9 @@ function formatBytes(n: number): string {
 }
 
 function isWorktreeDone(wt: Worktree, sessions: Session[]): boolean {
-  if (sessions.length === 0) return true;
-  return sessions.every((s) =>
+  const visible = excludeSuperseded(sessions);
+  if (visible.length === 0) return true;
+  return visible.every((s) =>
     s.type === "agent"
       ? s.state === "done"
       : s.state === "done" || s.state === "exited",
@@ -282,8 +284,11 @@ export function StorageSetting({ api }: StorageSettingProps) {
         {sorted.map((wt) => {
           const done = doneMap[wt.id] ?? false;
           const bytes = diskMap[wt.id] ?? 0;
-          const wtSessions = sessionsByWorktree[wt.id] ?? [];
-          const mainSession = wtSessions.find((s) => s.type === "agent") ?? wtSessions[0];
+          const wtSessions = excludeSuperseded(sessionsByWorktree[wt.id] ?? []);
+          const mainSession =
+            wtSessions.find((s) => s.type === "agent" && s.isMain) ??
+            wtSessions.find((s) => s.type === "agent") ??
+            wtSessions[0];
           const status = mainSession ? sessionStatus(mainSession.state) : "none";
 
           return (

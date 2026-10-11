@@ -916,6 +916,30 @@ async fn pin_toggles_and_is_idempotent() {
 }
 
 #[tokio::test]
+async fn pin_broadcasts_tri_state_pinned_at() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let pin = r.pin_session("s1", true).await.unwrap();
+    match rx.recv().await.unwrap() {
+        ServerEvent::SessionUpdated { pinned_at, .. } => {
+            assert_eq!(pinned_at, Some(pin.pinned_at.clone()));
+            assert!(matches!(pinned_at, Some(Some(_))));
+        }
+        other => panic!("expected session:updated, got {other:?}"),
+    }
+    r.pin_session("s1", false).await.unwrap();
+    match rx.recv().await.unwrap() {
+        ServerEvent::SessionUpdated { pinned_at, .. } => assert_eq!(pinned_at, Some(None)),
+        other => panic!("expected session:updated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn pin_missing_404() {
     let (_d, store) = store();
     let r = routes(store.clone());

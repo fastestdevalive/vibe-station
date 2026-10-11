@@ -60,6 +60,7 @@ import type {
   Worktree,
 } from "./types";
 import { ApiError } from "./errors";
+import { resolveSupersededChain } from "@/lib/sessionVisibility";
 import type { ConnectionState } from "./client";
 
 function nowIso() {
@@ -906,8 +907,11 @@ export function createMockApi(seed: MockSeed = {}) {
     async pinSession(id: string, pinned: boolean): Promise<{ ok: true; pinnedAt: string | null }> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("not found", 404);
-      s.pinnedAt = pinned ? new Date(0).toISOString() : null;
-      return { ok: true, pinnedAt: s.pinnedAt };
+      // Like the daemon: a superseded id acts on the live head of its chain.
+      const head = sessions.find((x) => x.id === resolveSupersededChain(id, sessions)) ?? s;
+      head.pinnedAt = pinned ? new Date(0).toISOString() : null;
+      emit({ type: "session:updated", sessionId: head.id, pinnedAt: head.pinnedAt });
+      return { ok: true, pinnedAt: head.pinnedAt };
     },
 
     async renameSession(id: string, name: string): Promise<{ ok: true; name: string | null }> {
@@ -940,10 +944,25 @@ export function createMockApi(seed: MockSeed = {}) {
       const archivedAt = nowIso();
       const handoffSummary = body?.handoff ? "Mock handoff summary." : null;
       const newId = `sess-${Date.now()}`; // moved up from below the emit — supersededBy needs this before the emit
+      // Capture BEFORE nulling the old row / cloning: the pin follows the conversation.
+      const carriedPin = s.pinnedAt ?? null;
       s.archivedAt = archivedAt;
       s.handoffSummary = handoffSummary;
       s.supersededBy = newId;
-      emit({ type: "session:updated", sessionId: id, archivedAt, supersededBy: newId });
+      s.pinnedAt = null;
+
+      // Daemon order: pinned-all swap first, so the replacement lands in the old slot.
+      if (carriedPin) {
+        const list = orderedLists.get("pinned-all");
+        if (list?.itemIds.includes(id)) {
+          const itemIds = list.itemIds.includes(newId)
+            ? list.itemIds.filter((x) => x !== id)
+            : list.itemIds.map((x) => (x === id ? newId : x));
+          const updatedAt = nowIso();
+          orderedLists.set("pinned-all", { itemIds, updatedAt });
+          emit({ type: "orderedList:updated", scopeKey: "pinned-all", itemIds: [...itemIds], updatedAt });
+        }
+      }
 
       const newSession: Session = {
         ...structuredClone(s), // NOTE: this spreads `s`, which now HAS supersededBy: newId set above —
@@ -954,9 +973,12 @@ export function createMockApi(seed: MockSeed = {}) {
         createdAt: nowIso(),
         archivedAt: null,
         handoffSummary: null,
-        pinnedAt: null,
+        pinnedAt: carriedPin,
         supersededBy: null, // MUST override the spread, see NOTE above
       };
+      // The replacement inherits main-ness; the superseded row never stays isMain
+      // (daemon stores is_main=false on it and broadcasts that).
+      s.isMain = false;
       sessions.push(newSession);
       emit({
         type: "session:created",
@@ -966,6 +988,15 @@ export function createMockApi(seed: MockSeed = {}) {
         sessionType: newSession.type,
         mode: typeof newSession.modeId === "string" ? newSession.modeId : undefined,
         snapshot: newSession,
+      });
+      // Old row last (daemon order: orderedList swap -> created -> old updated).
+      emit({
+        type: "session:updated",
+        sessionId: id,
+        archivedAt,
+        supersededBy: newId,
+        isMain: false,
+        ...(carriedPin ? { pinnedAt: null } : {}),
       });
 
       return { ok: true, archivedSessionId: id, newSessionId: newId };
