@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { LimitSlotRef, LimitWindow } from "@/api/types";
 import {
   ariaLabel,
+  cadenceBadge,
   cadenceLabel,
   chipView,
+  compactResetCountdown,
+  formatLocalResetTime,
   harnessLabel,
   nextSlots,
   resetCountdown,
@@ -53,7 +56,7 @@ describe("nextSlots", () => {
 
 describe("cadenceLabel", () => {
   it.each([
-    [300, "5h"],
+    [300, "Rolling hours"],
     [10080, "wk"],
     [43200, "mo"],
     [1440, "1d"],
@@ -65,6 +68,17 @@ describe("cadenceLabel", () => {
   });
 });
 
+describe("cadenceBadge", () => {
+  it.each([
+    [300, "hr"],
+    [10080, "wk"],
+    [43200, "mo"],
+    [null, ""],
+  ] as const)("cadenceBadge(%s) === %s", (mins, expected) => {
+    expect(cadenceBadge(mins)).toBe(expected);
+  });
+});
+
 describe("resetCountdown", () => {
   it("null → —", () => {
     expect(resetCountdown(null, 0)).toBe("—");
@@ -72,10 +86,73 @@ describe("resetCountdown", () => {
   it("past → reset", () => {
     expect(resetCountdown(new Date(1000).toISOString(), 2000)).toBe("reset");
   });
-  it("130 min → in 2h 10m", () => {
+  it("130 min → resets in 2h 10m", () => {
     const now = new Date("2026-01-01T00:00:00Z").getTime();
     const target = now + 130 * 60 * 1000;
-    expect(resetCountdown(new Date(target).toISOString(), now)).toBe("in 2h 10m");
+    expect(resetCountdown(new Date(target).toISOString(), now)).toBe("resets in 2h 10m");
+  });
+});
+
+describe("compactResetCountdown", () => {
+  it("null → empty", () => {
+    expect(compactResetCountdown(null, 0)).toBe("");
+  });
+  it("past → reset", () => {
+    expect(compactResetCountdown(new Date(1000).toISOString(), 2000)).toBe("reset");
+  });
+  it("15 min → ↻ 15m", () => {
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    const target = now + 15 * 60 * 1000;
+    expect(compactResetCountdown(new Date(target).toISOString(), now)).toBe("↻ 15m");
+  });
+  it("130 min → ↻ 2h 10m", () => {
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    const target = now + 130 * 60 * 1000;
+    expect(compactResetCountdown(new Date(target).toISOString(), now)).toBe("↻ 2h 10m");
+  });
+  it("120 min (exact hour) → ↻ 2h", () => {
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    const target = now + 120 * 60 * 1000;
+    expect(compactResetCountdown(new Date(target).toISOString(), now)).toBe("↻ 2h");
+  });
+  it("3 days → ↻ 3d", () => {
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    const target = now + 3 * 24 * 60 * 60 * 1000;
+    expect(compactResetCountdown(new Date(target).toISOString(), now)).toBe("↻ 3d");
+  });
+});
+
+describe("formatLocalResetTime", () => {
+  it("null or invalid or past → null", () => {
+    expect(formatLocalResetTime(null, 0)).toBeNull();
+    expect(formatLocalResetTime("not-a-date", 0)).toBeNull();
+    expect(formatLocalResetTime(new Date(1000).toISOString(), 2000)).toBeNull();
+  });
+
+  it("same calendar day → local time string", () => {
+    const now = new Date(2026, 0, 1, 10, 0, 0).getTime();
+    const target = new Date(2026, 0, 1, 14, 30, 0);
+    const result = formatLocalResetTime(target.toISOString(), now);
+    const expected = target.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    expect(result).toBe(expected);
+  });
+
+  it("within 6 days → weekday + time", () => {
+    const now = new Date(2026, 0, 1, 10, 0, 0).getTime();
+    const target = new Date(2026, 0, 3, 14, 30, 0);
+    const result = formatLocalResetTime(target.toISOString(), now);
+    const weekday = target.toLocaleDateString([], { weekday: "short" });
+    const time = target.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    expect(result).toBe(`${weekday} ${time}`);
+  });
+
+  it("further out (>= 6 days) → month + day + time", () => {
+    const now = new Date(2026, 0, 1, 10, 0, 0).getTime();
+    const target = new Date(2026, 0, 20, 14, 30, 0);
+    const result = formatLocalResetTime(target.toISOString(), now);
+    const dateStr = target.toLocaleDateString([], { month: "short", day: "numeric" });
+    const time = target.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    expect(result).toBe(`${dateStr}, ${time}`);
   });
 });
 

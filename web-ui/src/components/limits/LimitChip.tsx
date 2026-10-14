@@ -1,7 +1,15 @@
 import type { Ref } from "react";
 import type { LimitWindow } from "@/api/types";
 import { ModeIcon } from "@/components/agent/ModeIcon";
-import { ariaLabel, cadenceFromWindowId, cadenceLabel, chipView, resetCountdown } from "./limitsModel";
+import {
+  ariaLabel,
+  cadenceBadge,
+  cadenceFromWindowId,
+  chipView,
+  compactResetCountdown,
+  isResetImminent,
+  resetCountdown,
+} from "./limitsModel";
 
 interface LimitChipProps {
   harness: string;
@@ -20,8 +28,12 @@ interface LimitChipProps {
   fallbackWindowId?: string;
 }
 
-const RING_R = 7;
+const RING_R = 7.5;
 const RING_C = 2 * Math.PI * RING_R;
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
 
 /** Tooltip for the bar chip: reset time, plus an as-of note when dimmed, plus
  *  a reason when the window has one. */
@@ -32,7 +44,7 @@ function tooltipText(
 ): string {
   const parts: string[] = [];
   if (window?.resetsAt) {
-    parts.push(view.kind === "reset" ? "Reset" : `Resets ${resetCountdown(window.resetsAt, nowMs)}`);
+    parts.push(view.kind === "reset" ? "Reset" : capitalize(resetCountdown(window.resetsAt, nowMs)));
   }
   if (view.dim && view.asOfLabel) parts.push(`as of ${view.asOfLabel}`);
   if (view.reason) parts.push(view.reason);
@@ -67,43 +79,62 @@ export function LimitChip({
     .join(" ");
 
   const pctText = view.kind === "nodata" ? "—" : view.pctText;
+  const isPercentView = view.kind === "ok" || view.kind === "warn" || view.kind === "limit";
+  const pctDisplay = !isBar && isPercentView ? `${pctText} used` : pctText;
 
   const label = ariaLabel(harness, window, view, nowMs);
+
+  const ringText = cadenceBadge(cadence);
+
+  const showImminentCountdown = isBar && isResetImminent(window?.resetsAt, nowMs);
 
   const inner = (
     <>
       <ModeIcon iconKey={harness} channel="json" size={12} />
       <svg
         className="limit-chip__ring"
-        width="16"
-        height="16"
-        viewBox="0 0 16 16"
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
         aria-hidden="true"
       >
         <circle
           className="limit-chip__ring-track"
-          cx="8"
-          cy="8"
+          cx="9"
+          cy="9"
           r={RING_R}
           fill="none"
           strokeWidth="1.5"
         />
         <circle
           className="limit-chip__ring-arc"
-          cx="8"
-          cy="8"
+          cx="9"
+          cy="9"
           r={RING_R}
           fill="none"
           strokeWidth="1.5"
           strokeDasharray={dash}
           strokeLinecap="round"
-          transform="rotate(-90 8 8)"
+          transform="rotate(-90 9 9)"
         />
+        {ringText && (
+          <text
+            className="limit-chip__ring-text"
+            x="9"
+            y="9"
+            textAnchor="middle"
+            dominantBaseline="central"
+          >
+            {ringText}
+          </text>
+        )}
       </svg>
-      {(view.kind !== "nodata" || cadence != null) && (
-        <span className="limit-chip__cadence">{cadenceLabel(cadence)}</span>
+      <span className="limit-chip__pct">{pctDisplay}</span>
+      {showImminentCountdown && (
+        <span className="limit-chip__countdown">
+          {compactResetCountdown(window?.resetsAt ?? null, nowMs)}
+        </span>
       )}
-      <span>{pctText}</span>
       {view.glyph && <span className="limit-chip__glyph" aria-hidden="true">{view.glyph}</span>}
     </>
   );

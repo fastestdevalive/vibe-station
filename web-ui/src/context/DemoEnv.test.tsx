@@ -31,7 +31,7 @@ describe('DemoEnv Context', () => {
   it('respects provided values', () => {
      const dummyElement = document.createElement('div');
      const customEnv = { demo: true, viewport: { w: 100, h: 200 }, scale: 2, portalRoot: dummyElement, eventRoot: dummyElement };
-     const wrapper = ({ children }: any) => <DemoEnvProvider value={customEnv}>{children}</DemoEnvProvider>;
+     const wrapper = ({ children }: { children: React.ReactNode }) => <DemoEnvProvider value={customEnv}>{children}</DemoEnvProvider>;
      
      const { result: rootResult } = renderHook(() => usePortalRoot(), { wrapper });
      expect(rootResult.current).toBe(dummyElement);

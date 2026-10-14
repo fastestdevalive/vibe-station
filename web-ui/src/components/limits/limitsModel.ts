@@ -41,6 +41,7 @@ export function cadenceFromWindowId(windowId: string | undefined): number | null
 
 export function cadenceLabel(minutes: number | null): string {
   if (minutes === null) return "limit";
+  if (minutes === 300) return "Rolling hours";
   if (minutes < 60) return `${minutes}m`;
   if (minutes === 10080) return "wk";
   if (minutes >= 40320 && minutes <= 44640) return "mo";
@@ -49,22 +50,97 @@ export function cadenceLabel(minutes: number | null): string {
   return `${Math.round(minutes / 60)}h`;
 }
 
-/** "in 12m" / "in 2h 10m" / "in 21d" countdown from `resetsAt`; "—" if null;
- *  "reset" if already past. */
+/** Short 1-2 char badge for the center of the circular progress bar. */
+export function cadenceBadge(minutes: number | null): string {
+  if (minutes === null) return "";
+  if (minutes === 300) return "hr";
+  if (minutes === 10080) return "wk";
+  if (minutes >= 40320 && minutes <= 44640) return "mo";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${Math.round(minutes / 60)}h`;
+}
+
+/** "resets in 12m" / "resets in 2h 10m" / "resets in 21d" countdown from `resetsAt`; "—" if null;
+ *  "reset" if already past. Used in popup dialog rows. */
 export function resetCountdown(resetsAt: string | null, nowMs: number): string {
   if (!resetsAt) return "—";
   const target = new Date(resetsAt).getTime();
   const diffMs = target - nowMs;
   if (diffMs <= 0) return "reset";
   const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 60) return `in ${diffMin}m`;
+  if (diffMin < 60) return `resets in ${diffMin}m`;
   if (diffMin < 48 * 60) {
     const h = Math.floor(diffMin / 60);
     const m = diffMin % 60;
-    return m === 0 ? `in ${h}h` : `in ${h}h ${m}m`;
+    return m === 0 ? `resets in ${h}h` : `resets in ${h}h ${m}m`;
   }
   const d = Math.floor(diffMin / (60 * 24));
-  return `in ${d}d`;
+  return `resets in ${d}d`;
+}
+
+/** Compact countdown for the bottom status bar: "↻ 12m" / "↻ 2h 10m" / "↻ 21d"
+ *  (uses the cycle symbol ↻ to keep the bar compact). */
+export function compactResetCountdown(resetsAt: string | null, nowMs: number): string {
+  if (!resetsAt) return "";
+  const target = new Date(resetsAt).getTime();
+  const diffMs = target - nowMs;
+  if (diffMs <= 0) return "reset";
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `↻ ${diffMin}m`;
+  if (diffMin < 48 * 60) {
+    const h = Math.floor(diffMin / 60);
+    const m = diffMin % 60;
+    return m === 0 ? `↻ ${h}h` : `↻ ${h}h ${m}m`;
+  }
+  const d = Math.floor(diffMin / (60 * 24));
+  return `↻ ${d}d`;
+}
+
+/** Format the exact local end time for popup rows.
+ *  - Same calendar day: "2:41 AM"
+ *  - Within 6 days: "Wed 2:41 AM"
+ *  - Further out: "Oct 19, 2:41 AM"
+ */
+export function formatLocalResetTime(resetsAt: string | null, nowMs: number): string | null {
+  if (!resetsAt) return null;
+  const target = new Date(resetsAt);
+  const targetMs = target.getTime();
+  if (isNaN(targetMs) || targetMs <= nowMs) return null;
+
+  const now = new Date(nowMs);
+  const timeStr = target.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  const isSameDay =
+    target.getFullYear() === now.getFullYear() &&
+    target.getMonth() === now.getMonth() &&
+    target.getDate() === now.getDate();
+
+  if (isSameDay) {
+    return timeStr;
+  }
+
+  const diffDays = Math.floor((targetMs - nowMs) / (24 * 60 * 60 * 1000));
+  if (diffDays < 6) {
+    const weekday = target.toLocaleDateString([], { weekday: "short" });
+    return `${weekday} ${timeStr}`;
+  }
+
+  const dateStr = target.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${dateStr}, ${timeStr}`;
+}
+
+/** Whether remaining time until reset is strictly positive and less than threshold (default 10h). */
+export function isResetImminent(
+  resetsAt: string | null | undefined,
+  nowMs: number,
+  thresholdMs = 10 * 60 * 60 * 1000,
+): boolean {
+  if (!resetsAt) return false;
+  const target = new Date(resetsAt).getTime();
+  const diffMs = target - nowMs;
+  return diffMs > 0 && diffMs < thresholdMs;
 }
 
 export function harnessLabel(harness: string): string {
@@ -156,7 +232,7 @@ export function ariaLabel(
     return `${base}, ${view.pctText}`;
   }
   const pct = view.pct !== null ? `${Math.round(view.pct)} percent used` : "";
-  const reset = win?.resetsAt ? `, resets ${resetCountdown(win.resetsAt, nowMs)}` : "";
+  const reset = win?.resetsAt ? `, ${resetCountdown(win.resetsAt, nowMs)}` : "";
   if (view.kind === "limit") {
     return `${base}, ${pct}, limit reached`;
   }

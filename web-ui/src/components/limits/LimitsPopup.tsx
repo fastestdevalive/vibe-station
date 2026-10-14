@@ -4,6 +4,7 @@ import type { LimitsResult, LimitSlotRef, LimitWindow } from "@/api/types";
 import { useRovingListNav } from "@/hooks/useRovingListNav";
 import { LimitChip } from "./LimitChip";
 import {
+  formatLocalResetTime,
   harnessLabel,
   resetCountdown,
   sameRef,
@@ -116,6 +117,8 @@ export function LimitsPopup({
               const isCurrent = sameRef(slots[slotIndex], ref);
               const inOther = sameRef(slots[other], ref);
               const nodata = isNodata(w);
+              const countdown = resetCountdown(w.resetsAt, nowMs);
+              const exactTime = formatLocalResetTime(w.resetsAt, nowMs);
               return (
                 <div
                   key={path}
@@ -130,11 +133,19 @@ export function LimitsPopup({
                   onClick={() => onPick(ref)}
                   onFocus={() => nav.setCursorPath(path)}
                 >
-                  <LimitChip harness={h.harness} window={w} nowMs={nowMs} variant="row" />
+                  <LimitChip
+                    harness={h.harness}
+                    window={w}
+                    nowMs={nowMs}
+                    variant="row"
+                  />
                   {nodata ? (
                     <span>{statusReason(w.status, h.message) ?? "—"}</span>
                   ) : (
-                    <span>{resetCountdown(w.resetsAt, nowMs)}</span>
+                    <span>
+                      {countdown}
+                      {exactTime ? ` (${exactTime})` : ""}
+                    </span>
                   )}
                   {inOther ? <span>slot {other + 1}</span> : <span />}
                 </div>

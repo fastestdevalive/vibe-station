@@ -71,8 +71,30 @@
   stroke: currentColor;
 }
 
-.limit-chip__cadence {
+.limit-chip__ring-text {
+  font-size: 7px;
+  font-weight: 600;
+  fill: var(--fg-muted);
+  user-select: none;
+}
+
+.limit-chip--warn .limit-chip__ring-text {
+  fill: var(--fg-warning);
+}
+
+.limit-chip--limit .limit-chip__ring-text {
+  fill: var(--fg-danger);
+}
+
+.limit-chip__pct {
   white-space: nowrap;
+}
+
+.limit-chip__countdown {
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  margin-left: 2px;
 }
 
 .limit-chip__glyph {
@@ -104,7 +126,7 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: 4px var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
@@ -144,7 +166,7 @@
 }
 
 @media (max-width: 768px) {
-  .limit-chip__cadence {
+  .limit-chip__countdown {
     display: none;
   }
 
