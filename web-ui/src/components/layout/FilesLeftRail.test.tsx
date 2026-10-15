@@ -74,7 +74,7 @@ describe("FilesLeftRail", () => {
         layoutByWorktree: {
           [WT]: { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "vcs" },
         },
-        vcsSelectedCommitByWorktree: { [WT]: "abc1234def" },
+        vcsSelectedCommitByWorktree: { [WT]: { sha: "abc1234def" } },
         vcsSidebarVisibleByWorktree: { [WT]: true },
       });
       render(<FilesLeftRail worktreeId={WT} />);

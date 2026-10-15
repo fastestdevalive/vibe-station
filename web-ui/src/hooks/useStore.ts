@@ -316,8 +316,10 @@ export interface WorkspaceState {
    * keydown.
    */
   focusedPane: string | null;
-  /** Non-persisted: which commit is open in the VCS panel, keyed by worktreeId. */
-  vcsSelectedCommitByWorktree: Record<string, string | null>;
+  /** Non-persisted: which commit is open in the VCS panel, keyed by worktreeId.
+   *  A selected submodule commit also carries the submodule path so the commit
+   *  view can resolve it. */
+  vcsSelectedCommitByWorktree: Record<string, { sha: string; submodule?: string } | null>;
   /** Non-persisted: whether the VCS commit view's changed-file sidebar is
    *  visible, keyed by worktreeId. Scoped to the commit-open case and
    *  independent of the Files rail-mode's own `fileTreeVisible`. */
@@ -495,7 +497,7 @@ export interface WorkspaceState {
   /** Set (or clear with null) which flat/tree list owns arrow-key focus. */
   setFocusedPane: (id: string | null) => void;
   /** Set (or clear with null) which commit is open in the VCS panel for a worktree. */
-  setVcsSelectedCommit: (worktreeId: string, sha: string | null) => void;
+  setVcsSelectedCommit: (worktreeId: string, sha: string | null, submodule?: string) => void;
   /** Set whether the VCS commit view's changed-file sidebar is visible for a worktree. */
   setVcsSidebarVisible: (worktreeId: string, visible: boolean) => void;
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number | { lineIndex: number; offsetInRow: number }) => void;
@@ -888,7 +890,7 @@ const initial = {
   openDirectAgentTabsByProject: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
-  vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
+  vcsSelectedCommitByWorktree: {} as Record<string, { sha: string; submodule?: string } | null>,
   vcsSidebarVisibleByWorktree: {} as Record<string, boolean>,
   lastFileByWorktree: {} as Record<string, string>,
   fileScrollByKey: {} as Record<string, number | { lineIndex: number; offsetInRow: number }>,
@@ -1683,9 +1685,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             };
           }),
         setFocusedPane: (id) => set({ focusedPane: id }),
-        setVcsSelectedCommit: (worktreeId, sha) =>
+        setVcsSelectedCommit: (worktreeId, sha, submodule) =>
           set((s) => ({
-            vcsSelectedCommitByWorktree: { ...s.vcsSelectedCommitByWorktree, [worktreeId]: sha },
+            vcsSelectedCommitByWorktree: {
+              ...s.vcsSelectedCommitByWorktree,
+              [worktreeId]: sha === null ? null : { sha, submodule },
+            },
             // Opening a commit (sha != null) defaults its changed-file sidebar
             // to visible (State B). While the commit stays open the rail icon
             // toggles this flag independently (State B ↔ C) without ever

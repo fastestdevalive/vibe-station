@@ -48,6 +48,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const isExternalPeek = Boolean(external);
   const externalToken = external?.token;
   const commitSha = controlled?.commitSha;
+  const submodule = controlled?.submodule;
   const previewFontScaleGlobal = useWorkspaceStore((s) => s.previewFontScale);
   const previewFontScaleByWorktree = useWorkspaceStore((s) => s.previewFontScaleByWorktree);
   const previewFontScale = (worktreeId ? previewFontScaleByWorktree[worktreeId] : undefined) ?? previewFontScaleGlobal;
@@ -96,7 +97,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // A watcher-triggered refetch keeps the same key, so the old body stays on
   // screen until the fresh one lands — no "Loading…" flash on every save.
   const bodyKey =
-    worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}\0${externalToken ?? ""}` : null;
+    worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}\0${submodule ?? ""}\0${externalToken ?? ""}` : null;
   const [loaded, setLoaded] = useState<{ key: string; fileBody: string | null; diffBody: string | null } | null>(null);
   // Cache the last 10 file bodies so switching back to a tab shows content
   // immediately without a loading flash. Without this, bodyKey mismatches
@@ -112,7 +113,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // the key it was fetched for (mirrors `bodyKey` above) so a watcher-triggered
   // refetch keeps the current blob on screen until the fresh one lands.
   const imageKey =
-    worktreeId && path && isImagePath(path) ? `${fileScope}\0${worktreeId}\0${path}` : null;
+    worktreeId && path && isImagePath(path) ? `${fileScope}\0${worktreeId}\0${path}\0${submodule ?? ""}` : null;
   const [imageBlob, setImageBlob] = useState<{ key: string; url: string } | null>(null);
   const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
   const [imageFullscreen, setImageFullscreen] = useState(false);
@@ -190,6 +191,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       setTooLarge(false);
       return;
     }
+    // `getFile` has no `submodule` query param, so a submodule-relative path
+    // must be root-joined against the worktree root; `getDiff` takes
+    // `submodule` separately and keeps the submodule-relative path.
+    const rootedPath = submodule && path ? `${submodule}/${path}` : path;
     let cancelled = false;
     setError(null);
     setTooLarge(false);
@@ -208,14 +213,14 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           // syntheticUntrackedHunks(fileBody), which shows every file as if
           // it were entirely new ("+N −0") regardless of its real git status.
           const [text, d] = await Promise.all([
-            api.getFile(worktreeId, path, fileScope),
-            api.getDiff(worktreeId, path, "local", undefined, fileScope).catch(() => null),
+            api.getFile(worktreeId, rootedPath, fileScope),
+            api.getDiff(worktreeId, path, "local", undefined, fileScope, submodule).catch(() => null),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "local") {
           const [text, d] = await Promise.all([
-            api.getFile(worktreeId, path, fileScope),
-            api.getDiff(worktreeId, path, "local", undefined, fileScope),
+            api.getFile(worktreeId, rootedPath, fileScope),
+            api.getDiff(worktreeId, path, "local", undefined, fileScope, submodule),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "branch") {
@@ -224,15 +229,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           // serves from disk — so branch scope can fetch file content
           // unconditionally, exactly like local scope, no new endpoint.
           const [text, d] = await Promise.all([
-            api.getFile(worktreeId, path, fileScope),
-            api.getDiff(worktreeId, path, "branch", undefined, fileScope),
+            api.getFile(worktreeId, rootedPath, fileScope),
+            api.getDiff(worktreeId, path, "branch", undefined, fileScope, submodule),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else {
           // scope === "commit" — a single commit's diff against its parent
           // (or the empty tree for a root commit). No plain file content:
           // the commit view is diff-only, same as branch scope used to be.
-          const d = await api.getDiff(worktreeId, path, "commit", commitSha, fileScope);
+          const d = await api.getDiff(worktreeId, path, "commit", commitSha, fileScope, submodule);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
       } catch (e) {
@@ -249,7 +254,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha, reconnectTick]);
+  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha, reconnectTick, submodule]);
 
   // Populate the content cache whenever a fresh load completes.
   useEffect(() => {
@@ -285,9 +290,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   useEffect(() => {
     if (!worktreeId || !path || !imageKey) return;
+    // Image blobs have no `submodule` param — root-join against the worktree
+    // root so a submodule-relative image path resolves (see the fetch effect).
+    const rootedPath = submodule && path ? `${submodule}/${path}` : path;
     let cancelled = false;
     api
-      .getFileBlob(worktreeId, path, fileScope)
+      .getFileBlob(worktreeId, rootedPath, fileScope)
       .then((blob) => {
         if (cancelled) return;
         const url = URL.createObjectURL(blob);
@@ -300,7 +308,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged, reconnectTick]);
+  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged, reconnectTick, submodule]);
 
   // Fetch gutter marks (git add/modify/delete annotations) when viewing a plain
   // file in working-tree scope. Only scope="none" supports gutter marks; other
@@ -786,7 +794,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           {segments.map((seg, i) =>
             seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={path} />
+              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={submodule && path ? `${submodule}/${path}` : path} />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={themeMode} />
             ),

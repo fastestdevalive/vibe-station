@@ -17,6 +17,9 @@ interface VcsCommitViewProps {
   /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId`
    *  indexes into. Threaded into the changed-paths fetch and `FilePreviewPane`. */
   scope?: FileScope;
+  /** When present, this commit lives in a submodule's history rather than the
+   *  checkout root; threaded into `listChangedPaths` + `FilePreviewPane`. */
+  submodule?: string;
 }
 
 /** First 7 chars — matches `CommitLogEntry.shortSha`'s convention closely
@@ -32,7 +35,14 @@ function shortSha(sha: string): string {
  * open file / diff scope. Owns its own `selectedPath` state — nothing here
  * touches `useWorkspaceStore`'s `activeFilePath`/`diffScopeByWorktree`.
  */
-export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree" }: VcsCommitViewProps) {
+export function VcsCommitView({
+  api,
+  worktreeId,
+  sha,
+  onBack,
+  scope = "worktree",
+  submodule,
+}: VcsCommitViewProps) {
   const [entries, setEntries] = useState<ChangedPathEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +61,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree"
     setSelectedPath(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(worktreeId, "commit", sha, scope);
+        const list = await api.listChangedPaths(worktreeId, "commit", sha, scope, submodule);
         if (!cancelled) {
           setEntries(list);
           setLoading(false);
@@ -67,11 +77,15 @@ export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, sha, scope]);
+  }, [api, worktreeId, sha, scope, submodule]);
 
   const topbarExtra = (
     <div className="files-topbar__breadcrumb">
-      <DiffScopeSelector scope="commit" commitLabel={`commit #${shortSha(sha)}`} onBack={onBack} />
+      <DiffScopeSelector
+        scope="commit"
+        commitLabel={`${submodule ? `${submodule} · ` : ""}commit #${shortSha(sha)}`}
+        onBack={onBack}
+      />
     </div>
   );
 
@@ -101,7 +115,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree"
           api={api}
           worktreeId={worktreeId}
           scope={scope}
-          controlled={{ path: selectedPath, scope: "commit", commitSha: sha }}
+          controlled={{ path: selectedPath, scope: "commit", commitSha: sha, submodule }}
         />
       }
     />
