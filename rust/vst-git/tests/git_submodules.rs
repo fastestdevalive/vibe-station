@@ -4,7 +4,11 @@
 mod common;
 
 use common::{git, git_fixture, rm_git_fixture};
-use vst_git::git::{list_submodules, SubmoduleStatus};
+use vst_git::git::{
+    commit_exists, list_commits, list_submodules, resolve_submodule_dir, submodule_pin_at,
+    SubmoduleDirError, SubmoduleStatus,
+};
+use vst_testkit::GitFixture;
 
 #[tokio::test]
 async fn repo_with_no_gitmodules_returns_empty_without_throwing() {
@@ -444,4 +448,151 @@ async fn multiple_submodules_are_all_returned_and_independently_resolved() {
     rm_git_fixture(&outer).await;
     rm_git_fixture(&sub1).await;
     rm_git_fixture(&sub2).await;
+}
+
+/// Adds a commit in `sub` then registers it as `vendor/widget` in `outer`.
+/// Returns the submodule's HEAD sha.
+async fn add_submodule(outer: &GitFixture, sub: &GitFixture, path: &str) -> String {
+    git(
+        sub,
+        &["commit", "--allow-empty", "-q", "-m", "submodule commit"],
+    )
+    .await;
+    let sha = git(sub, &["rev-parse", "HEAD"]).await;
+    git(
+        outer,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub.dir.to_str().unwrap(),
+            path,
+        ],
+    )
+    .await;
+    git(outer, &["commit", "-q", "-m", &format!("add {path} submodule")]).await;
+    sha
+}
+
+#[tokio::test]
+async fn resolve_submodule_dir_returns_ok_for_an_initialized_submodule() {
+    let sub = git_fixture("vst-git-submodule-resolve-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-resolve-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "outer"]).await;
+    add_submodule(&outer, &sub, "vendor/widget").await;
+
+    let dir = resolve_submodule_dir(outer.dir.to_str().unwrap(), "vendor/widget")
+        .await
+        .unwrap();
+    assert_eq!(dir, outer.dir.join("vendor/widget"));
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
+}
+
+#[tokio::test]
+async fn resolve_submodule_dir_rejects_unknown_dotdot_and_absolute_paths() {
+    let sub = git_fixture("vst-git-submodule-resolve-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-resolve-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "outer"]).await;
+    add_submodule(&outer, &sub, "vendor/widget").await;
+
+    let repo = outer.dir.to_str().unwrap();
+    for bad in ["vendor/other", "vendor/../widget", "/vendor/widget", ""] {
+        assert_eq!(
+            resolve_submodule_dir(repo, bad).await,
+            Err(SubmoduleDirError::NotFound),
+            "expected NotFound for {bad:?}"
+        );
+    }
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
+}
+
+#[tokio::test]
+async fn resolve_submodule_dir_returns_not_initialized_and_never_main_repo_commits() {
+    let sub = git_fixture("vst-git-submodule-resolve-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-resolve-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "outer"]).await;
+    add_submodule(&outer, &sub, "vendor/widget").await;
+    git(&outer, &["submodule", "deinit", "-f", "vendor/widget"]).await;
+
+    let repo = outer.dir.to_str().unwrap();
+    assert_eq!(
+        resolve_submodule_dir(repo, "vendor/widget").await,
+        Err(SubmoduleDirError::NotInitialized)
+    );
+
+    // The route rejects BEFORE ever running git on the submodule dir, so the
+    // uninitialized empty dir can never fall through to the main repo's
+    // history/diff (git searches upward out of an empty folder).
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
+}
+
+#[tokio::test]
+async fn submodule_pin_at_returns_base_pin_and_none_when_added_later() {
+    let sub = git_fixture("vst-git-submodule-pin-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-pin-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "before sub"]).await;
+    let base = git(&outer, &["rev-parse", "HEAD"]).await;
+    let sub_sha = add_submodule(&outer, &sub, "vendor/widget").await;
+    let head = git(&outer, &["rev-parse", "HEAD"]).await;
+
+    let repo = outer.dir.to_str().unwrap();
+    // Base commit predates the submodule — no gitlink there.
+    assert_eq!(submodule_pin_at(repo, &base, "vendor/widget").await, None);
+    // HEAD pins the gitlink at the submodule's HEAD sha.
+    assert_eq!(
+        submodule_pin_at(repo, &head, "vendor/widget").await,
+        Some(sub_sha)
+    );
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
+}
+
+#[tokio::test]
+async fn list_commits_on_resolved_dir_returns_submodule_commits() {
+    let sub = git_fixture("vst-git-submodule-list-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-list-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "outer"]).await;
+    add_submodule(&outer, &sub, "vendor/widget").await;
+
+    let dir = resolve_submodule_dir(outer.dir.to_str().unwrap(), "vendor/widget")
+        .await
+        .unwrap();
+    let commits = list_commits(dir.to_str().unwrap(), 200, None)
+        .await
+        .unwrap();
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].subject, "submodule commit");
+    // The main repo's own commit must not leak into the submodule's log.
+    assert!(commits.iter().all(|c| c.subject != "outer"));
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
+}
+
+#[tokio::test]
+async fn commit_exists_reflects_object_store_membership() {
+    let sub = git_fixture("vst-git-submodule-exists-sub-test").await;
+    let outer = git_fixture("vst-git-submodule-exists-outer-test").await;
+    git(&outer, &["commit", "--allow-empty", "-q", "-m", "outer"]).await;
+    let outer_sha = add_submodule(&outer, &sub, "vendor/widget").await;
+    let dir = resolve_submodule_dir(outer.dir.to_str().unwrap(), "vendor/widget")
+        .await
+        .unwrap();
+
+    // The submodule HEAD is in the submodule's store but not the main repo's.
+    assert!(commit_exists(dir.to_str().unwrap(), &outer_sha).await);
+    assert!(!commit_exists(outer.dir.to_str().unwrap(), &outer_sha).await);
+    assert!(!commit_exists(dir.to_str().unwrap(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").await);
+
+    rm_git_fixture(&outer).await;
+    rm_git_fixture(&sub).await;
 }

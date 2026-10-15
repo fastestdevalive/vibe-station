@@ -7,7 +7,7 @@
 //! `fetchOrigin`'s in-flight-dedupe + success-only-cooldown maps.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -847,6 +847,107 @@ pub async fn list_submodules(repo_path: &str) -> Vec<SubmoduleInfo> {
         });
     }
     result
+}
+
+/// Why a requested submodule path could not be resolved to a checkout dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmoduleDirError {
+    /// Not a gitlink at the given path (unknown / not in `.gitmodules` / `..`
+    /// or absolute path). Maps to a 422 "Unknown submodule".
+    NotFound,
+    /// A gitlink but its checkout dir is empty (never initialized). Maps to a
+    /// 422 "Submodule not initialized" — and must NEVER fall through to the
+    /// main repo's history/diff (git searches upward out of an empty dir).
+    NotInitialized,
+}
+
+/// Resolve a repo-relative submodule path (as returned by
+/// `GET .../submodules` `path`) to its checkout directory, or an error.
+///
+/// The allow-list is intentionally light (unlike [`list_submodules`], which
+/// shells out per submodule): `sub` must be a path present in `.gitmodules`
+/// AND a gitlink (`git ls-files -s` mode `160000`) at the current index. That
+/// single check rejects arbitrary / `..` / absolute paths in one shot, then an
+/// initialized check confirms the dir is its own repo root so a stale
+/// uninitialized empty dir can't be answered by the enclosing main repo.
+pub async fn resolve_submodule_dir(
+    repo: &str,
+    sub: &str,
+) -> Result<PathBuf, SubmoduleDirError> {
+    if sub.is_empty() {
+        return Err(SubmoduleDirError::NotFound);
+    }
+
+    let in_gitmodules = parse_gitmodules_branches(repo).await.contains_key(sub);
+    if !in_gitmodules {
+        return Err(SubmoduleDirError::NotFound);
+    }
+
+    // A gitlink appears in `git ls-files -s` as mode 160000 (S_IFGITLINK).
+    let is_gitlink = run_git(
+        &["-C", repo, "ls-files", "-s", "--", sub],
+        Some(Path::new(repo)),
+    )
+    .await
+    .map(|out| out.split_whitespace().next() == Some("160000"))
+    .unwrap_or(false);
+    if !is_gitlink {
+        return Err(SubmoduleDirError::NotFound);
+    }
+
+    let dir = Path::new(repo).join(sub);
+    // Initialized ⇔ the dir's own toplevel equals the dir (canonicalised). An
+    // uninitialized submodule dir is an empty folder inside the main checkout,
+    // so `git rev-parse --show-toplevel` from it answers with the MAIN repo.
+    let toplevel = run_git(
+        &["-C", dir.to_str().unwrap_or(""), "rev-parse", "--show-toplevel"],
+        Some(&dir),
+    )
+    .await
+    .ok();
+    let canonical_dir = dir
+        .canonicalize()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    if toplevel.is_none() || canonical_dir.is_none() || toplevel != canonical_dir {
+        return Err(SubmoduleDirError::NotInitialized);
+    }
+
+    Ok(dir)
+}
+
+/// The gitlink SHA the tree `rev` pins for submodule path `sub`, or `None` if
+/// `rev` does not pin `sub` as a gitlink (added later) — the base an expanded
+/// submodule's "on branch" filter is computed against.
+pub async fn submodule_pin_at(repo: &str, rev: &str, sub: &str) -> Option<String> {
+    let out = run_git(
+        &["-C", repo, "ls-tree", rev, "--", sub],
+        Some(Path::new(repo)),
+    )
+    .await
+    .ok()?;
+    // `ls-tree` output: "<mode> <type> <sha>\t<path>" — accept only a gitlink.
+    let mut fields = out.split_whitespace();
+    let mode = fields.next()?;
+    // `type` ("commit") is the second field; skip it to reach the sha.
+    fields.next()?;
+    let sha = fields.next()?;
+    if mode != "160000" {
+        return None;
+    }
+    Some(sha.to_string())
+}
+
+/// Whether `sha` resolves to a commit in `dir`'s object store. The commits
+/// route uses this to tell whether the base pin is present; when it is not,
+/// everything stays on-branch (accepted fallback).
+pub async fn commit_exists(dir: &str, sha: &str) -> bool {
+    run_git(
+        &["-C", dir, "cat-file", "-e", &format!("{sha}^{{commit}}")],
+        Some(Path::new(dir)),
+    )
+    .await
+    .is_ok()
 }
 
 // ---------------------------------------------------------------------------
