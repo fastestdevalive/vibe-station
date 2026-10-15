@@ -38,8 +38,9 @@ use vst_agents::session_runtime::{release_session_runtime, ReleaseOpts};
 use vst_git::branch_validator::{branch_exists_in_repo, validate_branch};
 use vst_git::direct_pty::PtyKill;
 use vst_git::git::{
-    branch_exists, get_diff_stat, list_commits, list_submodules, parse_numstat_z, resolve_base_sha,
-    resolve_parent_sha, rev_parse, worktree_remove, DiffStat as GitDiffStat, PathNumstat,
+    branch_exists, commit_exists, get_diff_stat, list_commits, list_submodules, parse_numstat_z,
+    resolve_base_sha, resolve_parent_sha, resolve_submodule_dir, rev_parse, submodule_pin_at,
+    worktree_remove, DiffStat as GitDiffStat, PathNumstat, SubmoduleDirError,
 };
 use vst_git::naming::slugify_prompt;
 use vst_git::paths::Paths;
@@ -328,6 +329,27 @@ pub async fn untracked_numstat_cmd(wt_path: &Path, rel_path: &str) -> PathNumsta
         insertions: None,
         deletions: None,
     })
+}
+
+/// Resolve an optional `submodule` query param (a repo-relative path, exactly
+/// as in `GET .../submodules` `path`) to its checkout dir. `None` means "the
+/// checkout root" (no submodule). Returns an error message for the caller to
+/// map to a 422 — `NotFound` for unknown / `..` / absolute paths ("Unknown
+/// submodule"), `NotInitialized` for a gitlink whose checkout dir is empty
+/// ("Submodule not initialized", and which must never fall through to the main
+/// repo's history/diff). Shared by the worktree and project route scopes.
+pub(crate) async fn resolve_submodule_dir_route(
+    root: &Path,
+    submodule: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(sub) = submodule else {
+        return Ok(None);
+    };
+    match resolve_submodule_dir(root.to_str().unwrap_or(""), sub).await {
+        Ok(dir) => Ok(Some(dir)),
+        Err(SubmoduleDirError::NotFound) => Err("Unknown submodule".to_string()),
+        Err(SubmoduleDirError::NotInitialized) => Err("Submodule not initialized".to_string()),
+    }
 }
 
 pub use crate::file_serving::{compute_etag, read_file_response, FileResponse, FileServingError};
@@ -1457,6 +1479,7 @@ impl WorktreeRoutes {
         file_path: &str,
         scope: Option<&str>,
         sha: Option<&str>,
+        submodule: Option<&str>,
     ) -> Result<DiffResponse, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let worktree = project
@@ -1466,6 +1489,24 @@ impl WorktreeRoutes {
             .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let scope = scope.unwrap_or("local");
+
+        // A `submodule` param switches the git working dir to that submodule's
+        // checkout. Only `commit` scope makes sense there (local/branch have no
+        // submodule UI entry), and the dir is allow-listed so an uninitialized
+        // submodule can never fall through to the main repo.
+        let git_dir = match resolve_submodule_dir_route(&wt_path, submodule).await {
+            Ok(Some(dir)) => {
+                if scope != "commit" {
+                    return Err(WorktreeRouteError::Unprocessable(
+                        "submodule only supports scope=commit".to_string(),
+                    ));
+                }
+                dir
+            }
+            Ok(None) => wt_path.clone(),
+            Err(msg) => return Err(WorktreeRouteError::Unprocessable(msg)),
+        };
+        let git_dir_str = git_dir.to_string_lossy().to_string();
 
         let mut cmd = Command::new("git");
         cmd.arg("-c")
@@ -1477,7 +1518,7 @@ impl WorktreeRoutes {
         match scope {
             "branch" => {
                 let base_sha = resolve_base_sha(
-                    &wt_path.to_string_lossy(),
+                    &git_dir_str,
                     Some(&worktree.base_branch),
                     Some(&worktree.base_sha),
                 )
@@ -1499,22 +1540,20 @@ impl WorktreeRoutes {
                         "Could not resolve commit sha".to_string(),
                     ));
                 }
-                let wt_str = wt_path.to_string_lossy().to_string();
-                let resolved_sha = rev_parse(&wt_str, &format!("{sha}^{{commit}}"))
+                let resolved_sha = rev_parse(&git_dir_str, &format!("{sha}^{{commit}}"))
                     .await
                     .map_err(|_| {
                         WorktreeRouteError::Unprocessable(
                             "Could not resolve commit sha".to_string(),
                         )
                     })?;
-                let parent_sha =
-                    resolve_parent_sha(&wt_str, &resolved_sha)
-                        .await
-                        .map_err(|_| {
-                            WorktreeRouteError::Unprocessable(
-                                "Could not resolve commit sha".to_string(),
-                            )
-                        })?;
+                let parent_sha = resolve_parent_sha(&git_dir_str, &resolved_sha)
+                    .await
+                    .map_err(|_| {
+                        WorktreeRouteError::Unprocessable(
+                            "Could not resolve commit sha".to_string(),
+                        )
+                    })?;
                 cmd.arg(parent_sha)
                     .arg(resolved_sha)
                     .arg("--")
@@ -1525,7 +1564,7 @@ impl WorktreeRoutes {
             }
         }
 
-        cmd.current_dir(&wt_path).env("GIT_TERMINAL_PROMPT", "0");
+        cmd.current_dir(&git_dir).env("GIT_TERMINAL_PROMPT", "0");
         let output = cmd
             .output()
             .await
@@ -1565,6 +1604,7 @@ impl WorktreeRoutes {
         wt_id: &str,
         scope: Option<&str>,
         sha: Option<&str>,
+        submodule: Option<&str>,
     ) -> Result<Vec<ChangedPath>, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let worktree = project
@@ -1575,6 +1615,22 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let scope = scope.unwrap_or("local");
 
+        // A `submodule` param switches the git working dir to that submodule's
+        // checkout; only `commit` scope is meaningful there (see `diff`).
+        let git_dir = match resolve_submodule_dir_route(&wt_path, submodule).await {
+            Ok(Some(dir)) => {
+                if scope != "commit" {
+                    return Err(WorktreeRouteError::Unprocessable(
+                        "submodule only supports scope=commit".to_string(),
+                    ));
+                }
+                dir
+            }
+            Ok(None) => wt_path.clone(),
+            Err(msg) => return Err(WorktreeRouteError::Unprocessable(msg)),
+        };
+        let git_dir_str = git_dir.to_string_lossy().to_string();
+
         if scope == "commit" {
             let sha = sha.ok_or_else(|| {
                 WorktreeRouteError::Unprocessable("Could not resolve commit sha".to_string())
@@ -1584,13 +1640,12 @@ impl WorktreeRoutes {
                     "Could not resolve commit sha".to_string(),
                 ));
             }
-            let wt_str = wt_path.to_string_lossy().to_string();
-            let resolved_sha = rev_parse(&wt_str, &format!("{sha}^{{commit}}"))
+            let resolved_sha = rev_parse(&git_dir_str, &format!("{sha}^{{commit}}"))
                 .await
                 .map_err(|_| {
                     WorktreeRouteError::Unprocessable("Could not resolve commit sha".to_string())
                 })?;
-            let parent_sha = resolve_parent_sha(&wt_str, &resolved_sha)
+            let parent_sha = resolve_parent_sha(&git_dir_str, &resolved_sha)
                 .await
                 .map_err(|_| {
                     WorktreeRouteError::Unprocessable("Could not resolve commit sha".to_string())
@@ -1606,7 +1661,7 @@ impl WorktreeRoutes {
                 &parent_sha,
                 &resolved_sha,
             ])
-            .current_dir(&wt_path)
+            .current_dir(&git_dir)
             .env("GIT_TERMINAL_PROMPT", "0");
             let output = cmd.output().await.map_err(|e| {
                 WorktreeRouteError::Internal(format!("git diff --name-status failed: {e}"))
@@ -1618,14 +1673,13 @@ impl WorktreeRoutes {
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let entries = parse_branch_name_status(&stdout);
-            let numstat = run_numstat_cmd(&wt_path, &[&parent_sha, &resolved_sha]).await;
+            let numstat = run_numstat_cmd(&git_dir, &[&parent_sha, &resolved_sha]).await;
             return Ok(merge_numstat(entries, numstat));
         }
 
         if scope == "branch" {
-            let wt_str = wt_path.to_string_lossy().to_string();
             let branch_base_sha = resolve_base_sha(
-                &wt_str,
+                &git_dir_str,
                 Some(&worktree.base_branch),
                 Some(&worktree.base_sha),
             )
@@ -1646,7 +1700,7 @@ impl WorktreeRoutes {
                 "--name-status",
                 &branch_base_sha,
             ])
-            .current_dir(&wt_path)
+            .current_dir(&git_dir)
             .env("GIT_TERMINAL_PROMPT", "0");
             let output = cmd.output().await.map_err(|e| {
                 WorktreeRouteError::Internal(format!("git diff --name-status failed: {e}"))
@@ -1658,14 +1712,14 @@ impl WorktreeRoutes {
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let entries = parse_branch_name_status(&stdout);
-            let numstat = run_numstat_cmd(&wt_path, &[&branch_base_sha]).await;
+            let numstat = run_numstat_cmd(&git_dir, &[&branch_base_sha]).await;
             return Ok(merge_numstat(entries, numstat));
         }
 
         // Local scope: git status -z -uall + git diff --numstat HEAD + untrackedNumstat
         let mut cmd = Command::new("git");
         cmd.args(["status", "--porcelain=v1", "-z", "-uall"])
-            .current_dir(&wt_path)
+            .current_dir(&git_dir)
             .env("GIT_TERMINAL_PROMPT", "0");
         let output = cmd
             .output()
@@ -1678,11 +1732,11 @@ impl WorktreeRoutes {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let entries = parse_porcelain_z(&stdout);
-        let mut numstat = run_numstat_cmd(&wt_path, &["HEAD"]).await;
+        let mut numstat = run_numstat_cmd(&git_dir, &["HEAD"]).await;
 
         for entry in &entries {
             if entry.status == "?" && !numstat.contains_key(&entry.path) {
-                let stat = untracked_numstat_cmd(&wt_path, &entry.path).await;
+                let stat = untracked_numstat_cmd(&git_dir, &entry.path).await;
                 numstat.insert(entry.path.clone(), stat);
             }
         }
@@ -1692,7 +1746,7 @@ impl WorktreeRoutes {
             if c.status == "D" {
                 continue;
             }
-            if let Ok(meta) = tokio::fs::metadata(wt_path.join(&c.path)).await {
+            if let Ok(meta) = tokio::fs::metadata(git_dir.join(&c.path)).await {
                 c.mtime_ms = meta
                     .modified()
                     .ok()
@@ -1753,6 +1807,7 @@ impl WorktreeRoutes {
         &self,
         wt_id: &str,
         limit: Option<usize>,
+        submodule: Option<&str>,
     ) -> Result<CommitsResult, WorktreeRouteError> {
         let limit = limit.unwrap_or(200).clamp(1, 1000);
         let project = self.find_project_for_worktree(wt_id).await?;
@@ -1764,22 +1819,63 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let wt_str = wt_path.to_string_lossy().to_string();
 
-        if !worktree.base_branch.is_empty() {
-            let _ = self
-                .fetch_origin(&project.absolute_path, &worktree.base_branch)
-                .await;
-        }
+        // A `submodule` param lists commits of that submodule's checkout rather
+        // than the worktree root. `fetch_origin` on the main repo is pointless
+        // (and slow) for a submodule request, so it is skipped.
+        let is_submodule = submodule.is_some();
+        let git_dir = match resolve_submodule_dir_route(&wt_path, submodule).await {
+            Ok(Some(dir)) => dir,
+            Ok(None) => wt_path.clone(),
+            Err(msg) => return Err(WorktreeRouteError::Unprocessable(msg)),
+        };
+        let git_dir_str = git_dir.to_string_lossy().to_string();
 
-        let base_sha = resolve_base_sha(
-            &wt_str,
-            Some(&worktree.base_branch),
-            Some(&worktree.base_sha),
-        )
-        .await
-        .ok()
-        .flatten();
+        let base_sha = if is_submodule {
+            // The submodule's "on branch" base is the gitlink SHA the main
+            // repo's own base pins for this submodule. If the worktree base
+            // can't be resolved, or doesn't pin it as a gitlink (added later),
+            // there is no base and everything is on-branch.
+            let wt_base = resolve_base_sha(
+                &wt_str,
+                Some(&worktree.base_branch),
+                Some(&worktree.base_sha),
+            )
+            .await
+            .ok()
+            .flatten();
+            match wt_base {
+                Some(wt_base) => submodule_pin_at(&wt_str, &wt_base, submodule.unwrap()).await,
+                None => None,
+            }
+        } else {
+            if !worktree.base_branch.is_empty() {
+                let _ = self
+                    .fetch_origin(&project.absolute_path, &worktree.base_branch)
+                    .await;
+            }
+            resolve_base_sha(
+                &wt_str,
+                Some(&worktree.base_branch),
+                Some(&worktree.base_sha),
+            )
+            .await
+            .ok()
+            .flatten()
+        };
 
-        let commits = list_commits(&wt_str, limit, base_sha.as_deref())
+        // The pin may not exist in the submodule's own object store (it was
+        // only fetched into the main repo). In that case pass no base so
+        // everything stays on-branch (accepted fallback).
+        let base_for_filter = if is_submodule {
+            match base_sha.as_deref() {
+                Some(b) if commit_exists(&git_dir_str, b).await => Some(b.to_string()),
+                _ => None,
+            }
+        } else {
+            base_sha.clone()
+        };
+
+        let commits = list_commits(&git_dir_str, limit, base_for_filter.as_deref())
             .await
             .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?;
 

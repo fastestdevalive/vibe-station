@@ -1027,7 +1027,7 @@ async fn test_git_surface_routes_on_real_repo() {
 
     // 1. changed_paths (local scope)
     let paths = routes
-        .changed_paths(&wt.id, Some("local"), None)
+        .changed_paths(&wt.id, Some("local"), None, None)
         .await
         .unwrap();
     assert!(!paths.is_empty());
@@ -1035,7 +1035,7 @@ async fn test_git_surface_routes_on_real_repo() {
 
     // 2. diff (local scope)
     let diff_res = routes
-        .diff(&wt.id, "newfile.txt", Some("local"), None)
+        .diff(&wt.id, "newfile.txt", Some("local"), None, None)
         .await
         .unwrap();
     assert!(!diff_res.etag.is_empty());
@@ -1045,7 +1045,7 @@ async fn test_git_surface_routes_on_real_repo() {
     assert!(stat.insertions >= 0);
 
     // 4. commits
-    let commits = routes.commits(&wt.id, Some(50)).await.unwrap();
+    let commits = routes.commits(&wt.id, Some(50), None).await.unwrap();
     assert!(!commits.commits.is_empty());
     assert_eq!(commits.commits[0].subject, "Initial commit");
 
@@ -1056,6 +1056,301 @@ async fn test_git_surface_routes_on_real_repo() {
     // 6. pr (no remote, should cleanly return NotGithub)
     let pr_res = routes.pr(&wt.id).await.unwrap();
     assert_eq!(pr_res, PrLookupResult::NotGithub);
+}
+
+/// Build a main repo containing a single submodule `vendor/widget` (its own
+/// repo `sub_dir`) pinned at the submodule's initial commit `c1`. Returns c1's
+/// sha. The caller is expected to add a later commit `c2` to the submodule and
+/// advance the worktree's copy of it, so that `c2` is on-branch and `c1` (the
+/// pin) is not.
+fn make_repo_with_submodule(main_dir: &Path, sub_dir: &Path) -> String {
+    init_git_repo(sub_dir); // c1
+    let c1 = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(sub_dir)
+        .output()
+        .unwrap();
+    let c1 = String::from_utf8_lossy(&c1.stdout).trim().to_string();
+
+    init_git_repo(main_dir);
+    let sub = Command::new("git")
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub_dir.to_str().unwrap(),
+            "vendor/widget",
+        ])
+        .current_dir(main_dir)
+        .status()
+        .unwrap();
+    assert!(sub.success());
+    let commit = Command::new("git")
+        .args(["commit", "-q", "-m", "add vendor/widget submodule"])
+        .current_dir(main_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    c1
+}
+
+#[tokio::test]
+async fn test_submodule_commit_scope_routes_and_validation() {
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    let sub_dir = tempdir().unwrap();
+    let _c1 = make_repo_with_submodule(git_repo_dir.path(), sub_dir.path());
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+
+    let proj = ProjectRecord {
+        id: "proj-git".into(),
+        absolute_path: git_repo_dir.path().to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: true,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(proj).await.unwrap();
+
+    let wt = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-git".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/sub".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+    let wt_path = routes.paths.worktree_path("proj-git", &wt.id);
+
+    // `git worktree add` leaves submodules uninitialized, so init it explicitly.
+    let init = Command::new("git")
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            wt_path.to_str().unwrap(),
+            "submodule",
+            "update",
+            "--init",
+            "vendor/widget",
+        ])
+        .status()
+        .unwrap();
+    assert!(init.success());
+
+    // Add a second commit c2 to the submodule (after the pin), then advance the
+    // worktree's submodule to it and commit the gitlink bump on the branch. The
+    // worktree base (merge-base with `main`) still pins c1, so c2 is on-branch
+    // and c1 is not.
+    std::fs::write(sub_dir.path().join("c2.txt"), "c2\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "."])
+        .current_dir(sub_dir.path())
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "c2"])
+        .current_dir(sub_dir.path())
+        .status()
+        .unwrap();
+    assert!(commit.success());
+    let c2 = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(sub_dir.path())
+        .output()
+        .unwrap();
+    let c2 = String::from_utf8_lossy(&c2.stdout).trim().to_string();
+
+    let fetch = Command::new("git")
+        .args([
+            "-C",
+            wt_path.join("vendor/widget").to_str().unwrap(),
+            "fetch",
+            "-q",
+            "origin",
+        ])
+        .status()
+        .unwrap();
+    assert!(fetch.success());
+    let co = Command::new("git")
+        .args([
+            "-C",
+            wt_path.join("vendor/widget").to_str().unwrap(),
+            "checkout",
+            "-q",
+            &c2,
+        ])
+        .status()
+        .unwrap();
+    assert!(co.success());
+    let add = Command::new("git")
+        .args(["-C", wt_path.to_str().unwrap(), "add", "vendor/widget"])
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let bump = Command::new("git")
+        .args(["-C", wt_path.to_str().unwrap(), "commit", "-q", "-m", "bump sub"])
+        .status()
+        .unwrap();
+    assert!(bump.success());
+
+    // 1. commits(submodule) — submodule log with pin-based is_on_branch.
+    let commits = routes
+        .commits(&wt.id, Some(50), Some("vendor/widget"))
+        .await
+        .unwrap();
+    assert_eq!(commits.commits.len(), 2);
+    assert_eq!(commits.commits[0].sha, c2);
+    assert!(commits.commits[0].is_on_branch, "c2 must be on-branch");
+    assert!(
+        !commits.commits[1].is_on_branch,
+        "c1 (reachable from the base pin) must NOT be on-branch"
+    );
+
+    // 1b. Regression: the MAIN repo's own commit list must keep its base
+    // filter — the branch's "bump sub" commit is on-branch, base history is not.
+    let main_commits = routes.commits(&wt.id, Some(50), None).await.unwrap();
+    assert!(main_commits.commits.len() >= 2);
+    assert_eq!(main_commits.commits[0].subject, "bump sub");
+    assert!(main_commits.commits[0].is_on_branch);
+    assert!(
+        !main_commits.commits[1].is_on_branch,
+        "base-branch history must not be marked on-branch"
+    );
+
+    // 2. changed_paths commit scope runs inside the submodule.
+    let c2_paths = routes
+        .changed_paths(&wt.id, Some("commit"), Some(&c2), Some("vendor/widget"))
+        .await
+        .unwrap();
+    assert!(
+        c2_paths.iter().any(|p| p.path == "c2.txt"),
+        "c2 commit must report c2.txt, got {c2_paths:?}"
+    );
+
+    // 3. diff commit scope runs inside the submodule.
+    let diff = routes
+        .diff(
+            &wt.id,
+            "c2.txt",
+            Some("commit"),
+            Some(&c2),
+            Some("vendor/widget"),
+        )
+        .await
+        .unwrap();
+    assert!(diff.content.contains("c2"));
+
+    // 4. Unknown submodule -> 422.
+    let err = routes
+        .commits(&wt.id, Some(50), Some("vendor/other"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
+    // 5. `..` traversal -> 422.
+    let err = routes
+        .commits(&wt.id, Some(50), Some("vendor/../widget"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
+    // 6. local scope + submodule -> 422.
+    let err = routes
+        .changed_paths(&wt.id, Some("local"), None, Some("vendor/widget"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
+    let err = routes
+        .diff(
+            &wt.id,
+            "c2.txt",
+            Some("local"),
+            None,
+            Some("vendor/widget"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
+}
+
+#[tokio::test]
+async fn test_uninitialized_submodule_commits_422() {
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    let sub_dir = tempdir().unwrap();
+    make_repo_with_submodule(git_repo_dir.path(), sub_dir.path());
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+
+    let proj = ProjectRecord {
+        id: "proj-git".into(),
+        absolute_path: git_repo_dir.path().to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: true,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(proj).await.unwrap();
+
+    let wt = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-git".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/sub-uninit".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    // Leave the submodule UNINITIALIZED (as `git worktree add` leaves it). The
+    // route must 422 with "Submodule not initialized" and never fall through to
+    // the main repo's history.
+    let err = routes
+        .commits(&wt.id, Some(50), Some("vendor/widget"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Unprocessable(msg) if msg.contains("not initialized")));
 }
 
 #[tokio::test]

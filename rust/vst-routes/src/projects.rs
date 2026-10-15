@@ -1605,6 +1605,7 @@ impl ProjectRoutes {
         project_id: &str,
         scope: Option<&str>,
         sha: Option<&str>,
+        submodule: Option<&str>,
     ) -> Result<Vec<ChangedPath>, ProjectRouteError> {
         let project = self.store.get_project(project_id).await.ok_or_else(|| {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
@@ -1614,7 +1615,7 @@ impl ProjectRoutes {
             return Ok(vec![]);
         }
 
-        let root = PathBuf::from(&project.absolute_path);
+        let mut root = PathBuf::from(&project.absolute_path);
         let scope = scope.unwrap_or("local");
 
         if scope == "branch" {
@@ -1623,13 +1624,35 @@ impl ProjectRoutes {
             ));
         }
 
+        // A `submodule` param switches the git working dir to that submodule's
+        // checkout; only `commit` scope is meaningful there. A submodule dir is
+        // its own repo root, so it is never a repo subdir.
+        let is_submodule = submodule.is_some();
+        if is_submodule {
+            if scope != "commit" {
+                return Err(ProjectRouteError::unprocessable(
+                    "submodule only supports scope=commit",
+                    None,
+                ));
+            }
+            root = match crate::worktrees::resolve_submodule_dir_route(&root, submodule).await {
+                Ok(Some(dir)) => dir,
+                Ok(None) => root,
+                Err(msg) => return Err(ProjectRouteError::unprocessable(msg, None)),
+            };
+        }
+
         // A project can sit in a SUBDIRECTORY of a git repo, not just at its
         // root. `git status`/`git diff` report paths relative to the REPO ROOT
         // in that case, which breaks project-relative consumers. `--show-prefix`
         // yields the (empty at the repo root) prefix to strip from `git status`
         // paths, and tells us to add `--relative` to the `git diff` calls so
         // their paths come back project-relative too.
-        let prefix = git_show_prefix(&root).await?;
+        let prefix = if is_submodule {
+            String::new()
+        } else {
+            git_show_prefix(&root).await?
+        };
         let is_subdir = !prefix.is_empty();
 
         if scope == "commit" {
@@ -1779,6 +1802,7 @@ impl ProjectRoutes {
         file_path: &str,
         scope: Option<&str>,
         sha: Option<&str>,
+        submodule: Option<&str>,
     ) -> Result<DiffResponse, ProjectRouteError> {
         let project = self.store.get_project(project_id).await.ok_or_else(|| {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
@@ -1791,13 +1815,29 @@ impl ProjectRoutes {
             ));
         }
 
-        let root = PathBuf::from(&project.absolute_path);
+        let mut root = PathBuf::from(&project.absolute_path);
         let scope = scope.unwrap_or("local");
 
         if scope == "branch" {
             return Err(ProjectRouteError::validation(
                 "scope=branch is not supported for project-scope routes",
             ));
+        }
+
+        // A `submodule` param switches the git working dir to that submodule's
+        // checkout; only `commit` scope is meaningful there.
+        if submodule.is_some() {
+            if scope != "commit" {
+                return Err(ProjectRouteError::unprocessable(
+                    "submodule only supports scope=commit",
+                    None,
+                ));
+            }
+            root = match crate::worktrees::resolve_submodule_dir_route(&root, submodule).await {
+                Ok(Some(dir)) => dir,
+                Ok(None) => root,
+                Err(msg) => return Err(ProjectRouteError::unprocessable(msg, None)),
+            };
         }
 
         let mut cmd = Command::new("git");
@@ -1881,6 +1921,7 @@ impl ProjectRoutes {
         &self,
         project_id: &str,
         limit: Option<usize>,
+        submodule: Option<&str>,
     ) -> Result<CommitsResult, ProjectRouteError> {
         let project = self.store.get_project(project_id).await.ok_or_else(|| {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
@@ -1891,7 +1932,18 @@ impl ProjectRoutes {
         }
 
         let limit = limit.unwrap_or(200).clamp(1, 1000);
-        let root_str = project.absolute_path.clone();
+        let mut root = PathBuf::from(&project.absolute_path);
+        // A `submodule` param lists commits of that submodule's checkout. The
+        // project scope has no base to pin against, so every commit stays
+        // on-branch (no `is_on_branch` filter).
+        if submodule.is_some() {
+            root = match crate::worktrees::resolve_submodule_dir_route(&root, submodule).await {
+                Ok(Some(dir)) => dir,
+                Ok(None) => root,
+                Err(msg) => return Err(ProjectRouteError::unprocessable(msg, None)),
+            };
+        }
+        let root_str = root.to_string_lossy().to_string();
         let commits = list_commits(&root_str, limit, None)
             .await
             .map_err(|e| ProjectRouteError::Internal(e.to_string()))?;

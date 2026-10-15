@@ -1986,7 +1986,12 @@ async fn handle_project_changed_paths(
 ) -> Result<Json<Vec<ChangedPath>>, (StatusCode, Json<serde_json::Value>)> {
     state
         .project_routes
-        .changed_paths(&id, q.scope.as_deref(), q.sha.as_deref())
+        .changed_paths(
+            &id,
+            q.scope.as_deref(),
+            q.sha.as_deref(),
+            q.submodule.as_deref(),
+        )
         .await
         .map(Json)
         .map_err(project_err_to_response)
@@ -2011,7 +2016,13 @@ async fn handle_project_diff(
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let DiffResponse { etag, content } = state
         .project_routes
-        .diff(&id, &file_path, q.scope.as_deref(), q.sha.as_deref())
+        .diff(
+            &id,
+            &file_path,
+            q.scope.as_deref(),
+            q.sha.as_deref(),
+            q.submodule.as_deref(),
+        )
         .await
         .map_err(project_err_to_response)?;
     Ok(harden_raw_file_response(
@@ -2036,7 +2047,7 @@ async fn handle_project_commits(
 ) -> Result<Json<CommitsResult>, (StatusCode, Json<serde_json::Value>)> {
     state
         .project_routes
-        .commits(&id, q.limit)
+        .commits(&id, q.limit, q.submodule.as_deref())
         .await
         .map(Json)
         .map_err(project_err_to_response)
@@ -2415,6 +2426,7 @@ async fn handle_worktree_gutter(
 struct DiffQuery {
     scope: Option<String>,
     sha: Option<String>,
+    submodule: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2425,6 +2437,7 @@ struct DiffstatQuery {
 #[derive(Deserialize)]
 struct CommitsQuery {
     limit: Option<usize>,
+    submodule: Option<String>,
 }
 
 async fn handle_worktree_diff(
@@ -2434,7 +2447,13 @@ async fn handle_worktree_diff(
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let DiffResponse { etag, content } = state
         .worktree_routes
-        .diff(&id, &file_path, q.scope.as_deref(), q.sha.as_deref())
+        .diff(
+            &id,
+            &file_path,
+            q.scope.as_deref(),
+            q.sha.as_deref(),
+            q.submodule.as_deref(),
+        )
         .await
         .map_err(worktree_err_to_response)?;
     Ok(harden_raw_file_response(
@@ -2459,7 +2478,12 @@ async fn handle_worktree_changed_paths(
 ) -> Result<Json<Vec<ChangedPath>>, (StatusCode, Json<serde_json::Value>)> {
     state
         .worktree_routes
-        .changed_paths(&id, q.scope.as_deref(), q.sha.as_deref())
+        .changed_paths(
+            &id,
+            q.scope.as_deref(),
+            q.sha.as_deref(),
+            q.submodule.as_deref(),
+        )
         .await
         .map(Json)
         .map_err(worktree_err_to_response)
@@ -2485,7 +2509,7 @@ async fn handle_worktree_commits(
 ) -> Result<Json<CommitsResult>, (StatusCode, Json<serde_json::Value>)> {
     state
         .worktree_routes
-        .commits(&id, q.limit)
+        .commits(&id, q.limit, q.submodule.as_deref())
         .await
         .map(Json)
         .map_err(worktree_err_to_response)

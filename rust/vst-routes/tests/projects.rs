@@ -1147,7 +1147,7 @@ async fn test_changed_paths_local_and_branch_validation() {
     std::fs::write(proj_dir.join("untracked.txt"), "new\n").unwrap();
 
     // 2.T1 — local scope (default) returns both, with correct porcelain chars.
-    let paths = routes.changed_paths("git-proj", None, None).await.unwrap();
+    let paths = routes.changed_paths("git-proj", None, None, None).await.unwrap();
     let readme = paths
         .iter()
         .find(|p| p.path == "README.md")
@@ -1161,7 +1161,7 @@ async fn test_changed_paths_local_and_branch_validation() {
 
     // 2.T2 — branch scope is rejected with Validation for project routes.
     let err = routes
-        .changed_paths("git-proj", Some("branch"), None)
+        .changed_paths("git-proj", Some("branch"), None, None)
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::Validation(_)));
@@ -1201,7 +1201,7 @@ async fn test_changed_paths_commit_scope() {
 
     // 2.T3 — commit scope returns the diff-name-status for that commit.
     let paths = routes
-        .changed_paths("commit-proj", Some("commit"), Some(&sha))
+        .changed_paths("commit-proj", Some("commit"), Some(&sha), None)
         .await
         .unwrap();
     let readme = paths
@@ -1217,7 +1217,7 @@ async fn test_changed_paths_commit_scope() {
 
     // Unresolvable sha -> Unprocessable, not 500.
     let err = routes
-        .changed_paths("commit-proj", Some("commit"), Some("deadbee"))
+        .changed_paths("commit-proj", Some("commit"), Some("deadbee"), None)
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
@@ -1507,7 +1507,7 @@ async fn test_diff_project_scope() {
 
     // 2.T5 — local diff matches `git diff HEAD -- file.rs`.
     let diff_res = routes
-        .diff("diff-proj", "file.rs", None, None)
+        .diff("diff-proj", "file.rs", None, None, None)
         .await
         .unwrap();
     let expected = Command::new("git")
@@ -1521,7 +1521,7 @@ async fn test_diff_project_scope() {
 
     // 2.T6 — branch scope is rejected with Validation.
     let err = routes
-        .diff("diff-proj", "file.rs", Some("branch"), None)
+        .diff("diff-proj", "file.rs", Some("branch"), None, None)
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::Validation(_)));
@@ -1554,7 +1554,7 @@ async fn test_commits_project_scope() {
     }
 
     // 2.T7 — exactly 3 commits, most-recent-first, all is_on_branch.
-    let result = routes.commits("commits-proj", None).await.unwrap();
+    let result = routes.commits("commits-proj", None, None).await.unwrap();
     assert_eq!(result.commits.len(), 3);
     assert!(result.commits.iter().all(|c| c.is_on_branch));
     assert_eq!(result.commits[0].subject, "Commit 1");
@@ -1588,7 +1588,7 @@ async fn test_non_git_project_short_circuit() {
 
     // changed_paths -> Ok([])
     let paths = routes
-        .changed_paths("non-git-proj", None, None)
+        .changed_paths("non-git-proj", None, None, None)
         .await
         .unwrap();
     assert!(paths.is_empty());
@@ -1600,12 +1600,12 @@ async fn test_non_git_project_short_circuit() {
     assert!(gutter.modified.is_empty());
 
     // commits -> Ok([])
-    let commits = routes.commits("non-git-proj", None).await.unwrap();
+    let commits = routes.commits("non-git-proj", None, None).await.unwrap();
     assert!(commits.commits.is_empty());
 
     // diff -> Err(Unprocessable) (422), NOT Internal (500).
     let err = routes
-        .diff("non-git-proj", "file.rs", None, None)
+        .diff("non-git-proj", "file.rs", None, None, None)
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
@@ -1650,7 +1650,7 @@ async fn test_project_in_git_subdir_paths_project_relative() {
 
     // 1) changed_paths — only the in-project files, project-relative (no repo-root
     //    `subproj/` prefix, no out-of-project `outside.txt`).
-    let paths = routes.changed_paths("subproj", None, None).await.unwrap();
+    let paths = routes.changed_paths("subproj", None, None, None).await.unwrap();
     assert!(
         paths.iter().any(|p| p.path == "inside.rs"),
         "inside.rs must appear project-relative, got {paths:?}"
@@ -1679,7 +1679,7 @@ async fn test_project_in_git_subdir_paths_project_relative() {
 
     // 3) diff — real content (not empty, not a doubled `subproj/subproj/...` path).
     let diff_res = routes
-        .diff("subproj", "inside.rs", None, None)
+        .diff("subproj", "inside.rs", None, None, None)
         .await
         .unwrap();
     assert!(
@@ -1786,4 +1786,116 @@ async fn test_project_search_integration() {
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::NotFound(_)));
+}
+
+#[tokio::test]
+async fn test_submodule_commit_scope_project() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("sub-proj");
+    let sub_dir = dir.path().join("sub-repo");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    std::fs::create_dir_all(&sub_dir).unwrap();
+    init_git_repo(&sub_dir);
+    // c2 in the submodule (c1 is init_git_repo's initial commit).
+    std::fs::write(sub_dir.join("c2.txt"), "c2\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "."])
+        .current_dir(&sub_dir)
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "c2"])
+        .current_dir(&sub_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+    let c2 = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&sub_dir)
+        .output()
+        .unwrap();
+    let c2 = String::from_utf8_lossy(&c2.stdout).trim().to_string();
+
+    init_git_repo(&proj_dir);
+    let sub = Command::new("git")
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub_dir.to_str().unwrap(),
+            "vendor/widget",
+        ])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(sub.success());
+    let commit = Command::new("git")
+        .args(["commit", "-q", "-m", "add vendor/widget submodule"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    register_git_project(&store, "sub-proj", &proj_dir).await;
+
+    // 1. commits(submodule) — project scope has no base to pin against, so every
+    //    submodule commit is on-branch.
+    let result = routes
+        .commits("sub-proj", None, Some("vendor/widget"))
+        .await
+        .unwrap();
+    assert_eq!(result.commits.len(), 2);
+    assert!(result.commits.iter().all(|c| c.is_on_branch));
+    assert_eq!(result.commits[0].sha, c2);
+
+    // 2. changed_paths commit scope runs inside the submodule.
+    let paths = routes
+        .changed_paths("sub-proj", Some("commit"), Some(&c2), Some("vendor/widget"))
+        .await
+        .unwrap();
+    assert!(
+        paths.iter().any(|p| p.path == "c2.txt"),
+        "c2 commit must report c2.txt, got {paths:?}"
+    );
+
+    // 3. diff commit scope runs inside the submodule.
+    let diff = routes
+        .diff(
+            "sub-proj",
+            "c2.txt",
+            Some("commit"),
+            Some(&c2),
+            Some("vendor/widget"),
+        )
+        .await
+        .unwrap();
+    assert!(diff.content.contains("c2"));
+
+    // 4. Unknown submodule -> 422.
+    let err = routes
+        .commits("sub-proj", None, Some("vendor/other"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
+    // 5. local scope + submodule -> 422.
+    let err = routes
+        .changed_paths("sub-proj", Some("local"), None, Some("vendor/widget"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
+    let err = routes
+        .diff(
+            "sub-proj",
+            "c2.txt",
+            Some("local"),
+            None,
+            Some("vendor/widget"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
 }
