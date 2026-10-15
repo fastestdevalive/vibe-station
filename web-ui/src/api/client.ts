@@ -999,10 +999,12 @@ export function createClientApi() {
       scope: "local" | "branch" | "commit",
       sha?: string,
       fileScope: FileScope = "worktree",
+      submodule?: string,
     ): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
+      if (submodule) q.set("submodule", submodule);
       const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/diff/${path}?${q}`);
       const text = await res.text();
       if (!res.ok) {
@@ -1118,9 +1120,11 @@ export function createClientApi() {
       scope: "local" | "branch" | "commit" = "local",
       sha?: string,
       fileScope: FileScope = "worktree",
+      submodule?: string,
     ): Promise<ChangedPathEntry[]> {
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
+      if (submodule) q.set("submodule", submodule);
       const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/changed-paths?${q}`);
       return parseJson<ChangedPathEntry[]>(res);
     },
@@ -1137,8 +1141,14 @@ export function createClientApi() {
     },
 
     /** Commit history for the worktree, most-recent-first, with per-commit diffstat. */
-    async listCommits(worktreeId: string, limit = 200, fileScope: FileScope = "worktree"): Promise<CommitLogEntry[]> {
+    async listCommits(
+      worktreeId: string,
+      limit = 200,
+      fileScope: FileScope = "worktree",
+      submodule?: string,
+    ): Promise<CommitLogEntry[]> {
       const q = new URLSearchParams({ limit: String(limit) });
+      if (submodule) q.set("submodule", submodule);
       const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/commits?${q}`);
       const { commits } = await parseJson<{ commits: CommitLogEntry[] }>(res);
       return commits;

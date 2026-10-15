@@ -7783,10 +7783,56 @@ button.dashboard-card {
 
 .vcs-submodules__row {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   padding: var(--space-1) 0;
   min-width: 0;
+}
+
+.vcs-submodules__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vcs-submodules__chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  transition: transform 0.15s ease;
+}
+
+.vcs-submodules__chevron--open {
+  transform: rotate(90deg);
+}
+
+.vcs-submodules__expanded {
+  padding-left: calc(var(--space-4) + 4px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.vcs-submodules__commits-header {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.vcs-submodules__not-init,
+.vcs-submodules__loading,
+.vcs-submodules__empty {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-style: italic;
 }
 
 .vcs-submodules__path {

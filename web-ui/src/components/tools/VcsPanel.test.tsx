@@ -548,6 +548,7 @@ describe("VcsPanel", () => {
           "commit",
           expect.stringMatching(/^sha-0-/),
           "worktree",
+          undefined,
         );
       });
       expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
@@ -578,6 +579,7 @@ describe("VcsPanel", () => {
           "commit",
           expect.stringMatching(/^sha-0-/),
           "worktree",
+          undefined,
         );
       });
       await screen.findByText("App.tsx");
@@ -595,6 +597,7 @@ describe("VcsPanel", () => {
           "commit",
           expect.stringMatching(/^sha-0-/),
           "worktree",
+          undefined,
         );
       });
     });
@@ -658,5 +661,220 @@ describe("VcsPanel", () => {
       await user.click(card);
       expect(screen.getByText(/more detail in the body/)).toBeInTheDocument();
     });
+  });
+
+  // ── Expandable submodule commit lists ──────────────────────────────────
+
+  /** Two submodules: an initialized `vendor/widget` and an uninitialized `vendor/legacy`. */
+  function submoduleFixture(): SubmoduleInfo[] {
+    return [
+      {
+        path: "vendor/widget",
+        sha: "a1b2c3d4e5f6789012345678901234567890abcd",
+        shortSha: "a1b2c3d",
+        branch: "main",
+        subject: "Bump widget renderer",
+        status: "clean",
+      },
+      {
+        path: "vendor/legacy",
+        sha: "0011223344556677889900112233445566778899",
+        shortSha: "0011223",
+        branch: null,
+        subject: null,
+        status: "uninitialized",
+      },
+    ];
+  }
+
+  /**
+   * A `listCommits` stub that serves the main pool when `submodule` is absent
+   * and a per-submodule pool when a submodule path is passed (the 4th arg), so
+   * the submodule expand flow can be asserted on without the real API.
+   */
+  function submoduleAwareListCommits(
+    main: CommitLogEntry[],
+    bySub: Record<string, CommitLogEntry[]>,
+  ) {
+    return vi.fn(async (_wt: string, limit = 200, _scope?: string, sub?: string) =>
+      ((sub ? bySub[sub] : main) ?? []).slice(0, limit),
+    );
+  }
+
+  it("submodules are collapsed by default — no submodule commit fetch fires until expanded", async () => {
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(2), { "vendor/widget": makeCommits(3) }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("Submodules");
+
+    // The main commit list was fetched, but no submodule-scoped fetch yet.
+    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree");
+    expect(spy.mock.calls.every((c) => c[3] === undefined)).toBe(true);
+    expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
+  });
+
+  it("expanding a submodule lazily fetches its log with the submodule arg", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(2), { "vendor/widget": makeCommits(3) }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("vendor/widget");
+
+    const toggle = screen.getByRole("button", { name: /vendor\/widget/i });
+    await user.click(toggle);
+
+    await screen.findByText("Commits (3)");
+    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree", "vendor/widget");
+  });
+
+  it("diffFromMain filters a submodule's list — ON shows own commits only, OFF shows all", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    // Two on-branch commits then one upstream — the ON state must hide the last.
+    const mixed = makeCommits(3, { isOnBranch: (i) => i < 2 });
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": mixed }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await screen.findByText("vendor/widget");
+    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
+
+    // Toggle ON (default): only the two own commits.
+    await screen.findByText("Commits (2)");
+
+    // Toggle OFF: all three.
+    const checkbox = screen.getByRole("checkbox", { name: /diff from main/i });
+    await user.click(checkbox);
+    await screen.findByText("Commits (3)");
+    void spy;
+  });
+
+  it("project scope hides the diff toggle and shows the full submodule log (no base to pin against)", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const mixed = makeCommits(3, { isOnBranch: (i) => i < 2 });
+    vi.spyOn(api, "listCommits").mockImplementation(
+      submoduleAwareListCommits(makeCommits(1), { "vendor/widget": mixed }),
+    );
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" scope="project" />);
+    await screen.findByText("vendor/widget");
+    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
+
+    // All three commits shown (no filtering), and no diff-from-main toggle.
+    await screen.findByText("Commits (3)");
+    expect(screen.queryByRole("checkbox", { name: /diff from main/i })).not.toBeInTheDocument();
+  });
+
+  it("clicking a submodule commit's dot opens the commit view with the submodule; back keeps the row expanded without refetch", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(3) }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+    const changedSpy = vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("vendor/widget");
+    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
+    await screen.findByText("Commits (3)");
+
+    // Use sha-1 (not sha-0): the main repo's single commit is also sha-0, so
+    // the submodule-only sha-1 dot is unambiguous.
+    await user.click(screen.getByRole("button", { name: /view diff for commit sha-1/i }));
+    await waitFor(() =>
+      expect(changedSpy).toHaveBeenCalledWith("wt-1", "commit", expect.stringMatching(/^sha-1-/), "worktree", "vendor/widget"),
+    );
+    expect(screen.getByText(/vendor\/widget · commit #sha-1/i)).toBeInTheDocument();
+
+    // Back to the list — the row is still expanded and NOT refetched.
+    await user.click(screen.getByRole("button", { name: "Commits" }));
+    await screen.findByText("Commits (3)");
+    const subCalls = spy.mock.calls.filter((c) => c[3] === "vendor/widget");
+    expect(subCalls).toHaveLength(1);
+  });
+
+  it("an uninitialized submodule expands to 'Not initialized' with no request fired", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(1), {}));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("vendor/legacy");
+
+    await user.click(screen.getByRole("button", { name: /vendor\/legacy/i }));
+
+    expect(screen.getByText("Not initialized")).toBeInTheDocument();
+    expect(spy.mock.calls.every((c) => c[3] === undefined)).toBe(true);
+  });
+
+  it("refresh refetches only the expanded submodules' logs", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(3) }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("vendor/widget");
+    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
+    await screen.findByText("Commits (3)");
+
+    await user.click(screen.getByRole("button", { name: "Refresh commits" }));
+
+    await waitFor(() => {
+      const subCalls = spy.mock.calls.filter((c) => c[3] === "vendor/widget");
+      expect(subCalls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("a submodule 'Load more' fetches more commits but leaves the shared diff-from-main toggle untouched", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "listCommits")
+      .mockImplementation(
+        submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(60) }),
+      );
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
+
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await screen.findByText("vendor/widget");
+    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
+    await screen.findByText("Commits (50)");
+
+    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
+    expect(toggle).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
+    await screen.findByText("Commits (60)");
+
+    // The shared toggle is still ON — the submodule's load-more never flips it.
+    expect(screen.getByRole("checkbox", { name: /diff from main/i })).toBeChecked();
+    expect(spy).toHaveBeenCalledWith("wt-1", 101, "worktree", "vendor/widget");
   });
 });

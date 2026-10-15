@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, ExternalLink, GitCommit, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
+import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { CommitLogEntry, FileScope, PrInfo, PrStatus, SubmoduleInfo } from "@/api/types";
+import { CommitRow, splitOwnCommits } from "@/components/tools/VcsCommitRow";
 import { VcsCommitView } from "@/components/tools/VcsCommitView";
+import { VcsSubmodules } from "@/components/tools/VcsSubmodules";
+import { useSubmoduleCommits } from "@/hooks/useSubmoduleCommits";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface VcsPanelProps {
@@ -20,73 +23,6 @@ interface VcsPanelProps {
   /** PR status from the session store (branch-guarded). Used for the error row
    *  when `api.getPr` hasn't returned a PR yet or returned null. */
   prStatus?: PrStatus | null;
-}
-
-/** Relative time like "3m ago", "2h ago", "5d ago"; falls back to a date past ~30d. */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return iso;
-  const diffMs = Date.now() - then;
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase();
-}
-
-/** Label + modifier class for a submodule's `git submodule status` state. */
-function submoduleStatus(status: SubmoduleInfo["status"]): { label: string; modifier: string } {
-  switch (status) {
-    case "clean":
-      return { label: "Clean", modifier: "clean" };
-    case "modified":
-      return { label: "Modified", modifier: "modified" };
-    case "out-of-date":
-      return { label: "Out of date", modifier: "out-of-date" };
-    case "uninitialized":
-      return { label: "Uninitialized", modifier: "uninitialized" };
-  }
-}
-
-/**
- * Top-level `.gitmodules` submodules section, shown below the commit list
- * when the worktree has any (Requirement 3f). Renders nothing when empty —
- * the commit list is the primary content and most repos have no submodules.
- */
-function SubmodulesSection({ submodules }: { submodules: SubmoduleInfo[] }) {
-  if (submodules.length === 0) return null;
-  return (
-    <div className="vcs-submodules">
-      <div className="vcs-submodules__header">Submodules</div>
-      <ul className="vcs-submodules__list">
-        {submodules.map((s) => {
-          const { label, modifier } = submoduleStatus(s.status);
-          return (
-            <li key={s.path} className="vcs-submodules__row">
-              <span className="vcs-submodules__path" title={s.path}>
-                {s.path}
-              </span>
-              {s.shortSha ? <code className="vcs-submodules__sha">{s.shortSha}</code> : null}
-              <span className="vcs-submodules__subject" title={s.subject ?? undefined}>
-                {s.subject ?? "—"}
-              </span>
-              <span className={`vcs-submodules__badge vcs-submodules__badge--${modifier}`}>{label}</span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
 }
 
 /** Icon + label + modifier class for a PR's current status. */
@@ -125,107 +61,6 @@ function PrBanner({ pr }: { pr: PrInfo }) {
   );
 }
 
-/** One row of the commit graph — a single commit's card, with expand/collapse for its body. */
-function CommitRow({
-  c,
-  isOpen,
-  onToggle,
-  onOpenDiff,
-}: {
-  c: CommitLogEntry;
-  isOpen: boolean;
-  onToggle: () => void;
-  /** Opens `VcsCommitView` scoped to this commit (item 9). */
-  onOpenDiff: (sha: string) => void;
-}) {
-  // Only commits with a body beyond the subject line get the expand
-  // affordance — a bare one-line commit has nothing more to reveal, so
-  // tapping it would just be a no-op toggle.
-  const hasBody = c.body.trim() !== c.subject.trim() && c.body.trim() !== "";
-  return (
-    <li className="vcs-graph__item">
-      <div className="vcs-graph__rail">
-        <span
-          className="vcs-graph__dot vcs-graph__dot--clickable"
-          role="button"
-          tabIndex={0}
-          aria-label={`View diff for commit ${c.shortSha}`}
-          title="View commit diff"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenDiff(c.sha);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              e.stopPropagation();
-              onOpenDiff(c.sha);
-            }
-          }}
-        >
-          <GitCommit size={11} aria-hidden="true" />
-        </span>
-        <span className="vcs-graph__line" aria-hidden />
-      </div>
-      <div
-        className={`vcs-graph__card${hasBody ? " vcs-graph__card--expandable" : ""}`}
-        role={hasBody ? "button" : undefined}
-        tabIndex={hasBody ? 0 : undefined}
-        aria-expanded={hasBody ? isOpen : undefined}
-        onClick={hasBody ? onToggle : undefined}
-        onKeyDown={
-          hasBody
-            ? (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onToggle();
-                }
-              }
-            : undefined
-        }
-      >
-        <div className="vcs-graph__subject-row">
-          <span className="vcs-graph__subject" title={hasBody ? undefined : c.subject}>
-            {c.subject || "(no message)"}
-          </span>
-        </div>
-        {hasBody && isOpen ? <pre className="vcs-graph__body">{c.body}</pre> : null}
-        <div className="vcs-graph__meta">
-          {hasBody ? (
-            <ChevronRight
-              size={12}
-              aria-hidden
-              className={`vcs-graph__chevron${isOpen ? " vcs-graph__chevron--open" : ""}`}
-            />
-          ) : null}
-          <span className="vcs-graph__avatar" title={c.authorName}>
-            {initials(c.authorName)}
-          </span>
-          <span className="vcs-graph__author">{c.authorName}</span>
-          <span className="vcs-graph__dot-sep" aria-hidden>
-            ·
-          </span>
-          <span className="vcs-graph__time" title={c.date}>
-            {relativeTime(c.date)}
-          </span>
-          <span className="vcs-graph__dot-sep" aria-hidden>
-            ·
-          </span>
-          <code className="vcs-graph__sha">{c.shortSha}</code>
-          <span className="vcs-graph__stats">
-            {c.insertions > 0 ? <span className="vcs-graph__add">+{c.insertions}</span> : null}
-            {c.deletions > 0 ? <span className="vcs-graph__del">−{c.deletions}</span> : null}
-            {c.insertions === 0 && c.deletions === 0 ? (
-              <span className="vcs-graph__nochange">no changes</span>
-            ) : null}
-          </span>
-        </div>
-      </div>
-    </li>
-  );
-}
-
-/** Commits fetched and shown per page — an initial load, and each "Load more" click. */
 const PAGE_SIZE = 50;
 
 /** Mirrors the `limit` clamp `GET /worktrees/:id/commits` applies server-side (`daemon/src/routes/worktrees.ts`). */
@@ -283,9 +118,9 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
   // tool panel unmounting when toggled off.
   const vcsSelectedCommitByWorktree = useWorkspaceStore((s) => s.vcsSelectedCommitByWorktree);
   const setVcsSelectedCommitStore = useWorkspaceStore((s) => s.setVcsSelectedCommit);
-  const selectedCommitSha = vcsSelectedCommitByWorktree[worktreeId] ?? null;
+  const selectedCommit = vcsSelectedCommitByWorktree[worktreeId] ?? null;
   const setSelectedCommitSha = useCallback(
-    (sha: string | null) => setVcsSelectedCommitStore(worktreeId, sha),
+    (sha: string | null, submodule?: string) => setVcsSelectedCommitStore(worktreeId, sha, submodule),
     [setVcsSelectedCommitStore, worktreeId],
   );
 
@@ -324,15 +159,23 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
   // commits after that point; those still get bucketed as upstream here,
   // which is an acceptable simplification for this view (they're still
   // visible, just under "from <base>" instead of inline).
-  const ownCommits = useMemo(() => {
-    if (!pageCommits) return [];
-    const splitIdx = pageCommits.findIndex((c) => !c.isOnBranch);
-    return splitIdx === -1 ? pageCommits : pageCommits.slice(0, splitIdx);
-  }, [pageCommits]);
+  const ownCommits = useMemo(
+    () => (pageCommits ? splitOwnCommits(pageCommits) : []),
+    [pageCommits],
+  );
 
   // Commits actually rendered: `ownCommits` when the toggle is ON, the full
   // unfiltered page when OFF (Requirements 1b/1c).
   const displayedCommits = diffFromMainEff ? ownCommits : (pageCommits ?? []);
+
+  // Expandable submodule commit lists (Requirement 3f→). An uninitialized
+  // submodule's row is expandable but fires no request (Requirement 6) — the
+  // hook needs to know which paths those are so it can skip the fetch.
+  const uninitializedPaths = useMemo(
+    () => new Set(submodules.filter((s) => s.status === "uninitialized").map((s) => s.path)),
+    [submodules],
+  );
+  const submoduleCommits = useSubmoduleCommits(api, worktreeId, scope, uninitializedPaths);
 
   // The controller for whichever fetch is currently in flight. Centralizing
   // cancellation here (rather than only aborting on effect cleanup) is what
@@ -405,8 +248,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
           // own-branch commits, the click was a no-visible-op with the
           // toggle ON, so turn it OFF to reveal the new page.
           const newPageCommits = list.slice(0, limit);
-          const splitIdx = newPageCommits.findIndex((c) => !c.isOnBranch);
-          const newOwnCount = splitIdx === -1 ? newPageCommits.length : splitIdx;
+          const newOwnCount = splitOwnCommits(newPageCommits).length;
           if (newOwnCount === loadMoreCheck.prevOwnCount) {
             setDiffFromMain(false);
           }
@@ -440,6 +282,9 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
     // Deliberately scoped to this effect only — manual `refresh()` of the
     // SAME worktree should keep showing old data while it reloads.
     setCommits(null);
+    // A worktree switch must also collapse every expanded submodule row — their
+    // commits belong to the previous worktree's checkout.
+    submoduleCommits.reset();
     void load(PAGE_SIZE, "initial");
     return () => activeLoad.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render (reads current api/worktreeId via closure); depending on worktreeId/api alone matches the pre-existing effect's deps.
@@ -447,6 +292,8 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
 
   const refresh = () => {
     void load(PAGE_SIZE, "initial");
+    // Refresh the submodule commit lists that are currently expanded too.
+    submoduleCommits.refresh();
   };
 
   const loadMore = () => {
@@ -461,12 +308,13 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
     void load(Math.min(pageLimit + PAGE_SIZE, SERVER_MAX_LIMIT), "more", loadMoreCheck);
   };
 
-  if (selectedCommitSha) {
+  if (selectedCommit) {
     return (
       <VcsCommitView
         api={api}
         worktreeId={worktreeId}
-        sha={selectedCommitSha}
+        sha={selectedCommit.sha}
+        submodule={selectedCommit.submodule}
         onBack={() => setSelectedCommitSha(null)}
         scope={scope}
       />
@@ -567,7 +415,16 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
             ) : null}
           </>
         )}
-        {!error && pageCommits != null ? <SubmodulesSection submodules={submodules} /> : null}
+        {!error && pageCommits != null ? (
+          <VcsSubmodules
+            submodules={submodules}
+            states={submoduleCommits.byPath}
+            onToggle={submoduleCommits.toggle}
+            onLoadMore={submoduleCommits.loadMore}
+            onOpenDiff={(sha, sub) => setSelectedCommitSha(sha, sub)}
+            diffFromMainEff={diffFromMainEff}
+          />
+        ) : null}
       </div>
     </div>
   );

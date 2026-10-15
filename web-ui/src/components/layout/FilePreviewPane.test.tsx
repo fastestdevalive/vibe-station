@@ -104,7 +104,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     render(<FilePreviewPane api={api} worktreeId="proj-1" scope="project" />);
 
     await waitFor(() => {
-      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project", undefined);
     });
 
     getDiffSpy.mockRestore();
@@ -139,7 +139,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
 
     await waitFor(() => {
       expect(getFileSpy).toHaveBeenCalledWith("proj-1", "README.md", "project");
-      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project", undefined);
     });
     expect(await screen.findByText("Compared to HEAD")).toBeInTheDocument();
     // `Promise.all([getFile, getDiff])` rejects as a whole if EITHER call
@@ -171,7 +171,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
 
     await waitFor(() => {
       expect(getFileSpy).toHaveBeenCalledWith("proj-1", "README.md", "project");
-      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "branch", undefined, "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "branch", undefined, "project", undefined);
     });
 
     getFileSpy.mockRestore();
@@ -210,7 +210,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
       />,
     );
     await waitFor(() => {
-      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc123", "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc123", "project", undefined);
     });
 
     getDiffSpy.mockRestore();

@@ -6,6 +6,7 @@ export interface FilePreviewControlled {
   path: string | null;
   scope: DiffScope;
   commitSha?: string;
+  submodule?: string;
 }
 
 export interface PreviewedPathInfo {
@@ -14,6 +15,7 @@ export interface PreviewedPathInfo {
   fileScope: FileScope;
   isWorkingTreeView: boolean;
   external: { token: string; displayPath: string } | null;
+  submodule?: string;
 }
 
 /**
@@ -77,5 +79,6 @@ export function usePreviewedPath(
     fileScope,
     isWorkingTreeView,
     external,
+    submodule: controlled?.submodule,
   };
 }

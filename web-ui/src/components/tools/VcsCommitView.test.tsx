@@ -16,13 +16,13 @@ describe("VcsCommitView", () => {
     render(<VcsCommitView api={api} worktreeId="wt-1" sha="abc1234def" onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(changedPathsSpy).toHaveBeenCalledWith("wt-1", "commit", "abc1234def", "worktree");
+      expect(changedPathsSpy).toHaveBeenCalledWith("wt-1", "commit", "abc1234def", "worktree", undefined);
     });
     await screen.findByText("App.tsx");
 
     await user.click(screen.getByText("App.tsx"));
     await waitFor(() => {
-      expect(diffSpy).toHaveBeenCalledWith("wt-1", "src/App.tsx", "commit", "abc1234def", "worktree");
+      expect(diffSpy).toHaveBeenCalledWith("wt-1", "src/App.tsx", "commit", "abc1234def", "worktree", undefined);
     });
   });
 
@@ -73,7 +73,7 @@ describe("VcsCommitView", () => {
     render(<VcsCommitView api={api} worktreeId="proj-1" sha="abc1234def" onBack={() => {}} scope="project" />);
 
     await waitFor(() => {
-      expect(changedPathsSpy).toHaveBeenCalledWith("proj-1", "commit", "abc1234def", "project");
+      expect(changedPathsSpy).toHaveBeenCalledWith("proj-1", "commit", "abc1234def", "project", undefined);
     });
     await screen.findByText("App.tsx");
 
@@ -81,7 +81,7 @@ describe("VcsCommitView", () => {
     // project scope (its `scope` prop threaded through from VcsCommitView).
     await user.click(screen.getByText("App.tsx"));
     await waitFor(() => {
-      expect(diffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc1234def", "project");
+      expect(diffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc1234def", "project", undefined);
     });
   });
 
@@ -110,7 +110,7 @@ describe("VcsCommitView", () => {
 
     await user.keyboard("{Enter}");
     await waitFor(() => {
-      expect(api.getDiff).toHaveBeenCalledWith("wt-1", "b.ts", "commit", "abc1234def", "worktree");
+      expect(api.getDiff).toHaveBeenCalledWith("wt-1", "b.ts", "commit", "abc1234def", "worktree", undefined);
     });
   });
 

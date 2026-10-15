@@ -1161,6 +1161,8 @@ export function createMockApi(seed: MockSeed = {}) {
       filePath: string,
       _scope: "local" | "branch" | "commit",
       _sha?: string,
+      _fileScope?: FileScope,
+      _submodule?: string,
     ): Promise<string> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const key = filePath.replace(/^\/+/, "");
@@ -1270,6 +1272,8 @@ export function createMockApi(seed: MockSeed = {}) {
       worktreeId: string,
       _scope: "local" | "branch" | "commit" = "local",
       _sha?: string,
+      _fileScope?: FileScope,
+      _submodule?: string,
     ): Promise<ChangedPathEntry[]> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (worktreeId === "wt-1") {
@@ -1289,7 +1293,12 @@ export function createMockApi(seed: MockSeed = {}) {
       return [];
     },
 
-    async listCommits(worktreeId: string, limit = 200): Promise<CommitLogEntry[]> {
+    async listCommits(
+      worktreeId: string,
+      limit = 200,
+      _fileScope?: FileScope,
+      _submodule?: string,
+    ): Promise<CommitLogEntry[]> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const now = new Date("2026-08-11T12:00:00Z").getTime();
       // The first OWN_COMMIT_COUNT entries of `curated` are the worktree's

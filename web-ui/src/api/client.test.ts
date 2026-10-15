@@ -459,6 +459,39 @@ describe("project-scope URL routing (git-status / commits)", () => {
     const url = fetchMock.mock.calls[0]![0] as string;
     expect(url).toContain("/api/worktrees/wt1/diff/a.rs");
   });
+
+  it("submodule param is appended to getDiff/listChangedPaths/listCommits and omitted otherwise", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      calls.push(u);
+      // listCommits parses `{commits}`; getDiff/listChangedPaths return arrays/text.
+      const body = u.includes("/commits") ? JSON.stringify({ commits: [] }) : "[]";
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // present
+    await api.getDiff("wt1", "a.rs", "local", undefined, "worktree", "vendor/widget");
+    await api.listChangedPaths("wt1", "local", undefined, "worktree", "vendor/widget");
+    await api.listCommits("wt1", 200, "worktree", "vendor/widget");
+    expect(calls[0]).toContain("submodule=vendor%2Fwidget");
+    expect(calls[1]).toContain("submodule=vendor%2Fwidget");
+    expect(calls[2]).toContain("submodule=vendor%2Fwidget");
+
+    // absent
+    await api.getDiff("wt1", "a.rs", "local");
+    await api.listChangedPaths("wt1", "local");
+    await api.listCommits("wt1");
+    expect(calls[3]).not.toContain("submodule=");
+    expect(calls[4]).not.toContain("submodule=");
+    expect(calls[5]).not.toContain("submodule=");
+  });
 });
 
 describe("pong-liveness timeout (Phase 2)", () => {
