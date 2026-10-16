@@ -22,10 +22,8 @@ import { useServerStore } from "@/hooks/useServerStore";
  * skipping it would leave `draftConfig` unset until the WS echo lands, and
  * `DraftComposer` would render the wrong composer UI in the meantime.
  *
- * Does NOT open the tab (`openProjectAgentTab`) or activate it
- * (`setActiveSession`) itself — callers do that in the order their own call
- * site requires (see item 4's note on why sidebar-initiated drafts must
- * navigate before opening the tab, so seeding isn't short-circuited).
+ * The tab is derived from the session list (entryPoint "tab"), so nothing opens
+ * it explicitly; this does NOT activate it (`setActiveSession`) — callers do.
  */
 export async function createProjectDirectDraft(api: ApiInstance, projectId: string): Promise<Session> {
   const s = await api.createDraftSession({

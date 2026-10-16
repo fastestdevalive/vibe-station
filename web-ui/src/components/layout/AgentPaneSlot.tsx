@@ -65,7 +65,6 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
   const insertTileIntoScratchCanvas = useWorkspaceStore((s) => s.insertTileIntoScratchCanvas);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
-  const openProjectAgentTab = useWorkspaceStore((s) => s.openProjectAgentTab);
 
   // `session.state` (not `.lifecycleState`) — the live `session:state` WS
   // handler (useServerSync.ts) only patches `.state` on the session object;
@@ -139,7 +138,6 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
                       insertTileIntoScratchCanvas,
                       setActiveSession,
                       setActiveTerminalSession,
-                      openProjectAgentTab,
                     })
                   }
                 />

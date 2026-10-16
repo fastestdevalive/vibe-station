@@ -10,6 +10,7 @@ import type { Session } from "@/api/types";
 import { Workspace } from "./Workspace";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { projectTabIds } from "@/lib/sessionVisibility";
 
 // Workspace mounts the full app shell (Layout, TopBar, LeftSidebar, the
 // terminal/chrome panes, ...). Stub out the libraries that need real DOM/canvas
@@ -252,7 +253,6 @@ describe("Workspace project workspace (Phase 1 routing)", () => {
       activeWorktreeId: null,
       activeDirectContextId: null,
       activeSessionId: null,
-      openDirectAgentTabsByProject: {},
     });
   });
 
@@ -280,7 +280,6 @@ describe("Workspace project workspace (Phase 1 routing)", () => {
 
     // Simulate clicking an agent tab: activate session s2 directly.
     act(() => {
-      useWorkspaceStore.getState().openProjectAgentTab("proj-a", "s2");
       useWorkspaceStore.getState().setActiveSession("s2");
     });
 
@@ -352,7 +351,6 @@ describe("Workspace project workspace (Phase 1 routing)", () => {
     const newSess = directAgent("s-new", "proj-a", "working");
     act(() => {
       useServerStore.getState().applySessionCreated(newSess);
-      useWorkspaceStore.getState().openProjectAgentTab("proj-a", "s-new");
       useWorkspaceStore.getState().setActiveSession("s-new");
     });
 
@@ -418,7 +416,7 @@ describe("Workspace project workspace (Phase 1 routing)", () => {
     expect(document.title).toBe("wt-1 — Vibe Station");
   });
 
-  it("1.T9 — a project with 2 pre-existing direct agents, entered via /project/p1/s1, seeds BOTH into the open-tab set", async () => {
+  it("1.T9 — a project with 2 pre-existing direct agents, entered via /project/p1/s1, renders BOTH as tabs", async () => {
     await seedDirectAgents([directAgent("s1", "proj-a"), directAgent("s2", "proj-a")]);
     renderProjectWorkspace(["/project/proj-a/s1"], { current: null });
 
@@ -426,9 +424,9 @@ describe("Workspace project workspace (Phase 1 routing)", () => {
       expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
     });
 
-    const open = useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"];
-    expect(open).toContain("s1");
-    expect(open).toContain("s2");
+    expect(projectTabIds("proj-a", useServerStore.getState().sessions)).toEqual(
+      expect.arrayContaining(["s1", "s2"]),
+    );
   });
 });
 
@@ -445,7 +443,6 @@ describe("Workspace project workspace (Phase 4)", () => {
       activeDirectContextId: null,
       activeSessionId: null,
       activeTerminalSessionId: null,
-      openDirectAgentTabsByProject: {},
       openFileTabsByWorktree: {},
     });
   });
@@ -544,16 +541,16 @@ describe("Workspace project workspace (Phase 4)", () => {
     expect(screen.getByRole("heading", { name: "Proj A" })).toBeInTheDocument();
   });
 
-  it("4.T12 — a project with 2 never-opened direct agents seeds both as open tabs on first visit", async () => {
+  it("4.T12 — a project with 2 never-opened direct agents derives both as tabs on first visit", async () => {
     await seedDirectAgents([directAgent("s1", "proj-a"), directAgent("s2", "proj-a")]);
     renderProjectWorkspace(["/project/proj-a"], { current: null });
 
     await waitFor(() => {
       expect(useWorkspaceStore.getState().activeDirectContextId).toBe("proj-a");
     });
-    const open = useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"];
-    expect(open).toContain("s1");
-    expect(open).toContain("s2");
+    expect(projectTabIds("proj-a", useServerStore.getState().sessions)).toEqual(
+      expect.arrayContaining(["s1", "s2"]),
+    );
   });
 
   it("4.T13 — CUJ 4: clicking 'New agent in worktree' from the project opens a worktree draft at /draft/:id (no worktree created yet)", async () => {
@@ -673,7 +670,6 @@ describe("Workspace project workspace (Phase 5 sidebar wiring)", () => {
       activeWorktreeId: null,
       activeDirectContextId: null,
       activeSessionId: null,
-      openDirectAgentTabsByProject: {},
     });
   });
 

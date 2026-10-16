@@ -58,8 +58,10 @@ to refactor it in an unrelated PR.
 
 - **One folder per feature area** (`components/<area>/` + tests, hook beside it or in `hooks/`). Shared
   shells (`Layout`, `GlobalStatusBar`, `TabsStrip`) get a mount, not feature logic.
-- **One source per piece of server state.** A component keeping its own copy (like `TabsStrip`'s
-  `localSessions`) must handle every WS event that mutates it — see "Session status".
+- **One source per piece of server state.** Read sessions/worktrees from `useServerStore` (what the
+  sidebar uses); don't keep a private fetched copy. `TabsStrip` did (`localSessions`) and tabs drifted from
+  the sidebar — it now derives its list from the store and keeps only focus side-effects. Project (direct-agent) tabs are
+  likewise derived (`projectTabIds` in `lib/sessionVisibility.ts`); there is no persisted open-tab set.
 
 ### What to watch for
 
@@ -172,14 +174,14 @@ This was violated three separate times in the same feature (the instant-draft-ag
 
 1. `TerminalPane.tsx` read `sessionStates[id]` with **no fallback at all**. A freshly-promoted draft has no entry in that map yet, so `lifecycleState` was `undefined`, which made BOTH `mountTerminal` and `showSpawningOverlay` false — no xterm mounted, no "Starting…" either, just a silent empty box until a reload repopulated the map from REST.
 2. `ChatPane.tsx`'s spawning guard read `session.lifecycleState` — frozen forever at `"drafting"`/`undefined` for any session created this page-session, so the guard could never fire; a Rich Chat agent showed its empty "Start chatting" view for the entire spawn window.
-3. `TabsStrip.tsx` keeps its own REST-fetched `localSessions` copy (worktree-scoped tabs are NOT rendered off the global store) and its WS `session:updated` handler patched `name`/`channel`/`isMain`/etc but never `.state` — and there were no handlers at all for `session:state`/`session:exited`/`session:resumed`. A tab's "Draft" badge (`s.state === "drafting"`) stuck forever after Start, even though the session was long since running, until a hard refresh forced a fresh `listSessions()` fetch.
+3. (Historical — fixed by deriving tabs from `useServerStore`.) `TabsStrip.tsx` kept its own REST-fetched `localSessions` copy (worktree-scoped tabs are NOT rendered off the global store) and its WS `session:updated` handler patched `name`/`channel`/`isMain`/etc but never `.state` — and there were no handlers at all for `session:state`/`session:exited`/`session:resumed`. A tab's "Draft" badge (`s.state === "drafting"`) stuck forever after Start, even though the session was long since running, until a hard refresh forced a fresh `listSessions()` fetch.
 
 In all three cases the left sidebar (`LeftSidebar.tsx`, `DashboardPanel.tsx`, `SubagentRow.tsx`) showed the correct status the whole time — it has always used the `sessionStates[id] ?? s.state` resolution — which is the fastest way to tell "is this a live-state-resolution bug" apart from "is the session actually stuck": if the sidebar shows it correctly and a specific pane/row doesn't, suspect this pattern first.
 
 ### What to watch for
 
 - **New status-driven UI:** resolve state via `sessionStates[id] ?? session.state`, matching the sidebar. Do not introduce a fourth divergent resolution.
-- **A component with its OWN fetched copy of sessions** (like `TabsStrip.tsx`'s `localSessions`) needs its OWN WS reconciliation for `.state`/`session:exited`/`session:resumed` — subscribing only to `session:updated` is not enough, since that event never carries `.state` at all (state changes go out as their own three distinct event types).
+- **A component with its OWN fetched copy of sessions** (avoid this; `TabsStrip.tsx` no longer has one) needs its OWN WS reconciliation for `.state`/`session:exited`/`session:resumed` — subscribing only to `session:updated` is not enough, since that event never carries `.state` at all (state changes go out as their own three distinct event types).
 - **`.lifecycleState` is not a live field.** Grep for `.lifecycleState` before adding a new read of it — every existing one is either the same intentional one-shot idempotency use `AgentPaneSlot.tsx` documents at its `session.state` comment, or a bug waiting to be found.
 
 ---

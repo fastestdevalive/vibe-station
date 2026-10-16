@@ -6,6 +6,7 @@ import {
   isTabVisibleAgent,
   pickFirstDirectAgent,
   pickNextDirectAgent,
+  projectTabIds,
   resolveSupersededChain,
 } from "@/lib/sessionVisibility";
 
@@ -76,9 +77,6 @@ export function useProjectWorkspaceUrlSync(
     // direct agent of this project.
     const firstApply = lastAppliedRef.current === null;
     const store = useWorkspaceStore.getState();
-    // Seed the open-tab set up front so the fallback picks below (and any
-    // first visit via a direct sidebar link) operate on the full tab set.
-    store.seedProjectAgentTabsIfEmpty(pid, sessions);
     let sid: string | null;
     if (params.sessionId) {
       const listed = sessions.find(
@@ -91,7 +89,7 @@ export function useProjectWorkspaceUrlSync(
         // a valid visible direct tab of this project (so a store-side pick —
         // e.g. the guard's neighbor re-selection — is never overwritten by the
         // URL's stale sid); else the first open tab; else null (Project tab).
-        const openTabs = useWorkspaceStore.getState().openDirectAgentTabsByProject[pid] ?? [];
+        const openTabs = projectTabIds(pid, sessions);
         const active = store.activeSessionId;
         const activeValid =
           active != null &&
@@ -120,7 +118,6 @@ export function useProjectWorkspaceUrlSync(
     if (store.activeProjectId !== pid || store.activeWorktreeId != null) store.selectProject(pid);
     store.setActiveDirectContext(pid);
     store.setActiveSession(sid);
-    if (sid) store.openProjectAgentTab(pid, sid);
   }, [enabled, bundleLoaded, params.projectId, params.sessionId, sessions, projects, navigate]);
 
   // Edge-triggered guard (Decisions 5, 10): if the active DIRECT agent was a
@@ -161,7 +158,7 @@ export function useProjectWorkspaceUrlSync(
       // Follow the supersededBy chain to the live replacement (existing behavior).
       store.setActiveSession(resolveSupersededChain(sessId, sessions));
     } else {
-      const openTabs = store.openDirectAgentTabsByProject[pid] ?? [];
+      const openTabs = projectTabIds(pid, sessions);
       const next = pickNextDirectAgent(
         openTabs,
         active ?? ({ id: sessId } as Session),
