@@ -86,6 +86,12 @@ pub struct NoticeSlotInner {
 pub(super) struct ActiveTurn {
     pub(super) turn_id: String,
     pub(super) cancel: CancellationToken,
+    /// Set once the turn's prompt is in flight (`TurnContext::on_prompt_dispatched`);
+    /// a mid-turn steer is only valid from then on.
+    pub(super) prompt_dispatched: bool,
+    /// Wakes the turn's `select!` to (re-)run `steer_queued_head`: fired on
+    /// prompt dispatch and whenever a newly eligible head appears mid-turn.
+    pub(super) steer_wake: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl NoticeSlotInner {
@@ -170,6 +176,10 @@ pub(super) struct State {
     pub(super) enqueue_counter: u64,
     pub(super) running: bool,
     pub(super) active_turn: Option<ActiveTurn>,
+    /// Queued turn whose steer RPC is in flight (set around the RPC by
+    /// `steer_queued_head`). Cancel/edit treat it as not found: the agent may
+    /// already be receiving it.
+    pub(super) steering_turn_id: Option<String>,
     pub(super) aborted_since_last_drain: bool,
     pub(super) promoted_notice: bool,
     pub(super) active_fork_from_chat_id: Option<String>,
@@ -352,6 +362,7 @@ impl JsonAgentSession {
             enqueue_counter: 0,
             running: false,
             active_turn: None,
+            steering_turn_id: None,
             aborted_since_last_drain: false,
             promoted_notice: false,
             active_fork_from_chat_id: None,
@@ -467,14 +478,7 @@ impl JsonAgentSession {
                 .collect(),
             usage: s.usage.clone(),
             cwd: Some(self.0.cwd.display().to_string()),
-            can_steer: Some(
-                s.running
-                    && s.connection.as_ref().map_or(false, |c| {
-                        use crate::acp_transport::AcpTransport;
-                        c.is_alive() && c.supports_steering()
-                    })
-                    && self.0.plugin.supports_mid_turn_steering(),
-            ),
+            can_steer: Some(self.can_steer_now(&s)),
             commands,
             notice_slot: notice_slot_meta,
             active_turn_id: s.active_turn.as_ref().map(|t| t.turn_id.clone()),

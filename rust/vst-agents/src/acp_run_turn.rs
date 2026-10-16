@@ -132,6 +132,9 @@ pub async fn run_turn_acp(
 
     let prompt_blocks = (params.build_prompt_blocks)(&ctx, &input, system.as_deref());
     let turn = conn.send_prompt(&acp_session_id, prompt_blocks);
+    if let Some(cb) = &ctx.on_prompt_dispatched {
+        cb();
+    }
 
     // Drain the raw `SessionUpdate`s through normalize. A cancel interrupts the
     // drain at any point (even while parked on an idle `recv`), and a killed

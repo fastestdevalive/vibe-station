@@ -1,5 +1,8 @@
 //! `JsonAgentSession` drain loop — the sequential turn runner.
 //!
+//! **Invariant (steer-on-ready):** a queued turn is steered into the running
+//!   turn at the first moment it can be (`steer_queued_head`, on prompt
+//!   dispatch); otherwise it runs here, when the turn ends.
 //! **Invariant (R5b):** Human queue always drains before the notice slot fires.
 //! **Invariant (FIX-G):** `aborted_since_last_drain` prevents the notice slot
 //!   from firing immediately after a user-initiated abort.
@@ -185,11 +188,14 @@ impl JsonAgentSession {
         }
 
         let cancel = CancellationToken::new();
+        let dispatched = std::sync::Arc::new(tokio::sync::Notify::new());
         {
             let mut s = self.0.state.lock().unwrap();
             s.active_turn = Some(super::ActiveTurn {
                 turn_id: turn.turn_id.clone(),
                 cancel: cancel.clone(),
+                prompt_dispatched: false,
+                steer_wake: dispatched.clone(),
             });
             // A real turn closes any open out-of-band burst.
             s.out_of_band_turn_id = None;
@@ -273,6 +279,25 @@ impl JsonAgentSession {
             }))
         };
 
+        // Prompt-dispatch signal: flips `can_steer` and wakes the select below
+        // to steer the queue head (CLI-agnostic — fired by `run_turn_acp`).
+        let on_prompt_dispatched: Option<crate::plugin::OnPromptDispatched> = {
+            let this = self.clone();
+            let notify = dispatched.clone();
+            let turn_id = turn.turn_id.clone();
+            Some(std::sync::Arc::new(move || {
+                {
+                    let mut s = this.0.state.lock().unwrap();
+                    match s.active_turn.as_mut() {
+                        Some(t) if t.turn_id == turn_id => t.prompt_dispatched = true,
+                        _ => return,
+                    }
+                }
+                this.emit_meta();
+                notify.notify_one();
+            }))
+        };
+
         let ctx = TurnContext {
             cwd: self.0.cwd.clone(),
             project,
@@ -287,6 +312,7 @@ impl JsonAgentSession {
             system_prompt_file: self.0.system_prompt_file.clone(),
             daemon_port: self.0.daemon_port,
             on_spawn,
+            on_prompt_dispatched,
             get_acp_connection,
         };
 
@@ -298,6 +324,9 @@ impl JsonAgentSession {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => { break; }
+                _ = dispatched.notified() => {
+                    self.steer_queued_head(&cancel).await;
+                }
                 maybe_ev = receiver.recv() => {
                     let Some(mut ev) = maybe_ev else { break; };
                     if cancel.is_cancelled() { break; }

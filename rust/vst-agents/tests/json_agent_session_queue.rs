@@ -979,3 +979,386 @@ async fn fork_while_held_turn_survives() {
         "held turn must survive the fork (a fork must not drop an unrun held turn)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Steer-on-ready: a queued turn is steered once the running turn's prompt is
+// dispatched (real `run_turn_acp` + `fakeAcpAgent.mjs` `steering_strict`).
+// ---------------------------------------------------------------------------
+
+/// Plugin driving the REAL shared `run_turn_acp` against the fake agent, with
+/// steering trusted. `env` configures the fixture's `steering_strict` mode.
+struct SteerPlugin {
+    env: std::collections::HashMap<String, String>,
+}
+
+impl AgentPlugin for SteerPlugin {
+    fn name(&self) -> &str {
+        "steer-mock"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn supports_mid_turn_steering(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        input: TurnInput,
+        ctx: TurnContext,
+        cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut env = self.env.clone();
+        env.insert("FAKE_ACP_MODE".into(), "steering_strict".into());
+        let spec = vst_agents::acp_connection::AcpLaunchSpec {
+            command: "node".to_string(),
+            args: vec![format!(
+                "{}/tests/fixtures/fakeAcpAgent.mjs",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+            cwd: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            env,
+            initialize_timeout_ms: None,
+            prompt_timeout_ms: None,
+            reap_detached_descendants: false,
+        };
+        let params = vst_agents::acp_run_turn::RunTurnAcpParams {
+            provider: vst_types::NormalizedEventProvider::Claude,
+            build_spec: Box::new(move |_| spec.clone()),
+            enrich: None,
+            first_turn_session_init: None,
+            build_prompt_blocks: Box::new(|_c, input, _sys| {
+                vec![agent_client_protocol::schema::v1::ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new(input.message.clone()),
+                )]
+            }),
+            emit_refusal_error: false,
+            stuck_turn_idle_ms: None,
+            stuck_turn_cancel_grace_ms: None,
+        };
+        tokio::spawn(vst_agents::acp_run_turn::run_turn_acp(
+            tx, input, ctx, cancel, params,
+        ));
+        rx
+    }
+}
+
+struct SteerHarness {
+    _dir: tempfile::TempDir,
+    _home: vst_agents::home::HomeGuard,
+    session: JsonAgentSession,
+    steer_log: std::path::PathBuf,
+}
+
+impl SteerHarness {
+    fn new(extra_env: &[(&str, &str)]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let home = vst_agents::home::with_home(dir.path().to_path_buf());
+        let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+        let (tx, _rx) = tokio::sync::broadcast::channel(64);
+        let steer_log = dir.path().join("steer.log");
+        let mut env: std::collections::HashMap<String, String> = extra_env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        env.insert("STEER_OUT_FILE".into(), steer_log.display().to_string());
+        let session = JsonAgentSession::new(JsonAgentSessionOptions {
+            project: common::make_project("p1"),
+            worktree: None,
+            session: common::make_session("s1"),
+            plugin: Arc::new(SteerPlugin { env }),
+            daemon_port: 0,
+            cli: vst_types::NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle,
+            broadcaster: vst_types::Broadcaster(tx),
+        });
+        Self {
+            _dir: dir,
+            _home: home,
+            session,
+            steer_log,
+        }
+    }
+
+    fn steered(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.steer_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Run a first (fast) turn to completion so later turns may steer.
+    async fn finish_first_turn(&self) {
+        self.session.enqueue("first".into(), vec![], None, None);
+        wait_idle(&self.session).await;
+    }
+
+    /// Wait until the running turn's prompt is in flight (`can_steer`).
+    async fn wait_dispatched(&self) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while self.session.get_meta().can_steer != Some(true) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("prompt should be dispatched");
+    }
+
+    fn user_events(&self, turn_id: &str) -> Vec<NormalizedEvent> {
+        self.session
+            .read_transcript()
+            .into_iter()
+            .filter(|e| {
+                e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(turn_id)
+            })
+            .collect()
+    }
+}
+
+async fn sleep_ms(ms: u64) {
+    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+}
+
+/// A message queued behind a running turn is steered right after dispatch (not
+/// at turn end), keeps its queued `turn_id`, and gets exactly one user row.
+#[tokio::test]
+async fn queued_head_is_steered_after_prompt_dispatch() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "1500")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    // Queued before the prompt exists: cannot steer yet.
+    let q = h.session.enqueue("three".into(), vec![], None, None);
+    assert!(h.session.get_meta().can_steer != Some(true) || h.steered().is_empty());
+
+    h.wait_dispatched().await;
+    sleep_ms(300).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    let meta = h.session.get_meta();
+    assert_eq!(meta.queue_depth, 0, "head left the queue once injected");
+    assert!(meta.active_turn_id.is_some(), "turn two is still running");
+    let rows = h.user_events(&q.turn_id);
+    assert_eq!(rows.len(), 1, "one user row under the queued turn_id");
+    assert_eq!(rows[0].text.as_deref(), Some("three"));
+    h.session.abort_and_drain();
+}
+
+/// The very first turn of a session never steers (`first_turn_done` is false;
+/// the steer RPC is not even attempted): the queued message stays queued, then
+/// runs at turn end exactly once (never lost, never duplicated).
+#[tokio::test]
+async fn first_ever_turn_never_steers_and_queue_runs_fifo() {
+    let h = SteerHarness::new(&[("STEER_FIRST_MS", "300"), ("STEER_PROMPT_MS", "50")]);
+    h.session.enqueue("one".into(), vec![], None, None);
+    let q = h.session.enqueue("two".into(), vec![], None, None);
+    sleep_ms(200).await;
+    assert!(h.steered().is_empty(), "first turn must not steer");
+    assert_eq!(h.session.get_meta().queue_depth, 1);
+    wait_idle(&h.session).await;
+    assert!(h.steered().is_empty());
+    assert_eq!(h.user_events(&q.turn_id).len(), 1);
+}
+
+/// Attachments and fork turns are not text-steerable: the head stays queued.
+#[tokio::test]
+async fn attachment_and_fork_heads_stay_queued() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "800")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let att = vst_types::Attachment {
+        id: "a".into(),
+        name: "a.txt".into(),
+        path: "/tmp/a.txt".into(),
+        size: 1,
+        mime: "text/plain".into(),
+    };
+    h.session.enqueue("with-att".into(), vec![att], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(250).await;
+    assert!(h.steered().is_empty());
+    assert_eq!(h.session.get_meta().queue_depth, 1);
+    h.session.abort_and_drain();
+    // `with_home` is process-global: release the first harness's guard first.
+    drop(h);
+
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "800")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.session
+        .enqueue("fork".into(), vec![], None, Some("chat-x".into()));
+    h.wait_dispatched().await;
+    sleep_ms(250).await;
+    assert!(h.steered().is_empty());
+    assert_eq!(h.session.get_meta().queue_depth, 1);
+    h.session.abort_and_drain();
+}
+
+/// Stop (cancel) while the steer RPC is in flight: the RPC outcome is still
+/// awaited, so the message the agent received is delivered exactly once and
+/// the head is NOT re-run as a fresh turn.
+#[tokio::test]
+async fn cancel_during_steer_rpc_delivers_exactly_once() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000"), ("STEER_DELAY_MS", "800")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let q = h.session.enqueue("three".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(100).await; // steer RPC now parked in the fake agent
+    assert!(h.session.stop_active_turn(None));
+    wait_idle(&h.session).await;
+    sleep_ms(300).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    assert_eq!(h.user_events(&q.turn_id).len(), 1, "no fresh re-run");
+    assert_eq!(h.session.get_meta().queue_depth, 0);
+}
+
+/// Promote (send-now) of the head during the steer RPC: still delivered
+/// exactly once, never re-run as its own turn.
+#[tokio::test]
+async fn promote_during_steer_rpc_delivers_exactly_once() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000"), ("STEER_DELAY_MS", "800")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let q3 = h.session.enqueue("three".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(100).await;
+    assert!(h.session.promote_queued_turn(&q3.turn_id));
+    wait_idle(&h.session).await;
+    sleep_ms(300).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    assert_eq!(h.user_events(&q3.turn_id).len(), 1, "no fresh re-run");
+    assert_eq!(h.session.get_meta().queue_depth, 0);
+}
+
+/// abort_and_drain during the steer RPC: the agent still got the text, so its
+/// user row is emitted after `Injected` and the queue stays empty.
+#[tokio::test]
+async fn abort_during_steer_rpc_still_emits_delivered_row() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000"), ("STEER_DELAY_MS", "800")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let q = h.session.enqueue("three".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(100).await;
+    h.session.abort_and_drain();
+    sleep_ms(1200).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    assert_eq!(h.user_events(&q.turn_id).len(), 1);
+    assert_eq!(h.session.get_meta().queue_depth, 0);
+}
+
+/// Cancel / edit of the head while its steer RPC is in flight are refused
+/// (same as an unknown id) — they must not succeed and then be delivered.
+#[tokio::test]
+async fn cancel_and_edit_of_head_during_steer_rpc_are_not_found() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000"), ("STEER_DELAY_MS", "800")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let q = h.session.enqueue("three".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(100).await;
+    assert!(!h.session.cancel_queued_turn(&q.turn_id));
+    assert!(h.session.begin_edit_queued_turn(&q.turn_id).is_none());
+    assert!(!h
+        .session
+        .resubmit_queued_turn(&q.turn_id, "x".into(), vec![], true));
+    sleep_ms(1000).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    let rows = h.user_events(&q.turn_id);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text.as_deref(), Some("three"));
+    h.session.abort_and_drain();
+}
+
+/// A `promptRequired` answer (prompt not yet written) is retried, so the head
+/// is still steered rather than waiting for turn end.
+#[tokio::test]
+async fn steer_retries_prompt_required_then_injects() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000"), ("STEER_REJECT_FIRST", "2")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let q = h.session.enqueue("three".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(600).await;
+
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    assert_eq!(h.session.get_meta().queue_depth, 0);
+    assert_eq!(h.user_events(&q.turn_id).len(), 1);
+    h.session.abort_and_drain();
+}
+
+/// Cancelling an ineligible head (attachment) mid-turn exposes the next
+/// message as head; it is steered without waiting for turn end.
+#[tokio::test]
+async fn cancelling_ineligible_head_steers_the_next_one() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000")]);
+    h.finish_first_turn().await;
+
+    h.session.enqueue("two".into(), vec![], None, None);
+    let att = vst_types::Attachment {
+        id: "a".into(),
+        name: "a.txt".into(),
+        path: "/tmp/a.txt".into(),
+        size: 1,
+        mime: "text/plain".into(),
+    };
+    let blocker = h.session.enqueue("with-att".into(), vec![att], None, None);
+    let q = h.session.enqueue("four".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(250).await;
+    assert!(h.steered().is_empty(), "blocked behind the attachment head");
+
+    assert!(h.session.cancel_queued_turn(&blocker.turn_id));
+    sleep_ms(400).await;
+    assert_eq!(h.steered(), vec!["four".to_string()]);
+    assert_eq!(h.user_events(&q.turn_id).len(), 1);
+    h.session.abort_and_drain();
+}

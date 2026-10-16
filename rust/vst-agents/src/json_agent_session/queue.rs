@@ -38,6 +38,12 @@ pub enum ForkResult {
     NotFound,
 }
 
+/// Upper bound on one steer RPC; past it the head stays queued.
+const STEER_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Attempts when the agent answers `PromptRequired` (prompt not yet written).
+const STEER_PROMPT_REQUIRED_TRIES: u32 = 3;
+const STEER_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
+
 impl JsonAgentSession {
     /// Enqueue a human turn and kick the drain loop. Does NOT persist a `user`
     /// event here — the turn's transcript row is emitted at run time, when the
@@ -96,10 +102,29 @@ impl JsonAgentSession {
         }
     }
 
-    /// Submit a user turn, steering it mid-turn when possible. Steers iff ALL
-    /// are true: running, active_turn not cancelled, queue empty, no
-    /// attachments, not first turn pending, and the connection is alive and
-    /// supports steering.
+    /// Steer-eligibility shared by `submit()`, queue-head steering and the
+    /// `can_steer` meta flag: a turn is running, not cancelled, past its first
+    /// turn, its prompt is IN FLIGHT (`prompt_dispatched` — before that a steer
+    /// gets `PromptRequired` or lands ahead of the turn's own prompt), and the
+    /// connection is alive, advertises steering, and the plugin trusts it.
+    pub(super) fn can_steer_now(&self, s: &State) -> bool {
+        s.running
+            && s.active_turn
+                .as_ref()
+                .map_or(false, |t| t.prompt_dispatched && !t.cancel.is_cancelled())
+            && s.first_turn_done
+            && s.connection
+                .as_ref()
+                .map_or(false, |c| c.is_alive() && c.supports_steering())
+            && self.0.plugin.supports_mid_turn_steering()
+    }
+
+    /// Submit a user turn, steering it mid-turn when possible. Steers iff
+    /// `can_steer_now` AND the queue is empty and there are no attachments.
+    ///
+    /// **Invariant:** a queued turn is steered at the first moment it can be
+    /// (`steer_queued_head`, fired when the running turn's prompt is
+    /// dispatched), else it runs when the turn ends (`drain_loop`).
     pub async fn submit(
         &self,
         message: String,
@@ -109,18 +134,7 @@ impl JsonAgentSession {
     ) -> SubmitResult {
         let can_attempt_steer = {
             let s = self.0.state.lock().unwrap();
-            s.running
-                && s.active_turn
-                    .as_ref()
-                    .map_or(false, |t| !t.cancel.is_cancelled())
-                && s.queue.is_empty()
-                && attachments.is_empty()
-                && s.first_turn_done
-                && s.connection.as_ref().map_or(false, |c| c.is_alive())
-                && s.connection
-                    .as_ref()
-                    .map_or(false, |c| c.supports_steering())
-                && self.0.plugin.supports_mid_turn_steering()
+            self.can_steer_now(&s) && s.queue.is_empty() && attachments.is_empty()
         };
 
         if can_attempt_steer {
@@ -148,6 +162,120 @@ impl JsonAgentSession {
             turn_id: result.turn_id,
             queue_position: result.queue_position,
             delivery: SubmitDelivery::Queued,
+        }
+    }
+
+    /// Steer queued turns into the running turn, head first, as soon as its
+    /// prompt is dispatched (and again whenever a new head becomes eligible,
+    /// via `ActiveTurn::steer_wake`). Runs on the drain task (inside
+    /// `run_one_turn`'s `select!`), so `drain_loop` cannot pop concurrently.
+    /// The head stays IN the queue during the RPC and is removed by id only
+    /// after `Injected`. Stops at the first ineligible/failed head (FIFO).
+    ///
+    /// The steer outcome is ALWAYS awaited (bounded by `STEER_RPC_TIMEOUT`),
+    /// even if the turn is cancelled meanwhile: the agent receives the message
+    /// as soon as the request is written, so abandoning the RPC and re-running
+    /// the head would deliver it twice. While the RPC is in flight the head is
+    /// `steering_turn_id`: cancel/edit of it report not-found, and an
+    /// `abort_and_drain` that clears the queue still gets its user row emitted
+    /// after `Injected`, so the transcript matches what the agent got.
+    ///
+    /// `PromptRequired` is retried (`STEER_PROMPT_REQUIRED_TRIES`, backoff
+    /// `STEER_RETRY_BACKOFF`) because the dispatch callback fires before
+    /// `session/prompt` is necessarily written. If all fail the head stays
+    /// queued and runs at turn end.
+    ///
+    /// Head-only exclusions: attachments (steer carries text blocks only),
+    /// fork turns (need a fresh harness session) and skill invocations (raw
+    /// text bypasses `resolve_skill_invocations`).
+    pub(super) async fn steer_queued_head(&self, cancel: &tokio_util::sync::CancellationToken) {
+        use crate::acp_transport::SteerOutcome;
+        use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
+        let mut prompt_required_tries = 0u32;
+        loop {
+            if self.is_released() {
+                return;
+            }
+            let (head, conn, catalog) = {
+                let mut s = self.0.state.lock().unwrap();
+                let head = s.queue.front().cloned();
+                match head {
+                    Some(h)
+                        if self.can_steer_now(&s)
+                            && h.attachments.is_empty()
+                            && h.fork_from_chat_id.is_none() =>
+                    {
+                        let cmds = s.commands.clone().unwrap_or_default();
+                        let conn = s.connection.clone();
+                        // Mark BEFORE releasing the lock so cancel/edit can
+                        // never slip between eligibility and the RPC.
+                        s.steering_turn_id = Some(h.turn_id.clone());
+                        (h, conn, cmds)
+                    }
+                    _ => return,
+                }
+            };
+            let clear_marker = |this: &Self| {
+                this.0.state.lock().unwrap().steering_turn_id = None;
+            };
+            let Some(conn) = conn else {
+                clear_marker(self);
+                return;
+            };
+            let merged = crate::skill_resolution::get_merged_skill_catalog(&catalog);
+            let resolved =
+                crate::skill_resolution::resolve_skill_invocations(&head.raw_message, &merged);
+            if !resolved.skill_invocations.is_empty() {
+                clear_marker(self);
+                return;
+            }
+
+            let blocks = vec![ContentBlock::Text(TextContent::new(
+                head.raw_message.clone(),
+            ))];
+            let outcome = tokio::time::timeout(STEER_RPC_TIMEOUT, conn.steer(blocks))
+                .await
+                .unwrap_or(SteerOutcome::Unsupported);
+
+            match outcome {
+                SteerOutcome::Injected => {
+                    // Take the head out by id. It may be gone already (the
+                    // queue was cleared by `abort_and_drain` mid-RPC): the
+                    // agent still got the text, so emit its row regardless.
+                    {
+                        let mut s = self.0.state.lock().unwrap();
+                        s.steering_turn_id = None;
+                        if let Some(i) = s.queue.iter().position(|t| t.turn_id == head.turn_id) {
+                            s.queue.remove(i);
+                        }
+                        Self::sync_idle_state_inner(&mut s);
+                    }
+                    self.emit_user_event(
+                        &head.turn_id,
+                        &head.raw_message,
+                        &[],
+                        EmitUserEventOpts::default(),
+                    );
+                    self.emit_meta();
+                    prompt_required_tries = 0;
+                }
+                SteerOutcome::PromptRequired => {
+                    clear_marker(self);
+                    prompt_required_tries += 1;
+                    if prompt_required_tries >= STEER_PROMPT_REQUIRED_TRIES {
+                        return;
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return,
+                        _ = tokio::time::sleep(STEER_RETRY_BACKOFF) => {}
+                    }
+                }
+                SteerOutcome::Unsupported => {
+                    clear_marker(self);
+                    return;
+                }
+            }
         }
     }
 
@@ -221,6 +349,9 @@ impl JsonAgentSession {
         // Capture the turn before removal so we can re-emit.
         let removed = {
             let mut s = self.0.state.lock().unwrap();
+            if s.steering_turn_id.as_deref() == Some(turn_id) {
+                return false; // being delivered to the agent right now
+            }
             let in_queue = s.queue.iter().position(|t| t.turn_id == turn_id);
             let from_queue = if let Some(idx) = in_queue {
                 Some(s.queue.remove(idx).unwrap())
@@ -246,6 +377,7 @@ impl JsonAgentSession {
                 Self::sync_idle_state_inner(&mut s);
             }
             self.emit_meta();
+            self.wake_steer();
             true
         } else {
             false
@@ -287,6 +419,9 @@ impl JsonAgentSession {
         turn_id: &str,
     ) -> Option<(String, Vec<Attachment>, usize)> {
         let mut s = self.0.state.lock().unwrap();
+        if s.steering_turn_id.as_deref() == Some(turn_id) {
+            return None; // being delivered to the agent right now
+        }
         // Already held — idempotent re-acquire.
         if let Some(held) = s.holds.get(turn_id) {
             let msg = held.turn.raw_message.clone();
@@ -323,6 +458,9 @@ impl JsonAgentSession {
         edited: bool,
     ) -> bool {
         let mut s = self.0.state.lock().unwrap();
+        if s.steering_turn_id.as_deref() == Some(turn_id) {
+            return false;
+        }
         let Some(held) = s.holds.remove(turn_id) else {
             return false;
         };
@@ -339,8 +477,24 @@ impl JsonAgentSession {
         drop(s);
 
         self.emit_meta();
+        self.wake_steer();
         self.kick_drain();
         true
+    }
+
+    /// Re-run queue-head steering on the active turn (no-op unless its prompt
+    /// is in flight): a cancel/resubmit may have exposed a new eligible head.
+    fn wake_steer(&self) {
+        let wake = {
+            let s = self.0.state.lock().unwrap();
+            s.active_turn
+                .as_ref()
+                .filter(|t| t.prompt_dispatched)
+                .map(|t| t.steer_wake.clone())
+        };
+        if let Some(w) = wake {
+            w.notify_one();
+        }
     }
 
     /// Edit an already-ANSWERED turn → fork (R3.1/R3.4/R3.5). Truncates the

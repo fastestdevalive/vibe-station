@@ -80,6 +80,7 @@ fn ctx_with_spec(spec: AcpLaunchSpec) -> (TurnContext, Arc<Mutex<Option<AcpConne
             system_prompt_file: PathBuf::from("/tmp/sp.md"),
             daemon_port: 0,
             on_spawn: None,
+            on_prompt_dispatched: None,
             get_acp_connection,
         },
         captured,
@@ -324,6 +325,7 @@ async fn get_acp_connection_failure_emits_error() {
         system_prompt_file: PathBuf::from("/tmp/sp.md"),
         daemon_port: 0,
         on_spawn: None,
+        on_prompt_dispatched: None,
         get_acp_connection,
     };
 
