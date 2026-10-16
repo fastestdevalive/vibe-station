@@ -201,7 +201,6 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
     const draftSpy = vi.spyOn(api, "createDraftSession").mockResolvedValue(draft);
     const directSpy = vi.spyOn(api, "createDirectSession");
     const setActiveSpy = vi.spyOn(useWorkspaceStore.getState(), "setActiveSession");
-    const openTabSpy = vi.spyOn(useWorkspaceStore.getState(), "openProjectAgentTab");
 
     await userEvent.click(screen.getByRole("button", { name: NEW_DIRECT }));
 
@@ -213,12 +212,10 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
       draftConfig: { entryPoint: "tab", channel: "json" },
     });
     expect(directSpy).not.toHaveBeenCalled();
-    expect(openTabSpy).toHaveBeenCalledWith("p1", "sess-new");
 
     draftSpy.mockRestore();
     directSpy.mockRestore();
     setActiveSpy.mockRestore();
-    openTabSpy.mockRestore();
   });
 
   it("2.T6 (revised) — both quick actions are enabled without a mode check (DraftComposer resolves its own mode)", () => {
@@ -439,8 +436,8 @@ describe("ProjectHomeTab — Phase 3 (bucketed sections + Direct agents list)", 
   });
 
   it("excludes drafting direct sessions from the Direct agents list and from the empty state (regression)", () => {
-    // A drafting (direct) session is not a live agent — the sidebar and
-    // seedProjectAgentTabsIfEmpty both treat drafts separately. It must not
+    // A drafting (direct) session is not a live agent — the sidebar
+    // treats drafts separately. It must not
     // appear in the "Direct agents" list, nor make `isEmpty` false.
     const draft = makeSession({
       id: "draft-d1",
@@ -474,18 +471,15 @@ describe("ProjectHomeTab — Phase 3 (bucketed sections + Direct agents list)", 
     expect(onOpenAgent).toHaveBeenCalledWith({ worktreeId: "wt-1", sessionId: "wt-sess" });
   });
 
-  it("item 1 — clicking a direct-agent row adds it to the open-tab set and activates it", async () => {
+  it("item 1 — clicking a direct-agent row activates it", async () => {
     const direct = makeSession({ id: "d1", name: "Direct One" });
-    const openTabSpy = vi.spyOn(useWorkspaceStore.getState(), "openProjectAgentTab");
     const setActiveSpy = vi.spyOn(useWorkspaceStore.getState(), "setActiveSession");
 
     renderTab({ sessions: [direct] });
 
     await userEvent.click(screen.getByRole("button", { name: /Direct One/ }));
-    expect(openTabSpy).toHaveBeenCalledWith("p1", "d1");
     expect(setActiveSpy).toHaveBeenCalledWith("d1");
 
-    openTabSpy.mockRestore();
     setActiveSpy.mockRestore();
   });
 

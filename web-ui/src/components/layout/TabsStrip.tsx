@@ -22,7 +22,7 @@ import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Channel, Session } from "@/api/types";
 import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
-import { compareTabOrder, pickWorktreeAgent } from "@/lib/sessionVisibility";
+import { compareTabOrder, isProjectTabAgent, pickWorktreeAgent } from "@/lib/sessionVisibility";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
@@ -188,12 +188,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     const activeTab = el.querySelector<HTMLElement>('[data-active="true"]');
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }, [activeSessionId]);
-  const [localSessions, setSessions] = useState<Session[]>([]);
-  // Mirrors the rendered `sessions` list so the WS effect — whose deps are
-  // deliberately stable — can read it without re-subscribing on every change.
-  const sessionsRef = useRef<Session[]>([]);
-  /** Worktree list finished (project scope is always ready from the server store). */
-  const [sessionsLoaded, setSessionsLoaded] = useState(isProject);
+  /** Shared server store has done its first fetch. */
+  const sessionsLoaded = useServerStore((s) => s.loaded);
+  /** Last rendered tab order, for picking a neighbour after a delete. */
+  const prevOrderedRef = useRef<Session[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
 
@@ -204,7 +202,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const [resetMenu, setResetMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [resetTarget, setResetTarget] = useState<Session | null>(null);
   const [resetHandoff, setResetHandoff] = useState(false);
-  const { reset, modeDialog } = useSessionReset(api, () => void refreshTabs());
+  const { reset, modeDialog } = useSessionReset(api);
 
   useEffect(() => {
     if (!resetMenu) return undefined;
@@ -291,46 +289,33 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       .renameSession(id, trimmed)
       .catch(() => {
         /* surface errors later */
-      })
-      .then(() => refreshTabs());
+      });
   }
 
-  // Project scope: direct-session terminals live in the global server store
-  // (no worktree). Derive them instead of fetching per-worktree.
+  // Tabs are derived from the shared server store — the same source as the
+  // sidebar — so the two can never drift. Worktree scope: the worktree's
+  // sessions of this kind. Project scope: direct (worktree-less) sessions.
   const serverSessions = useServerStore((s) => s.sessions);
-  const openAgentTabIds = useWorkspaceStore((s) =>
-    isProject && worktreeId ? (s.openDirectAgentTabsByProject[worktreeId] ?? null) : null,
-  );
-  const projectSessions = useMemo(
-    () =>
-      isProject && worktreeId
-        ? serverSessions.filter(
-            (s) =>
-              s.projectId === worktreeId &&
-              s.worktreeId === null &&
-              s.type === kind &&
-              // Decision 5 (4.1) — agent tabs only show sessions in the open-tab
-              // set; terminal tabs keep showing every project terminal.
-              (kind !== "agent" || (openAgentTabIds ?? []).includes(s.id)),
-          )
-        : [],
-    [isProject, worktreeId, serverSessions, kind, openAgentTabIds],
-  );
-  const sessions = isProject ? projectSessions : localSessions;
-  const historySessions = isProject ? serverSessions : sessions;
-  // Keep the ref in step so the WS `session:created` effect — whose deps are
-  // deliberately stable — can tell whether the currently-active id still
-  // refers to a session that exists.
-  sessionsRef.current = sessions;
-  // Reorder purely by re-sorting this array before render, by each session's
-  // REAL server `sortOrder` — sessions stay keyed by `s.id` in the .map()
-  // below, so this never causes a remount of anything (and TabsStrip doesn't
-  // render TerminalPane/ChatPane itself anyway — see SortableTab's doc comment).
+  const sessions = useMemo(() => {
+    if (!worktreeId) return [];
+    if (!isProject) {
+      return serverSessions.filter((s) => s.worktreeId === worktreeId && s.type === kind);
+    }
+    return serverSessions.filter((s) =>
+      kind === "agent"
+        ? isProjectTabAgent(s, worktreeId)
+        : s.projectId === worktreeId && s.worktreeId === null && s.type === kind,
+    );
+  }, [isProject, worktreeId, serverSessions, kind]);
+  const historySessions = serverSessions;
+  // Reorder purely by re-sorting before render, by each session's REAL server
+  // `sortOrder` — sessions stay keyed by `s.id`, so this never remounts anything.
   const orderedSessions = useMemo(() => {
     return sessions
       .filter((s) => s.supersededBy == null)
       .sort(compareTabOrder);
   }, [sessions]);
+  prevOrderedRef.current = orderedSessions;
 
   // subagent-ux-v2 Decision 5 — deleting a parent detaches, never cascades.
   // Live subagents of the terminate target, named in the confirm dialog so
@@ -356,11 +341,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
    *  backs this scope, so the reorder is reflected immediately (before the
    *  server call resolves) without waiting on a WS round-trip. */
   function patchLocalSortOrder(sessionId: string, sortOrder: number | undefined) {
-    if (isProject) {
-      useServerStore.getState().applySessionUpdated(sessionId, { sortOrder });
-    } else {
-      setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, sortOrder } : s)));
-    }
+    useServerStore.getState().applySessionUpdated(sessionId, { sortOrder });
   }
 
   function handleDragEnd(e: DragEndEvent) {
@@ -401,226 +382,86 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (isAgent) return; // agent scope never auto-picks (see comment above)
     const store = useWorkspaceStore.getState();
     const cur = store.activeTerminalSessionId;
-    if (cur && projectSessions.some((s) => s.id === cur)) return;
-    const pick = projectSessions[0]?.id ?? null;
+    if (cur && sessions.some((s) => s.id === cur)) return;
+    const pick = sessions[0]?.id ?? null;
     if (pick) setActiveSession(pick);
-  }, [isProject, projectSessions, isAgent, setActiveSession]);
+  }, [isProject, sessions, isAgent, setActiveSession]);
 
-  /** Sessions announced by `session:created` while a `listSessions` fetch was
-   *  in flight. See `mergeArrivedDuringFetch` below — without this, the fetch's
-   *  older snapshot overwrites them and the tab never appears. */
-  const arrivedDuringFetch = useRef<Session[]>([]);
-  const fetchTokenRef = useRef(0);
-
+  // Initial selection: once per (worktree, kind), after the shared store has
+  // loaded, pick a session if the current selection isn't in this strip. Never
+  // re-runs on list changes — that would fight the user's own focus.
+  const pickedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (isProject) return; // project scope derives from the server store above
-    if (!worktreeId) {
-      setSessions([]);
-      setSessionsLoaded(true);
-      return;
+    if (isProject || !worktreeId || !sessionsLoaded) return;
+    const key = `${worktreeId}:${kind}`;
+    if (pickedFor.current === key) return;
+    pickedFor.current = key;
+    const store = useWorkspaceStore.getState();
+    const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
+    // Keep `cur` if it is in the UNFILTERED list (Decision 9): a superseded
+    // session already selected by a sidebar click stays selected.
+    if (cur && sessions.some((s) => s.id === cur)) return;
+    if (isAgent) {
+      const pick = pickWorktreeAgent(sessions, { lastId: store.lastSessionByWorktree[worktreeId] });
+      if (pick) setActiveSession(pick);
+    } else {
+      const last = store.lastTerminalByWorktree[worktreeId];
+      const pick =
+        (last && sessions.some((s) => s.id === last) ? last : null) ??
+        sessions.find((s) => s.isMain)?.id ??
+        sessions[0]?.id ??
+        null;
+      if (pick) setActiveSession(pick);
     }
-    const matches = (s: Session) => s.type === kind;
-    // Narrowed to non-null (guaranteed by the guard above) for fetchSessions' closure.
-    const wt = worktreeId;
+  }, [isProject, worktreeId, kind, isAgent, sessionsLoaded, sessions, setActiveSession]);
 
-    async function fetchSessions(): Promise<void> {
-      const token = ++fetchTokenRef.current;
-      setSessionsLoaded(false);
-      arrivedDuringFetch.current = [];
-      const all = await api.listSessions(wt);
-      if (token !== fetchTokenRef.current) return; // superseded by a newer call
-      // Union, never blind-replace. `session:created` can fire while this GET
-      // is in flight, and the server snapshot it returns may predate the new
-      // session — so `setSessions(ss)` alone silently drops a tab that was
-      // already announced, and nothing ever invalidates it. That is the
-      // "second agent session sometimes doesn't show up in the tab bar" bug;
-      // it is a lost update, not slowness, so it survives any latency fix (a
-      // slow daemon just widens the window from microseconds to seconds).
-      const ss = [
-        ...all.filter(matches),
-        ...arrivedDuringFetch.current.filter(
-          (s) => matches(s) && !all.some((a) => a.id === s.id),
-        ),
-      ];
-      arrivedDuringFetch.current = [];
-      setSessions(ss);
-      setSessionsLoaded(true);
-      const store = useWorkspaceStore.getState();
-      store.syncSessionsFromApi(all);
-      const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
-      // Keep `cur` if it is in the UNFILTERED list (Decision 9): a superseded
-      // session already selected by a sidebar click stays selected on refetch.
-      if (cur && ss.some((s) => s.id === cur)) {
-        return;
-      }
-      const last = isAgent
-        ? store.lastSessionByWorktree[wt]
-        : store.lastTerminalByWorktree[wt];
-      if (isAgent) {
-        // Shared pick: last(tab-visible, non-exited) → main → first tab-visible
-        // by tab order → null. Superseded sessions are filtered out internally.
-        const pick = pickWorktreeAgent(ss, { lastId: last });
-        if (pick) setActiveSession(pick);
-      } else {
-        const main = ss.find((s) => s.isMain);
-        const pick =
-          (last && ss.some((s) => s.id === last) ? last : null) ??
-          main?.id ??
-          ss[0]?.id ??
-          null;
-        if (pick) setActiveSession(pick);
-      }
-    }
-
-    void fetchSessions();
-
+  // Focus side-effects only — the session LIST is derived from the shared
+  // server store (same source as the sidebar), never mirrored here.
+  // Listener order vs `useServerSync` is not fixed, so these read the store
+  // defensively (and `prevOrderedRef` for the pre-delete tab order).
+  useEffect(() => {
+    if (isProject || !worktreeId) return undefined;
     const offCreated = api.on("session:created", (ev) => {
       if (ev.type !== "session:created" || !ev.snapshot) return;
-      if (ev.snapshot.worktreeId !== worktreeId) return;
-      if (!matches(ev.snapshot)) return;
-      const snapshot = {
-        ...ev.snapshot,
-        parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
-      };
-      // Also record it for the in-flight fetch to merge in — appending to
-      // state alone is not enough, because a `listSessions` response that is
-      // still in flight will replace this array wholesale when it lands.
-      arrivedDuringFetch.current = [
-        ...arrivedDuringFetch.current.filter((s) => s.id !== snapshot.id),
-        snapshot,
-      ];
-      setSessions((prev) => {
-        const exists = prev.some((s) => s.id === snapshot.id);
-        return exists ? prev : [...prev, snapshot];
-      });
-      // Seed lifecycle state from the snapshot so the spawning placeholder
-      // shows "Starting…" while state is "not_started", instead of skipping
-      // straight to "Reconnecting…" when session:state working arrives later.
-      useWorkspaceStore.getState().patchSessionState(snapshot.id, snapshot.state);
-      // Focus a session the USER created — they asked for it and expect to
-      // land in it. Never focus one an AGENT spawned: the user is mid-read in
-      // the parent, and yanking them into a subagent they did not open loses
-      // their place, mid-sentence, at a moment they did not choose. A
-      // `parentSessionId` is exactly the "an agent spawned this" signal (the
-      // CLI sets it from $VST_SESSION only when run from inside an agent's
-      // own shell). The tab is still added, and the subagent row above the
-      // composer points at it — it is reachable, just not intrusive.
-      // ...unless nothing valid is focused right now (e.g. the user closed the
-      // last tab in this strip), in which case an unfocused arrival would leave
-      // a populated tab strip beside an empty "No session" pane.
+      const snap = ev.snapshot;
+      if (snap.worktreeId !== worktreeId || snap.type !== kind) return;
+      // Focus a session the USER created. Never focus one an AGENT spawned
+      // (`parentSessionId`) — unless nothing valid is focused right now.
+      const parentSessionId = snap.parentSessionId ?? ev.parentSessionId ?? null;
       const st = useWorkspaceStore.getState();
       const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
       const curIsValid =
         !!cur &&
-        (cur === snapshot.id ||
-          arrivedDuringFetch.current.some((s) => s.id === cur) ||
-          sessionsRef.current.some((s) => s.id === cur));
-      if (!snapshot.parentSessionId || !curIsValid) setActiveSession(snapshot.id);
+        (cur === snap.id || useServerStore.getState().sessions.some((s) => s.id === cur));
+      if (!parentSessionId || !curIsValid) setActiveSession(snap.id);
     });
-
     const offDeleted = api.on("session:deleted", (ev) => {
-      if (ev.type !== "session:deleted") return;
-      setSessions((prev) => {
-        if (!prev.some((s) => s.id === ev.sessionId)) return prev;
-        const idx = prev.findIndex((s) => s.id === ev.sessionId);
-        const remaining = prev.filter((s) => s.id !== ev.sessionId);
-        // If the closed tab was the active one, switch focus to a sibling so
-        // the user doesn't stare at an [exited] view of a session that no
-        // longer exists. Prefer the tab immediately before the closed one;
-        // fall back to the first remaining tab.
-        const st = useWorkspaceStore.getState();
-        const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
-        // Agent-kind deletion selection is owned by the store
-        // (`removeTilesForSession` via useServerSync), which re-picks a live
-        // tab-visible agent deterministically — do not compete here. Terminal
-        // kind keeps its own neighbor pick (no store-side terminal fallback).
-        if (cur === ev.sessionId && remaining.length > 0 && !isAgent) {
-          const beforeId = idx > 0 ? prev[idx - 1]?.id : null;
-          const target = beforeId && remaining.some((r) => r.id === beforeId)
-            ? beforeId
-            : remaining[0]!.id;
-          setActiveSession(target);
-        }
-        return remaining;
-      });
+      // Agent-kind selection after delete is owned by the store
+      // (`removeTilesForSession` via useServerSync); terminals pick a neighbour.
+      if (ev.type !== "session:deleted" || isAgent) return;
+      const st = useWorkspaceStore.getState();
+      // useServerSync may already have cleared the active id (listener order
+      // is not fixed), so `null` also counts as "the deleted one was active".
+      const cur = st.activeTerminalSessionId;
+      if (cur !== null && cur !== ev.sessionId) return;
+      const prev = prevOrderedRef.current;
+      const idx = prev.findIndex((s) => s.id === ev.sessionId);
+      if (idx === -1) return;
+      const remaining = prev.filter((s) => s.id !== ev.sessionId);
+      const target = (idx > 0 ? prev[idx - 1] : undefined) ?? remaining[0];
+      if (target && target.id !== ev.sessionId) setActiveSession(target.id);
     });
-
-    // Live reconciliation for fields the daemon broadcasts on `session:updated`
-    // (name, archivedAt, sortOrder, pinnedAt, channel) — project scope already
-    // gets this via the global `useServerSync`/`useServerStore` path; this
-    // worktree-scoped `localSessions` list needs its own patch so e.g. a
-    // reset's `archivedAt` shows up here without a manual refresh (3.T3).
+    // A superseded active session's tab disappears — follow it to its replacement.
     const offUpdated = api.on("session:updated", (ev) => {
-      if (ev.type !== "session:updated") return;
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== ev.sessionId) return s;
-          const patch: Partial<Session> = {};
-          if (ev.name !== undefined) patch.name = ev.name ?? null;
-          if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
-          if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
-          if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
-          if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
-          if (ev.supersededBy) patch.pinnedAt = null; // pin moves to the replacement
-          if (ev.isMain !== undefined) patch.isMain = ev.isMain;
-          // Keep the draft's chosen mode current: `sessionModeId` reads it, and it
-          // is what keeps the tab icon right after the draft is promoted.
-          if (ev.draftConfig !== undefined) patch.draftConfig = ev.draftConfig ?? null;
-          if (ev.channel !== undefined) {
-            patch.channel = ev.channel;
-            patch.useTmux = ev.channel === "tmux";
-          }
-          return { ...s, ...patch };
-        }),
-      );
-      // The superseded session's tab is about to disappear from
-      // orderedSessions — if it was the active one, follow it to its
-      // replacement instead of leaving the strip with no selected tab
-      // (mirrors the session:deleted handler above).
-      if (ev.supersededBy) {
-        const st = useWorkspaceStore.getState();
-        const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
-        if (cur === ev.sessionId) setActiveSession(ev.supersededBy);
-      }
+      if (ev.type !== "session:updated" || !ev.supersededBy) return;
+      const st = useWorkspaceStore.getState();
+      const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
+      if (cur === ev.sessionId) setActiveSession(ev.supersededBy);
     });
-
-    // `.state` reconciliation — mirrors useServerSync.ts's global-store
-    // handlers for the same three events. Without this, `localSessions`'
-    // `.state` field never advances past whatever it was when the tab was
-    // fetched/created (e.g. "drafting"), so the tab strip's "Draft" chip
-    // (which reads `s.state === "drafting"` off this exact array) sticks
-    // forever even after the session is long since running — only a hard
-    // refresh (which re-fetches via `api.listSessions` above) clears it,
-    // since that's the only other place this array's `.state` gets set.
-    const offState = api.on("session:state", (ev) => {
-      if (ev.type !== "session:state") return;
-      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: ev.state } : s)));
-    });
-    const offExited = api.on("session:exited", (ev) => {
-      if (ev.type !== "session:exited") return;
-      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: "exited" } : s)));
-    });
-    const offResumed = api.on("session:resumed", (ev) => {
-      if (ev.type !== "session:resumed") return;
-      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: "working" } : s)));
-    });
-
-    // Re-fetch the worktree-scoped session list on every `ws:open` reconnect, so
-    // a session deleted while the client was offline disappears from the tab
-    // strip the same way the live `session:deleted` event already handles it.
-    const offReconnect = api.on("ws:open", () => {
-      void fetchSessions().catch(() => {});
-    });
-
     return () => {
-      fetchTokenRef.current++; // invalidate any fetch left in flight from this run
       offCreated();
       offDeleted();
       offUpdated();
-      offState();
-      offExited();
-      offResumed();
-      offReconnect();
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 
@@ -692,15 +533,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       cancelled = true;
     };
   }, [api, isAgent, isProject, scope, sessions.length, sessionsLoaded, worktreeId]);
-
-  async function refreshTabs() {
-    // Project scope derives from the server store (WS session:deleted updates
-    // it); nothing to refetch here.
-    if (isProject || !worktreeId) return;
-    const all = await api.listSessions(worktreeId);
-    setSessions(all.filter((s) => s.type === kind));
-    useWorkspaceStore.getState().syncSessionsFromApi(all);
-  }
 
   const ariaLabel = isAgent ? "Agent sessions" : "Terminals";
 
@@ -1005,7 +837,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 void (async () => {
                   try {
                     const s = await createProjectDirectDraft(api, worktreeId);
-                    useWorkspaceStore.getState().openProjectAgentTab(worktreeId, s.id);
                     setActiveSession(s.id);
                   } catch {
                     /* surface later */
@@ -1116,17 +947,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             const targetId = terminateTarget.id;
             void api
               .terminateSession(targetId)
-              .then(() => {
-                // Direct-agent (project-scope) tabs are also tracked in the
-                // client-only open-tab set; prune the id there too, but only
-                // after the terminate call actually succeeds, so a failed
-                // terminate leaves the tab in place and in sync with the
-                // sidebar (which still shows the session on failure).
-                if (isAgent && isProject && worktreeId) {
-                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, targetId, sessions);
-                }
-                void refreshTabs();
-              })
               .catch((err: unknown) => {
                 // No existing toast/error-banner mechanism was found anywhere
                 // in web-ui (grepped LeftSidebar.tsx, WorkspaceCanvas.tsx,

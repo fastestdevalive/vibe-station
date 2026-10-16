@@ -3,12 +3,14 @@ import type { Session } from "@/api/types";
 import {
   compareTabOrder,
   excludeSuperseded,
+  isProjectTabAgent,
   isSupersededSession,
   isTabVisibleAgent,
   listPredecessors,
   pickFirstDirectAgent,
   pickNextDirectAgent,
   pickWorktreeAgent,
+  projectTabIds,
   resolveSupersededChain,
 } from "./sessionVisibility";
 
@@ -300,5 +302,40 @@ describe("excludeSuperseded", () => {
     excludeSuperseded(input);
     expect(input).toEqual(copy);
     expect(input).toHaveLength(2);
+  });
+});
+
+describe("isProjectTabAgent / projectTabIds", () => {
+  const direct = (id: string, overrides: Partial<Session> = {}) =>
+    makeSession({ id, worktreeId: null, projectId: "p1", ...overrides });
+
+  it("includes live direct agents of the project", () => {
+    expect(isProjectTabAgent(direct("a"), "p1")).toBe(true);
+    expect(isProjectTabAgent(direct("a"), "other")).toBe(false);
+  });
+
+  it("shows a draft only when its entryPoint is 'tab'", () => {
+    const tab = direct("d1", { state: "drafting", draftConfig: { entryPoint: "tab", channel: "json" } });
+    const wt = direct("d2", { state: "drafting", draftConfig: { entryPoint: "worktree", channel: "json" } });
+    expect(isProjectTabAgent(tab, "p1")).toBe(true);
+    expect(isProjectTabAgent(wt, "p1")).toBe(false);
+  });
+
+  it("excludes archived, superseded, worktree and terminal sessions", () => {
+    expect(isProjectTabAgent(direct("a", { archivedAt: new Date().toISOString() }), "p1")).toBe(false);
+    expect(isProjectTabAgent(direct("b", { supersededBy: "c" }), "p1")).toBe(false);
+    expect(isProjectTabAgent(direct("c", { worktreeId: "wt-1" }), "p1")).toBe(false);
+    expect(isProjectTabAgent(direct("d", { type: "terminal" }), "p1")).toBe(false);
+  });
+
+  it("projectTabIds returns ids ordered by sortOrder", () => {
+    const sessions = [
+      direct("z", { sortOrder: 3 }),
+      direct("a", { sortOrder: 1 }),
+      direct("m", { sortOrder: 2 }),
+      direct("x", { sortOrder: 0, archivedAt: new Date().toISOString() }),
+      direct("o", { projectId: "p2", sortOrder: 0 }),
+    ];
+    expect(projectTabIds("p1", sessions)).toEqual(["a", "m", "z"]);
   });
 });

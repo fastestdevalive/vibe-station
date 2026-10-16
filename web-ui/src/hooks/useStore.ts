@@ -4,7 +4,7 @@ import { api } from "@/api";
 import type { DiffScope, FileScope, Session, SessionState } from "@/api/types";
 import type { LspFailure } from "@/lib/lspApi";
 import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
-import { pickFirstDirectAgent, pickNextDirectAgent, pickWorktreeAgent } from "@/lib/sessionVisibility";
+import { pickFirstDirectAgent, pickNextDirectAgent, pickWorktreeAgent, projectTabIds } from "@/lib/sessionVisibility";
 import { randomId } from "@/lib/uuid";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
@@ -299,12 +299,6 @@ export interface WorkspaceState {
   forwardStack: Record<string, PeekEntry[]>;
   /** Open file tabs per worktree/direct-context (keyed by layout key). */
   openFileTabsByWorktree: Record<string, string[]>;
-  /**
-   * Which direct-agent sessions show as tabs in a project workspace (keyed by
-   * projectId, ordered). `undefined` for a key = "never seeded", `[]` = "user
-   * closed all tabs" — distinct states (Decision 5).
-   */
-  openDirectAgentTabsByProject: Record<string, string[]>;
   /** Active tab index per worktree/direct-context; -1 means none active. */
   activeFileTabIdxByWorktree: Record<string, number>;
   /**
@@ -451,16 +445,6 @@ export interface WorkspaceState {
   selectProject: (projectId: string) => void;
   /** Set the active agent session, or null to mean "Project tab is active" (Decision 1). */
   setActiveSession: (sessionId: string | null) => void;
-  /** Add a direct-agent session id to a project's open-tab set (no-op if already present). */
-  openProjectAgentTab: (projectId: string, sessionId: string) => void;
-  /** Remove a direct-agent session id from a project's open-tab set; if it was
-   *  active, re-select the neighbor in tab order (`pickNextDirectAgent`, else
-   *  null). No-op when the id is not in the pre-close tab set (Decision 12 —
-   *  a WS delete may have already pruned/moved it). `sessions` carries the
-   *  project's sessions so the closed session's `sortOrder` is available. */
-  closeProjectAgentTab: (projectId: string, sessionId: string, sessions: Session[]) => void;
-  /** Seed a project's open-tab set only when it has NO entry yet (undefined); excludes drafts. */
-  seedProjectAgentTabsIfEmpty: (projectId: string, sessions: Session[]) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null, opts?: { skipHistory?: boolean }) => void;
   /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
@@ -887,7 +871,6 @@ const initial = {
   backStack: {} as Record<string, PeekEntry[]>,
   forwardStack: {} as Record<string, PeekEntry[]>,
   openFileTabsByWorktree: {} as Record<string, string[]>,
-  openDirectAgentTabsByProject: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
   vcsSelectedCommitByWorktree: {} as Record<string, { sha: string; submodule?: string } | null>,
@@ -1240,49 +1223,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ? { ...s.lastSessionByWorktree, [key]: sessionId }
                 : s.lastSessionByWorktree;
             return { activeSessionId: sessionId, lastSessionByWorktree: nextLast };
-          }),
-        // Decision 5 — open-tab-set actions for direct-agent tabs in a project
-        // workspace.
-        openProjectAgentTab: (projectId, sessionId) =>
-          set((s) => {
-            const cur = s.openDirectAgentTabsByProject[projectId] ?? [];
-            const next = cur.includes(sessionId) ? cur : [...cur, sessionId];
-            return { openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: next } };
-          }),
-        closeProjectAgentTab: (projectId, sessionId, sessions) =>
-          set((s) => {
-            const cur = s.openDirectAgentTabsByProject[projectId] ?? [];
-            // Decision 12 — a WS `session:deleted` may have already pruned (or
-            // moved) this id, so the tab close is a no-op when it's absent.
-            if (!cur.includes(sessionId)) return s;
-            const closed = sessions.find((x) => x.id === sessionId);
-            const nextActive =
-              s.activeSessionId === sessionId
-                ? pickNextDirectAgent(cur, closed ?? ({ id: sessionId } as Session), sessions)
-                : s.activeSessionId;
-            return {
-              openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: cur.filter((id) => id !== sessionId) },
-              activeSessionId: nextActive,
-            };
-          }),
-        // Seeds only when the project has NO entry yet (undefined, not `[]`) —
-        // an intentionally emptied set must never be silently repopulated.
-        // Excludes drafts (state === "drafting"), matching LeftSidebar's
-        // directSessionMap draft exclusion.
-        seedProjectAgentTabsIfEmpty: (projectId, sessions) =>
-          set((s) => {
-            if (s.openDirectAgentTabsByProject[projectId] !== undefined) return s;
-            const ids = sessions
-              .filter(
-                (x) =>
-                  x.projectId === projectId &&
-                  x.worktreeId === null &&
-                  x.type === "agent" &&
-                  x.archivedAt == null &&
-                  x.state !== "drafting",
-              )
-              .map((x) => x.id);
-            return { openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: ids } };
           }),
         setActiveTerminalSession: (sessionId) =>
           set((s) => {
@@ -2033,19 +1973,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 docsChanged = true;
               }
             }
-            // Project-scope direct-agent tabs render only ids in the open-tab
-            // set, so the replacement must take the archived session's slot
-            // there too — otherwise the tab vanishes on reset (the old id is
-            // filtered out as superseded) while it is still reachable via Previous sessions.
-            let openTabsChanged = false;
-            const nextOpenTabs = { ...s.openDirectAgentTabsByProject };
-            for (const [projectId, ids] of Object.entries(s.openDirectAgentTabsByProject)) {
-              if (!ids.includes(fromSessionId)) continue;
-              nextOpenTabs[projectId] = ids.includes(toSessionId)
-                ? ids.filter((id) => id !== fromSessionId)
-                : ids.map((id) => (id === fromSessionId ? toSessionId : id));
-              openTabsChanged = true;
-            }
             const activeChanged = follow && s.activeSessionId === fromSessionId;
             // Restoring the per-worktree last-selected session after a context switch
             // must not resurrect the archived id either.
@@ -2059,13 +1986,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 }
               }
             }
-            if (!layoutChanged && !docsChanged && !openTabsChanged && !activeChanged && !lastChanged) {
+            if (!layoutChanged && !docsChanged && !activeChanged && !lastChanged) {
               return s;
             }
             return {
               ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
               ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
-              ...(openTabsChanged ? { openDirectAgentTabsByProject: nextOpenTabs } : {}),
               ...(activeChanged ? { activeSessionId: toSessionId } : {}),
               ...(lastChanged ? { lastSessionByWorktree: nextLast } : {}),
             };
@@ -2108,14 +2034,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const closedIsDirect = closed ? closed.worktreeId == null : s.activeWorktreeId == null;
               if (closedIsDirect && s.activeDirectContextId != null) {
                 // Deleted DIRECT agent: re-select the neighbor in tab order.
-                // `preCloseTabs` must be captured BEFORE the open-tab set is
-                // pruned below. When `closed` is absent (reconnect safety-net
-                // call with no post-deletion Session), degrade to the first
-                // open tab.
-                const preCloseTabs = s.openDirectAgentTabsByProject[s.activeDirectContextId] ?? [];
+                // Tabs are derived from the (post-deletion) session list. When
+                // `closed` is absent (reconnect safety-net call with no
+                // post-deletion Session), degrade to the first tab.
+                const tabs = projectTabIds(s.activeDirectContextId, remainingSessions);
                 fallbackSessionId = closed
-                  ? pickNextDirectAgent(preCloseTabs, closed, remainingSessions)
-                  : pickFirstDirectAgent(preCloseTabs, remainingSessions);
+                  ? pickNextDirectAgent(tabs, closed, remainingSessions)
+                  : pickFirstDirectAgent(tabs, remainingSessions);
               } else {
                 // Worktree agent: pick a live tab-visible agent via the shared
                 // helper (main → first by tab order) instead of main-only.
@@ -2139,30 +2064,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               }
             }
 
-            // Hardening: a direct-agent session can be terminated from a
-            // surface other than its own project-scope tab close button (the
-            // sidebar's terminate action, the CLI, another connected client)
-            // — prune it from every project's open-tab set too, so a stale
-            // id never lingers there. Harmless if it wasn't open anywhere:
-            // `projectSessions` already filters this set against the server
-            // store's live sessions.
-            let openDirectAgentTabsChanged = false;
-            const nextOpenDirectAgentTabsByProject = { ...s.openDirectAgentTabsByProject };
-            for (const [projectId, ids] of Object.entries(s.openDirectAgentTabsByProject)) {
-              if (ids.includes(sessionId)) {
-                nextOpenDirectAgentTabsByProject[projectId] = ids.filter((id) => id !== sessionId);
-                openDirectAgentTabsChanged = true;
-              }
-            }
-
             if (
               !layoutChanged &&
               !docsChanged &&
               !activeSessionChanged &&
               !activeTerminalChanged &&
               !lastSessionChanged &&
-              !lastTerminalChanged &&
-              !openDirectAgentTabsChanged
+              !lastTerminalChanged
             ) {
               return s;
             }
@@ -2173,9 +2081,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...(activeTerminalChanged ? { activeTerminalSessionId: null } : {}),
               ...(lastSessionChanged ? { lastSessionByWorktree: nextLastSessionByWorktree } : {}),
               ...(lastTerminalChanged ? { lastTerminalByWorktree: nextLastTerminalByWorktree } : {}),
-              ...(openDirectAgentTabsChanged
-                ? { openDirectAgentTabsByProject: nextOpenDirectAgentTabsByProject }
-                : {}),
             };
           }),
         reorderWorkspace: (scopeKey, orderedIds) =>
@@ -2518,7 +2423,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         activeTerminalSessionId: s.activeTerminalSessionId,
         activeFilePath: s.activeFilePath,
         openFileTabsByWorktree: s.openFileTabsByWorktree,
-        openDirectAgentTabsByProject: s.openDirectAgentTabsByProject,
         activeFileTabIdxByWorktree: s.activeFileTabIdxByWorktree,
         lastFileByWorktree: s.lastFileByWorktree,
         fileScrollByKey: s.fileScrollByKey,

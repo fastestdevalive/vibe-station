@@ -48,7 +48,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
   const defaultBranch = project.defaultBranch;
 
   // Direct agents only — excludes drafting sessions, matching
-  // `seedProjectAgentTabsIfEmpty` and the sidebar (both treat drafts separately,
+  // `projectTabIds` and the sidebar (both treat drafts separately,
   // as draft rows, never as live direct agents). This also keeps `isEmpty`
   // consistent: a project with only a draft still shows the empty state.
   const directAgents = sessions.filter(
@@ -143,7 +143,6 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
     try {
       setCreating("direct");
       const s = await createProjectDirectDraft(api, project.id);
-      useWorkspaceStore.getState().openProjectAgentTab(project.id, s.id);
       useWorkspaceStore.getState().setActiveSession(s.id);
     } catch {
       setActionError("Could not create the agent. Please try again.");
@@ -358,8 +357,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
                   // Item 1: a direct agent has no worktree — open/activate its
                   // own tab directly, same pair the "New direct agent" handler
                   // uses (the URL-sync write effect then syncs the URL).
-                  useWorkspaceStore.getState().openProjectAgentTab(project.id, s.id);
-                  useWorkspaceStore.getState().setActiveSession(s.id);
+                              useWorkspaceStore.getState().setActiveSession(s.id);
                 }}
               >
                 <StatusDot status={sessionStatus(sessionStates[s.id] ?? s.state)} pr={null} />

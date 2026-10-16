@@ -950,16 +950,14 @@ export function createMockApi(seed: MockSeed = {}) {
         promoted.isMain = true;
         promoted.pr = victim.pr;
         sessions.splice(idx, 1);
-        // Unlike the daemon, this mock emits NO event for the delete itself
-        // (matches its existing convention — no `emit(...)` call here today).
-        // It DOES emit for the promoted sibling's isMain flip: other open
-        // surfaces (sidebar rollup, other tabs) have no other way to learn
-        // about it in mock/dev mode, since the caller's own refetch only
-        // refreshes its own worktree-scoped list, not every mounted component.
+        // Like the daemon: broadcast the delete and the promoted sibling's
+        // isMain flip so every surface (tabs, sidebar) follows via the store.
+        emit({ type: "session:deleted", sessionId: victim.id });
         emit({ type: "session:updated", sessionId: promoted.id, isMain: true, pr: promoted.pr ?? undefined });
         return { ok: true };
       }
       sessions.splice(idx, 1);
+      emit({ type: "session:deleted", sessionId: victim.id });
       return { ok: true };
     },
 

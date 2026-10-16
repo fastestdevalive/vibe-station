@@ -26,6 +26,7 @@ import { useProjectWorkspaceUrlSync } from "@/hooks/useProjectWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
+import { projectTabIds } from "@/lib/sessionVisibility";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
 import { DraftComposer } from "@/components/draft/DraftComposer";
 
@@ -728,9 +729,6 @@ export function Workspace() {
   // the terminal dock's TerminalPane renders directly in `terminalDock`
   // below, keyed only by `activeTerminalSessionId`, so it never remounts on a
   // Project↔agent switch (AGENTS.md TerminalPane invariant).
-  const projectOpenAgentIds = useWorkspaceStore((s) =>
-    isProjectView && projectId ? (s.openDirectAgentTabsByProject[projectId] ?? null) : null,
-  );
   const projectPaneKeys = useMemo<PaneKey[]>(() => {
     if (!isProjectView || !projectId) return [];
     const keys: PaneKey[] = [];
@@ -740,7 +738,7 @@ export function Workspace() {
       seen.add(k);
       keys.push(k);
     };
-    for (const id of projectOpenAgentIds ?? []) {
+    for (const id of projectTabIds(projectId, sessions)) {
       // Item 3 Fix D — a drafting session renders via the `DraftComposer`
       // branch below, not the offscreen pane-host mechanism; leaving it out
       // of `projectPaneKeys` stops an `AgentPaneSlot` from mounting for it.
@@ -749,7 +747,7 @@ export function Workspace() {
     }
     push(`tools:${projectId}`);
     return keys;
-  }, [isProjectView, projectId, projectOpenAgentIds, sessions]);
+  }, [isProjectView, projectId, sessions]);
   const renderProjectPane = useCallback(
     (key: PaneKey): ReactNode => {
       if (key.startsWith("agent:")) {
@@ -817,8 +815,7 @@ export function Workspace() {
               } catch {
                 /* ignore */
               }
-              // Also re-selects a neighbor if it was the discarded draft.
-              useWorkspaceStore.getState().closeProjectAgentTab(projectId, activeSessionId, sessions);
+              // The `session:deleted` handler re-selects a neighbor.
             }}
           />
         ) : (

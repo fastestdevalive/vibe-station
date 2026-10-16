@@ -1,5 +1,5 @@
 import { DemoEnvProvider } from "@/context/DemoEnv";
-import { createElement, StrictMode } from "react";
+import { createElement, StrictMode, useRef } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -7,7 +7,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { createMockApi } from "@/api/mock";
-import { TabsStrip } from "./TabsStrip";
+import { TabsStrip as RawTabsStrip } from "./TabsStrip";
+import { useServerSync, __resetForDemo } from "@/hooks/useServerSync";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useModesStore } from "@/store/modesStore";
@@ -64,12 +65,35 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
   };
 });
 
+// Tabs are derived from the shared server store, which `useServerSync` keeps
+// current in the app. Mount it beside the strip so tests exercise the real path.
+// Sessions a test pre-seeds into the store are pushed into the mock api first
+// so `useServerSync`'s initial `replaceAll` doesn't wipe them.
+// Only seeds present BEFORE the first sync (store not yet `loaded`) are pushed.
+function TabsStrip(props: React.ComponentProps<typeof RawTabsStrip>) {
+  const seeded = useRef(false);
+  if (!seeded.current) {
+    seeded.current = true;
+    const st = useServerStore.getState();
+    if (!st.loaded) {
+      for (const s of st.sessions) {
+        (props.api as ReturnType<typeof createMockApi>).__test.addSession(s);
+      }
+    }
+  }
+  useServerSync(props.api as Parameters<typeof useServerSync>[0]);
+  return <RawTabsStrip {...props} />;
+}
+
 describe("TabsStrip", () => {
-  const api = createMockApi();
+  let api = createMockApi();
 
   beforeEach(() => {
+    api = createMockApi();
     capturedOnDragEnd = null;
     capturedOnDragStart = null;
+    __resetForDemo();
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
       activeSessionId: "sess-main",
@@ -80,6 +104,27 @@ describe("TabsStrip", () => {
         "wt-2": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
       },
     });
+  });
+
+  it("derives worktree tabs from the shared store — a session the strip never saw an event for still gets a tab (sidebar parity)", async () => {
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    const base = useServerStore.getState().sessions.find((s) => s.worktreeId === "wt-1" && s.type === "agent")!;
+    // Written straight to the store (what the sidebar reads) — no WS event.
+    act(() => {
+      useServerStore.getState().applySessionCreated({
+        ...base,
+        id: "sess-store-only",
+        name: "Store Only",
+        isMain: false,
+        sortOrder: 9999,
+      });
+    });
+    expect(await screen.findByRole("tab", { name: /store only/i })).toBeInTheDocument();
   });
 
   it("A2.T2 — main tab has no close control when it is the only agent session (wt-2, sole session)", async () => {
@@ -1211,64 +1256,6 @@ describe("TabsStrip", () => {
     });
   });
 
-  it("keeps a session announced by session:created while the initial fetch was still in flight", async () => {
-    // Regression: "sometimes a second agent session doesn't show up in the tab
-    // bar". The mount effect fetched `listSessions` and REPLACED state with the
-    // result. If `session:created` landed while that GET was in flight — and
-    // the server snapshot it returns predates the insert — the resolve dropped
-    // the new session, and nothing ever invalidated it, so the tab stayed
-    // missing until an unrelated refetch.
-    //
-    // This is a lost update, not slowness: a slow daemon only widens the window
-    // from microseconds to seconds, so no amount of latency work fixes it.
-    const localApi = createMockApi();
-    const staleSnapshot = await localApi.listSessions("wt-1");
-
-    let releaseFetch: (() => void) | null = null;
-    vi.spyOn(localApi, "listSessions").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseFetch = () => resolve(structuredClone(staleSnapshot));
-        }),
-    );
-
-    render(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => expect(releaseFetch).not.toBeNull());
-
-    // The daemon announces a new agent BEFORE our in-flight GET resolves.
-    const newSession = {
-      ...staleSnapshot.find((s) => s.type === "agent")!,
-      id: "sess-raced",
-      name: "Raced Agent",
-      isMain: false,
-      sortOrder: Date.now(),
-    };
-    await act(async () => {
-      localApi.__test.emit({
-        type: "session:created",
-        sessionId: newSession.id,
-        worktreeId: newSession.worktreeId,
-        sessionType: newSession.type,
-        snapshot: newSession,
-      });
-    });
-
-    // Now the older snapshot lands. It must not erase the raced-in session.
-    await act(async () => {
-      releaseFetch!();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /raced agent/i })).toBeInTheDocument();
-    });
-  });
-
   it("3.T1 — re-fetches localSessions on ws:open and drops a deleted session's tab", async () => {
     // Phase 3: the tab strip only refetched on `worktreeId`/`kind` change, so a
     // session deleted while offline survived as a tappable, inert ghost tab
@@ -1333,145 +1320,6 @@ describe("TabsStrip", () => {
     });
 
     expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
-  });
-
-  it("3.T3 — a stale (older) fetch response is discarded in favor of the newer call", async () => {
-    // Two overlapping fetchSessions calls (mount racing a near-simultaneous
-    // ws:open) have no ordering guarantee on which await resolves last. The
-    // request token must ensure the OLDER response (which still lists the
-    // deleted session) can't overwrite the NEWER one's pruned result.
-    const localApi = createMockApi();
-    const full = await localApi.listSessions("wt-1");
-    const removed = full.find((s) => s.type === "agent" && !s.isMain)!;
-    const reduced = full.filter((s) => s.id !== removed.id);
-
-    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
-    vi.spyOn(localApi, "listSessions").mockImplementation(
-      () =>
-        new Promise<Session[]>((resolve) => {
-          deferreds.push({ resolve });
-        }),
-    );
-
-    render(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(deferreds.length).toBe(1));
-
-    // Newer call (ws:open) starts while the first fetch is still pending.
-    await act(async () => {
-      localApi.__test.emit({ type: "ws:open" });
-    });
-    await waitFor(() => expect(deferreds.length).toBe(2));
-
-    // Resolve the SECOND (newer) call first — it prunes the deleted session.
-    await act(async () => {
-      deferreds[1]!.resolve(structuredClone(reduced));
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
-    });
-
-    // Now the FIRST (older, now-stale) call resolves. It must be discarded, so
-    // agent-2 must STAY gone — the stale full response must not resurrect it.
-    await act(async () => {
-      deferreds[0]!.resolve(structuredClone(full));
-      await Promise.resolve();
-    });
-    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
-  });
-
-  it("3.T4 — a stale response from a previous worktree does not overwrite the new worktree's tabs", async () => {
-    // Switching worktreeId re-runs the effect, and its cleanup bumps the token,
-    // so the old worktree's in-flight fetch — which would write worktree A's
-    // tabs into worktree B's strip — must be discarded.
-    const localApi = createMockApi();
-    const wt1 = await localApi.listSessions("wt-1");
-    const wt2 = await localApi.listSessions("wt-2");
-
-    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
-    vi.spyOn(localApi, "listSessions").mockImplementation(
-      () =>
-        new Promise<Session[]>((resolve) => {
-          deferreds.push({ resolve });
-        }),
-    );
-
-    const { rerender } = render(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(deferreds.length).toBe(1));
-
-    // Switch to wt-2 while wt-1's fetch is still pending.
-    rerender(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId="wt-2" kind="agent" />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(deferreds.length).toBe(2));
-
-    // Resolve wt-2's (newer) fetch first — its main agent tab renders.
-    await act(async () => {
-      deferreds[1]!.resolve(structuredClone(wt2));
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
-    });
-
-    // Now wt-1's stale response resolves — it must not replace wt-2's tabs.
-    await act(async () => {
-      deferreds[0]!.resolve(structuredClone(wt1));
-      await Promise.resolve();
-    });
-    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
-  });
-
-  it("3.T5 — a stale fetch from a valid-worktree mount is discarded after switching to no worktree (early-return branch)", async () => {
-    // Switching to `worktreeId: undefined` (or project scope) takes the
-    // effect's early-return branch and never calls fetchSessions again, so the
-    // ONLY thing that invalidates the previous run's in-flight fetch is the
-    // cleanup's token bump. Verify the stale result is discarded.
-    const localApi = createMockApi();
-    const full = await localApi.listSessions("wt-1");
-
-    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
-    vi.spyOn(localApi, "listSessions").mockImplementation(
-      () =>
-        new Promise<Session[]>((resolve) => {
-          deferreds.push({ resolve });
-        }),
-    );
-
-    const { rerender } = render(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(deferreds.length).toBe(1));
-
-    // Re-render without a worktree — effect cleanup bumps the token, then the
-    // body early-returns (no new fetchSessions call).
-    rerender(
-      <MemoryRouter>
-        <TabsStrip api={localApi} worktreeId={null} kind="agent" />
-      </MemoryRouter>,
-    );
-
-    // Resolve the original pending fetch; its result must be discarded.
-    await act(async () => {
-      deferreds[0]!.resolve(structuredClone(full));
-      await Promise.resolve();
-    });
-
-    // Neither of wt-1's agent tabs may appear.
-    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: /^main\b/i })).not.toBeInTheDocument();
   });
 
   // ─── Mode icons + reset-menu full name (Phase 3) ─────────────────────────
@@ -1621,7 +1469,7 @@ describe("TabsStrip", () => {
     };
   }
 
-  it("4.T3 — closing a direct-agent tab shows the terminate confirm dialog, and confirming terminates and prunes the open-tab set (matches worktree-tab behavior)", async () => {
+  it("4.T3 — closing a direct-agent tab shows the terminate confirm dialog, and confirming terminates and re-selects the neighbour (matches worktree-tab behavior)", async () => {
     useModesStore.getState()._reset();
     const localApi = createMockApi();
     useServerStore.setState({
@@ -1632,7 +1480,6 @@ describe("TabsStrip", () => {
     });
     useWorkspaceStore.setState({
       activeSessionId: "s1",
-      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
     });
     const terminateSpy = vi.spyOn(localApi, "terminateSession").mockResolvedValue({ ok: true });
     const user = userEvent.setup();
@@ -1654,16 +1501,19 @@ describe("TabsStrip", () => {
     await waitFor(() => {
       expect(terminateSpy).toHaveBeenCalledWith("s1");
     });
-    // Only after the terminate call succeeds is the id pruned from the
-    // client-only open-tab set, and the active (closed) tab re-selects the
-    // neighbor (s2) rather than going bare null (Phase 2, Requirement 5) —
-    // kept in sync with the sidebar rather than desyncing from it.
-    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s2"]);
+    // Re-selection of the neighbour happens when the daemon's session:deleted
+    // lands (useServerSync -> removeTilesForSession); simulate that here.
+    const alpha = directAgentSession("s1", "proj-a", "Alpha");
+    const beta = directAgentSession("s2", "proj-a", "Beta");
+    useWorkspaceStore.setState({ activeWorktreeId: null, activeDirectContextId: "proj-a" });
+    act(() => {
+      useWorkspaceStore.getState().removeTilesForSession("s1", [beta], alpha);
+    });
     expect(useWorkspaceStore.getState().activeSessionId).toBe("s2");
     useModesStore.getState()._reset();
   });
 
-  it("4.T3a — canceling the direct-agent terminate dialog leaves the tab and open-tab set untouched", async () => {
+  it("4.T3a — canceling the direct-agent terminate dialog leaves the tab untouched", async () => {
     useModesStore.getState()._reset();
     const localApi = createMockApi();
     useServerStore.setState({
@@ -1674,7 +1524,6 @@ describe("TabsStrip", () => {
     });
     useWorkspaceStore.setState({
       activeSessionId: "s1",
-      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
     });
     const terminateSpy = vi.spyOn(localApi, "terminateSession").mockResolvedValue({ ok: true });
     const user = userEvent.setup();
@@ -1692,7 +1541,7 @@ describe("TabsStrip", () => {
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     expect(terminateSpy).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s1", "s2"]);
+    expect(screen.getByRole("tab", { name: /Beta/i })).toBeInTheDocument();
     expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
     expect(screen.queryByRole("dialog")).toBeNull();
     useModesStore.getState()._reset();
@@ -1709,7 +1558,6 @@ describe("TabsStrip", () => {
     });
     useWorkspaceStore.setState({
       activeSessionId: null,
-      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
     });
     const { unmount: unmountProject } = render(
       <MemoryRouter>
@@ -1742,15 +1590,9 @@ describe("TabsStrip", () => {
   it("4.T4 — an empty project agent strip does NOT auto-pick a default (keeps activeSessionId null)", async () => {
     useModesStore.getState()._reset();
     const localApi = createMockApi();
-    useServerStore.setState({
-      sessions: [
-        directAgentSession("s1", "proj-a", "Alpha"),
-        directAgentSession("s2", "proj-a", "Beta"),
-      ],
-    });
+    useServerStore.setState({ sessions: [] });
     useWorkspaceStore.setState({
       activeSessionId: null,
-      openDirectAgentTabsByProject: { "proj-a": [] },
     });
     render(
       <MemoryRouter>
@@ -1773,7 +1615,6 @@ describe("TabsStrip", () => {
     useServerStore.setState({ sessions: [] });
     useWorkspaceStore.setState({
       activeSessionId: null,
-      openDirectAgentTabsByProject: { "proj-a": [] },
     });
     const createSpy = vi.spyOn(localApi, "createDirectSession");
     const createDraftSpy = vi.spyOn(localApi, "createDraftSession");
@@ -1783,6 +1624,8 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
 
+    // Let the initial store sync land first, or it would replace the draft.
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: /New agent/i }));
 
     await waitFor(() => {
@@ -1803,16 +1646,36 @@ describe("TabsStrip", () => {
       draftConfig: { entryPoint: "tab" },
     });
 
-    // The new draft is added to the open set AND activated immediately, and
+    // The new draft is activated immediately, and
     // renders with the Draft chip (TabsStrip.tsx:758-759,901 — existing
     // drafting-session chip, unchanged by this fix).
     const newId = useWorkspaceStore.getState().activeSessionId;
     expect(newId).toBeTruthy();
-    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toContain(newId);
     expect(useWorkspaceStore.getState().activeSessionId).toBe(newId);
     await waitFor(() => {
       expect(screen.getByText("Draft")).toBeInTheDocument();
     });
+    useModesStore.getState()._reset();
+  });
+
+  it("project strip: a tab-entry draft renders with a Draft chip; a non-tab draft does not render", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({
+      sessions: [
+        { ...directAgentSession("d-tab", "proj-a", "TabDraft"), state: "drafting", draftConfig: { entryPoint: "tab", channel: "json" } },
+        { ...directAgentSession("d-wt", "proj-a", "WtDraft"), state: "drafting", draftConfig: { entryPoint: "worktree", channel: "json" } },
+      ],
+    });
+    useWorkspaceStore.setState({ activeSessionId: null });
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /TabDraft/i });
+    expect(screen.getByText("Draft")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /WtDraft/i })).toBeNull();
     useModesStore.getState()._reset();
   });
 

@@ -87,6 +87,30 @@ export function isTabVisibleAgent(s: Session): boolean {
 }
 
 /**
+ * True iff `s` gets a tab in `projectId`'s project workspace: a live direct
+ * (worktree-less) agent, or a draft opened from a tab ("+"). Drafts started
+ * from other entry points live at `/draft/:id`, never in the strip. Derived
+ * from the session list — the sidebar's source — so tabs can't drift from it.
+ */
+export function isProjectTabAgent(s: Session, projectId: string): boolean {
+  return (
+    s.projectId === projectId &&
+    s.worktreeId === null &&
+    isTabVisibleAgent(s) &&
+    s.archivedAt == null &&
+    (s.state !== "drafting" || s.draftConfig?.entryPoint === "tab")
+  );
+}
+
+/** Ids of a project's tab sessions, in tab order. */
+export function projectTabIds(projectId: string, sessions: Session[]): string[] {
+  return sessions
+    .filter((s) => isProjectTabAgent(s, projectId))
+    .sort(compareTabOrder)
+    .map((s) => s.id);
+}
+
+/**
  * Deterministic tab-order comparator — `sortOrder ?? 0`, then `id`. Must match
  * TabsStrip's `orderedSessions` sort so neighbor selection agrees with the
  * rendered strip. TabsStrip imports this so the two can never diverge.

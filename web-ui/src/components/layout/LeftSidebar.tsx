@@ -40,7 +40,7 @@ import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
-import { pickNextDirectAgent, isSupersededSession, excludeSuperseded } from "@/lib/sessionVisibility";
+import { pickNextDirectAgent, projectTabIds, isSupersededSession, excludeSuperseded } from "@/lib/sessionVisibility";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
@@ -1118,7 +1118,7 @@ export function LeftSidebar({
     // this just drives the URL to the same neighbor the handler will pick.
     if (location.pathname === `/project/${sess.projectId}/${sess.id}` && sess.projectId) {
       const pid = sess.projectId;
-      const openTabs = useWorkspaceStore.getState().openDirectAgentTabsByProject[pid] ?? [];
+      const openTabs = projectTabIds(pid, sessions);
       const next = pickNextDirectAgent(openTabs, sess, sessions);
       navigate(next ? `/project/${pid}/${next}` : `/project/${pid}`, { replace: true });
     }
@@ -1343,11 +1343,7 @@ export function LeftSidebar({
    *  the project workspace's own "+"/"New direct agent" (`createProjectDirectDraft`,
    *  entryPoint "tab"), landing in the SAME tab + sidebar-highlighted state
    *  those produce, instead of the legacy full-page `/draft/:id` composer.
-   *  Deliberately does NOT call `openProjectAgentTab` here — navigating first
-   *  lets `useProjectWorkspaceUrlSync`'s read effect seed the project's other
-   *  existing direct agents before this draft's own entry is added; opening
-   *  the tab first would mark the project's open-tab-set non-empty and skip
-   *  that seed. */
+   *  The tab itself is derived from the session list (draft entryPoint "tab"). */
   function handleNewDirectAgent(project: Project) {
     if (isMobile) setMobileSidebarOpen(false);
     setDraftError(null);
@@ -1373,13 +1369,10 @@ export function LeftSidebar({
       if (location.pathname === `/project/${s.projectId}/${s.id}`) {
         // Navigate to the same neighbor the store re-selects below (else the
         // project read effect, seeing no sessionId in the URL, nulls it).
-        const openTabs = useWorkspaceStore.getState().openDirectAgentTabsByProject[s.projectId] ?? [];
+        const openTabs = projectTabIds(s.projectId, sessions);
         const next = pickNextDirectAgent(openTabs, s, sessions);
         navigate(next ? `/project/${s.projectId}/${next}` : `/project/${s.projectId}`, { replace: true });
       }
-      // Re-selects the neighbor (or null → Project tab) if `s` was the active
-      // direct agent.
-      useWorkspaceStore.getState().closeProjectAgentTab(s.projectId, s.id, sessions);
     } else if (location.pathname === `/draft/${s.id}`) {
       navigate("/", { replace: true });
     }

@@ -27,8 +27,7 @@ let inFlightRefresh: Promise<void> | null = null;
 
 /**
  * Sessions announced via `session:created` while `refresh()`'s fetch is in
- * flight (id -> full snapshot). Mirrors `TabsStrip.tsx`'s `arrivedDuringFetch`
- * for the identical race: a tile inserted for a session created mid-fetch must
+ * flight (id -> full snapshot). Guards a lost update: a tile inserted for a session created mid-fetch must
  * not be treated as stale (and its `sessionStates` entry must not be pruned)
  * just because the in-flight fetch response predates it. Cleared in
  * `refresh()`'s `finally` alongside `inFlightRefresh`.
@@ -290,19 +289,6 @@ export function useServerSync(api: ApiInstance): void {
             ev.worktreeId ?? undefined,
           );
         }
-      }
-      // Direct (worktree-less) agent subagents get a project tab like any
-      // other direct agent — but only when the parent is itself an open tab,
-      // so a subagent never resurrects a tab the user closed. Focus is left
-      // alone (project scope never auto-focuses an agent-spawned child).
-      const snap = ev.snapshot && {
-        ...ev.snapshot,
-        parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
-      };
-      if (snap && snap.parentSessionId && snap.worktreeId == null && snap.type === "agent" && snap.projectId) {
-        const store = useWorkspaceStore.getState();
-        const open = store.openDirectAgentTabsByProject[snap.projectId];
-        if (open?.includes(snap.parentSessionId)) store.openProjectAgentTab(snap.projectId, snap.id);
       }
     });
     const offSessState = sessionRepo.on("session:state", (ev) => {

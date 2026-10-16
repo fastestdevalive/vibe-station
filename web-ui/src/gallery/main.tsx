@@ -18,6 +18,7 @@ import { StatusBar } from "@/components/chat/StatusBar";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { AttachmentPicker } from "@/components/chat/AttachmentPicker";
 import { TabsStrip } from "@/components/layout/TabsStrip";
+import { useServerSync } from "@/hooks/useServerSync";
 import { DraftComposer } from "@/components/draft/DraftComposer";
 
 import "@/styles/tokens.css";
@@ -445,6 +446,8 @@ function TabStripScene() {
     ] as Session[]);
     return a;
   }, []);
+  // Tabs read the shared server store; populate it from the scene's mock api.
+  useServerSync(api);
   return (
     <div className="gallery-tabstrip">
       <TabsStrip api={api} worktreeId="wt-1" kind="agent" />

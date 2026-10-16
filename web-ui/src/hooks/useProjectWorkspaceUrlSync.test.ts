@@ -72,7 +72,6 @@ describe("useProjectWorkspaceUrlSync", () => {
       activeWorktreeId: null,
       activeDirectContextId: null,
       activeSessionId: null,
-      openDirectAgentTabsByProject: {},
     });
   });
 
@@ -83,8 +82,6 @@ describe("useProjectWorkspaceUrlSync", () => {
     const selectProjectSpy = vi.spyOn(useWorkspaceStore.getState(), "selectProject");
     const setActiveDirectContextSpy = vi.spyOn(useWorkspaceStore.getState(), "setActiveDirectContext");
     const setActiveSessionSpy = vi.spyOn(useWorkspaceStore.getState(), "setActiveSession");
-    const openProjectAgentTabSpy = vi.spyOn(useWorkspaceStore.getState(), "openProjectAgentTab");
-    const seedSpy = vi.spyOn(useWorkspaceStore.getState(), "seedProjectAgentTabsIfEmpty");
 
     renderHook(() => TestHarness({ sessions, projects }), { wrapper: wrapperFor("/project/p1/s1") });
 
@@ -94,15 +91,12 @@ describe("useProjectWorkspaceUrlSync", () => {
 
     expect(selectProjectSpy).toHaveBeenCalledWith("p1");
     expect(setActiveDirectContextSpy).toHaveBeenCalledWith("p1");
-    expect(seedSpy).toHaveBeenCalledWith("p1", sessions);
     expect(setActiveSessionSpy).toHaveBeenCalledWith("s1");
-    expect(openProjectAgentTabSpy).toHaveBeenCalledWith("p1", "s1");
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
 
     selectProjectSpy.mockRestore();
     setActiveDirectContextSpy.mockRestore();
     setActiveSessionSpy.mockRestore();
-    openProjectAgentTabSpy.mockRestore();
-    seedSpy.mockRestore();
   });
 
   it("ignores a sessionId that is not a direct agent of this project", async () => {
@@ -152,7 +146,6 @@ describe("useProjectWorkspaceUrlSync", () => {
       activeWorktreeId: null,
       activeDirectContextId: "p1",
       activeSessionId: null,
-      openDirectAgentTabsByProject: {},
     });
     // Only p1 exists — "nope" is unknown/hidden.
     const projects = [makeProject({})];
@@ -253,7 +246,6 @@ describe("useProjectWorkspaceUrlSync - Phase 2 (direct agents)", () => {
       activeWorktreeId: null,
       activeDirectContextId: null,
       activeSessionId: null,
-      openDirectAgentTabsByProject: {},
     });
   });
 

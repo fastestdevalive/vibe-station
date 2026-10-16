@@ -299,21 +299,15 @@ describe("openSubagentSession — classic vs workspace mode, cross-worktree guar
     insertTileIntoScratchCanvas: vi.fn(),
     setActiveSession: vi.fn(),
     setActiveTerminalSession: vi.fn(),
-    openProjectAgentTab: vi.fn(),
     ...over,
   });
 
-  it("direct agent child: opens a project tab only when the project's set exists", () => {
+  it("direct agent child: activates it", () => {
     const from = makeSession({ id: "p1", worktreeId: null, projectId: "proj" });
     const target = makeSession({ id: "c1", worktreeId: null, projectId: "proj", type: "agent" });
     const st = store();
-    useWorkspaceStore.setState({ openDirectAgentTabsByProject: {} });
     openSubagentSession(target, from, st);
-    expect(st.openProjectAgentTab).not.toHaveBeenCalled();
-    useWorkspaceStore.setState({ openDirectAgentTabsByProject: { proj: ["p1"] } });
-    openSubagentSession(target, from, st);
-    expect(st.openProjectAgentTab).toHaveBeenCalledWith("proj", "c1");
-    useWorkspaceStore.setState({ openDirectAgentTabsByProject: {} });
+    expect(st.setActiveSession).toHaveBeenCalledWith("c1");
   });
 
   it("direct child in a different project is ignored", () => {
