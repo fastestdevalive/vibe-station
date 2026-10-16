@@ -557,9 +557,9 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               // Mirrors the daemon's OTHER can_attempt_steer conditions
               // (json_agent_session/queue.rs) that `meta.canSteer` doesn't
               // encode: an attachment or an already-queued turn always
-              // enqueues by design, not because steering failed. This still
-              // can't see `first_turn_done`, so a first-turn mid-send can
-              // still false-positive; that gap needs a daemon-side signal.
+              // enqueues by design, not because steering failed.
+              // `meta.canSteer` already accounts for `first_turn_done` and
+              // prompt-in-flight (daemon `can_steer_now`).
               const expectedSteer =
                 turnActive &&
                 (meta?.canSteer ?? false) &&

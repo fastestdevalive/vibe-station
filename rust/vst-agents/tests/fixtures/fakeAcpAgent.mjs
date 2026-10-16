@@ -63,8 +63,13 @@
 //     notification 200ms later. Models an agent that keeps working after its
 //     prompt ended, so the update arrives with no prompt in flight and must be
 //     routed to the out-of-band sink (2.T2).
+//   FAKE_ACP_MODE=steering_strict — steering supported; every session/prompt holds for
+//     STEER_PROMPT_MS (default 400; the FIRST prompt for STEER_FIRST_MS, default 20)
+//     and `_session/steering` answers `outcome: "injected"` only while a prompt is
+//     active (else `promptRequired`), after STEER_DELAY_MS (default 0). Each injected
+//     steer's text is appended, one per line, to STEER_OUT_FILE when set.
 import { createInterface } from "node:readline";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
 
@@ -85,6 +90,8 @@ const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let sessionId = "fake-session-1";
 let cancelRequested = false;
 let promptCount = 0;
+let steerCount = 0;
+let promptActive = false;
 let nextClientReqId = 1000;
 
 const modelConfigOptions = () =>
@@ -142,8 +149,8 @@ rl.on("line", (line) => {
       writeFileSync(process.env.CLIENT_CAPS_OUT_FILE, JSON.stringify(msg.params?.clientCapabilities ?? null));
     }
     const result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
-    if (mode === "steering_supported" || mode === "steering_method_not_found") {
-      result._meta = { steering: { supported: mode === "steering_supported" } };
+    if (mode === "steering_supported" || mode === "steering_strict" || mode === "steering_method_not_found") {
+      result._meta = { steering: { supported: mode !== "steering_method_not_found" } };
     }
     write({ jsonrpc: "2.0", id: msg.id, result });
     return;
@@ -179,6 +186,23 @@ rl.on("line", (line) => {
   }
   if (msg.method === "session/prompt") {
     const sid = msg.params.sessionId;
+    if (mode === "steering_strict") {
+      promptCount += 1;
+      promptActive = true;
+      const holdMs = promptCount === 1
+        ? Number(process.env.STEER_FIRST_MS ?? 20)
+        : Number(process.env.STEER_PROMPT_MS ?? 400);
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "working" } } },
+      });
+      setTimeout(() => {
+        promptActive = false;
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn", usage: { totalTokens: 12, inputTokens: 10, outputTokens: 2 } } });
+      }, holdMs);
+      return;
+    }
     if (mode === "bg_terminal") {
       promptCount += 1;
       if (promptCount > 1) {
@@ -327,6 +351,18 @@ rl.on("line", (line) => {
     }
     if (mode === "steering_method_not_found") {
       write({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
+    } else if (mode === "steering_strict") {
+      steerCount += 1;
+      // STEER_REJECT_FIRST=n: the first n steers answer promptRequired (the
+      // prompt "isn't written yet"), without consuming the message.
+      const active = promptActive && steerCount > Number(process.env.STEER_REJECT_FIRST ?? 0);
+      setTimeout(() => {
+        if (active && process.env.STEER_OUT_FILE) {
+          const text = (p.prompt[0] && p.prompt[0].text) || "";
+          appendFileSync(process.env.STEER_OUT_FILE, text + "\n");
+        }
+        write({ jsonrpc: "2.0", id: msg.id, result: { outcome: active ? "injected" : "promptRequired" } });
+      }, Number(process.env.STEER_DELAY_MS ?? 0));
     } else {
       write({ jsonrpc: "2.0", id: msg.id, result: { outcome: "injected" } });
     }

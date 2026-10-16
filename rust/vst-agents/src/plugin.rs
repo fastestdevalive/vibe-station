@@ -177,6 +177,9 @@ pub struct TurnInput {
 /// Callback the plugin invokes with each spawned child PID (the child MUST be
 /// its own process group so the core can group-kill orphans on boot/abort).
 pub type OnSpawn = Arc<dyn Fn(u32) + Send + Sync>;
+/// Fired once by `run_turn_acp` right after `send_prompt` — from then on the
+/// turn has a prompt in flight, so a mid-turn steer can land on it.
+pub type OnPromptDispatched = Arc<dyn Fn() + Send + Sync>;
 
 /// The lazy create-or-return callback for this session's ONE persistent
 /// `AcpConnection`. The plugin builds the launch spec (argv/env — CLI-specific,
@@ -218,6 +221,8 @@ pub struct TurnContext {
     pub system_prompt_file: PathBuf,
     pub daemon_port: u16,
     pub on_spawn: Option<OnSpawn>,
+    /// Called (once, CLI-agnostic) after the turn's prompt is dispatched.
+    pub on_prompt_dispatched: Option<OnPromptDispatched>,
     /// Lazy create-or-return this session's persistent ACP connection.
     pub get_acp_connection: GetAcpConnection,
 }
