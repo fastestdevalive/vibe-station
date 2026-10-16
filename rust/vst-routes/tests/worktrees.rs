@@ -1213,7 +1213,14 @@ async fn test_submodule_commit_scope_routes_and_validation() {
         .unwrap();
     assert!(add.success());
     let bump = Command::new("git")
-        .args(["-C", wt_path.to_str().unwrap(), "commit", "-q", "-m", "bump sub"])
+        .args([
+            "-C",
+            wt_path.to_str().unwrap(),
+            "commit",
+            "-q",
+            "-m",
+            "bump sub",
+        ])
         .status()
         .unwrap();
     assert!(bump.success());
@@ -1284,13 +1291,7 @@ async fn test_submodule_commit_scope_routes_and_validation() {
         .unwrap_err();
     assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
     let err = routes
-        .diff(
-            &wt.id,
-            "c2.txt",
-            Some("local"),
-            None,
-            Some("vendor/widget"),
-        )
+        .diff(&wt.id, "c2.txt", Some("local"), None, Some("vendor/widget"))
         .await
         .unwrap_err();
     assert!(matches!(err, WorktreeRouteError::Unprocessable(_)));
@@ -1350,7 +1351,9 @@ async fn test_uninitialized_submodule_commits_422() {
         .commits(&wt.id, Some(50), Some("vendor/widget"))
         .await
         .unwrap_err();
-    assert!(matches!(err, WorktreeRouteError::Unprocessable(msg) if msg.contains("not initialized")));
+    assert!(
+        matches!(err, WorktreeRouteError::Unprocessable(msg) if msg.contains("not initialized"))
+    );
 }
 
 #[tokio::test]

@@ -870,10 +870,7 @@ pub enum SubmoduleDirError {
 /// single check rejects arbitrary / `..` / absolute paths in one shot, then an
 /// initialized check confirms the dir is its own repo root so a stale
 /// uninitialized empty dir can't be answered by the enclosing main repo.
-pub async fn resolve_submodule_dir(
-    repo: &str,
-    sub: &str,
-) -> Result<PathBuf, SubmoduleDirError> {
+pub async fn resolve_submodule_dir(repo: &str, sub: &str) -> Result<PathBuf, SubmoduleDirError> {
     if sub.is_empty() {
         return Err(SubmoduleDirError::NotFound);
     }
@@ -900,7 +897,12 @@ pub async fn resolve_submodule_dir(
     // uninitialized submodule dir is an empty folder inside the main checkout,
     // so `git rev-parse --show-toplevel` from it answers with the MAIN repo.
     let toplevel = run_git(
-        &["-C", dir.to_str().unwrap_or(""), "rev-parse", "--show-toplevel"],
+        &[
+            "-C",
+            dir.to_str().unwrap_or(""),
+            "rev-parse",
+            "--show-toplevel",
+        ],
         Some(&dir),
     )
     .await

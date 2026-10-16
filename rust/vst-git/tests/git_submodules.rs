@@ -472,7 +472,11 @@ async fn add_submodule(outer: &GitFixture, sub: &GitFixture, path: &str) -> Stri
         ],
     )
     .await;
-    git(outer, &["commit", "-q", "-m", &format!("add {path} submodule")]).await;
+    git(
+        outer,
+        &["commit", "-q", "-m", &format!("add {path} submodule")],
+    )
+    .await;
     sha
 }
 
@@ -538,7 +542,11 @@ async fn resolve_submodule_dir_returns_not_initialized_and_never_main_repo_commi
 async fn submodule_pin_at_returns_base_pin_and_none_when_added_later() {
     let sub = git_fixture("vst-git-submodule-pin-sub-test").await;
     let outer = git_fixture("vst-git-submodule-pin-outer-test").await;
-    git(&outer, &["commit", "--allow-empty", "-q", "-m", "before sub"]).await;
+    git(
+        &outer,
+        &["commit", "--allow-empty", "-q", "-m", "before sub"],
+    )
+    .await;
     let base = git(&outer, &["rev-parse", "HEAD"]).await;
     let sub_sha = add_submodule(&outer, &sub, "vendor/widget").await;
     let head = git(&outer, &["rev-parse", "HEAD"]).await;
@@ -591,7 +599,13 @@ async fn commit_exists_reflects_object_store_membership() {
     // The submodule HEAD is in the submodule's store but not the main repo's.
     assert!(commit_exists(dir.to_str().unwrap(), &outer_sha).await);
     assert!(!commit_exists(outer.dir.to_str().unwrap(), &outer_sha).await);
-    assert!(!commit_exists(dir.to_str().unwrap(), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").await);
+    assert!(
+        !commit_exists(
+            dir.to_str().unwrap(),
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        )
+        .await
+    );
 
     rm_git_fixture(&outer).await;
     rm_git_fixture(&sub).await;
