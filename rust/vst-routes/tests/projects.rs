@@ -1147,7 +1147,10 @@ async fn test_changed_paths_local_and_branch_validation() {
     std::fs::write(proj_dir.join("untracked.txt"), "new\n").unwrap();
 
     // 2.T1 — local scope (default) returns both, with correct porcelain chars.
-    let paths = routes.changed_paths("git-proj", None, None, None).await.unwrap();
+    let paths = routes
+        .changed_paths("git-proj", None, None, None)
+        .await
+        .unwrap();
     let readme = paths
         .iter()
         .find(|p| p.path == "README.md")
@@ -1650,7 +1653,10 @@ async fn test_project_in_git_subdir_paths_project_relative() {
 
     // 1) changed_paths — only the in-project files, project-relative (no repo-root
     //    `subproj/` prefix, no out-of-project `outside.txt`).
-    let paths = routes.changed_paths("subproj", None, None, None).await.unwrap();
+    let paths = routes
+        .changed_paths("subproj", None, None, None)
+        .await
+        .unwrap();
     assert!(
         paths.iter().any(|p| p.path == "inside.rs"),
         "inside.rs must appear project-relative, got {paths:?}"
