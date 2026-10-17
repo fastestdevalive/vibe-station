@@ -15,6 +15,9 @@ import { CodeView, type CodeViewHandle, type GutterMarkKind } from "@/components
 import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
 import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
+import { HtmlView, isOverHtmlCap } from "@/components/preview/HtmlView";
+import { HtmlModeToggle, useHtmlPreviewMode } from "@/components/preview/HtmlModeToggle";
+import { isHtmlPath } from "@/components/preview/htmlDocument";
 import { isImagePath } from "@/lib/imageFile";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
@@ -86,6 +89,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const { theme } = useTheme();
   const themeMode = theme;
+  const [htmlMode, setHtmlMode] = useHtmlPreviewMode();
 
   // Identity of the content this pane is currently asked to show. Fetched
   // bodies are stored together with the key they were fetched for and only
@@ -459,6 +463,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // must scroll back, even though path+line are unchanged (L5).
   const effectiveLineKey =
     effectiveLine != null ? `${path}#${effectiveLine}#${effectiveTarget?.seq ?? ""}` : null;
+  // Decision 11 — a search/LSP line-jump on an HTML file defaults to Source;
+  // clicking Rendered sets the override so the user stays in control.
+  const [renderOverrideKey, setRenderOverrideKey] = useState<string | null>(null);
   const lineIsConsumed = effectiveLineKey == null || lastScrolledKeyRef.current === effectiveLineKey;
 
   // Restore scroll the instant the body element mounts. Stored value comes
@@ -675,6 +682,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     );
   }
 
+  // HTML file preview: rendered sandboxed iframe by default, Source via
+  // toggle. `htmlMode` is the user's persisted preference; a line-jump forces
+  // Source until the user clicks Rendered (`renderOverrideKey`). Oversize
+  // disables Rendered entirely.
+  const isHtml = isHtmlPath(path) && scope === "none";
+  const htmlTooLarge = isHtml && fileBody != null && isOverHtmlCap(fileBody, "file");
+  const htmlForcedSource = effectiveLineKey != null && renderOverrideKey !== effectiveLineKey;
+  const showHtmlRendered =
+    isHtml && htmlMode === "rendered" && !htmlForcedSource && !htmlTooLarge && fileBody != null;
+
   // Slim, content-scoped strip — line counts + which baseline. The
   // local/branch scope toggle itself lives only in the Files header
   // (`FileTreeSidebar`) now — one control, not one per surface — and both
@@ -727,6 +744,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             ? "Commit diff"
             : "Compared to HEAD"}
       </span>
+      {isHtml ? (
+        <HtmlModeToggle
+          mode={htmlTooLarge || htmlForcedSource ? "source" : htmlMode}
+          onChange={(m) => {
+            // Re-clicking the mode already shown (forced Source / oversize)
+            // must not overwrite the saved preference.
+            if (m === (htmlTooLarge || htmlForcedSource ? "source" : htmlMode)) return;
+            setHtmlMode(m);
+            if (m === "rendered") setRenderOverrideKey(effectiveLineKey);
+          }}
+          renderDisabled={htmlTooLarge}
+          renderDisabledReason="File too large to render"
+        />
+      ) : null}
     </div>
   );
 
@@ -787,6 +818,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     }
     if (!fileBody) {
       return <div className="empty-state">Loading…</div>;
+    }
+    if (showHtmlRendered) {
+      return <HtmlView source={fileBody} variant="file" title={path} />;
     }
     if (isMd) {
       const segments = segmentMarkdownWithMermaid(fileBody);
@@ -849,11 +883,11 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       style={{ position: "relative" }}
     >
       {diffInfo}
-      {fontOverlay}
+      {showHtmlRendered ? null : fontOverlay}
       <div
         ref={setBodyRef}
         onScroll={handleScroll}
-        className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`}
+        className={`preview-body${useCodeChrome ? " preview-body--code" : ""}${showHtmlRendered ? " preview-body--html" : ""}`}
         style={clearsRail ? {
                 ...previewScaleStyle,
                 paddingLeft: `calc(var(--tools-rail-w, 36px) + ${useCodeChrome ? "0px" : "var(--space-3, 12px)"})`,

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { StreamingMarkdown, closeUnterminatedFences } from "./StreamingMarkdown";
 
@@ -91,5 +91,44 @@ describe("StreamingMarkdown (4.T3)", () => {
     const { container } = render(<StreamingMarkdown source="![logo](./assets/logo.png)" />);
     expect(getFileBlob).not.toHaveBeenCalled();
     expect(container.querySelector("img.markdown-img")).toBeNull();
+  });
+});
+
+describe("StreamingMarkdown renderHtml (4.T2)", () => {
+  it("renders a closed html fence as a sandboxed iframe when renderHtml is true", () => {
+    const { container } = render(
+      <StreamingMarkdown renderHtml source={"Before\n\n```html\n<h1>Hi</h1>\n```"} />,
+    );
+    const iframe = container.querySelector("iframe");
+    expect(iframe).toBeTruthy();
+    expect(iframe?.getAttribute("srcdoc")).toContain("<h1>Hi</h1>");
+    expect(container.textContent).toContain("Before");
+  });
+
+  it("switches the html fence to a Source tab showing highlighted code and removing the iframe", () => {
+    const { container } = render(
+      <StreamingMarkdown renderHtml source={"```html\n<h1>Hi</h1>\n```"} />,
+    );
+    expect(container.querySelector("iframe")).toBeTruthy();
+    const sourceTab = container.querySelector('[role="tab"][aria-selected="false"]');
+    expect(sourceTab?.textContent).toBe("Source");
+    fireEvent.click(sourceTab as Element);
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".workspace-md-code-block")).toBeTruthy();
+    expect(container.textContent).toContain("<h1>Hi</h1>");
+  });
+
+  it("renders only a code block (no iframe) when renderHtml is absent (default false)", () => {
+    const { container } = render(<StreamingMarkdown source={"```html\n<h1>Hi</h1>\n```"} />);
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".workspace-md-code-block")).toBeTruthy();
+  });
+
+  it("keeps an unclosed html fence as a code block mid-stream even with renderHtml", () => {
+    const { container } = render(
+      <StreamingMarkdown renderHtml source={"```html\n<h1>Hi</h1>"} />,
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".workspace-md-code-block")).toBeTruthy();
   });
 });

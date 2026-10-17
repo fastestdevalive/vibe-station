@@ -441,3 +441,25 @@ There are three different "skill" concepts in this repo, two of which share a fi
 - **Scan hazard:** if a user ever adds the vibe-station repo root to `skillPaths` in the Skills settings panel, `userSkillCatalog`'s `<dir>/*/SKILL.md` scan would ingest `skill/SKILL.md` as a user skill named `vst` (it has valid frontmatter, so it parses cleanly — the ingestion is silent, not an error). The default (`~/.claude/skills`) avoids this in practice, but the settings UI does not block the repo root — don't "fix" this by special-casing the repo root path; the fix (if ever needed) belongs in the scanner's directory validation, not as a silent path skip.
 - Do not rename `userSkillCatalog` to `skillCatalog` or similar — the deliberately distinct name is what keeps this file from being confused with `promptBuilder.ts`'s L1 asset in searches/greps.
 - **`skill/SKILL.md` is not the L1 prompt.** Editing it changes what *external* agents are told about the vst CLI; editing `daemon/src/assets/agent-system-prompt.md` changes what *our own* spawned agents are told. They are cross-referenced from each other but are never the same file.
+
+---
+
+## HTML rendering — untrusted HTML only enters an iframe via `htmlDocument.buildHtmlSrcdoc`
+
+**Files:** `web-ui/src/components/preview/htmlDocument.ts` · `web-ui/src/components/preview/HtmlView.tsx` · `rust/vst-agents/assets/agent-subagent-richchat.md`
+
+`.html`/`.htm` file previews and Rich Chat ```` ```html ```` fences are rendered as sandboxed iframes. The sandbox is a layered boundary (iframe `sandbox` flags + a CSP meta + DOMPurify), and **`buildHtmlSrcdoc` is the single audited path from untrusted HTML to an iframe** — no component builds an iframe from raw HTML any other way.
+
+### The invariant
+
+- **The sandbox never gains `allow-scripts` or `allow-same-origin`** (nor `allow-forms`/`allow-top-navigation*`/`allow-modals`). `HTML_IFRAME_SANDBOX` is exactly `"allow-popups allow-popups-to-escape-sandbox"`; `HtmlView.tsx` renders `<iframe sandbox={HTML_IFRAME_SANDBOX}>` with no `allow` and no `src`. Adding any of these flags is the one edit that turns a harmless preview into full script execution — treat it as a security review blocker.
+- **The CSP meta is always first** in the `srcdoc`, before user content, so a sanitized user `<style>` can never precede or override it. `HTML_CSP` (`default-src 'none'`; `style-src 'unsafe-inline'`; `img`/`font`/`media-src data:`) blocks all network/exfil even if a sanitizer bypass slips through.
+- **The DOMPurify instance in `htmlDocument.ts` is private** (`const purify = DOMPurify(window)`) with its own hook — never swap it for the default instance used by `MermaidView`, or the link-rewriting hook leaks into SVG sanitization (and vice-versa).
+- **`renderHtml` is only passed by the assistant `TextMessage`** (`StreamingMarkdown.tsx`'s `renderHtml?: boolean`, default `false`). User messages and `ThinkingBlock` never pass it, so an html fence there stays a plain code block.
+- **The prompt section's rules stay in sync with the UI's caps and sanitizer:** `rust/vst-agents/assets/agent-subagent-richchat.md` (appended to the Rich-Chat-only `SUBAGENT_MD`, gated by `rich_chat` in `prompt_builder.rs`) tells agents "inline `<style>` only, images only as `data:` URIs, no JS/external assets/forms, keep each block under 256 KiB, http(s)/mailto links only". If `HTML_CHAT_MAX_BYTES` (256 KiB), the sanitizer + `HTML_CSP` allowed set (inline CSS; the CSP limits images to `data:`), or the link rules ever change, that prose must change in the same commit.
+
+### What to watch for
+
+- **A second path from HTML text to a rendered view.** Every new render site for untrusted HTML must go through `buildHtmlSrcdoc` — never `dangerouslySetInnerHTML`, never injecting into app DOM (a sanitizer bypass then becomes app XSS), never adding `allow-same-origin` to measure iframe height (Decision 2's rejected option D).
+- **Editing the prompt section without the sanitizer/caps, or vice versa.** The UI lets an agent render exactly what the prompt promises (inline CSS, `data:` images, ≤256 KiB, http(s)/mailto links); they must not drift apart.
+- **Size caps have one owner:** `HtmlView.isOverHtmlCap` — callers (`FilePreviewPane`, `HtmlBlock`) only call it to pick Source vs Rendered, never re-implement thresholds.
