@@ -6,6 +6,7 @@ import { createMockApi } from "@/api/mock";
 import { FilePreviewPane } from "./FilePreviewPane";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import * as lspApi from "@/lib/lspApi";
+import { HTML_FILE_MAX_BYTES } from "@/components/preview/htmlDocument";
 
 describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", () => {
   const api = createMockApi();
@@ -1073,3 +1074,98 @@ describe("FilePreviewPane — 2.9 (back/forward buttons and keyboard shortcuts)"
   });
 });
 
+
+describe("FilePreviewPane — HTML rendering (Rendered / Source toggle)", () => {
+  const api = createMockApi();
+
+  beforeEach(() => {
+    window.localStorage.removeItem("vibestation:html-preview-mode");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "page.html",
+      diffScopeByWorktree: {},
+      pendingLineTarget: null,
+      peekFile: null,
+    });
+  });
+
+  it("3.T1 — an .html file renders in a sandboxed iframe by default, no font buttons", async () => {
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue("<h1>Hi</h1>");
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe[title="page.html"]') as HTMLIFrameElement | null;
+      expect(iframe).toBeTruthy();
+      expect(iframe!.srcdoc).toContain("<h1>Hi</h1>");
+    });
+    expect(container.querySelector(".preview-font-overlay")).toBeNull();
+    getFileSpy.mockRestore();
+  });
+
+  it("3.T2 — clicking Source shows the code view, persists 'source', font buttons return; Rendered restores the iframe", async () => {
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue("<h1>Hi</h1>");
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(container.querySelector('iframe[title="page.html"]')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Source" }));
+    await waitFor(() => {
+      expect(container.querySelector('iframe[title="page.html"]')).toBeNull();
+    });
+    expect(container.querySelector(".workspace-code-viewer")).toBeTruthy();
+    expect(window.localStorage.getItem("vibestation:html-preview-mode")).toBe("source");
+    expect(container.querySelector(".preview-font-overlay")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    await waitFor(() => {
+      expect(container.querySelector('iframe[title="page.html"]')).toBeTruthy();
+    });
+    getFileSpy.mockRestore();
+  });
+
+  it("3.T3 — a line-jump (pendingLineTarget) on an .html file defaults to Source; clicking Rendered shows the iframe", async () => {
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue("<h1>Hi</h1>");
+    useWorkspaceStore.setState({
+      pendingLineTarget: { worktreeId: "wt-1", path: "page.html", line: 1, matchText: null },
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(container.querySelector(".workspace-code-viewer")).toBeTruthy();
+    });
+    expect(container.querySelector('iframe[title="page.html"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    await waitFor(() => {
+      expect(container.querySelector('iframe[title="page.html"]')).toBeTruthy();
+    });
+    getFileSpy.mockRestore();
+  });
+
+  it("3.T4 — diff scope on an .html file renders DiffView, no iframe and no toggle", async () => {
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue("<h1>Hi</h1>");
+    useWorkspaceStore.setState({ diffScopeByWorktree: { "wt-1": "branch" } });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(container.querySelector(".diff-line")).toBeTruthy();
+    });
+    expect(container.querySelector('iframe[title="page.html"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rendered" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Source" })).not.toBeInTheDocument();
+    getFileSpy.mockRestore();
+  });
+
+  it("3.T5 — oversize body shows no iframe, Rendered disabled, toggle shows Source pressed", async () => {
+    const body = "<p>x</p>\n".repeat(Math.ceil(HTML_FILE_MAX_BYTES / 9) + 1);
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue(body);
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(container.querySelector(".workspace-code-viewer")).toBeTruthy();
+    });
+    expect(container.querySelector('iframe[title="page.html"]')).toBeNull();
+    const renderedBtn = screen.getByRole("button", { name: "Rendered" });
+    expect(renderedBtn).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
+    getFileSpy.mockRestore();
+  });
+});

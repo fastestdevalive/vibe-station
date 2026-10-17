@@ -19,6 +19,8 @@ interface TextMessageProps {
   scope?: FileScope;
   /** This user message was delivered by a scheduled send — tag it inside the bubble. */
   scheduled?: boolean;
+  /** Row key from MessageList; keeps html card UI state across virtualized remounts. */
+  rowKey?: string;
 }
 
 /**
@@ -26,7 +28,7 @@ interface TextMessageProps {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey }: TextMessageProps) {
   const isUser = role === "user";
   return (
     <div
@@ -62,7 +64,7 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
             )}
           </div>
         ) : (
-          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} />
+          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} renderHtml rowKey={rowKey} />
         )}
         {attachments && attachments.length > 0 ? (
           <div className="chat-bubble__attachments">

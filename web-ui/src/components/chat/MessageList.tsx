@@ -1059,7 +1059,7 @@ export function MessageList({
         return <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />;
       }
       case "assistant":
-        return <TextMessage role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} />;
+        return <TextMessage role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} />;
       case "thinking":
         // The null-render gate for unclosed/empty thinking groups is folded
         // into the `items` memo (2.2b), so any thinking item that reaches here

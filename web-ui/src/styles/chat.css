@@ -704,6 +704,112 @@
   cursor: zoom-in;
 }
 
+/* ── HTML rendering (sandboxed iframe) ────────────────────────────────────── */
+
+.html-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.html-view__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1);
+}
+.html-view__light-btn,
+.html-view__expand-btn {
+  background: none;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  padding: 2px 6px;
+}
+.html-view__light-btn[aria-pressed="true"] {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+.html-view__frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg-primary);
+}
+.html-view--chat .html-view__body {
+  height: 320px;
+  overflow: hidden;
+  resize: vertical;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md, 6px);
+}
+.html-view--chat[data-expanded="true"] .html-view__body {
+  height: 70vh;
+}
+@media (max-width: 600px) {
+  /* must follow the base rule above: same specificity, source order decides */
+  .html-view--chat[data-expanded="true"] .html-view__body {
+    height: 50vh;
+  }
+}
+.html-view--file {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+.html-view--file .html-view__body {
+  flex: 1;
+}
+.html-view__notice {
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  border: var(--border-width) dashed var(--border-default);
+  border-radius: var(--radius-md, 6px);
+}
+
+/* HTML chat card — Preview/Source tabs (Decision 10). */
+.html-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  /* Definite width: the assistant bubble is shrink-wrapped (max-width: 80%), so
+     a bare width:100% iframe inside it would collapse to the 300px default. */
+  width: 640px;
+  max-width: 100%;
+}
+.html-block__tabs {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.html-block__tab {
+  background: none;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+}
+.html-block__tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.html-block__tab[aria-selected="true"] {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+.html-block__panel {
+  min-width: 0;
+}
+
 /* ── Thinking block ───────────────────────────────────────────────────────── */
 
 .chat-thinking {

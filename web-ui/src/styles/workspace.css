@@ -3154,6 +3154,40 @@
   padding: 0;
 }
 
+.preview-body--html {
+  display: flex;
+  flex-direction: column;
+}
+
+.html-mode-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.html-mode-toggle button {
+  /* reuse the preview nav button look */
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+}
+
+.html-mode-toggle button[aria-pressed="true"] {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.html-mode-toggle button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .preview-diff-root {
   margin: 0;
   padding: 12px 0;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
 import { TextMessage } from "./TextMessage";
+import { ThinkingBlock } from "./ThinkingBlock";
 
 /** 7B.10 — a sent user message carries the internal `{/name args}` encoding.
  *  It must never surface a brace, and the skill name must read differently
@@ -48,5 +49,33 @@ describe("TextMessage — sent skill tokens", () => {
   it("leaves an assistant message to the markdown renderer (no chip styling)", () => {
     const { container } = render(<TextMessage role="assistant" text="Use {/code-review high}." />);
     expect(container.querySelector(".chat-msg-skill")).toBeNull();
+  });
+});
+
+describe("TextMessage — HTML rendering (4.T3)", () => {
+  it("renders an assistant html fence as a sandboxed iframe", () => {
+    const { container } = render(
+      <TextMessage role="assistant" text={"```html\n<h1>Hi</h1>\n```"} />,
+    );
+    const iframe = container.querySelector("iframe");
+    expect(iframe).toBeTruthy();
+    expect(iframe?.getAttribute("srcdoc")).toContain("<h1>Hi</h1>");
+  });
+
+  it("renders a thinking block html fence as a code block, never an iframe", () => {
+    // ThinkingBlock.tsx:90 omits renderHtml (Decision 9), so even when open a
+    // closed html fence stays a plain code block.
+    const { container } = render(
+      <ThinkingBlock defaultOpen text={"```html\n<h1>Hi</h1>\n```"} startedTs="2024-01-01T00:00:00.000Z" />,
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".workspace-md-code-block")).toBeTruthy();
+  });
+
+  it("never reaches StreamingMarkdown for a user message (no iframe)", () => {
+    const { container } = render(
+      <TextMessage role="user" text={"```html\n<h1>Hi</h1>\n```"} />,
+    );
+    expect(container.querySelector("iframe")).toBeNull();
   });
 });
