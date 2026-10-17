@@ -117,3 +117,29 @@ export function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+
+/** One-line summary of the draft's target fields for the short-pane fold. */
+export function summarizeFields(a: {
+  projectName: string | null;
+  newProject: boolean;
+  useWorktree: boolean;
+  worktreeChoice: "new" | "existing";
+  existingBranch: string | null;
+  baseBranch: string;
+}): string {
+  const parts: string[] = [];
+  const project =
+    a.projectName ?? (a.newProject ? "New project" : "Choose a project");
+  parts.push(project);
+  if (a.useWorktree) {
+    if (a.worktreeChoice === "existing") {
+      parts.push(a.existingBranch ?? "existing worktree");
+    } else {
+      parts.push("new worktree");
+      if (a.baseBranch) parts.push(`from ${a.baseBranch}`);
+    }
+  } else {
+    parts.push("project folder");
+  }
+  return parts.join(" · ");
+}
