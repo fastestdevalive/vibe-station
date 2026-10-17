@@ -5171,10 +5171,6 @@
 
 /* "Will create <path>" line — the path is highlighted (mono chip, primary
    colour) so the target directory reads clearly instead of as muted hint text. */
-.new-agent__will-create {
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-}
 .new-agent__will-create-path {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
@@ -5250,47 +5246,6 @@
 
 .combobox-wrapper {
   position: relative;
-}
-
-.project-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: var(--border-width) solid var(--border-default);
-  background: var(--bg-input);
-}
-
-.project-chip__icon {
-  opacity: 0.7;
-  flex: none;
-}
-
-.project-chip__name {
-  font-weight: var(--font-weight-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-chip__remove {
-  margin-left: auto;
-  flex: none;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: var(--fg-muted);
-  padding: 0 var(--space-1);
-  font-size: var(--font-size-base);
-  line-height: 1;
-}
-
-.project-chip__remove:hover {
-  color: var(--fg-primary);
 }
 
 .combobox-popup {

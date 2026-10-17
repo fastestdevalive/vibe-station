@@ -8,6 +8,7 @@ import { ApiError } from "@/api/errors";
 import type { Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
 import { DraftComposer } from "./DraftComposer";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 
 // DraftComposer renders the Lexical-backed SkillEditor and the directory
@@ -331,11 +332,70 @@ describe("DraftComposer new-directory creation", () => {
     const block = /\.draft-composer \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(block).toMatch(/height:\s*100%/);
     expect(block).toMatch(/min-height:\s*0/);
-    // The scroll/pin contract the above restores: body scrolls, bar never does.
+    // The scroll/pin contract the above restores: body scrolls, folded rows hide.
     const body = /\.draft-composer__body \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(body).toMatch(/overflow-y:\s*auto/);
-    const bar = /\.draft-composer__bar \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(bar).toMatch(/flex-shrink:\s*0/);
+    const rowsHidden = /\.draft-composer__rows\[hidden\] \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(rowsHidden).toMatch(/display:\s*none/);
+  });
+
+  it("`.draft-composer .draft-row__label` fixes the label column so it cannot grow to half the row (R1F-01)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const block = /\.draft-composer \.draft-row__label \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/flex:\s*none/);
+    expect(block).toMatch(/width:\s*84px/);
+  });
+
+  it("`.draft-composer__composer` zeroes the shell's own padding so the draft inset aligns with the rows (R1F-02)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const block = /\.draft-composer \.draft-composer__composer \.chat-composer \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/padding:\s*0/);
+  });
+
+  it("`.draft-composer .draft-composer__hint` wraps instead of clipping (R1F-06)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const block = /\.draft-composer \.draft-composer__hint \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/white-space:\s*normal/);
+  });
+
+  it("`.draft-composer .draft-popover__search` carries focus on the single wrapper border, no inner ring (R1F-08)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const focus = /\.draft-composer \.draft-popover__search:focus-within \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(focus).toMatch(/border-color:\s*var\(--fg-muted\)/);
+    const input = /\.draft-composer \.draft-popover__search input:focus[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(input).toMatch(/outline:\s*none/);
+    expect(input).toMatch(/box-shadow:\s*none/);
+  });
+
+  it("`.draft-composer` is an inline-size container so short panes can give the Discard ✕ its own band (R2F-01)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const block = /\.draft-composer \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/container:\s*draft-pane\s*\/\s*inline-size/);
+    const short = /\.draft-composer--short \.draft-composer__discard \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(short).toMatch(/top:\s*var\(--space-2\)/);
+    expect(short).toMatch(/right:\s*var\(--space-3\)/);
+    const band = /@container draft-pane \(max-width: 608px\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(band).toMatch(/padding-top:\s*44px/);
+  });
+
+  it("`.draft-composer__body` is positioned so the Discard ✕ scrolls with its band and never lands on the box (R3F-01)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const body = /\.draft-composer__body \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(body).toMatch(/position:\s*relative/);
+    expect(body).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it("Start goes icon-only in a very narrow composer so the toolbar never overflows the shell (R2F-02)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const narrow = /@container composer \(max-width: 340px\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(narrow).toMatch(/draft-composer__start-label/);
+    expect(narrow).toMatch(/display:\s*none/);
+  });
+
+  it("`.draft-composer .draft-composer__hint` lays items out with 14px gaps, no '·' separators (R2F-03)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const block = /\.draft-composer \.draft-composer__hint \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/column-gap:\s*14px/);
   });
 });
 
@@ -436,16 +496,26 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
 
   it("preselects settings.lastModeId when it still exists, else the first mode", async () => {
     vi.spyOn(api, "getSettings").mockResolvedValue({ defaultProjectsDir: "/p", lastModeId: "m2" });
-    renderTier2([makeMode({ id: "m1", name: "One" }), makeMode({ id: "m2", name: "Two" })], [makeCli({ id: "claude" })]);
-    const select = await screen.findByRole("combobox", { name: "Mode" });
-    await waitFor(() => expect(select).toHaveValue("m2"));
+    renderTier2(
+      [makeMode({ id: "m1", name: "Claude One" }), makeMode({ id: "m2", name: "Claude Two" })],
+      [makeCli({ id: "claude" })],
+    );
+    fireEvent.click(await screen.findByLabelText("Mode"));
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Claude Two/ })).toHaveAttribute("aria-selected", "true");
+    });
   });
 
   it("falls back to the first mode when settings.lastModeId no longer exists", async () => {
     vi.spyOn(api, "getSettings").mockResolvedValue({ defaultProjectsDir: "/p", lastModeId: "gone" });
-    renderTier2([makeMode({ id: "m1", name: "One" }), makeMode({ id: "m2", name: "Two" })], [makeCli({ id: "claude" })]);
-    const select = await screen.findByRole("combobox", { name: "Mode" });
-    await waitFor(() => expect(select).toHaveValue("m1"));
+    renderTier2(
+      [makeMode({ id: "m1", name: "Claude One" }), makeMode({ id: "m2", name: "Claude Two" })],
+      [makeCli({ id: "claude" })],
+    );
+    fireEvent.click(await screen.findByLabelText("Mode"));
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Claude One/ })).toHaveAttribute("aria-selected", "true");
+    });
   });
 
   it("4.T5 — scaffold draft with channel:json and no channelExplicit flips to Terminal for an agy mode (B1)", async () => {
@@ -495,7 +565,10 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     const claude = makeCli({ id: "claude", defaultChannel: "json" });
     // Auto-select the tmux-default mode first (ms[0]) so the default is Terminal.
     renderTier2(
-      [makeMode({ id: "tmux-default-mode", cli: "tmux-default" }), makeMode({ id: "claude-mode", cli: "claude" })],
+      [
+        makeMode({ id: "tmux-default-mode", name: "Tmux", cli: "tmux-default" }),
+        makeMode({ id: "claude-mode", name: "Claude", cli: "claude" }),
+      ],
       [tmuxDefault, claude],
     );
     const sw = await findChannelSwitch();
@@ -509,8 +582,9 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       channelSwitch().click(); // explicit Terminal
     });
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
+      fireEvent.click(screen.getByLabelText("Mode"));
     });
+    fireEvent.click(await screen.findByRole("option", { name: /^Claude/ }));
     await waitFor(() => expect(channelSwitch()).not.toBeChecked());
   });
 
@@ -518,15 +592,16 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
     const claude = makeCli({ id: "claude", defaultChannel: "json" });
     renderTier2(
-      [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
+      [makeMode({ id: "agy-mode", name: "Agy", cli: "agy" }), makeMode({ id: "claude-mode", name: "Claude", cli: "claude" })],
       [agy, claude],
     );
     const sw = await findChannelSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
     // No manual pick -> switching to claude follows claude's json default.
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
+      fireEvent.click(screen.getByLabelText("Mode"));
     });
+    fireEvent.click(await screen.findByRole("option", { name: /Claude/ }));
     await waitFor(() => expect(channelSwitch()).toBeChecked());
   });
 
@@ -596,6 +671,15 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(screen.queryByText("Attachments")).toBeNull();
     expect(screen.getByRole("button", { name: "Attach files" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Start agent" })).toBeTruthy();
+  });
+
+  it("the Start button carries `.draft-composer__start-label` so the narrow-composer CSS can hide it (R2F-02)", async () => {
+    renderTier1(makeDraftSession({}));
+    await findChannelSwitch();
+    const btn = screen.getByRole("button", { name: "Start agent" });
+    const label = btn.querySelector(".draft-composer__start-label");
+    expect(label).toBeTruthy();
+    expect(label?.textContent).toBe("Start");
   });
 
   it("toggle ON submits channel json; OFF submits channel tmux (explicit)", async () => {
@@ -707,5 +791,497 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(keys).toEqual(["Enter", "Shift + Enter"]);
     expect(hint.textContent).toContain("to start");
     expect(hint.textContent).not.toContain("to queue");
+  });
+
+  it("the Rich Chat hint has no '·' separator dangling at the end of a wrapped line (R2F-03)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    const hint = document.querySelector(".draft-composer__hint")!;
+    expect(hint.textContent).not.toContain("·");
+  });
+
+  it("the Terminal draft hint has no '·' separator (R2F-03)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier1(
+      makeDraftSession({
+        modeId: "claude-mode",
+        draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "claude-mode", channel: "pty", channelExplicit: true },
+      }),
+    );
+    await waitFor(async () => expect(await findChannelSwitch()).not.toBeChecked());
+    const hint = document.querySelector(".draft-composer__hint")!;
+    expect(hint.textContent).not.toContain("·");
+  });
+
+  it("the Rich Chat hint renders 3 hint items, the first carrying the drop-files prefix (R1F-06)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    const items = Array.from(document.querySelectorAll(".draft-composer__hint .chat-composer__hint-item"));
+    // Drop files here + Enter to start + Shift + Enter newline.
+    expect(items).toHaveLength(3);
+    expect(items[0]!.textContent).toContain("Drop files here");
+    expect(items[0]!.textContent).toContain("⤓");
+  });
+
+  // ── Minimal box layout (Phase 1) ─────────────────────────────────────────
+  function projectFixture(id = "p1"): Project {
+    return {
+      id,
+      name: id,
+      path: "/tmp/proj",
+      prefix: "p",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hidden: false,
+      lspEnabled: false,
+    };
+  }
+
+  it("minimal box layout: caption, box, no logo/hero/old mode select, hint outside the box (1.T5)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude", name: "Claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    expect(document.querySelector(".draft-composer__box")).toBeTruthy();
+    const heading = screen.getByRole("heading", { name: "New agent" });
+    expect(heading.className).toContain("draft-composer__caption");
+    const logo = document.querySelector('img[src="/logo.svg"]');
+    expect(logo).toBeTruthy();
+    expect(logo?.nextElementSibling).toBe(heading);
+    expect(screen.queryByRole("button", { name: "+ New mode" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Mode" })).toBeNull();
+    const hint = document.querySelector(".chat-composer__hint")!;
+    expect(hint.closest(".draft-composer__box")).toBeNull();
+  });
+
+  it("mode popover: opens, lists New mode + modes, keyboard select, Esc refocuses, New mode opens dialog (1.T6)", async () => {
+    const modes = [
+      makeMode({ id: "m1", name: "Alpha", cli: "claude" }),
+      makeMode({ id: "m2", name: "Beta", cli: "claude" }),
+    ];
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier2(modes, [makeCli({ id: "claude" })]);
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveTextContent("Alpha"));
+
+    fireEvent.click(screen.getByLabelText("Mode"));
+    expect(screen.getByRole("listbox", { name: "Modes" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /New mode…/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Alpha/ })).toHaveAttribute("aria-selected", "true");
+
+    // ArrowDown + Enter selects the next mode (Beta); chip text changes. The
+    // cursor starts on the current mode Alpha (R1F-10), so one ArrowDown lands
+    // on Beta.
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "Enter" });
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveTextContent("Beta"));
+    expect(screen.queryByRole("listbox", { name: "Modes" })).toBeNull();
+    // Choosing a mode returns focus to the chip (no drop to <body>).
+    expect(screen.getByLabelText("Mode")).toHaveFocus();
+
+    // Tab closes the popover instead of leaving it open behind the focus move.
+    fireEvent.click(screen.getByLabelText("Mode"));
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "Tab" });
+    expect(screen.queryByRole("listbox", { name: "Modes" })).toBeNull();
+
+    // Reopen, Escape closes and refocuses the chip.
+    fireEvent.click(screen.getByLabelText("Mode"));
+    expect(screen.getByRole("listbox", { name: "Modes" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByLabelText("Mode"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("listbox", { name: "Modes" })).toBeNull());
+    expect(screen.getByLabelText("Mode")).toHaveFocus();
+
+    // New mode… opens the NewModeDialog.
+    fireEvent.click(screen.getByLabelText("Mode"));
+    fireEvent.click(screen.getByRole("option", { name: /New mode…/ }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+  });
+
+  it("mode chip carries the current mode name as its title for the icon-only state (R1F-04)", async () => {
+    const modes = [
+      makeMode({ id: "m1", name: "Alpha", cli: "claude" }),
+      makeMode({ id: "m2", name: "Beta", cli: "claude" }),
+    ];
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier2(modes, [makeCli({ id: "claude" })]);
+    const chip = await screen.findByLabelText("Mode");
+    await waitFor(() => expect(chip).toHaveAttribute("title", "Alpha"));
+  });
+
+  it("mode popover keyboard cursor starts on the current mode, both on click and ArrowDown (R1F-10)", async () => {
+    const modes = [
+      makeMode({ id: "m1", name: "Alpha", cli: "claude" }),
+      makeMode({ id: "m2", name: "Beta", cli: "claude" }),
+      makeMode({ id: "m3", name: "Gamma", cli: "claude" }),
+    ];
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    // Current mode is Beta (m2): the chip's modeId state seeds from draftConfig.modeId.
+    renderTier1(makeDraftSession({ modeId: "m2", draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "m2" } }));
+
+    const chip = await screen.findByLabelText("Mode");
+    await waitFor(() => expect(chip).toHaveTextContent("Beta"));
+
+    // Opening via ArrowDown on the closed chip starts on the current mode.
+    fireEvent.keyDown(chip, { key: "ArrowDown" });
+    let beta = screen.getByRole("option", { name: /Beta/ });
+    expect(chip.getAttribute("aria-activedescendant")).toBe(beta.id);
+    expect(beta).toHaveClass("draft-popover__item--active");
+
+    // Close, then opening by click also starts on Beta, highlighted and selected.
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "Escape" });
+    fireEvent.click(chip);
+    beta = screen.getByRole("option", { name: /Beta/ });
+    expect(chip.getAttribute("aria-activedescendant")).toBe(beta.id);
+    expect(beta).toHaveClass("draft-popover__item--active");
+    expect(beta).toHaveAttribute("aria-selected", "true");
+
+    // ArrowDown + Enter moves relative to Beta and selects the next mode (Gamma).
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("listbox", { name: "Modes" }), { key: "Enter" });
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveTextContent("Gamma"));
+  });
+
+  it("R4F-01 — mode popover is bounded to the space above it (short pane)", async () => {
+    const modes = [
+      makeMode({ id: "m1", name: "Alpha", cli: "claude" }),
+      makeMode({ id: "m2", name: "Beta", cli: "claude" }),
+      makeMode({ id: "m3", name: "Gamma", cli: "claude" }),
+    ];
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier2(modes, [makeCli({ id: "claude" })]);
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveTextContent("Alpha"));
+
+    // The popover's bottom edge sits below the body's clip top (a short pane):
+    // bottom 214, body top 35, minus the 8px edge gap => 171px. Anything else
+    // returns the default zero rect.
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    rect.mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("draft-popover--up")) return { bottom: 214 } as DOMRect;
+      if (this.classList.contains("draft-composer__body")) return { top: 35 } as DOMRect;
+      return { top: 0, bottom: 0 } as DOMRect;
+    });
+
+    try {
+      fireEvent.click(screen.getByLabelText("Mode"));
+      await waitFor(() => {
+        expect(screen.getByRole("listbox", { name: "Modes" }).style.maxHeight).toBe("171px");
+      });
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("R4F-01 — mode popover height has a floor even in an extremely short pane", async () => {
+    const modes = [
+      makeMode({ id: "m1", name: "Alpha", cli: "claude" }),
+      makeMode({ id: "m2", name: "Beta", cli: "claude" }),
+      makeMode({ id: "m3", name: "Gamma", cli: "claude" }),
+    ];
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    renderTier2(modes, [makeCli({ id: "claude" })]);
+    await waitFor(() => expect(screen.getByLabelText("Mode")).toHaveTextContent("Alpha"));
+
+    // bottom 60, body top 35: 60 - 35 - 8 = 17, which floors to 120px.
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    rect.mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("draft-popover--up")) return { bottom: 60 } as DOMRect;
+      if (this.classList.contains("draft-composer__body")) return { top: 35 } as DOMRect;
+      return { top: 0, bottom: 0 } as DOMRect;
+    });
+
+    try {
+      fireEvent.click(screen.getByLabelText("Mode"));
+      await waitFor(() => {
+        expect(screen.getByRole("listbox", { name: "Modes" }).style.maxHeight).toBe("120px");
+      });
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it("`.draft-popover--up` flexes so the bound shrinks only the mode list, not the pinned row/label (R4F-01)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    // There are two `.draft-popover--up { … }` blocks: the positioning one and
+    // the flex one that lets the inline max-height shrink only the list.
+    const blocks = [...css.matchAll(/\.draft-popover--up \{([^}]*)\}/g)].map((m) => m[1] ?? "");
+    const flex = blocks.find((b) => /flex-direction/.test(b));
+    expect(flex).toBeTruthy();
+    expect(flex!).toMatch(/display:\s*flex/);
+    expect(flex!).toMatch(/flex-direction:\s*column/);
+    const list = /\.draft-popover--up > \.draft-popover__list \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(list).toMatch(/min-height:\s*0/);
+    const pinned = /\.draft-popover--up > \.draft-popover__pinned,([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(pinned).toMatch(/flex:\s*none/);
+  });
+
+  it("error strip renders inside the box above the composer (1.T7)", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude", name: "Claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    vi.spyOn(api, "startDraft").mockRejectedValue(new Error("boom"));
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    await typePrompt("do it");
+    await startTier1Draft();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("boom");
+    expect(alert.closest(".draft-composer__box")).not.toBeNull();
+    expect(alert.nextElementSibling?.className).toContain("draft-composer__composer");
+  });
+
+  it("tab entry shows a join header with the worktree branch and running agent count (1.T8a)", async () => {
+    const wt: Worktree = {
+      id: "wt-1",
+      projectId: "p1",
+      branch: "feat/foo",
+      baseBranch: "main",
+      baseSha: "sha",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      pinnedAt: null,
+      hiddenAt: null,
+      mainSessionId: "a-main",
+      lspEnabled: false,
+    };
+    const a1: Session = {
+      id: "a1",
+      worktreeId: "wt-1",
+      projectId: "p1",
+      modeId: "opencode",
+      type: "agent",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "t",
+      channel: "json",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draftPrompt: "",
+      draftConfig: { entryPoint: "tab" },
+    };
+    const a2: Session = {
+      id: "a2",
+      worktreeId: "wt-1",
+      projectId: "p1",
+      modeId: "opencode",
+      type: "agent",
+      isMain: false,
+      state: "exited",
+      lifecycleState: "exited",
+      tmuxName: "t",
+      channel: "json",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draftPrompt: "",
+      draftConfig: { entryPoint: "tab" },
+    };
+    const draft = makeDraftSession({ id: "tab-draft", worktreeId: "wt-1", projectId: "p1", draftConfig: { entryPoint: "tab" } });
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [wt], sessions: [draft, a1, a2], loaded: true });
+    useWorkspaceStore.setState({ sessionStates: { a1: "working", a2: "exited" } });
+    render(
+      <MemoryRouter initialEntries={["/draft/tab-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="tab-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    const join = screen.getByTestId("draft-join");
+    // Worktree has no display name, so the branch is the name; it must appear
+    // exactly once and not be repeated in the "joins this worktree" sub (R1F-12).
+    expect(join.textContent).toContain("feat/foo");
+    expect(join.textContent!.split("feat/foo").length).toBe(2);
+    expect(join.textContent).toContain("joins this worktree");
+    expect(screen.queryByText("Project")).toBeNull();
+    expect(join.textContent).toContain("1 agent running");
+  });
+
+  it("the Discard ✕ is the first child of `__body` so it scrolls with its band and never overlaps the box (R3F-01)", async () => {
+    const draft = makeDraftSession({ id: "tab-draft", worktreeId: "wt-1", projectId: "p1", draftConfig: { entryPoint: "tab" } });
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/tab-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="tab-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    const discard = screen.getByRole("button", { name: "Discard draft" });
+    const body = discard.parentElement;
+    expect(body).toBeTruthy();
+    expect(body!.className).toBe("draft-composer__body");
+    expect(body!.firstElementChild).toBe(discard);
+  });
+
+  it("project tab entry shows the project name and 'runs in the project folder', no worktree copy (R1F-11)", async () => {
+    const draft = makeDraftSession({
+      id: "ptab-draft",
+      projectId: "alpha",
+      worktreeId: null,
+      draftConfig: { entryPoint: "tab" },
+    });
+    useServerStore.setState({ projects: [projectFixture("alpha")], worktrees: [], sessions: [draft], loaded: true });
+    vi.spyOn(api, "listProjects").mockResolvedValue([projectFixture("alpha")]);
+    render(
+      <MemoryRouter initialEntries={["/draft/ptab-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="ptab-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    const join = await screen.findByTestId("draft-join");
+    await waitFor(() => expect(join.textContent).toContain("alpha"));
+    expect(join.textContent).toContain("runs in the project folder");
+    expect(join.textContent).not.toContain("worktree");
+    expect(join.textContent).not.toContain("agent running");
+  });
+
+  it("direct entry with project shows the padlock and Remove project (1.T8b)", async () => {
+    const draft = makeDraftSession({
+      id: "direct-draft",
+      projectId: "p1",
+      draftConfig: { entryPoint: "direct", useWorktree: true, worktreeChoice: "new" },
+    });
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/direct-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="direct-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    expect(screen.getByRole("img", { name: "Locked to this project" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove project" })).toBeTruthy();
+  });
+
+  it("global Tier 1 with project shows Remove project but no padlock (1.T8c)", async () => {
+    const draft = makeDraftSession({
+      id: "g-draft",
+      projectId: "p1",
+      draftConfig: { entryPoint: "global", useWorktree: true, worktreeChoice: "new" },
+    });
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/g-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="g-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    expect(screen.getByRole("button", { name: "Remove project" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "Locked to this project" })).toBeNull();
+  });
+
+  it("rows: direct draft shows worktree/switch/branch/base; toggling off hides them; Existing shows Join select (1.T9)", async () => {
+    const draft = makeDraftSession({
+      id: "r-draft",
+      projectId: "proj-a",
+      draftConfig: { entryPoint: "direct", useWorktree: true, worktreeChoice: "new" },
+    });
+    useServerStore.setState({ projects: [projectFixture("proj-a")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/r-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="r-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    expect(screen.getByRole("radiogroup", { name: "Worktree" })).toBeTruthy();
+    const sw = screen.getByRole("switch", { name: "Use worktree" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("textbox", { name: "Branch" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
+
+    fireEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("radiogroup", { name: "Worktree" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Branch" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Base branch" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Use worktree" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Existing worktree" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Worktree to join" })).toBeTruthy());
+  });
+
+  it("global draft gates rows behind a chosen target (W1) (1.T10)", async () => {
+    render(
+      <MemoryRouter initialEntries={["/draft/new"]}>
+        <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    expect(screen.queryByRole("switch", { name: "Use worktree" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Worktree" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Branch" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Base branch" })).toBeNull();
+
+    await act(async () => {
+      screen.getByTestId("add-path-btn").click();
+    });
+    expect(screen.getByRole("switch", { name: "Use worktree" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Worktree" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Branch" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Base branch" })).toBeTruthy();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("2.T6 — short pane folds the field rows into a summary; click expands; tall pane removes it", async () => {
+    let roCb: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          roCb = cb;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+
+    const draft = makeDraftSession({
+      id: "s-draft",
+      projectId: "p1",
+      draftConfig: { entryPoint: "direct", useWorktree: true, worktreeChoice: "new" },
+    });
+    vi.spyOn(api, "listProjects").mockResolvedValue([projectFixture("p1")]);
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/s-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="s-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+
+    // Short pane -> rows fold into a summary.
+    act(() => {
+      roCb!([{ contentRect: { height: 360 } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+    const summaryName = new RegExp(`${projectFixture("p1").name}.*Edit`);
+    const summary = screen.getByRole("button", { name: summaryName });
+    expect(summary).toHaveAttribute("aria-controls", "draft-composer-rows");
+    expect(document.getElementById("draft-composer-rows")).toBe(document.querySelector(".draft-composer__rows"));
+    expect(summary.textContent).toContain(projectFixture("p1").name);
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".draft-composer__rows")).toHaveAttribute("hidden");
+    expect(screen.getByRole("switch", { name: /Rich Chat/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start agent" })).toBeTruthy();
+    // R1F-07: the root carries the short class and the caption stays mounted (a11y).
+    expect(document.querySelector(".draft-composer")).toHaveClass("draft-composer--short");
+    expect(screen.getByRole("heading", { name: "New agent" })).toBeTruthy();
+
+    // Click the summary -> rows expand.
+    fireEvent.click(summary);
+    expect(summary).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelector(".draft-composer__rows")).not.toHaveAttribute("hidden");
+
+    // Tall pane -> summary gone, short class removed.
+    act(() => {
+      roCb!([{ contentRect: { height: 700 } } as ResizeObserverEntry], {} as ResizeObserver);
+    });
+    expect(document.querySelector(".draft-composer__summary")).toBeNull();
+    expect(document.querySelector(".draft-composer")).not.toHaveClass("draft-composer--short");
   });
 });

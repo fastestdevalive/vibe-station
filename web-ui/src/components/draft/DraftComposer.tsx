@@ -1,23 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play } from "lucide-react";
+import { Folder, GitBranch, Lock, Play } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { DraftAttachment } from "@/hooks/useAttachmentDrafts";
 import type { CreateWorktreeBody, DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Input } from "../ui/Input";
-import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
-import { ModeIcon } from "../agent/ModeIcon";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "../chat/SkillEditor";
-import { ComposerHint, ComposerShell, type HintItem } from "../chat/ComposerShell";
+import { ComposerShell, type HintItem } from "../chat/ComposerShell";
+import { DraftHint } from "./DraftHint";
 import { RichChatToggle } from "../chat/RichChatToggle";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import { NewModeDialog } from "../dialogs/NewModeDialog";
 import { NonGitWorktreeDialog } from "../dialogs/NonGitWorktreeDialog";
 import { ProjectCombobox } from "./ProjectCombobox";
-import { isAbsoluteQuery, type Mode_ } from "./draftComposerHelpers";
+import { DraftFieldRow } from "./DraftFieldRow";
+import { ModePopover } from "./ModePopover";
+import { isAbsoluteQuery, summarizeFields, type Mode_ } from "./draftComposerHelpers";
+import { useShortPane } from "./useShortPane";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { useGlobalDraftStore, type GlobalDraftState } from "@/store/globalDraftStore";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { useSkillCommands } from "@/hooks/useSkillCommands";
@@ -214,6 +217,36 @@ function DraftComposerInner({
 
   const { skillCommands, editorSeq, editorReady } = useSkillCommands(true, api);
   const softKeyboardVisible = useSoftKeyboardVisible();
+
+  // ── Short-pane fold (Phase 2). ────────────────────────────────────────────
+  const rootRef = useRef<HTMLDivElement>(null);
+  const shortPane = useShortPane(rootRef);
+  const [fieldsExpanded, setFieldsExpanded] = useState(false);
+
+  // ── Worktree-tab join header data (entryPoint "tab"). ─────────────────────
+  // The "+" on a worktree's agent tabs creates a draft with the project and
+  // worktree already fixed — show them as a read-only join header, not rows.
+  // Live status always resolves `sessionStates[id] ?? x.state` (AGENTS.md).
+  const tabWorktree = useServerStore((s) => s.worktrees.find((w) => w.id === session?.worktreeId) ?? null);
+  const sessionStates = useWorkspaceStore((s) => s.sessionStates);
+  const allSessions = useServerStore((s) => s.sessions);
+  const runningAgents = session?.worktreeId
+    ? allSessions.filter(
+        (x) =>
+          x.worktreeId === session.worktreeId &&
+          x.type === "agent" &&
+          x.archivedAt == null &&
+          x.id !== draftSessionId &&
+          !["drafting", "exited", "done"].includes(sessionStates[x.id] ?? x.state),
+      ).length
+    : 0;
+  // A project-folder direct-agent tab ("+" on a project's own agent tabs) has
+  // no worktree — name the fixed project target instead of the worktree copy.
+  const tabProjectName = projects.find((p) => p.id === session?.projectId)?.name ?? "this project";
+  // Worktree tabs: name the worktree, falling back to the branch (Worktree.name
+  // is optional and defaults to the branch). Used so the sub line doesn't
+  // repeat the branch when name === branch (R1F-12).
+  const joinName = tabWorktree?.name || tabWorktree?.branch || "this worktree";
 
   // Debounced save timer for prompt/config changes.
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -867,9 +900,27 @@ function DraftComposerInner({
     }
   }
 
-  const title = "New agent";
-
   const showWorktreeFields = entryPoint !== "tab" && useWorktree;
+
+  // Whether the draft has acquired a target (project/worktree) yet. For a
+  // global draft with nothing chosen, only the Project row shows (W1).
+  const hasTarget = Boolean(projectId) || comboMode === "create" || comboMode === "add-path";
+  const showFieldRows = entryPoint !== "global" || hasTarget;
+
+  // Short-pane fold: when the pane is short and a target is chosen, the field
+  // rows collapse into a one-line summary (they stay MOUNTED so the
+  // ProjectCombobox keeps its create/add-path state; only `hidden` toggles).
+  const folded = shortPane && hasTarget && entryPoint !== "tab" && !fieldsExpanded;
+  const summary = summarizeFields({
+    projectName:
+      (isTier1 ? projects.find((p) => p.id === session?.projectId)?.name : selectedProject?.name) ??
+      (comboMode === "add-path" ? newProjectAbsPath : null),
+    newProject: comboMode === "create",
+    useWorktree,
+    worktreeChoice,
+    existingBranch: worktrees.find((w) => w.id === existingWorktreeId)?.branch ?? null,
+    baseBranch,
+  });
 
   // Staged attachments: drafts have no live session to upload into (Tier 2
   // has no session at all), so files stay as `File`s until Start, where
@@ -885,295 +936,344 @@ function DraftComposerInner({
     !isJson && files.length > 0 ? "Attachments are only sent to Rich Chat agents — switch Rich Chat on or remove them." : null;
 
   return (
-    <div className="draft-composer">
-      {isTier1 ? (
-        <button
-          type="button"
-          className="draft-composer__discard"
-          onClick={() => setConfirmDiscard(true)}
-          aria-label="Discard draft"
-        >
-          ✕
-        </button>
-      ) : null}
+    <div className={"draft-composer" + (shortPane ? " draft-composer--short" : "")} ref={rootRef}>
       <div className="draft-composer__body">
-        <div className="draft-composer__spacer" />
-        <div className="draft-composer__hero">
-          <div className="draft-composer__appname">
-            vibe station <span className="draft-composer__appversion">v0.0.0</span>
-          </div>
+        {isTier1 ? (
+          <button
+            type="button"
+            className="draft-composer__discard"
+            onClick={() => setConfirmDiscard(true)}
+            aria-label="Discard draft"
+          >
+            ✕
+          </button>
+        ) : null}
+        <div className="draft-composer__stage-inner">
           <img src="/logo.svg" alt="" className="draft-composer__logo" aria-hidden />
-          <h2 className="draft-composer__title">{title}</h2>
-        </div>
-        <div className="draft-composer__fields">
-          {/* Project field — hidden entirely for entryPoint "tab": the
-              draft was created from the "+" on this worktree's own agent
-              tabs, so its project (and worktree) are already fixed and
-              implicit from where the button lives. Nothing here is ever
-              user-changeable for this entry point (there is no "Use
-              project folder instead" detach button for "tab" either, a few
-              lines below), so showing a fixed, unremovable chip added
-              nothing but visual noise. */}
-          {entryPoint !== "tab" && ((!isTier1 || !session?.projectId) ? (
-            <ProjectCombobox
-              api={api}
-              projects={projects}
-              settings={settings}
-              onSelectExisting={(p) => { void handleSelectProject(p); }}
-              onNewName={(name, dir) => {
-                setNewProjectName(name);
-                setNewProjectParentDir(dir);
-                setComboMode("create");
-              }}
-              onAddPath={(path) => {
-                setNewProjectAbsPath(path);
-                setComboMode("add-path");
-              }}
-              onClear={() => {
-                setSelectedProject(null);
-                setComboMode("search");
-                setNewProjectName("");
-                setNewProjectParentDir("");
-                setNewProjectAbsPath("");
-                setUseWorktree(true);
-                setBranch("");
-                setBaseBranch("");
-                setWorktreeChoice("new");
-                setExistingWorktreeId("");
-                setWorktrees([]);
-                setBranches([]);
-              }}
-            />
-          ) : (
-            <>
-              <div className="draft-composer__field">
-                <div className="draft-composer__field-label">Project</div>
-                <div className="project-chip">
-                  <span className="project-chip__icon" aria-hidden>◧</span>
-                  <span className="project-chip__name">
+          <h2 className="draft-composer__caption">New agent</h2>
+          <div className="draft-composer__box">
+            {shortPane && hasTarget && entryPoint !== "tab" ? (
+              <button
+                type="button"
+                className="draft-composer__summary"
+                aria-expanded={!folded}
+                aria-controls="draft-composer-rows"
+                onClick={() => setFieldsExpanded((v) => !v)}
+              >
+                <span className="draft-composer__summary-text">{summary}</span>
+                <span className="draft-row__link">{folded ? "Edit" : "Done"}</span>
+              </button>
+            ) : null}
+            <div className="draft-composer__rows" id="draft-composer-rows" hidden={folded}>
+              {/* Project field — hidden entirely for entryPoint "tab": the
+                  draft was created from the "+" on this worktree's own agent
+                  tabs, so its project (and worktree) are already fixed and
+                  implicit from where the button lives. Nothing here is ever
+                  user-changeable for this entry point (there is no "Use
+                  project folder instead" detach button for "tab" either, a few
+                  lines below), so showing a fixed, unremovable chip added
+                  nothing but visual noise. */}
+              {entryPoint === "tab" ? (
+                !session?.worktreeId ? (
+                  // A project-folder direct-agent tab (no worktree): name the
+                  // project the agent runs in, not the generic worktree copy.
+                  <div className="draft-join" data-testid="draft-join">
+                    <Folder size={16} aria-hidden />
+                    <div className="draft-join__text">
+                      <div className="draft-join__name">{tabProjectName}</div>
+                      <div className="draft-join__sub">runs in the project folder</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="draft-join" data-testid="draft-join">
+                    <GitBranch size={16} aria-hidden />
+                    <div className="draft-join__text">
+                      <div className="draft-join__name">{joinName}</div>
+                      <div className="draft-join__sub">{tabWorktree && tabWorktree.branch !== joinName ? tabWorktree.branch + " · " : ""}joins this worktree</div>
+                    </div>
+                    {runningAgents > 0 ? (
+                      <span className="draft-join__run">
+                        {runningAgents} agent{runningAgents === 1 ? "" : "s"} running
+                      </span>
+                    ) : null}
+                  </div>
+                )
+              ) : (!isTier1 || !session?.projectId) ? (
+                <ProjectCombobox
+                  api={api}
+                  projects={projects}
+                  settings={settings}
+                  onSelectExisting={(p) => { void handleSelectProject(p); }}
+                  onNewName={(name, dir) => {
+                    setNewProjectName(name);
+                    setNewProjectParentDir(dir);
+                    setComboMode("create");
+                  }}
+                  onAddPath={(path) => {
+                    setNewProjectAbsPath(path);
+                    setComboMode("add-path");
+                  }}
+                  onClear={() => {
+                    setSelectedProject(null);
+                    setComboMode("search");
+                    setNewProjectName("");
+                    setNewProjectParentDir("");
+                    setNewProjectAbsPath("");
+                    setUseWorktree(true);
+                    setBranch("");
+                    setBaseBranch("");
+                    setWorktreeChoice("new");
+                    setExistingWorktreeId("");
+                    setWorktrees([]);
+                    setBranches([]);
+                  }}
+                />
+              ) : (
+                <DraftFieldRow label="Project">
+                  <span aria-hidden>◧</span>
+                  <span className="draft-row__project-name">
                     {projects.find((p) => p.id === session?.projectId)?.name ?? "…"}
                   </span>
+                  {entryPoint === "direct" || entryPoint === "worktree" ? (
+                    <span role="img" aria-label="Locked to this project" className="draft-row__lock">
+                      <Lock size={13} aria-hidden />
+                    </span>
+                  ) : null}
                   <button
                     type="button"
-                    className="project-chip__remove"
+                    className="draft-row__icon-btn"
                     aria-label="Remove project"
                     onClick={() => void handleClearProject()}
                   >
                     ✕
                   </button>
-                </div>
-              </div>
-              {entryPoint === "worktree" ? (
-                <button
-                  type="button"
-                  className="draft-composer__detach-worktree"
-                  aria-label="Use existing project folder instead of a new worktree"
-                  onClick={() => {
-                    if (!draftSessionId) return;
-                    const newConfig = { ...currentConfig, entryPoint: "direct" as const, useWorktree: false };
-                    // Optimistic update so entryPoint flips immediately — no intermediate state
-                    useServerStore.getState().applySessionUpdated(draftSessionId, { draftConfig: newConfig });
-                    void api.updateDraft(draftSessionId, {
-                      draftPrompt: prompt,
-                      draftConfig: newConfig,
-                    }).catch(() => {
-                      if (currentConfig) {
-                        useServerStore.getState().applySessionUpdated(draftSessionId, { draftConfig: currentConfig });
-                      }
-                    });
-                  }}
-                >
-                  Use project folder instead
-                </button>
-              ) : null}
-            </>
-          ))}
-
-          {/* Use worktree checkbox — "global"/"direct" entry points only.
-              For entryPoint "worktree" this checkbox would be a no-op:
-              `currentConfig`'s "worktree" branch never reads `useWorktree` (it
-              always submits entryPoint "worktree"), so toggling it only hid/
-              showed the branch fields below while silently doing nothing to
-              what Start actually submits — confusingly, "Use project folder
-              instead" (above) is the ONLY control that really switches this
-              entry point to a direct/no-worktree session. Showing both
-              invited exactly that confusion (issue: unchecking this box for
-              a worktree-entry-point draft looked like it opted out of a
-              worktree, but Start still created one). */}
-          {entryPoint === "global" || entryPoint === "direct" ? (
-            <div className="draft-composer__field">
-              <label className="draft-composer__checkbox">
-                <input
-                  type="checkbox"
-                  checked={useWorktree}
-                  onChange={(e) => setUseWorktree(e.target.checked)}
-                />
-                Use worktree (isolated branch)
-              </label>
-            </div>
-          ) : null}
-
-          {/* Worktree choice — shown for all entry points when Use worktree is checked */}
-          {entryPoint !== "tab" && useWorktree ? (
-            <div className="draft-composer__field">
-              <div className="draft-composer__field-label">Worktree</div>
-              <Radio
-                name="wt-choice"
-                label="New worktree"
-                checked={worktreeChoice === "new"}
-                onChange={() => setWorktreeChoice("new")}
-              />
-              <Radio
-                name="wt-choice"
-                label="Existing worktree"
-                checked={worktreeChoice === "existing"}
-                onChange={() => setWorktreeChoice("existing")}
-              />
-              {worktreeChoice === "existing" ? (
-                <Select
-                  value={existingWorktreeId}
-                  onChange={(e) => setExistingWorktreeId(e.target.value)}
-                  style={{ marginTop: "var(--space-2)" }}
-                >
-                  {worktrees.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.branch}
-                    </option>
-                  ))}
-                </Select>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Branch fields */}
-          {showWorktreeFields && worktreeChoice === "new" ? (
-            <div className="draft-composer__field">
-              <div className="draft-composer__field-label">
-                Branch <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
-              </div>
-              <Input
-                aria-label="Branch"
-                placeholder="auto-generated from your prompt if left blank"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-              />
-              <div className="draft-composer__field-label" style={{ marginTop: "var(--space-3)" }}>
-                Base branch
-              </div>
-              {branches.length > 0 ? (
-                <Select aria-label="Base branch" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)}>
-                  {branches.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                <Input
-                  aria-label="Base branch"
-                  placeholder="main"
-                  value={baseBranch}
-                  onChange={(e) => setBaseBranch(e.target.value)}
-                />
+                </DraftFieldRow>
               )}
-            </div>
-          ) : null}
+              {entryPoint === "worktree" ? (
+                <div className="draft-row draft-row--detach">
+                  <div className="draft-row__line">
+                    <span className="draft-row__label" />
+                    <span className="draft-row__control">
+                      <button
+                        type="button"
+                        className="draft-composer__detach-worktree"
+                        aria-label="Use existing project folder instead of a new worktree"
+                        onClick={() => {
+                          if (!draftSessionId) return;
+                          const newConfig = { ...currentConfig, entryPoint: "direct" as const, useWorktree: false };
+                          // Optimistic update so entryPoint flips immediately — no intermediate state
+                          useServerStore.getState().applySessionUpdated(draftSessionId, { draftConfig: newConfig });
+                          void api.updateDraft(draftSessionId, {
+                            draftPrompt: prompt,
+                            draftConfig: newConfig,
+                          }).catch(() => {
+                            if (currentConfig) {
+                              useServerStore.getState().applySessionUpdated(draftSessionId, { draftConfig: currentConfig });
+                            }
+                          });
+                        }}
+                      >
+                        Use project folder instead
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
 
-          {/* Mode field — keep existing markup, show for all entry points */}
-          <div className="draft-composer__field">
-            <div className="draft-composer__field-label">Mode</div>
-            <div className="draft-composer__mode-row">
-              {/* A native <select> can't render icons in its options, so the
-                  selected mode's icon leads the control — framed as a terminal
-                  when the Terminal channel is chosen, bare for Rich Chat. */}
-              <span className="draft-composer__mode-icon" data-testid="draft-mode-icon" aria-hidden="true">
-                <ModeIcon
-                  iconKey={modes.find((m) => m.id === modeId)?.icon}
-                  channel={isJson ? "json" : "pty"}
-                  size={16}
-                />
-              </span>
-              <Select aria-label="Mode" value={modeId} onChange={(e) => setModeId(e.target.value)}>
-                {modes.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </Select>
-              <button type="button" className="draft-composer__new-mode" onClick={() => setNewModeOpen(true)}>
-                + New mode
-              </button>
+              {/* Use worktree checkbox — "global"/"direct" entry points only.
+                  For entryPoint "worktree" this checkbox would be a no-op:
+                  `currentConfig`'s "worktree" branch never reads `useWorktree` (it
+                  always submits entryPoint "worktree"), so toggling it only hid/
+                  showed the branch fields below while silently doing nothing to
+                  what Start actually submits — confusingly, "Use project folder
+                  instead" (above) is the ONLY control that really switches this
+                  entry point to a direct/no-worktree session. Showing both
+                  invited exactly that confusion (issue: unchecking this box for
+                  a worktree-entry-point draft looked like it opted out of a
+                  worktree, but Start still created one). */}
+              {(entryPoint === "global" || entryPoint === "direct") && showFieldRows ? (
+                <DraftFieldRow label="Use worktree">
+                  <span className="draft-row__hint">{useWorktree ? "isolated branch" : "runs in the project folder"}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={useWorktree}
+                    aria-label="Use worktree"
+                    className="draft-switch"
+                    onClick={() => setUseWorktree(!useWorktree)}
+                  >
+                    <span className="draft-switch__track" aria-hidden>
+                      <span className="draft-switch__thumb" />
+                    </span>
+                  </button>
+                </DraftFieldRow>
+              ) : null}
+
+              {/* Worktree choice — shown for all entry points when Use worktree is checked */}
+              {entryPoint !== "tab" && useWorktree && showFieldRows ? (
+                <DraftFieldRow label="Worktree">
+                  <div className="draft-seg" role="radiogroup" aria-label="Worktree">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={worktreeChoice === "new"}
+                      aria-label="New worktree"
+                      className="draft-seg__btn"
+                      onClick={() => setWorktreeChoice("new")}
+                    >
+                      New
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={worktreeChoice === "existing"}
+                      aria-label="Existing worktree"
+                      className="draft-seg__btn"
+                      onClick={() => setWorktreeChoice("existing")}
+                    >
+                      Existing
+                    </button>
+                  </div>
+                </DraftFieldRow>
+              ) : null}
+
+              {entryPoint !== "tab" && useWorktree && showFieldRows && worktreeChoice === "existing" ? (
+                <DraftFieldRow label="Join">
+                  <Select
+                    aria-label="Worktree to join"
+                    value={existingWorktreeId}
+                    onChange={(e) => setExistingWorktreeId(e.target.value)}
+                    style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
+                  >
+                    {worktrees.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.branch}
+                      </option>
+                    ))}
+                  </Select>
+                </DraftFieldRow>
+              ) : null}
+
+              {/* Branch fields */}
+              {showFieldRows && showWorktreeFields && worktreeChoice === "new" ? (
+                <DraftFieldRow label="Branch">
+                  <Input
+                    aria-label="Branch"
+                    placeholder="auto from your prompt (optional)"
+                    value={branch}
+                    onChange={(e) => setBranch(e.target.value)}
+                    style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
+                  />
+                </DraftFieldRow>
+              ) : null}
+              {showFieldRows && showWorktreeFields && worktreeChoice === "new" ? (
+                <DraftFieldRow label="Base">
+                  {branches.length > 0 ? (
+                    <Select
+                      aria-label="Base branch"
+                      value={baseBranch}
+                      onChange={(e) => setBaseBranch(e.target.value)}
+                      style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
+                    >
+                      {branches.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      aria-label="Base branch"
+                      placeholder="main"
+                      value={baseBranch}
+                      onChange={(e) => setBaseBranch(e.target.value)}
+                      style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
+                    />
+                  )}
+                </DraftFieldRow>
+              ) : null}
+            </div>
+
+            {error ? <div className="draft-composer__error" role="alert">{error}</div> : null}
+
+            <div className="draft-composer__composer">
+              {editorReady ? (
+                <ComposerShell
+                  className="chat-composer--draft"
+                  attachments={stagedChips}
+                  onRemoveAttachment={(id) => setFiles((prev) => prev.filter((_, i) => stagedId(i) !== id))}
+                  onFocusEditor={() => editorRef.current?.focus()}
+                  error={attachmentNotice}
+                  onFiles={(added) => setFiles((prev) => [...prev, ...added])}
+                  attachDisabled={submitting || !isJson}
+                  attachTitle={isJson ? "Attach files" : "Attachments are only sent to Rich Chat agents"}
+                  toolbarStart={
+                    <RichChatToggle
+                      checked={isJson}
+                      disabled={!jsonSupported || submitting}
+                      {...(!jsonSupported
+                        ? { disabledReason: `Rich Chat not available for ${selectedCli ?? "this CLI"} yet — this agent will run in a Terminal` }
+                        : {})}
+                      onChange={(on) => {
+                        channelTouchedRef.current = true;
+                        setChannel(on ? "json" : "terminal");
+                      }}
+                    />
+                  }
+                  toolbarEnd={
+                    <>
+                      <ModePopover
+                        modes={modes}
+                        modeId={modeId}
+                        channel={isJson ? "json" : "pty"}
+                        disabled={submitting}
+                        onSelect={setModeId}
+                        onNewMode={() => setNewModeOpen(true)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn--primary chat-composer__send"
+                        onClick={() => void handleStart()}
+                        disabled={submitting || !prompt.trim()}
+                        aria-label="Start agent"
+                      >
+                        <Play size={12} />
+                        <span className="draft-composer__start-label">{submitting ? "Starting…" : "Start"}</span>
+                      </button>
+                    </>
+                  }
+                >
+                  <SkillEditor
+                    ref={editorRef}
+                    editorKey={`draft-${draftSessionId ?? "new"}-${editorSeq}`}
+                    initialText={prompt}
+                    commands={skillCommands}
+                    ariaLabel="Prompt"
+                    placeholder="What should this agent do?"
+                    className="chat-composer__textarea"
+                    onChangeText={handlePromptChange}
+                    onSubmit={() => void handleStart()}
+                    disabled={submitting}
+                  />
+                </ComposerShell>
+              ) : null}
             </div>
           </div>
-        </div>
 
-        {error ? <div className="draft-composer__error">{error}</div> : null}
-      </div>
-
-      <div className="draft-composer__bar">
-        {editorReady ? (
-          <ComposerShell
-            className="chat-composer--draft"
-            attachments={stagedChips}
-            onRemoveAttachment={(id) => setFiles((prev) => prev.filter((_, i) => stagedId(i) !== id))}
-            onFocusEditor={() => editorRef.current?.focus()}
-            error={attachmentNotice}
-            onFiles={(added) => setFiles((prev) => [...prev, ...added])}
-            attachDisabled={submitting || !isJson}
-            attachTitle={isJson ? "Attach files" : "Attachments are only sent to Rich Chat agents"}
-            toolbarStart={
-              <RichChatToggle
-                checked={isJson}
-                disabled={!jsonSupported || submitting}
-                {...(!jsonSupported
-                  ? { disabledReason: `Rich Chat not available for ${selectedCli ?? "this CLI"} yet — this agent will run in a Terminal` }
-                  : {})}
-                onChange={(on) => {
-                  channelTouchedRef.current = true;
-                  setChannel(on ? "json" : "terminal");
-                }}
-              />
-            }
-            toolbarEnd={
-              <button
-                type="button"
-                className="btn btn--primary chat-composer__send"
-                onClick={() => void handleStart()}
-                disabled={submitting || !prompt.trim()}
-                aria-label="Start agent"
-              >
-                <Play size={12} />
-                <span>{submitting ? "Starting…" : "Start"}</span>
-              </button>
-            }
-            hint={
-              <ComposerHint
-                items={
-                  softKeyboardVisible
-                    ? [
-                        { keys: ["Enter"], label: "newline" },
-                        { keys: ["Ctrl/⌘ + Enter"], label: "to start" },
-                      ]
-                    : startHintItems
-                }
-                {...(isJson ? { prefix: <><span aria-hidden>⤓</span> Drop files here</> } : {})}
-              />
-            }
-          >
-            <SkillEditor
-              ref={editorRef}
-              editorKey={`draft-${draftSessionId ?? "new"}-${editorSeq}`}
-              initialText={prompt}
-              commands={skillCommands}
-              ariaLabel="Prompt"
-              placeholder="What should this agent do?"
-              className="chat-composer__textarea"
-              onChangeText={handlePromptChange}
-              onSubmit={() => void handleStart()}
-              disabled={submitting}
+          <div className="chat-composer__hint draft-composer__hint">
+            <DraftHint
+              items={
+                softKeyboardVisible
+                  ? [
+                      { keys: ["Enter"], label: "newline" },
+                      { keys: ["Ctrl/⌘ + Enter"], label: "to start" },
+                    ]
+                  : startHintItems
+              }
+              showDrop={isJson}
             />
-          </ComposerShell>
-        ) : null}
+          </div>
+        </div>
       </div>
 
       {newModeOpen ? (

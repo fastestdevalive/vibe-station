@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, useId } from "react";
+import { ChevronDown, Plus, Search } from "lucide-react";
 import { useEventTargets } from "@/context/DemoEnv";
 import type { ApiInstance } from "@/api";
 import type { Project, Settings } from "@/api/types";
 import { Input } from "../ui/Input";
 import { FolderChooserDialog } from "../dialogs/FolderChooserDialog";
 import { useDirSuggestions } from "@/hooks/useDirSuggestions";
+import { DraftFieldRow } from "./DraftFieldRow";
 import {
   isAbsoluteQuery,
   expandHome,
@@ -47,6 +49,7 @@ export function ProjectCombobox({
   const [popupOpen, setPopupOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const projectWrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const pathSuggs = useDirSuggestions(api);
   const [dirChooserOpen, setDirChooserOpen] = useState(false);
 
@@ -112,7 +115,7 @@ export function ProjectCombobox({
     }
     doc.addEventListener("mousedown", onDocMouseDown);
     return () => doc.removeEventListener("mousedown", onDocMouseDown);
-  }, [popupOpen]);
+  }, [popupOpen, doc]);
 
   useEffect(() => {
     if (!dirPopupOpen) return;
@@ -123,7 +126,7 @@ export function ProjectCombobox({
     }
     doc.addEventListener("mousedown", onDocMouseDown);
     return () => doc.removeEventListener("mousedown", onDocMouseDown);
-  }, [dirPopupOpen]);
+  }, [dirPopupOpen, doc]);
 
   // Cleanup the debounce timer on unmount.
   useEffect(() => {
@@ -353,6 +356,7 @@ export function ProjectCombobox({
         e.preventDefault();
         e.nativeEvent.stopImmediatePropagation();
         setPopupOpen(false);
+        triggerRef.current?.focus();
         break;
       default:
         break;
@@ -466,47 +470,56 @@ export function ProjectCombobox({
   return (
     <>
       {/* Project combobox */}
-      <div className="draft-composer__field">
-        <div className="draft-composer__field-label">Project</div>
-        <div style={{ display: "flex", gap: "var(--space-2)", width: "100%" }}>
-          <div className="combobox-wrapper" ref={projectWrapperRef} style={{ flex: 1 }}>
-            {mode === "existing" && selectedProject ? (
-              <div className="project-chip">
-                <span className="project-chip__icon" aria-hidden>◧</span>
-                <span className="project-chip__name">{selectedProject.name}</span>
-                <button
-                  type="button"
-                  className="project-chip__remove"
-                  aria-label="Clear selected project"
-                  onClick={clearSelection}
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <Input
-                id={projectFieldId}
-                type="text"
-                role="combobox"
-                aria-expanded={popupOpen}
-                aria-controls={projectListboxId}
-                aria-activedescendant={activeDescendant}
-                autoComplete="off"
-                placeholder="Search projects or type a new name…"
-                value={query}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                onFocus={() => {
-                  // Only auto-open on focus while still searching — in
-                  // create/add-path mode the popup reopens on edit (R5), not
-                  // on a mere click to reposition the cursor.
-                  if (mode === "search") setPopupOpen(true);
-                }}
-                onKeyDown={handleProjectKeyDown}
+      {mode === "search" ? (
+        <div className="combobox-wrapper" ref={projectWrapperRef}>
+          <DraftFieldRow label="Project">
+            <span className="draft-tag draft-tag--required">required</span>
+            <button
+              type="button"
+              ref={triggerRef}
+              className="draft-row__trigger"
+              aria-haspopup="listbox"
+              aria-expanded={popupOpen}
+              aria-controls={projectListboxId}
+              onClick={() => setPopupOpen((o) => !o)}
+            >
+              <span className="draft-row__trigger-label">Choose a project</span>
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className={popupOpen ? "draft-row__chev--open" : undefined}
               />
-            )}
+            </button>
+          </DraftFieldRow>
 
-            {popupOpen && mode !== "existing" ? (
-              <div className="combobox-popup" role="listbox" id={projectListboxId}>
+          {popupOpen ? (
+            <div className="draft-popover draft-popover--down">
+              <button type="button" className="draft-popover__item" onClick={() => setDirChooserOpen(true)}>
+                <span aria-hidden>＋</span>
+                <span className="draft-popover__text">
+                  <span>Add existing folder…</span>
+                  <span className="draft-popover__sub">browse the server</span>
+                </span>
+              </button>
+              <div className="draft-popover__search">
+                <Search size={13} aria-hidden />
+                <Input
+                  id={projectFieldId}
+                  type="text"
+                  role="combobox"
+                  aria-expanded={popupOpen}
+                  aria-controls={projectListboxId}
+                  aria-activedescendant={activeDescendant}
+                  autoComplete="off"
+                  placeholder="Search projects or type a new name…"
+                  value={query}
+                  onChange={(e) => handleQueryChange(e.target.value)}
+                  onKeyDown={handleProjectKeyDown}
+                  autoFocus
+                  style={{ width: "100%", height: 26, padding: "0 4px", border: "none", background: "transparent", fontSize: "var(--font-size-sm)" }}
+                />
+              </div>
+              <div className="draft-popover__list" role="listbox" id={projectListboxId}>
                 {rows.map((row, idx) => {
                   const prevRow = rows[idx - 1];
                   const showSuggestionsHeader = row.kind === "path-suggestion" && prevRow?.kind !== "path-suggestion";
@@ -516,6 +529,10 @@ export function ProjectCombobox({
                     : row.kind === "path-suggestion"
                       ? `suggest-${row.entry.path}`
                       : row.kind;
+                  const pinned =
+                    row.kind === "create" || row.kind === "add-path"
+                      ? " draft-popover__pinned-option"
+                      : "";
 
                   return (
                     <Fragment key={key}>
@@ -537,7 +554,7 @@ export function ProjectCombobox({
                           tabIndex={-1}
                           id={`${projectListboxId}-${idx}`}
                           aria-selected={activeIndex === idx}
-                          className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                          className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}${pinned}`}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             selectProjectRow(row);
@@ -561,7 +578,7 @@ export function ProjectCombobox({
                           tabIndex={-1}
                           id={`${projectListboxId}-${idx}`}
                           aria-selected={activeIndex === idx}
-                          className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                          className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}${pinned}`}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             selectProjectRow(row);
@@ -626,81 +643,137 @@ export function ProjectCombobox({
                   );
                 })}
               </div>
-            ) : null}
-          </div>
-          {!selectedProject ? (
-            <button
-              type="button"
-              className="btn btn--secondary"
-              onClick={() => setDirChooserOpen(true)}
-              style={{ whiteSpace: "nowrap" }}
-            >
-              📁 Browse
-            </button>
+            </div>
           ) : null}
         </div>
-        {mode === "existing" && selectedProject ? (
-          <div className="form-hint">Using existing project at {selectedProject.path}</div>
-        ) : null}
-        {mode === "add-path" ? (
-          <div className="form-hint">{addPathGitCopy.hint}</div>
-        ) : null}
-        {mode === "create" && !createNameValid ? (
-          <div className="field-error">{validateProjectName(trimmedQuery)}</div>
-        ) : null}
-      </div>
-
-      {/* Directory combobox (create mode only, once the name is valid) */}
-      {mode === "create" && createNameValid ? (
-        <div className="draft-composer__field">
-          <div className="draft-composer__field-label">Directory</div>
-          <div className="combobox-wrapper" ref={dirWrapperRef}>
-            <Input
-              id={dirFieldId}
-              type="text"
-              role="combobox"
-              aria-expanded={dirPopupOpen}
-              aria-controls={dirListboxId}
-              aria-activedescendant={dirActiveDescendant}
-              autoComplete="off"
-              placeholder={defaultProjectsDir || "~/projects"}
-              value={parentDir}
-              onChange={(e) => handleParentDirChange(e.target.value)}
-              onFocus={() => {
-                if (parentDirSuggs.suggestions.length > 0) setDirPopupOpen(true);
+      ) : mode === "existing" && selectedProject ? (
+        <DraftFieldRow
+          label="Project"
+          message={
+            <>
+              <span className="draft-dot draft-dot--ok" />
+              Using existing project at {selectedProject.path}
+            </>
+          }
+        >
+          <span aria-hidden>◧</span>
+          <span className="draft-row__project-name">{selectedProject.name}</span>
+          <button
+            type="button"
+            className="draft-row__icon-btn"
+            aria-label="Clear selected project"
+            onClick={clearSelection}
+          >
+            ✕
+          </button>
+        </DraftFieldRow>
+      ) : mode === "add-path" ? (
+        <DraftFieldRow
+          label="Project"
+          message={
+            <>
+              <span className={isGitFolder === false ? "draft-dot draft-dot--warn" : "draft-dot draft-dot--idle"} />
+              {addPathGitCopy.hint}
+            </>
+          }
+        >
+          <span className="draft-row__path">{query}</span>
+          {isGitFolder === true ? (
+            <span className="draft-tag">git</span>
+          ) : isGitFolder === false ? (
+            <span className="draft-tag">no git</span>
+          ) : null}
+          <button
+            type="button"
+            className="draft-row__link"
+            onClick={() => {
+              setMode("search");
+              setQuery("");
+              setPopupOpen(true);
+              onClear?.();
+            }}
+          >
+            Change
+          </button>
+        </DraftFieldRow>
+      ) : mode === "create" ? (
+        <>
+          <DraftFieldRow
+            label="Project"
+            message={!createNameValid ? <div className="field-error">{validateProjectName(trimmedQuery)}</div> : undefined}
+          >
+            <Plus size={14} aria-hidden />
+            <span>New project</span>
+            <button
+              type="button"
+              className="draft-row__link"
+              onClick={() => {
+                setMode("search");
+                setQuery(trimmedQuery);
+                setPopupOpen(true);
+                onClear?.();
               }}
-              onKeyDown={handleDirKeyDown}
-            />
-            {dirPopupOpen && parentDirSuggs.suggestions.length > 0 ? (
-              <div className="combobox-popup" role="listbox" id={dirListboxId}>
-                {parentDirSuggs.suggestions.map((entry, i) => (
-                  <button
-                    key={entry.path}
-                    type="button"
-                    role="option"
-                    tabIndex={-1}
-                    id={`${dirListboxId}-${i}`}
-                    aria-selected={dirActiveIndex === i}
-                    className={`combobox-option${dirActiveIndex === i ? " combobox-option--active" : ""}`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      selectDirEntry(entry.path);
-                    }}
-                    onMouseEnter={() => setDirActiveIndex(i)}
-                  >
-                    <span className="combobox-option__title">{entry.path}</span>
-                  </button>
-                ))}
+            >
+              Change
+            </button>
+          </DraftFieldRow>
+          <DraftFieldRow label="Name">
+            <span className="draft-row__readonly">{trimmedQuery}</span>
+          </DraftFieldRow>
+          {createNameValid ? (
+            <>
+              <DraftFieldRow label="Parent folder">
+                <div className="draft-popover-anchor" style={{ width: "100%" }}>
+                  <div className="combobox-wrapper" ref={dirWrapperRef} style={{ width: "100%" }}>
+                    <Input
+                      id={dirFieldId}
+                      type="text"
+                      role="combobox"
+                      aria-expanded={dirPopupOpen}
+                      aria-controls={dirListboxId}
+                      aria-activedescendant={dirActiveDescendant}
+                      autoComplete="off"
+                      placeholder={defaultProjectsDir || "~/projects"}
+                      value={parentDir}
+                      onChange={(e) => handleParentDirChange(e.target.value)}
+                      onFocus={() => {
+                        if (parentDirSuggs.suggestions.length > 0) setDirPopupOpen(true);
+                      }}
+                      onKeyDown={handleDirKeyDown}
+                      style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
+                    />
+                    {dirPopupOpen && parentDirSuggs.suggestions.length > 0 ? (
+                      <div className="draft-popover draft-popover--down" role="listbox" id={dirListboxId}>
+                        {parentDirSuggs.suggestions.map((entry, i) => (
+                          <button
+                            key={entry.path}
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            id={`${dirListboxId}-${i}`}
+                            aria-selected={dirActiveIndex === i}
+                            className={`combobox-option${dirActiveIndex === i ? " combobox-option--active" : ""}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectDirEntry(entry.path);
+                            }}
+                            onMouseEnter={() => setDirActiveIndex(i)}
+                          >
+                            <span className="combobox-option__title">{entry.path}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </DraftFieldRow>
+              <div className="draft-row__msg draft-row__note">
+                Will create <code className="new-agent__will-create-path">{willCreatePath}</code>
+                <div>ⓘ Sets up git (init + .gitignore) if not already present.</div>
               </div>
-            ) : null}
-          </div>
-          <div className="new-agent__will-create">
-            Will create <code className="new-agent__will-create-path">{willCreatePath}</code>
-          </div>
-          <div className="form-hint">
-            ⓘ Sets up git (init + .gitignore) if not already present.
-          </div>
-        </div>
+            </>
+          ) : null}
+        </>
       ) : null}
 
       <FolderChooserDialog

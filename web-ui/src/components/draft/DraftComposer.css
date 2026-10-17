@@ -17,6 +17,7 @@
      "shrink to the slot, scroll `__body`, keep `__bar` pinned" behaviour. */
   min-height: 0;
   background: var(--bg-primary);
+  container: draft-pane / inline-size;
 }
 
 /* Shown while a Tier 1 draft session is still syncing from the daemon after a
@@ -34,18 +35,54 @@
 }
 
 .draft-composer__body {
+  position: relative;
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-6) max(var(--space-6), calc(50% - 320px));
-  padding-bottom: var(--space-12, 48px);
   display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  padding: var(--space-6) var(--space-4);
 }
 
-.draft-composer__spacer {
-  flex: 1;
-  min-height: var(--space-10, 40px);
+/* Short pane (W9): no logo, caption kept for a11y only, tighter top padding.
+   Bottom padding stays --space-6 so Start never sits on the status bar (owner #5). */
+.draft-composer--short .draft-composer__body {
+  padding: var(--space-3) var(--space-4) var(--space-6);
+}
+.draft-composer--short .draft-composer__logo {
+  display: none;
+}
+.draft-composer--short .draft-composer__caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Short panes put the Discard ✕ where W9 does (.x top 8px / right 12px). */
+.draft-composer--short .draft-composer__discard {
+  top: var(--space-2);
+  right: var(--space-3);
+}
+/* When the box can reach the ✕ horizontally (box 520 max, centred, so any
+   pane < 608px), give the ✕ its own band above the box: 8 + 28 + 8 = 44px.
+   Bottom padding stays --space-6 (owner #5). */
+@container draft-pane (max-width: 608px) {
+  .draft-composer--short .draft-composer__body {
+    padding-top: 44px;
+  }
+}
+
+.draft-composer__stage-inner {
+  margin: auto;
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .draft-composer__discard {
@@ -71,102 +108,145 @@
   color: var(--fg-primary);
 }
 
-.draft-composer__hero {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-  padding-bottom: var(--space-8);
+/* Small muted "New agent" caption above the box. It is an <h2> so route-level
+   heading queries (`getByRole("heading", { name: "New agent" })`) keep matching;
+   this resets the heading size/weight to a caption. */
+.draft-composer__logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+  opacity: 0.85;
 }
 
-.draft-composer__appname {
+.draft-composer__caption {
+  margin: 0;
   font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal, 400);
   color: var(--fg-muted);
   letter-spacing: 0.04em;
   text-align: center;
 }
 
-.draft-composer__appversion {
-  opacity: 0.6;
+.draft-composer__hint {
+  padding: 0 var(--space-1);
 }
 
-.draft-composer__logo {
-  width: 48px;
-  height: 48px;
-  opacity: 0.85;
+/* The one outer box: bordered, rounded, no overflow hidden (a popover overflows
+   the box in Phase 2). Rows fold in Phase 2; the composer is the last section. */
+.draft-composer__box {
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  position: relative;
+  container: draft-box / inline-size;
 }
 
-.draft-composer__title {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  color: var(--fg-primary);
-  text-align: center;
-  margin: 0;
-}
-
-.draft-composer__fields {
+.draft-composer__rows {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
 }
 
-.draft-composer__field {
+.draft-composer__rows[hidden] {
+  display: none;
+}
+
+/* Short-pane fold summary button (replaces the rows when the pane is short). */
+.draft-composer__summary {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.draft-composer__field-label {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 38px;
+  padding: 0 14px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--fg-secondary);
-  margin-bottom: var(--space-1);
-}
-
-.draft-composer__mode-row {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.draft-composer__mode-row .draft-composer__new-mode {
-  flex-shrink: 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-default);
-  background: transparent;
-  color: var(--fg-primary);
-  cursor: pointer;
-}
-
-.draft-composer__checkbox {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  cursor: pointer;
   font-size: var(--font-size-sm);
-  user-select: none;
-  margin-top: var(--space-2);
+  text-align: left;
+  cursor: pointer;
 }
 
-.draft-composer__project-chip {
-  display: inline-flex;
+.draft-composer__summary-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 40px field rows with 1px inner dividers. */
+.draft-row {
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.draft-row__line {
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-default);
-  background: var(--bg-input);
-  color: var(--fg-primary);
-  width: fit-content;
+  gap: var(--space-3);
+  min-height: 40px;
+  padding: 0 14px;
 }
 
-.draft-composer__project-clear {
+.draft-composer .draft-row__label {
+  width: 84px;
+  flex: none;
+  min-width: 0;
+  overflow: visible;
+  white-space: nowrap;
+  font-style: normal;
+  font-weight: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+
+.draft-row__control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  text-align: right;
+}
+
+/* R1F-09: form controls don't inherit the font by default, so row inputs /
+   selects and the project-popover search render in the system sans font.
+   Make them inherit the draft pane's mono font (JetBrains Mono). */
+.draft-composer .draft-row__control input,
+.draft-composer .draft-row__control select,
+.draft-composer .draft-popover__search input {
+  font-family: inherit;
+}
+
+.draft-row__hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.draft-row__msg {
+  padding: 0 14px var(--space-2) 110px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* R1F-13: "Will create" note band between the Parent folder row and the Use
+   worktree row gets its own top padding and a bottom divider, so it reads as a
+   separate band (W6 .note) instead of touching the divider above and merging
+   into the row below. */
+.draft-row__note {
+  padding-top: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.draft-row__icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-sm);
   border: none;
   background: transparent;
@@ -174,9 +254,20 @@
   cursor: pointer;
 }
 
-.draft-composer__project-clear:hover {
+.draft-row__icon-btn:hover {
   background: var(--bg-hover);
-  color: var(--fg-primary);
+}
+
+.draft-row__lock {
+  color: var(--fg-faint);
+  display: inline-flex;
+  align-items: center;
+}
+
+.draft-row__project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .draft-composer__detach-worktree {
@@ -184,40 +275,505 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--accent);
+  color: var(--fg-secondary);
   cursor: pointer;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
 }
 
 .draft-composer__detach-worktree:hover {
   text-decoration: underline;
 }
 
-/* Frameless, like the chat pane footer: the shared composer shell inside is
-   the only visible frame. Horizontal padding matches `__body`'s centred
-   column so the composer lines up with the form above it. */
-.draft-composer__bar {
-  flex-shrink: 0;
-  padding: 0 max(var(--space-3), calc(50% - 332px)) var(--space-1);
+/* Use worktree switch: 28x16 track with a sliding thumb. */
+.draft-switch {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.draft-switch__track {
+  width: 28px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  position: relative;
+  display: block;
+}
+
+.draft-switch__thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  transition: transform 120ms ease;
+}
+
+.draft-switch[aria-checked="true"] .draft-switch__track {
+  border-color: var(--fg-primary);
+}
+
+.draft-switch[aria-checked="true"] .draft-switch__thumb {
+  transform: translateX(12px);
+  background: var(--bg-primary);
+}
+
+.draft-switch:focus-visible {
+  outline: var(--border-width-2) solid var(--chat-accent);
+  outline-offset: 2px;
+}
+
+/* New/Existing segmented control. */
+.draft-seg {
+  display: flex;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.draft-seg__btn {
+  padding: 3px 10px;
+  font-size: var(--font-size-sm);
+  background: none;
+  border: 0;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.draft-seg__btn[aria-checked="true"] {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+/* Worktree-tab join header. */
+.draft-join {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.draft-join__name {
+  font-weight: var(--font-weight-medium);
+}
+
+.draft-join__sub,
+.draft-join__run {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.draft-join__run {
+  margin-left: auto;
+}
+
+/* Error strip inside the box, directly above the composer. */
+.draft-composer__error {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) 14px;
+  background: var(--destructive-muted);
+  color: var(--destructive-soft);
+  font-size: var(--font-size-sm);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The composer keeps its own shell (bg-input + border, as in the chat pane) inset
+   by the same 14px as the rows above, so its edges line up with the row labels. */
+.draft-composer__composer {
+  flex: none;
+  padding: 14px;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+
+/* ComposerShell's outer .chat-composer has its own padding (chat.css); the
+   draft's 14px inset lives on .draft-composer__composer only. */
+.draft-composer .draft-composer__composer .chat-composer {
+  padding: 0;
+}
+
+/* Round the box's top corners via the first row. */
+.draft-composer__rows > :first-child {
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+/* Shared popover base (mode chip now; project popover in Phase 2). */
+.draft-popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.draft-popover {
+  position: absolute;
+  z-index: 60;
+  min-width: 280px;
+  max-width: min(380px, 90vw);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.draft-popover--up {
+  bottom: calc(100% + 6px);
+  right: 0;
+}
+
+/* R4F-01: bounded by ModePopover's inline max-height in short panes (W9),
+   so the pinned row + label stay put and only the mode list scrolls. */
+.draft-popover--up {
+  display: flex;
+  flex-direction: column;
+}
+.draft-popover--up > .draft-popover__pinned,
+.draft-popover--up > .draft-popover__label {
+  flex: none;
+}
+.draft-popover--up > .draft-popover__list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.draft-popover--down {
+  top: calc(100% + 4px);
+  right: 8px;
+  width: 380px;
+}
+
+.draft-popover__pinned {
+  border-bottom: 1px solid var(--border-default);
+}
+
+.draft-popover__label {
+  padding: 8px 12px 2px;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+.draft-popover__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.draft-popover__item:hover,
+.draft-popover__item--active {
+  background: var(--bg-hover);
+}
+
+.draft-popover__text {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
-
-.draft-composer__error {
-  background: var(--destructive-muted);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-  color: var(--destructive-soft);
-  font-size: var(--font-size-sm);
-  margin-bottom: var(--space-3);
+.draft-popover__sub {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
 }
 
+.draft-popover__list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
 
-.draft-composer__mode-row .draft-composer__mode-icon {
+/* Pinned first option (create / add-path) inside the project popover list. */
+.draft-popover__pinned-option {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-default);
+}
+
+/* Project-row trigger ("Choose a project"). */
+.draft-row__trigger {
   display: inline-flex;
-  flex-shrink: 0;
   align-items: center;
-  justify-content: center;
-  min-width: 24px;
+  gap: var(--space-2);
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.draft-row__trigger-label {
+  color: var(--fg-muted);
+}
+
+.draft-row__chev--open {
+  transform: rotate(180deg);
+}
+
+/* Text link used for "Change" etc. */
+.draft-row__link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.draft-row__link:hover {
+  text-decoration: underline;
+}
+
+/* Small status tag ("required", "git", "no git"). */
+.draft-tag {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* 7px status dot. */
+.draft-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  margin-right: var(--space-2);
+  display: inline-block;
+}
+
+.draft-dot--ok {
+  background: var(--fg-success);
+}
+
+.draft-dot--idle {
+  background: var(--fg-muted);
+}
+
+.draft-dot--warn {
+  background: var(--fg-warning);
+}
+
+/* Read-only path / name value in a row. */
+.draft-row__path,
+.draft-row__readonly {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Search field inside the project popover. */
+.draft-popover__search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  padding: 0 8px;
+  color: var(--fg-muted);
+}
+
+/* R1F-08: the search input is a ui/Input with its own inline border + focus
+   ring; neutralise both so the single wrapper border carries focus visibility
+   (one 28px field, not two nested boxes). */
+.draft-composer .draft-popover__search:focus-within {
+  border-color: var(--fg-muted);
+}
+.draft-composer .draft-popover__search input:focus,
+.draft-composer .draft-popover__search input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Mode chip in the composer toolbar. */
+.draft-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 8px;
+  max-width: 12rem;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.draft-mode-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-mode-chip[aria-expanded="true"] {
+  border-color: var(--fg-muted);
+}
+
+/* ── Neutral colours, scoped to the draft screen (Decision 2). ──────────────
+   The global purple `--accent` stays for other screens; the draft's Start
+   button and Rich Chat / Use worktree switches are neutral `--fg-primary` on
+   `--bg-primary`, inverting automatically per theme. */
+
+.draft-composer .btn--primary {
+  background: var(--fg-primary);
+  border-color: var(--fg-primary);
+  color: var(--bg-primary);
+}
+
+.draft-composer .btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg-primary) 88%, var(--bg-primary));
+}
+
+.draft-composer .btn--primary:disabled {
+  background: var(--bg-active);
+  border-color: var(--bg-active);
+  color: var(--fg-muted);
+}
+
+/* Rich Chat + Use worktree switches when ON. */
+.draft-composer .chat-composer__channel-toggle[aria-checked="true"] .chat-composer__switch-track,
+.draft-composer .draft-switch[aria-checked="true"] .draft-switch__track {
+  background: var(--fg-primary);
+  border-color: var(--fg-primary);
+}
+
+/* ── Narrow panes (phone width): keep Start reachable and labels on one line. ── */
+.draft-mode-chip {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.draft-tag {
+  flex: none;
+  white-space: nowrap;
+}
+
+.draft-row__control > :not(.draft-tag):not(button):not(svg) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .draft-composer .draft-row__label {
+    width: 64px;
+  }
+
+  .draft-row__msg {
+    padding-left: 90px;
+  }
+}
+
+/* The chip's anchor wrapper must be able to shrink or Start is pushed off-screen. */
+.draft-popover-anchor {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Narrow composer (phone width or a narrow split pane): the mode chip collapses
+   to icon + chevron (R1F-04), and the mode popover spans the shell so it stays
+   inside the viewport (R1F-05). Measured on the composer container, so it also
+   covers narrow panes inside a wide viewport. */
+@container composer (max-width: 440px) {
+  .draft-composer .draft-mode-chip__name {
+    display: none;
+  }
+  .draft-composer .draft-mode-chip {
+    flex-shrink: 0;
+    gap: var(--space-1);
+    padding: 0 6px;
+  }
+  .draft-composer .draft-popover-anchor {
+    flex: none;
+  }
+  .draft-composer .draft-composer__composer .draft-popover-anchor {
+    position: static;
+  }
+  .draft-composer .draft-composer__composer .draft-popover--up {
+    left: 0;
+    right: 0;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+/* Very narrow composer (≈360px phones): Start goes icon-only, as the chat
+   composer's Send does, so the toolbar never overflows the shell. 340px
+   keeps the label at 412 (shell 346) and still fits "Starting…". */
+@container composer (max-width: 340px) {
+  .draft-composer .draft-composer__start-label {
+    display: none;
+  }
+}
+
+.draft-row__trigger {
+  min-width: 0;
+  white-space: nowrap;
+  flex: none;
+}
+
+.draft-row__trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* When the draft box is narrow the "required" tag gives way to the
+   "Choose a project" label (owner #4): hide the tag below 370px of box width. */
+@container draft-box (max-width: 370px) {
+  .draft-composer .draft-tag--required {
+    display: none;
+  }
+}
+
+/* The hint wraps between items instead of clipping (R1F-06, owner #4). The
+   chat.css `nowrap`/`overflow-x: auto` rule is beaten by the higher-specificity
+   `.draft-composer` prefix; each hint item stays on one line as a unit. */
+.draft-composer .draft-composer__hint {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 14px;
+  row-gap: 0;
+  white-space: normal;
+  overflow: visible;
+}
+.draft-composer .draft-composer__hint .chat-composer__hint-item {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .draft-popover {
+    min-width: 0;
+    width: min(280px, calc(100vw - 32px));
+  }
+}
+
+/* Parent-folder suggestions can be long: bound and scroll (was .combobox-popup). */
+.draft-popover--down {
+  max-height: 280px;
+  overflow-y: auto;
 }
