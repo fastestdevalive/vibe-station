@@ -261,6 +261,28 @@ fn rich_chat_splits_subagent_section() {
     });
     assert!(with.system_prompt.contains("Subagents (Rich Chat only)"));
     assert!(!without.system_prompt.contains("Subagents (Rich Chat only)"));
+    assert!(with
+        .system_prompt
+        .contains("Rendering HTML (Rich Chat only)"));
+    assert!(!without
+        .system_prompt
+        .contains("Rendering HTML (Rich Chat only)"));
+}
+
+#[test]
+fn rich_chat_html_section_states_constraints() {
+    reset_skill_cache_for_test();
+    let tmp = tempfile::tempdir().unwrap();
+    let with = build_prompt(&BuildPromptInput {
+        project: make_project(tmp.path().to_str().unwrap()),
+        worktree: make_worktree(),
+        mode_context: None,
+        user_prompt: None,
+        rich_chat: true,
+    });
+    assert!(with.system_prompt.contains("data: URIs"));
+    assert!(with.system_prompt.contains("No JavaScript"));
+    assert!(with.system_prompt.contains("256 KiB"));
 }
 
 #[test]

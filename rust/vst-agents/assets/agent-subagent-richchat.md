@@ -82,3 +82,18 @@ temporarily terminal-only** — it cannot run Rich Chat, so `--channel=json` on
 create (or a terminal→Rich Chat toggle) is rejected with a 4xx until the
 terminal↔ACP conversation-id bridge lands. Do not pass `--channel=json` for an
 `agy` mode.
+
+---
+
+## Rendering HTML (Rich Chat only)
+
+- Output a closed ```html fenced block and the UI renders it in a sandbox.
+- Inline <style> CSS only; images only as data: URIs.
+- No JavaScript, no external assets (stylesheets, fonts, images, iframes), no forms.
+- Keep each block under 256 KiB.
+- Links must be http(s) or mailto (they open in a new tab); #anchors do not work.
+- For HTML the user wants as copyable source, use a different fence label (e.g. xml), not html.
+
+```html
+<h1>Hello</h1>
+```
