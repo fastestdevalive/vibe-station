@@ -56,6 +56,7 @@ pub mod acp_run_turn;
 pub mod acp_terminal_manager;
 pub mod acp_transport;
 pub mod agy;
+pub mod agy_limits;
 pub mod claude;
 pub mod claude_import;
 pub mod claude_limits;
