@@ -32,11 +32,35 @@ export function nextSlots(
 }
 
 /** Human label for a window's cadence (reset frequency). */
-/** Best-effort cadence for a slot whose window has no data yet (derived from the stable window id). */
+/** Best-effort cadence for a slot whose window has no data yet (derived from the stable window id).
+ *  Handles the agy ids (`3p_5h` → 300, `gemini_weekly` → 10080) alongside the legacy claude ids. */
 export function cadenceFromWindowId(windowId: string | undefined): number | null {
   if (windowId === "five_hour") return 300;
   if (windowId === "seven_day") return 10080;
+  if (windowId?.endsWith("_5h")) return 300;
+  if (windowId?.endsWith("_weekly")) return 10080;
   return null;
+}
+
+/** Known agy window-id → human label. Keys are the lowercased bucket ids from
+ *  the vendor's `/usage` output (see agy_limits.rs Decision 2). */
+const AGY_WINDOW_LABELS: Record<string, string> = {
+  gemini_5h: "Gemini · 5h",
+  gemini_weekly: "Gemini · weekly",
+  "3p_5h": "Claude/GPT · 5h",
+  "3p_weekly": "Claude/GPT · weekly",
+  gemini_argon_wtu_weekly: "Gemini 4 Argon · weekly",
+};
+
+/** Human label for a window row, or `null` when the harness's own cadence ring
+ *  already conveys it (claude / codex). For agy, maps known ids to friendly
+ *  labels and prettifies unknown ones (`foo_bar_5h` → "foo bar 5h") so rows are
+ *  never indistinguishable. */
+export function windowLabel(harness: string, windowId: string): string | null {
+  if (harness !== "agy") return null;
+  const known = AGY_WINDOW_LABELS[windowId];
+  if (known) return known;
+  return windowId.replace(/_/g, " ");
 }
 
 export function cadenceLabel(minutes: number | null): string {
@@ -223,8 +247,13 @@ export function ariaLabel(
   nowMs: number,
 ): string {
   const h = harnessLabel(harness);
-  const windowLabel = win ? `${win.windowId.replace(/_/g, " ")} limit` : "limit";
-  const base = `${h} ${windowLabel}`;
+  const friendly = win ? windowLabel(harness, win.windowId) : null;
+  const windowLabelText = win
+    ? friendly !== null
+      ? `${friendly} limit`
+      : `${win.windowId.replace(/_/g, " ")} limit`
+    : "limit";
+  const base = `${h} ${windowLabelText}`;
   if (view.kind === "nodata") {
     return `${base}, no data${view.reason ? `: ${view.reason}` : ""}`;
   }

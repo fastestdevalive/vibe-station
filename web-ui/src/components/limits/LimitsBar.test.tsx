@@ -80,6 +80,17 @@ function codexHarness(over: Partial<LimitsResult> = {}): LimitsResult {
   };
 }
 
+function agyHarness(over: Partial<LimitsResult> = {}): LimitsResult {
+  return {
+    harness: "agy",
+    status: "ok",
+    message: null,
+    asOf: new Date().toISOString(),
+    windows: [win({ harness: "agy", windowId: "gemini_5h", cadenceMinutes: 300, usedPct: 12 })],
+    ...over,
+  };
+}
+
 function snapshot(over: Partial<LimitsSnapshot> = {}): LimitsSnapshot {
   return { host: "test-host", slots: SLOTS, harnesses: [claudeHarness(), codexHarness()], ...over };
 }
@@ -193,5 +204,70 @@ describe("LimitsBar", () => {
     render(<LimitsBar />);
     fireEvent.click(chipButtons()[1]);
     expect(screen.getByText("Signed out")).toBeInTheDocument();
+  });
+
+  it("renders an agy harness group with a window label row", () => {
+    mocks.snapshot = snapshot({ harnesses: [claudeHarness(), codexHarness(), agyHarness()] });
+    render(<LimitsBar />);
+    fireEvent.click(chipButtons()[1]);
+    const dialog = screen.getByRole("dialog");
+    const titles = Array.from(dialog.querySelectorAll(".limits-popup__group-title")).map((n) => n.textContent);
+    expect(titles).toContain("Agy");
+    expect(within(dialog).getByText(/Gemini · 5h/)).toBeInTheDocument();
+  });
+
+  it("puts the absolute reset time on its own subtitle line under the countdown", () => {
+    const resetsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    mocks.snapshot = snapshot({
+      harnesses: [
+        claudeHarness(),
+        codexHarness(),
+        agyHarness({
+          windows: [
+            win({ harness: "agy", windowId: "gemini_5h", cadenceMinutes: 300, usedPct: 12, resetsAt }),
+          ],
+        }),
+      ],
+    });
+    render(<LimitsBar />);
+    fireEvent.click(chipButtons()[1]);
+    const dialog = screen.getByRole("dialog");
+    const row = within(dialog).getByText(/Gemini · 5h/).closest('[role="menuitemradio"]')!;
+    const main = row.querySelector(".limits-popup__main")!;
+    const sub = row.querySelector(".limits-popup__sub")!;
+    expect(main.textContent).toMatch(/^Gemini · 5h — resets in /);
+    expect(main.textContent).not.toMatch(/\(/);
+    expect(sub.textContent).toBeTruthy();
+  });
+
+  it("shows Signed out on the labelled placeholder rows when agy is signed out", () => {
+    const placeholder = (windowId: string, cadenceMinutes: number) =>
+      win({ harness: "agy", windowId, cadenceMinutes, usedPct: null, resetsAt: null, status: "signed_out" });
+    mocks.snapshot = snapshot({
+      harnesses: [
+        claudeHarness(),
+        codexHarness(),
+        agyHarness({
+          status: "signed_out",
+          windows: [placeholder("gemini_5h", 300), placeholder("gemini_weekly", 10080)],
+        }),
+      ],
+    });
+    render(<LimitsBar />);
+    fireEvent.click(chipButtons()[1]);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Gemini · 5h — Signed out")).toBeInTheDocument();
+    expect(within(dialog).getByText("Gemini · weekly — Signed out")).toBeInTheDocument();
+  });
+
+  it("picks an agy row via assignSlot with the agy ref", () => {
+    mocks.snapshot = snapshot({ harnesses: [claudeHarness(), codexHarness(), agyHarness()] });
+    render(<LimitsBar />);
+    fireEvent.click(chipButtons()[1]);
+    const dialog = screen.getByRole("dialog");
+    const row = within(dialog).getByText(/Gemini · 5h/).closest('[role="menuitemradio"]')!;
+    fireEvent.click(row);
+    expect(mocks.assignSlot).toHaveBeenCalledTimes(1);
+    expect(mocks.assignSlot).toHaveBeenCalledWith(1, { harness: "agy", windowId: "gemini_5h" });
   });
 });

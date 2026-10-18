@@ -107,7 +107,7 @@
   right: 0;
   bottom: calc(100% + 4px);
   z-index: 1000;
-  min-width: min(300px, calc(100vw - 2 * var(--space-3)));
+  min-width: min(340px, calc(100vw - 2 * var(--space-3)));
   background: var(--bg-card);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
@@ -142,6 +142,29 @@
 
 .limits-popup__row[aria-checked="true"] {
   font-weight: 700;
+  color: var(--fg-primary);
+}
+
+/* Two-line text cell: main line (label + countdown) over a dimmer absolute
+ * reset time. --fg-faint is near-invisible in light mode, so the subtitle uses
+ * --fg-muted against a --fg-secondary main line. */
+.limits-popup__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.limits-popup__main {
+  color: var(--fg-secondary);
+}
+
+.limits-popup__sub {
+  font-size: calc(var(--font-size-xs) - 1px);
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+
+.limits-popup__row[aria-checked="true"] .limits-popup__main {
   color: var(--fg-primary);
 }
 

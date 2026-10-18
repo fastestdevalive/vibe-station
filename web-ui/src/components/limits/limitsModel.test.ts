@@ -3,6 +3,7 @@ import type { LimitSlotRef, LimitWindow } from "@/api/types";
 import {
   ariaLabel,
   cadenceBadge,
+  cadenceFromWindowId,
   cadenceLabel,
   chipView,
   compactResetCountdown,
@@ -12,6 +13,7 @@ import {
   resetCountdown,
   sameRef,
   statusReason,
+  windowLabel,
 } from "./limitsModel";
 
 const SLOTS: [LimitSlotRef, LimitSlotRef] = [
@@ -76,6 +78,38 @@ describe("cadenceBadge", () => {
     [null, ""],
   ] as const)("cadenceBadge(%s) === %s", (mins, expected) => {
     expect(cadenceBadge(mins)).toBe(expected);
+  });
+});
+
+describe("cadenceFromWindowId", () => {
+  it.each([
+    ["five_hour", 300],
+    ["seven_day", 10080],
+    ["3p_5h", 300],
+    ["gemini_5h", 300],
+    ["gemini_weekly", 10080],
+    ["3p_weekly", 10080],
+    [undefined, null],
+    ["unknown", null],
+  ] as const)("cadenceFromWindowId(%s) === %s", (id, expected) => {
+    expect(cadenceFromWindowId(id)).toBe(expected);
+  });
+});
+
+describe("windowLabel", () => {
+  it("maps known agy ids to friendly labels", () => {
+    expect(windowLabel("agy", "gemini_5h")).toBe("Gemini · 5h");
+    expect(windowLabel("agy", "gemini_weekly")).toBe("Gemini · weekly");
+    expect(windowLabel("agy", "3p_5h")).toBe("Claude/GPT · 5h");
+    expect(windowLabel("agy", "3p_weekly")).toBe("Claude/GPT · weekly");
+    expect(windowLabel("agy", "gemini_argon_wtu_weekly")).toBe("Gemini 4 Argon · weekly");
+  });
+  it("prettifies unknown agy ids so rows stay distinguishable", () => {
+    expect(windowLabel("agy", "foo_bar_5h")).toBe("foo bar 5h");
+  });
+  it("returns null for claude/codex (cadence ring suffices)", () => {
+    expect(windowLabel("claude", "five_hour")).toBeNull();
+    expect(windowLabel("codex", "primary")).toBeNull();
   });
 });
 
@@ -228,5 +262,15 @@ describe("ariaLabel", () => {
     expect(label).toContain("five hour limit");
     expect(label).toContain("42 percent used");
     expect(label).toContain("resets");
+  });
+
+  it("uses the friendly window label for agy", () => {
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    const w = win({ harness: "agy", windowId: "gemini_5h", usedPct: 42, resetsAt: new Date(now + 130 * 60 * 1000).toISOString() });
+    const v = chipView(w, now);
+    const label = ariaLabel("agy", w, v, now);
+    expect(label).toContain("Agy");
+    expect(label).toContain("Gemini · 5h limit");
+    expect(label).not.toContain("gemini 5h limit");
   });
 });
