@@ -71,8 +71,10 @@ function nowIso() {
 }
 
 /** Module-local harness-limits snapshot (host "demo-host", claude five_hour
- *  42% + seven_day 61%, codex primary 4% cadence 43200). Kept per-module so
- *  `setLimitSlots` mutates the same object the mock returns and emits. */
+ *  42% + seven_day 61%, codex primary 4% cadence 43200, agy gemini_5h 12% +
+ *  gemini_weekly 83% + 3p_5h 47% + 3p_weekly 5% + gemini_argon_wtu_weekly
+ *  100%). Kept per-module so `setLimitSlots` mutates the same object the mock
+ *  returns and emits. */
 const mockLimits: LimitsSnapshot = {
   host: "demo-host",
   slots: [
@@ -118,6 +120,59 @@ const mockLimits: LimitsSnapshot = {
           cadenceMinutes: 43200,
           usedPct: 4,
           resetsAt: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+      ],
+    },
+    {
+      harness: "agy",
+      status: "ok",
+      message: null,
+      asOf: new Date().toISOString(),
+      windows: [
+        {
+          harness: "agy",
+          windowId: "gemini_5h",
+          cadenceMinutes: 300,
+          usedPct: 12,
+          resetsAt: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+        {
+          harness: "agy",
+          windowId: "gemini_weekly",
+          cadenceMinutes: 10080,
+          usedPct: 83,
+          resetsAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+        {
+          harness: "agy",
+          windowId: "3p_5h",
+          cadenceMinutes: 300,
+          usedPct: 47,
+          resetsAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+        {
+          harness: "agy",
+          windowId: "3p_weekly",
+          cadenceMinutes: 10080,
+          usedPct: 5,
+          resetsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString(),
+          asOf: new Date().toISOString(),
+          status: "ok",
+        },
+        {
+          harness: "agy",
+          windowId: "gemini_argon_wtu_weekly",
+          cadenceMinutes: 10080,
+          usedPct: 100,
+          resetsAt: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(),
           asOf: new Date().toISOString(),
           status: "ok",
         },

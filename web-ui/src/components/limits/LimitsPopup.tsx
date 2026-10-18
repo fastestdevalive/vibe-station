@@ -9,6 +9,7 @@ import {
   resetCountdown,
   sameRef,
   statusReason,
+  windowLabel,
   type SlotIndex,
 } from "./limitsModel";
 
@@ -119,6 +120,7 @@ export function LimitsPopup({
               const nodata = isNodata(w);
               const countdown = resetCountdown(w.resetsAt, nowMs);
               const exactTime = formatLocalResetTime(w.resetsAt, nowMs);
+              const label = windowLabel(h.harness, w.windowId);
               return (
                 <div
                   key={path}
@@ -140,11 +142,19 @@ export function LimitsPopup({
                     variant="row"
                   />
                   {nodata ? (
-                    <span>{statusReason(w.status, h.message) ?? "—"}</span>
+                    <span className="limits-popup__text">
+                      <span className="limits-popup__main">
+                        {label ? `${label} — ` : ""}
+                        {statusReason(w.status, h.message) ?? "—"}
+                      </span>
+                    </span>
                   ) : (
-                    <span>
-                      {countdown}
-                      {exactTime ? ` (${exactTime})` : ""}
+                    <span className="limits-popup__text">
+                      <span className="limits-popup__main">
+                        {label ? `${label} — ` : ""}
+                        {countdown}
+                      </span>
+                      {exactTime ? <span className="limits-popup__sub">{exactTime}</span> : null}
                     </span>
                   )}
                   {inOther ? <span>slot {other + 1}</span> : <span />}

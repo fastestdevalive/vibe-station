@@ -9,6 +9,7 @@ import {
   compactResetCountdown,
   isResetImminent,
   resetCountdown,
+  windowLabel,
 } from "./limitsModel";
 
 interface LimitChipProps {
@@ -36,13 +37,17 @@ function capitalize(s: string): string {
 }
 
 /** Tooltip for the bar chip: reset time, plus an as-of note when dimmed, plus
- *  a reason when the window has one. */
+ *  a reason when the window has one. The window label (agy) is prefixed. */
 function tooltipText(
+  harness: string,
+  windowId: string | undefined,
   window: LimitWindow | undefined,
   view: ReturnType<typeof chipView>,
   nowMs: number,
 ): string {
   const parts: string[] = [];
+  const label = windowLabel(harness, windowId ?? "");
+  if (label) parts.push(label);
   if (window?.resetsAt) {
     parts.push(view.kind === "reset" ? "Reset" : capitalize(resetCountdown(window.resetsAt, nowMs)));
   }
@@ -83,6 +88,7 @@ export function LimitChip({
   const pctDisplay = !isBar && isPercentView ? `${pctText} used` : pctText;
 
   const label = ariaLabel(harness, window, view, nowMs);
+  const tooltipWindowId = window?.windowId ?? fallbackWindowId;
 
   const ringText = cadenceBadge(cadence);
 
@@ -148,7 +154,7 @@ export function LimitChip({
         aria-haspopup="dialog"
         aria-expanded={expanded}
         aria-label={slotLabel ? `${slotLabel}, ${label}` : label}
-        title={tooltipText(window, view, nowMs)}
+        title={tooltipText(harness, tooltipWindowId, window, view, nowMs)}
         onClick={onClick}
       >
         {inner}
@@ -157,7 +163,7 @@ export function LimitChip({
   }
 
   return (
-    <span className={className} title={tooltipText(window, view, nowMs)}>
+    <span className={className} title={tooltipText(harness, tooltipWindowId, window, view, nowMs)}>
       {inner}
     </span>
   );
