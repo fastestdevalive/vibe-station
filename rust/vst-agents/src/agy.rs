@@ -527,6 +527,10 @@ impl AgentPlugin for AgyPlugin {
         true
     }
 
+    fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::agy_limits::probe_agy_limits())
+    }
+
     fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
         // openab's agy-acp ignores `_meta` at `session/new`/`session/load`
         // entirely (its handler hardcodes `model_id: None`) — the only way
@@ -664,7 +668,7 @@ impl AgentPlugin for AgyPlugin {
 
 /// Resolve the user's own `agy` binary, passed to the adapter via `AGY_BIN`
 /// (its escape hatch — it otherwise tries to download a release binary itself).
-fn resolve_agy_binary() -> String {
+pub(crate) fn resolve_agy_binary() -> String {
     std::env::var("AGY_BIN").unwrap_or_else(|_| "agy".to_string())
 }
 

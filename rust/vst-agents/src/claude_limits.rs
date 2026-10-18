@@ -152,7 +152,7 @@ pub(crate) fn resolve_or_not_installed(
 
 /// Normalise a vendor RFC3339 timestamp to the wire's millis-`Z` ISO-8601 form.
 /// Falls back to the raw string when it does not parse.
-fn normalize_iso(s: &str) -> String {
+pub(crate) fn normalize_iso(s: &str) -> String {
     match chrono::DateTime::parse_from_rfc3339(s) {
         Ok(dt) => crate::util::ms_to_iso_8601(dt.timestamp_millis()),
         Err(_) => s.to_string(),
