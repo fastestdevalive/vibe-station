@@ -3034,7 +3034,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vst-agents"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "agent-client-protocol",
  "chrono",
@@ -3058,7 +3058,7 @@ dependencies = [
 
 [[package]]
 name = "vst-agy-acp"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "serde",
  "serde_json",
@@ -3066,7 +3066,7 @@ dependencies = [
 
 [[package]]
 name = "vst-cli"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "anyhow",
  "axum",
@@ -3083,7 +3083,7 @@ dependencies = [
 
 [[package]]
 name = "vst-daemon"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "anyhow",
  "axum",
@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "vst-git"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "fancy-regex",
  "getrandom 0.4.3",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "vst-harness-limits"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "chrono",
  "tokio",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "vst-lifecycle"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "mockito",
  "regex",
@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "vst-lsp"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "anyhow",
  "libc",
@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "vst-proc"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "anyhow",
  "libc",
@@ -3199,7 +3199,7 @@ dependencies = [
 
 [[package]]
 name = "vst-routes"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3227,7 +3227,7 @@ dependencies = [
 
 [[package]]
 name = "vst-rpc"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "serde_json",
  "thiserror 1.0.69",
@@ -3237,7 +3237,7 @@ dependencies = [
 
 [[package]]
 name = "vst-store"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3251,7 +3251,7 @@ dependencies = [
 
 [[package]]
 name = "vst-testkit"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "serde",
  "serde_json",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "vst-types"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "serde",
  "serde_json",
@@ -3271,7 +3271,7 @@ dependencies = [
 
 [[package]]
 name = "vst-ws"
-version = "0.0.1-beta"
+version = "0.0.2-beta"
 dependencies = [
  "async-trait",
  "futures",
