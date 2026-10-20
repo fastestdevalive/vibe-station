@@ -53,18 +53,27 @@ impl TailscaleRoutes {
     pub async fn status(&self) -> TailscaleStatus {
         match tailscale_serve::get_status(self.port).await {
             Ok(status) => match status {
-                ServiceStatus::NotInstalled => TailscaleStatus::NotInstalled,
+                ServiceStatus::NotInstalled => not_installed(),
                 ServiceStatus::Starting => TailscaleStatus::Starting,
-                ServiceStatus::NotConnected => TailscaleStatus::NotConnected,
+                ServiceStatus::NotConnected => TailscaleStatus::NotConnected {
+                    up_command: Some(format!("{} up", tailscale_serve::display_cmd().await)),
+                },
                 ServiceStatus::NeedsOperator => TailscaleStatus::NeedsOperator {
-                    fix_command: "sudo tailscale set --operator=$USER".to_string(),
+                    fix_command: format!(
+                        "sudo {} set --operator=$USER",
+                        tailscale_serve::display_cmd().await
+                    ),
                 },
                 ServiceStatus::CertsNotEnabled => TailscaleStatus::CertsNotEnabled {
                     dns_name: String::new(),
                 },
                 ServiceStatus::ConnectedNoServe => TailscaleStatus::ConnectedNoServe {
                     https_url: String::new(),
-                    setup_command: format!("tailscale serve --bg --yes {}", self.port),
+                    setup_command: format!(
+                        "{} serve --bg --yes {}",
+                        tailscale_serve::display_cmd().await,
+                        self.port
+                    ),
                 },
                 ServiceStatus::ServeActive { url } => {
                     TailscaleStatus::ServeActive { https_url: url }
@@ -72,12 +81,16 @@ impl TailscaleRoutes {
                 ServiceStatus::PortMismatch { expected, actual } => TailscaleStatus::PortMismatch {
                     expected_port: expected as i64,
                     actual_port: actual as i64,
-                    fix_command: format!("tailscale serve --bg --yes {}", self.port),
+                    fix_command: format!(
+                        "{} serve --bg --yes {}",
+                        tailscale_serve::display_cmd().await,
+                        self.port
+                    ),
                 },
                 ServiceStatus::Error { message } => TailscaleStatus::Error { message },
             },
             Err(e) => match e {
-                TailscaleError::NotInstalled => TailscaleStatus::NotInstalled,
+                TailscaleError::NotInstalled => not_installed(),
                 other => TailscaleStatus::Error {
                     message: other.to_string(),
                 },
@@ -131,17 +144,8 @@ impl TailscaleRoutes {
             }
         }
 
-        // Run `tailscale up --timeout=20s` with a 30s timeout
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            tokio::process::Command::new("tailscale")
-                .args(["up", "--timeout=20s"])
-                .output(),
-        )
-        .await;
-
-        match output {
-            Ok(Ok(out)) => {
+        match tailscale_serve::up().await {
+            Ok(Some(out)) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let exit_code = out.status.code().unwrap_or(-1) as i64;
@@ -155,17 +159,14 @@ impl TailscaleRoutes {
                     login_url,
                 })
             }
-            Ok(Err(e)) => Err(TailscaleRouteError::Internal(e.to_string())),
-            Err(_) => {
-                // Timed out
-                Ok(TailscaleUpResult {
-                    stdout: String::new(),
-                    stderr: "timed out waiting for tailscale up".to_string(),
-                    exit_code: -1,
-                    timed_out: true,
-                    login_url: None,
-                })
-            }
+            Ok(None) => Ok(TailscaleUpResult {
+                stdout: String::new(),
+                stderr: "timed out waiting for tailscale up".to_string(),
+                exit_code: -1,
+                timed_out: true,
+                login_url: None,
+            }),
+            Err(e) => Err(TailscaleRouteError::Internal(e.to_string())),
         }
     }
 
@@ -181,6 +182,12 @@ impl TailscaleRoutes {
         let qr_url = format!("{}/mobile-auth?code={}", https_url, code);
 
         Ok(TailscaleQr { qr_url, expires_at })
+    }
+}
+
+fn not_installed() -> TailscaleStatus {
+    TailscaleStatus::NotInstalled {
+        host_os: Some(std::env::consts::OS.to_string()),
     }
 }
 

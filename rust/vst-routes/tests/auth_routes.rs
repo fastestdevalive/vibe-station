@@ -557,8 +557,8 @@ async fn test_tailscale_routes() {
     // On dev/test sandbox, tailscale status returns a valid enum
     assert!(matches!(
         status,
-        vst_types::rest::tailscale::TailscaleStatus::NotInstalled
-            | vst_types::rest::tailscale::TailscaleStatus::NotConnected
+        vst_types::rest::tailscale::TailscaleStatus::NotInstalled { .. }
+            | vst_types::rest::tailscale::TailscaleStatus::NotConnected { .. }
             | vst_types::rest::tailscale::TailscaleStatus::Starting
             | vst_types::rest::tailscale::TailscaleStatus::NeedsOperator { .. }
             | vst_types::rest::tailscale::TailscaleStatus::CertsNotEnabled { .. }

@@ -144,6 +144,29 @@ describe("RemoteAccessSetting", () => {
     expect(screen.queryByRole("button", { name: /run/i })).not.toBeInTheDocument();
   });
 
+  it("not_installed on a macOS host shows the app download, not the Linux curl", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    vi.spyOn(api, "getTailscaleStatus").mockResolvedValue({ state: "not_installed", hostOs: "macos" });
+    render(<RemoteAccessSetting api={api} />);
+    expect(await screen.findByRole("link", { name: /download tailscale for macos/i })).toHaveAttribute(
+      "href",
+      "https://tailscale.com/download/mac",
+    );
+    expect(screen.queryByText(/install\.sh/)).not.toBeInTheDocument();
+  });
+
+  it("not_connected shows the daemon-provided up command (off-PATH install)", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    vi.spyOn(api, "getTailscaleStatus").mockResolvedValue({
+      state: "not_connected",
+      upCommand: "'/Applications/Tailscale.app/Contents/MacOS/Tailscale' up",
+    });
+    render(<RemoteAccessSetting api={api} />);
+    expect(await screen.findByText(/Applications\/Tailscale\.app\/Contents\/MacOS\/Tailscale' up/)).toBeInTheDocument();
+  });
+
   it("not_connected Run calls runTailscaleUp and refetches status on exitCode 0", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });

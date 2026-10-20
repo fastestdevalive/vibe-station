@@ -173,17 +173,19 @@ pub fn parse_marked_path(output: &str) -> Option<String> {
     Some(path.to_string())
 }
 
-/// Capture the user's interactive-shell PATH once (`$SHELL -ilc`, own process
-/// group, 5s thread timeout, stdin/stderr nulled). On any failure (SHELL
-/// unset, overridden home, timeout, non-zero) falls back to the daemon PATH.
-fn capture_shell_path() -> Option<String> {
+/// Run `script` under the user's interactive login shell (`$SHELL -ilc`, own
+/// process group, `timeout` thread timeout, stdin/stderr nulled) and return its
+/// stdout. `None` on any failure (SHELL unset, overridden home, timeout).
+/// On timeout the whole process group is killed (a hung rc file or a
+/// backgrounded grandchild holding stdout).
+fn run_interactive_shell(script: &str, timeout: Duration) -> Option<String> {
     if is_overridden() {
         return None;
     }
     let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
 
     let mut child = Command::new(&shell)
-        .args(["-ilc", r#"printf '__VST_PATH__%s__VST_PATH__' "$PATH""#])
+        .args(["-ilc", script])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .stdout(Stdio::piped())
@@ -201,15 +203,13 @@ fn capture_shell_path() -> Option<String> {
         let _ = tx.send(buf);
     });
 
-    match rx.recv_timeout(Duration::from_secs(5)) {
+    match rx.recv_timeout(timeout) {
         Ok(out) => {
             let _ = child.wait();
-            parse_marked_path(&out)
+            Some(out)
         }
         Err(_) => {
-            // Timeout: kill the whole process group (a hung rc file or a
-            // backgrounded grandchild holding stdout). `kill -- -<pgid>`
-            // through Command, not libc (crate forbids unsafe).
+            // `kill -- -<pgid>` through Command, not libc (crate forbids unsafe).
             let _ = Command::new("kill")
                 .args(["--", &format!("-{}", child.id())])
                 .output();
@@ -218,6 +218,39 @@ fn capture_shell_path() -> Option<String> {
             None
         }
     }
+}
+
+/// Capture the user's interactive-shell PATH once. On any failure falls back to
+/// the daemon PATH.
+fn capture_shell_path() -> Option<String> {
+    let out = run_interactive_shell(
+        r#"printf '__VST_PATH__%s__VST_PATH__' "$PATH""#,
+        Duration::from_secs(5),
+    )?;
+    parse_marked_path(&out)
+}
+
+const CMD_MARKER: &str = "__VST_CMD__";
+
+/// Ask the user's interactive shell what `name` resolves to (`command -v`): an
+/// executable path, or `alias name='…'` for an alias — which a daemon can never
+/// see. Returns the raw text between markers (rc-file noise stripped); the
+/// caller must validate it and must never feed it to a shell. `name` is
+/// restricted to `[A-Za-z0-9._-]` so it cannot inject shell syntax.
+pub fn shell_command_v(name: &str, timeout: Duration) -> Option<String> {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return None;
+    }
+    let script = format!(r#"printf '{CMD_MARKER}%s{CMD_MARKER}' "$(command -v {name})""#);
+    let out = run_interactive_shell(&script, timeout)?;
+    let rest = &out[out.find(CMD_MARKER)? + CMD_MARKER.len()..];
+    let text = &rest[..rest.find(CMD_MARKER)?];
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 fn capture_effective_path() -> String {

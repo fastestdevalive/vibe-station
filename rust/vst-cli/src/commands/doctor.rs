@@ -157,13 +157,22 @@ fn which(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The daemon's own tailscale command builder (off-PATH app bundle, `TAILSCALE_BE_CLI`);
+/// a bare `tailscale` when nothing is located so the failure path stays "not found".
+async fn tailscale_command() -> AsyncCommand {
+    vst_lifecycle::tailscale_serve::tailscale_command()
+        .await
+        .unwrap_or_else(|_| AsyncCommand::new("tailscale"))
+}
+
 /// Run `tailscale status --json` / `tailscale serve status --json` with a
 /// per-invocation timeout, printing the connected DNS name and any serve-port
 /// drift. Non-fatal: returns false when tailscale is absent/unconnected.
 async fn check_tailscale() -> bool {
     let status_out = timeout(
         Duration::from_millis(15_000),
-        AsyncCommand::new("tailscale")
+        tailscale_command()
+            .await
             .args(["status", "--json"])
             .output(),
     )
@@ -199,7 +208,8 @@ async fn check_tailscale() -> bool {
 
     let serve_out = timeout(
         Duration::from_millis(15_000),
-        AsyncCommand::new("tailscale")
+        tailscale_command()
+            .await
             .args(["serve", "status", "--json"])
             .output(),
     )

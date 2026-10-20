@@ -7,12 +7,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state")]
 pub enum TailscaleStatus {
-    #[serde(rename = "not_installed")]
-    NotInstalled,
+    /// `host_os` is `std::env::consts::OS` of the daemon host ("macos", "linux", …),
+    /// so the UI can show the right install instructions even when it is viewed
+    /// from another machine. Absent from older daemons.
+    #[serde(rename = "not_installed", rename_all = "camelCase")]
+    NotInstalled {
+        #[serde(default)]
+        host_os: Option<String>,
+    },
     #[serde(rename = "starting")]
     Starting,
-    #[serde(rename = "not_connected")]
-    NotConnected,
+    /// `up_command` is what to type in a terminal (quoted full path when
+    /// `tailscale` is not on `PATH`). Absent from older daemons.
+    #[serde(rename = "not_connected", rename_all = "camelCase")]
+    NotConnected {
+        #[serde(default)]
+        up_command: Option<String>,
+    },
     #[serde(rename = "needs_operator", rename_all = "camelCase")]
     NeedsOperator { fix_command: String },
     #[serde(rename = "certs_not_enabled", rename_all = "camelCase")]
