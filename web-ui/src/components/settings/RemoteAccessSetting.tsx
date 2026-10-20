@@ -470,15 +470,35 @@ function TailscaleCard({
       ) : status.state === "not_installed" ? (
         <>
           <StatusBox sentiment="info">Tailscale isn't installed on this machine.</StatusBox>
-          <ShellBlock command="curl -fsSL https://tailscale.com/install.sh | sh" lang="bash" />
-          <a
-            href="https://tailscale.com/download"
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: "var(--font-size-xs)", color: "var(--accent)" }}
-          >
-            Other install options →
-          </a>
+          {status.hostOs === "macos" || status.hostOs === "windows" ? (
+            <>
+              <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+                {status.hostOs === "macos"
+                  ? "Install the Tailscale app, then press Refresh. If it's already installed, keep it in /Applications so it can be found."
+                  : "Install the Tailscale app, then press Refresh."}
+              </div>
+              <a
+                href={`https://tailscale.com/download/${status.hostOs === "macos" ? "mac" : "windows"}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: "var(--font-size-xs)", color: "var(--accent)" }}
+              >
+                {status.hostOs === "macos" ? "Download Tailscale for macOS →" : "Download Tailscale for Windows →"}
+              </a>
+            </>
+          ) : (
+            <>
+              <ShellBlock command="curl -fsSL https://tailscale.com/install.sh | sh" lang="bash" />
+              <a
+                href="https://tailscale.com/download"
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: "var(--font-size-xs)", color: "var(--accent)" }}
+              >
+                Other install options →
+              </a>
+            </>
+          )}
         </>
       ) : status.state === "starting" ? (
         <StatusBox sentiment="busy">Connecting to Tailscale…</StatusBox>
@@ -486,7 +506,7 @@ function TailscaleCard({
         <>
           <StatusBox sentiment="warn">Tailscale is installed but not connected.</StatusBox>
           <ShellBlock
-            command="tailscale up"
+            command={status.upCommand || "tailscale up"}
             lang="bash"
             actions={
               <button

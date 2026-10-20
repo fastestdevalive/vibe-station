@@ -229,27 +229,39 @@ pub fn check_cloudflared() -> DoctorCheck {
     }
 }
 
-pub fn check_tailscale_binary() -> DoctorCheck {
-    if let Some(path) = resolve_bin_path("tailscale") {
-        DoctorCheck {
-            name: "tailscale".to_string(),
-            status: DoctorStatus::Ok,
-            required: false,
-            group: CheckGroup::Optional,
-            message: "tailscale found on PATH".to_string(),
-            resolved_path: Some(path),
-            install_hint: None,
-        }
-    } else {
-        DoctorCheck {
-            name: "tailscale".to_string(),
-            status: DoctorStatus::Warn,
-            required: false,
-            group: CheckGroup::Optional,
-            message: "tailscale not found on PATH".to_string(),
-            resolved_path: None,
-            install_hint: None,
-        }
+pub fn check_tailscale_binary(
+    located: vst_lifecycle::tailscale_serve::locate::Located,
+) -> DoctorCheck {
+    use vst_lifecycle::tailscale_serve::locate::{self, Located};
+    let mk = |status, message: String, resolved_path, install_hint| DoctorCheck {
+        name: "tailscale".to_string(),
+        status,
+        required: false,
+        group: CheckGroup::Optional,
+        message,
+        resolved_path,
+        install_hint,
+    };
+    match located {
+        Located::OnPath => mk(
+            DoctorStatus::Ok,
+            "tailscale found on PATH".to_string(),
+            resolve_bin_path("tailscale"),
+            None,
+        ),
+        // Remote Access works off-PATH, so this is informational (Ok), not a warning.
+        Located::OffPath(p) => mk(
+            DoctorStatus::Ok,
+            locate::off_path_message(&p),
+            Some(p.to_string_lossy().into_owned()),
+            None,
+        ),
+        Located::Missing => mk(
+            DoctorStatus::Warn,
+            "tailscale not found on PATH".to_string(),
+            None,
+            None,
+        ),
     }
 }
 
@@ -588,15 +600,26 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         .await,
     );
 
-    // 7. tailscale (Optional, false)
+    // 7. tailscale (Optional, false). Located async (it may probe the user's shell for
+    // an alias); bounded by the same 3s budget as every other check.
     checks.push(
-        with_timeout(
-            "tailscale",
-            CheckGroup::Optional,
-            false,
-            check_tailscale_binary,
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            vst_lifecycle::tailscale_serve::locate::locate_async(),
         )
-        .await,
+        .await
+        {
+            Ok(located) => check_tailscale_binary(located),
+            Err(_) => DoctorCheck {
+                name: "tailscale".to_string(),
+                status: DoctorStatus::Timeout,
+                required: false,
+                group: CheckGroup::Optional,
+                message: "tailscale timed out after 3s".to_string(),
+                resolved_path: None,
+                install_hint: None,
+            },
+        },
     );
 
     // 8. codex-acp vendor install (the official ACP adapter for

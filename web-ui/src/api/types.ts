@@ -25,9 +25,11 @@ export interface NetworkAccess {
 
 /** Mirrors daemon `TailscaleStatus` (services/tailscaleServe.ts). */
 export type TailscaleStatus =
-  | { state: "not_installed" }
+  /** `hostOs`: daemon host's OS ("macos" | "linux" | …); absent from older daemons. */
+  | { state: "not_installed"; hostOs?: string | null }
   | { state: "starting" }
-  | { state: "not_connected" }
+  /** `upCommand`: what to type in a terminal (quoted full path when off PATH); absent from older daemons. */
+  | { state: "not_connected"; upCommand?: string | null }
   | { state: "needs_operator"; fixCommand: string }
   | { state: "certs_not_enabled"; dnsName: string }
   | { state: "connected_no_serve"; httpsUrl: string; setupCommand: string }

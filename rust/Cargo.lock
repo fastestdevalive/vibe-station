@@ -3077,6 +3077,7 @@ dependencies = [
  "tokio",
  "vst-agy-acp",
  "vst-daemon",
+ "vst-lifecycle",
  "vst-proc",
  "vst-types",
 ]

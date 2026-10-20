@@ -400,6 +400,38 @@ A PR that changes behaviour without changing the matrix should be sent back.
 
 ---
 
+## Killing processes you started — by PID only, never by name
+
+**Applies to:** any agent/script that launches a throwaway `vst-daemon`, `vite`, `cargo run`, etc. to test something.
+
+The developer usually has a **real** dev daemon running on the same machine (e.g. the Tauri dev app's
+`target/debug/vst-daemon` sidecar). `pkill -f "target/debug/vst-daemon"` matches *every* process whose command
+line contains that string, so it kills theirs too. This has happened twice.
+
+### Rules
+
+- **Never** use `pkill`, `killall`, `pkill -f`, or `kill $(pgrep …)` / `kill $(ps … | grep …)` for processes by
+  binary name or pattern. Never `lsof -ti :PORT | xargs kill` on a port you didn't verify is yours.
+- **Prefer the Docker dev sandbox** (`scripts/dev-sandbox.sh up|down`) for anything that needs a running daemon;
+  `down` only touches that sandbox's own containers. If Docker is down, start it or ask — don't silently fall
+  back to a native daemon.
+- If you must run a daemon natively, capture the PID at launch and kill exactly that PID:
+
+```bash
+T=$(mktemp -d)
+# Isolated HOME (the data dir is $HOME/.vibe-station) and a port you checked is free:
+lsof -i :7198 >/dev/null 2>&1 && { echo "port busy"; exit 1; }
+HOME=$T VST_NO_AUTH=1 VST_PORT=7198 ./target/debug/vst-daemon >"$T/daemon.log" 2>&1 &
+DAEMON_PID=$!
+trap 'kill "$DAEMON_PID" 2>/dev/null; rm -rf "$T"' EXIT   # exactly this PID, nothing else
+# ... curl localhost:7198 ...
+```
+
+- Before killing, confirm the PID is yours: `ps -p "$DAEMON_PID" -o pid,command` should show your temp `HOME`
+  port/binary, not the developer's. After cleanup, check that only *your* port is gone.
+
+---
+
 ## Docker dev sandboxes — two different tools, don't conflate them
 
 **Files:** `docker-compose.dev.yml` · `scripts/dev-sandbox.sh` · `scripts/dev-entrypoint.sh` · `docker-compose.screenshots.yml` · `Dockerfile.screenshots` · `scripts/demo-seed.sh` · `scripts/seed-file-search-demo.sh`

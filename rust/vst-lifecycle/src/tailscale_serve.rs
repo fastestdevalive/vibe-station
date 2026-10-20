@@ -10,6 +10,9 @@
 
 use thiserror::Error;
 
+pub mod locate;
+use locate::Located;
+
 #[derive(Debug, Error)]
 pub enum TailscaleError {
     #[error("tailscale is not installed")]
@@ -37,11 +40,31 @@ pub enum TailscaleStatus {
     Error { message: String },
 }
 
+/// Build a command for the located binary (bare name when on the daemon's `PATH`).
+///
+/// `TAILSCALE_BE_CLI=1`: the macOS app binary only behaves as a CLI when `TERM` is
+/// set, and a daemon started from Finder/launchd has none — without this every call
+/// fails with "The Tailscale GUI failed to start". Harmless for the Go CLI.
+pub async fn tailscale_command() -> TailscaleResult<tokio::process::Command> {
+    command_for(&locate::locate_async().await)
+}
+
+fn command_for(l: &Located) -> TailscaleResult<tokio::process::Command> {
+    let mut cmd = match l {
+        Located::OnPath => tokio::process::Command::new("tailscale"),
+        Located::OffPath(p) => tokio::process::Command::new(p),
+        Located::Missing => return Err(TailscaleError::NotInstalled),
+    };
+    cmd.env("TAILSCALE_BE_CLI", "1");
+    Ok(cmd)
+}
+
 async fn run_tailscale(args: &[&str]) -> TailscaleResult<std::process::Output> {
     // `kill_on_drop`: `get_status` also runs as an abortable post-bind boot
     // task; a `spawn_blocking` child couldn't be cancelled and would stall
     // runtime shutdown if tailscaled hangs.
-    tokio::process::Command::new("tailscale")
+    tailscale_command()
+        .await?
         .args(args)
         .kill_on_drop(true)
         .output()
@@ -53,6 +76,24 @@ async fn run_tailscale(args: &[&str]) -> TailscaleResult<std::process::Output> {
                 TailscaleError::Io(e)
             }
         })
+}
+
+/// `tailscale up --timeout=20s` bounded to 30s. `None` means it timed out (the
+/// child is killed on drop).
+pub async fn up() -> TailscaleResult<Option<std::process::Output>> {
+    let mut cmd = tailscale_command().await?;
+    cmd.args(["up", "--timeout=20s"]).kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output()).await {
+        Ok(Ok(out)) => Ok(Some(out)),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(TailscaleError::NotInstalled),
+        Ok(Err(e)) => Err(TailscaleError::Io(e)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// How a user should invoke the CLI from a terminal (quoted full path when off `PATH`).
+pub async fn display_cmd() -> String {
+    locate::display_cmd(&locate::locate_async().await)
 }
 
 /// Get the current Tailscale+serve status for the daemon port.
@@ -150,4 +191,24 @@ pub async fn disable_serve(_port: u16) -> TailscaleResult<()> {
         return Err(TailscaleError::Command(msg));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn sets_be_cli_env_and_maps_missing() {
+        for l in [Located::OnPath, Located::OffPath("/x/Tailscale".into())] {
+            let cmd = command_for(&l).unwrap();
+            let envs: Vec<_> = cmd.as_std().get_envs().collect();
+            assert!(envs
+                .iter()
+                .any(|(k, v)| *k == "TAILSCALE_BE_CLI" && *v == Some("1".as_ref())));
+        }
+        assert!(matches!(
+            command_for(&Located::Missing),
+            Err(TailscaleError::NotInstalled)
+        ));
+    }
 }
