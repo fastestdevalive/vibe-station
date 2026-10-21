@@ -332,6 +332,9 @@ async fn test_modes_crud_lifecycle_and_events() {
             reason: None,
             last_transition_at: "2026-09-15T00:00:00Z".to_string(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     let session2_done = SessionRecord {
         id: "sess-2".to_string(),
@@ -365,6 +368,9 @@ async fn test_modes_crud_lifecycle_and_events() {
             reason: None,
             last_transition_at: "2026-09-15T00:00:00Z".to_string(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     let direct_session = SessionRecord {
         id: "sess-dir".to_string(),
@@ -398,6 +404,9 @@ async fn test_modes_crud_lifecycle_and_events() {
             reason: None,
             last_transition_at: "2026-09-15T00:00:00Z".to_string(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
 
     let project = ProjectRecord {
@@ -1261,6 +1270,9 @@ async fn test_backfill_session_mode_icons_stamps_live_modes_only() {
             reason: None,
             last_transition_at: "2026-09-15T00:00:00Z".to_string(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
 
     let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();

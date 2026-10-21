@@ -110,6 +110,16 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    #[serde(rename = "session:activity", rename_all = "camelCase")]
+    SessionActivity {
+        session_id: String,
+        last_activity_at: String,
+        /// Reserved, no longer written (never emitted).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_line: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_tool: Option<crate::activity::ToolActivity>,
+    },
     #[serde(rename = "session:opened", rename_all = "camelCase")]
     SessionOpened { session_id: String },
     #[serde(rename = "session:output", rename_all = "camelCase")]

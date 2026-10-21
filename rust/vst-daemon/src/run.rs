@@ -479,6 +479,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let json_registry = Arc::new(vst_agents::json_agent_registry::JsonAgentRegistry::<
         vst_agents::json_agent_session::JsonAgentSession,
     >::new());
+    // Session activity (`lastActivityAt`/`lastLine`): one throttled writer,
+    // fed by Rich Chat sessions (via the registry) and the terminal poller.
+    let activity = vst_activity::ActivityTracker::new(store.clone(), broadcaster.clone());
+    json_registry.set_activity_sink(activity.clone());
 
     // `persistEpoch` callback: re-writes config.json when the browser epoch
     // bumps (e.g. POST /auth/logout/all). It RE-READS the file at call time
@@ -556,10 +560,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     });
 
     // ── Pollers ───────────────────────────────────────────────────────────────
-    let lifecycle_poller = Arc::new(LifecyclePollerHandle::new(
-        store.clone(),
-        broadcaster.clone(),
-    ));
+    let lifecycle_poller = Arc::new(
+        LifecyclePollerHandle::new(store.clone(), broadcaster.clone())
+            .with_activity(activity.clone()),
+    );
     let lifecycle_handle = lifecycle_poller.clone().start();
 
     let pr_poller = Arc::new(PrPollerHandle::new(store.clone(), broadcaster.clone()));

@@ -894,6 +894,9 @@ impl ProjectRoutes {
                             pinned_at: None,
                             superseded_by: None,
                             pr: None,
+                            last_activity_at: None,
+                            last_line: None,
+                            last_tool: None,
                         };
 
                         let worktree_record = WorktreeRecord {
@@ -1041,6 +1044,9 @@ impl ProjectRoutes {
                     pinned_at: None,
                     superseded_by: None,
                     pr: None,
+                    last_activity_at: None,
+                    last_line: None,
+                    last_tool: None,
                 };
 
                 let sess_clone = session_record.clone();

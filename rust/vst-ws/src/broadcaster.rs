@@ -184,6 +184,17 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             snapshot,
             parent_session_id,
         },
+        ServerEvent::SessionActivity {
+            session_id,
+            last_activity_at,
+            last_line,
+            last_tool,
+        } => ServerMessage::SessionActivity {
+            session_id,
+            last_activity_at,
+            last_line,
+            last_tool,
+        },
         ServerEvent::SessionState {
             session_id,
             state,

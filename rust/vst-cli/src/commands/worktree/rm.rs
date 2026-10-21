@@ -1,4 +1,4 @@
-//! `vst worktree rm <id> [--purge]`
+//! `vst worktree rm <id> [--purge] [--yes|-y]`
 //!
 //! Sends `DELETE /worktrees/:id?purge=true|false`. Mirrors `cli/src/commands/worktree/rm.ts`.
 
@@ -11,6 +11,9 @@ use crate::preflight::preflight;
 pub struct WorktreeRmOptions {
     pub id: String,
     pub purge: bool,
+    /// `--yes` / `-y`: skip the typed-name confirmation (scripts, the doctor's
+    /// copyable "forget" command).
+    pub yes: bool,
 }
 
 pub fn parse_worktree_rm_options(args: &[String]) -> Result<WorktreeRmOptions, String> {
@@ -21,6 +24,9 @@ pub fn parse_worktree_rm_options(args: &[String]) -> Result<WorktreeRmOptions, S
         match arg.as_str() {
             "--purge" => {
                 opts.purge = true;
+            }
+            "--yes" | "-y" => {
+                opts.yes = true;
             }
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}"));
@@ -51,7 +57,9 @@ pub async fn run_worktree_rm(opts: WorktreeRmOptions) -> Result<(), (String, i32
         )
     };
 
-    confirm_by_typing_name(&opts.id, &msg);
+    if !opts.yes {
+        confirm_by_typing_name(&opts.id, &msg);
+    }
 
     preflight().await;
 

@@ -84,6 +84,7 @@ pub mod registry;
 pub mod session_runtime;
 pub mod skill_resolution;
 pub mod skill_tokens;
+pub mod tool_activity;
 pub mod util;
 
 pub use agy::{create_agy_plugin, parse_agy_stream_line, AgyStreamState};

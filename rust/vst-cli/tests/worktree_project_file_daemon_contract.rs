@@ -162,6 +162,24 @@ fn test_worktree_rm_without_purge() {
 }
 
 #[test]
+fn test_worktree_rm_parses_yes_flags() {
+    let opts = parse_worktree_rm_options(&["abc".to_string(), "--yes".to_string()]).expect("ok");
+    assert!(opts.yes);
+    assert!(!opts.purge);
+
+    let opts =
+        parse_worktree_rm_options(&["abc".into(), "-y".into(), "--purge".into()]).expect("ok");
+    assert!(opts.yes && opts.purge);
+
+    let opts = parse_worktree_rm_options(&["abc".to_string()]).expect("ok");
+    assert!(!opts.yes);
+
+    let err =
+        parse_worktree_rm_options(&["abc".into(), "--nope".into()]).expect_err("unknown flag");
+    assert!(err.contains("Unknown option"), "err: {err}");
+}
+
+#[test]
 fn test_worktree_rm_requires_id() {
     let err = parse_worktree_rm_options(&[]).expect_err("should fail without id");
     assert!(err.contains("id") || err.contains("required"), "err: {err}");

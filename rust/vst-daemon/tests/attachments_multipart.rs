@@ -94,6 +94,9 @@ fn agent_session(id: &str) -> SessionRecord {
             reason: None,
             last_transition_at: "2026-01-01T00:00:00Z".into(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     }
 }
 

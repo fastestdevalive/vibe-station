@@ -26,6 +26,7 @@ use vst_git::paths::Paths;
 use vst_store::StoreHandle;
 use vst_types::domain::{Channel, LifecycleState};
 use vst_types::events::{Broadcaster, ServerEvent};
+use vst_types::rest::doctor_hints::hint_dto;
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
 };
@@ -448,6 +449,11 @@ impl ModeRoutes {
                     using_fallback_only,
                     default_channel,
                     default_channel_overridden,
+                    install_hint: if detected {
+                        None
+                    } else {
+                        hint_dto(&format!("plugin-{cli_name}"))
+                    },
                 }
             })
             .collect()

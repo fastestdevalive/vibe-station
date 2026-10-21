@@ -676,6 +676,17 @@ pub struct SessionRecord {
     pub superseded_by: Option<String>,
     /// VCS status for this session's branch, written only by `prPoller`.
     pub pr: Option<PrStatus>,
+    /// ISO8601 — last time the session did something visible. Written only by
+    /// `vst-activity`'s `ActivityTracker`.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
+    /// Reserved, no longer written (it could carry secrets and nothing displays
+    /// it). Kept readable so old rows / JSON still load.
+    #[serde(default)]
+    pub last_line: Option<String>,
+    /// Tool call the Rich Chat agent most recently made. Same writer.
+    #[serde(default)]
+    pub last_tool: Option<crate::activity::ToolActivity>,
 }
 
 /// Transcript reference.

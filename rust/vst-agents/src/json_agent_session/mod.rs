@@ -9,6 +9,7 @@
 //! blocks in separate files (queue / drain / connection / pids / meta / events).
 //! The no-live-session meta assembly free functions live in [`meta`].
 
+mod activity;
 pub mod connection;
 pub mod drain;
 pub mod events;
@@ -199,6 +200,10 @@ pub(super) struct State {
     pub(super) out_of_band_turn_id: Option<String>,
     pub(super) out_of_band_last_at_ms: u64,
 
+    // ---- activity tail (see `activity.rs`) ----
+    /// Most recent tool call `(tool_id, summary)`; kept until the next one.
+    pub(super) last_tool: Option<(Option<String>, vst_types::activity::ToolActivity)>,
+
     // ---- notice slot ----
     pub(super) notice_slot: Option<NoticeSlotInner>,
     pub(super) active_notice: Option<NoticeSlotInner>,
@@ -214,6 +219,8 @@ pub(super) struct State {
 
 #[allow(dead_code)]
 pub(super) struct Inner {
+    /// Daemon-wide activity sink; attached by `get_or_create_json_agent_session`.
+    pub(super) activity: std::sync::OnceLock<Arc<dyn vst_types::activity::ActivitySink>>,
     pub(super) state: Mutex<State>,
     /// The per-session SQLite transcript store, in its OWN lock — deliberately
     /// a sibling of `state`, not a field inside it.
@@ -373,11 +380,13 @@ impl JsonAgentSession {
             last_unrecovered_model: None,
             out_of_band_turn_id: None,
             out_of_band_last_at_ms: 0,
+            last_tool: None,
             notice_slot: None,
             active_notice: None,
         };
 
         let inner = Inner {
+            activity: std::sync::OnceLock::new(),
             state: Mutex::new(state),
             store: Mutex::new(Some(store)),
             released: AtomicBool::new(false),
@@ -916,7 +925,13 @@ pub fn get_or_create_json_agent_session(
     // `get()` ... `set()` here was a lost-update race that could silently
     // build and immediately discard a whole `JsonAgentSession` (with its
     // own turn stream nobody was listening to).
-    let session = registry.get_or_insert_with(&session_id, || JsonAgentSession::new(opts));
+    let session = registry.get_or_insert_with(&session_id, || {
+        let s = JsonAgentSession::new(opts);
+        if let Some(sink) = registry.activity_sink() {
+            s.attach_activity_sink(sink);
+        }
+        s
+    });
     (*session).clone()
 }
 
@@ -1188,6 +1203,9 @@ mod tests {
             parent_session_id: None,
             superseded_by: None,
             pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         };
         let project_rec = ProjectRecord {
             id: "p1".into(),

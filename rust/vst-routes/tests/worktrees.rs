@@ -117,6 +117,9 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
 
     let wt = WorktreeRecord {

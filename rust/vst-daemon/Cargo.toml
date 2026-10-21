@@ -20,6 +20,7 @@ vst-git = { workspace = true }
 vst-rpc = { workspace = true }
 vst-agents = { workspace = true }
 vst-lifecycle = { workspace = true }
+vst-activity = { workspace = true }
 vst-harness-limits = { workspace = true }
 vst-ws = { workspace = true }
 vst-routes = { workspace = true }

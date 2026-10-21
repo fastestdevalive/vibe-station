@@ -25,7 +25,7 @@ to refactor it in an unrelated PR.
 ### Backend (Rust)
 
 - **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
-  `vst-proc`/`vst-store`/`vst-rpc` ← `vst-git` ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-proc`/`vst-store`/`vst-rpc` ← `vst-git`/`vst-activity` (types, store) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
   `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. No library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
@@ -454,6 +454,7 @@ There are two separate docker setups in this repo. They look similar (both boot 
 
 - **`scripts/dev-sandbox.sh up` with no flags seeds the full demo dataset by default** — worktrees/agents are there out of the box. Pass `--seed=file-search` if you specifically want a fast, empty single-project tree instead.
 - **Switching `--seed` mode on an already-seeded volume does NOT cleanly swap datasets — it merges/corrupts them.** The two seed scripts guard themselves independently and asymmetrically, not via a shared "already seeded in mode X" marker: `demo-seed.sh` checks its own `$VST/.seeded` file; `seed-file-search-demo.sh` checks whether `file-search-demo`'s repo dir exists and whether that project is already registered with the daemon. Neither guard knows about the other, so going `file-search` → `demo` on the same worktree-name runs `demo-seed.sh` in full on a volume the daemon already has state for (it `rm -rf`s its own project dirs and overwrites `modes.json`, but doesn't touch the pre-existing `file-search-demo` data or the daemon's already-booted SQLite state — the result is an inconsistent mix, not a clean demo dataset), and going `demo` → `file-search` just registers a 4th project alongside the demo data rather than being a no-op. Use a fresh worktree-name (or `docker volume rm vst-dev-data-<worktree> vst-dev-projects-<worktree>`) whenever you want to actually change an existing sandbox's seed mode.
+- **macOS hosts: host agent binaries are never mounted.** The container is Linux; a Mac's `claude`/`opencode`/`agy` are Mach-O and fail with `ENOEXEC ... posix_spawn`. `claude` is installed in the image (`dev.Dockerfile`); `opencode`/`agy`/`codex`/`cursor-agent` are bind-mounted only on non-Darwin hosts via `docker-compose.dev.hostbins.yml` (layered by `scripts/dev-sandbox.sh`) and show as "not found" on a Mac. Keychain-held Claude logins aren't readable from the container, so on macOS the long-lived `claude setup-token` token (`~/.config/vibe-station/claude-oauth-token`) is REQUIRED; `dev-sandbox.sh` warns loudly (and still starts, with claude signed out) without it. Don't re-add host-binary mounts to `docker-compose.dev.yml`.
 - **Don't add demo-dataset seeding to `docker-compose.screenshots.yml`'s job description** or vice versa — `screenshots` intentionally has no hot reload and real auth so it matches what `take-screenshots.ts` expects; don't "fix" that to make it more dev-friendly.
 
 ---

@@ -238,3 +238,51 @@ fn enqueue_chat_result_roundtrips() {
 fn limits_snapshot_fixture_roundtrips() {
     assert_roundtrip::<LimitsSnapshot>("limits-snapshot.json");
 }
+
+#[test]
+fn session_activity_event_wire_shape() {
+    let ev = vst_types::ServerEvent::SessionActivity {
+        session_id: "s1".into(),
+        last_activity_at: "2026-10-21T10:00:00.000Z".into(),
+        last_line: None,
+        last_tool: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&ev).unwrap(),
+        serde_json::json!({
+            "type": "session:activity",
+            "sessionId": "s1",
+            "lastActivityAt": "2026-10-21T10:00:00.000Z"
+        })
+    );
+    let msg = ServerMessage::SessionActivity {
+        session_id: "s1".into(),
+        last_activity_at: "2026-10-21T10:00:00.000Z".into(),
+        last_line: None,
+        last_tool: Some(vst_types::activity::ToolActivity {
+            name: "Edit".into(),
+            detail: Some("a.ts".into()),
+        }),
+    };
+    assert!(serde_json::to_value(&msg)
+        .unwrap()
+        .get("lastLine")
+        .is_none());
+    assert_eq!(
+        serde_json::to_value(&msg).unwrap()["lastTool"],
+        serde_json::json!({"name": "Edit", "detail": "a.ts"})
+    );
+}
+
+#[test]
+fn session_without_activity_keys_still_deserializes() {
+    let mut fixture = load_fixture("session.json");
+    let obj = fixture.as_object_mut().unwrap();
+    obj.remove("lastActivityAt");
+    obj.remove("lastLine");
+    obj.remove("lastTool");
+    let s: Session = serde_json::from_value(fixture).unwrap();
+    assert_eq!(s.last_activity_at, None);
+    assert_eq!(s.last_line, None);
+    assert_eq!(s.last_tool, None);
+}

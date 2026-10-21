@@ -12,6 +12,7 @@
 //! See `.vibekit/feature-plans/pending/daemon-rust-port/arch-daemon-rust-port.md`
 //! § vst-types owns the wire, all of it.
 
+pub mod activity;
 pub mod domain;
 pub mod events;
 pub mod limits;

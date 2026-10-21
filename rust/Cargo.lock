@@ -3033,6 +3033,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vst-activity"
+version = "0.0.2-beta"
+dependencies = [
+ "tempfile",
+ "tokio",
+ "tracing",
+ "vst-store",
+ "vst-types",
+]
+
+[[package]]
 name = "vst-agents"
 version = "0.0.2-beta"
 dependencies = [
@@ -3104,6 +3115,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "vst-activity",
  "vst-agents",
  "vst-git",
  "vst-harness-limits",

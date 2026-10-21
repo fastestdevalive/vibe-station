@@ -24,10 +24,15 @@
 # docker-compose.screenshots.yml instead — it bakes source into the image
 # (no hot reload) and keeps auth on, which this file intentionally doesn't.
 #
-# CLI binaries are bind-mounted read-only from the host so that
-# GET /cli-models works inside the container. gemini is installed directly in the image;
+# `claude` and gemini are installed directly in the image (dev.Dockerfile);
 # ~/.gemini is bind-mounted so OAuth credentials are available inside the container.
-# Override paths with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN if yours differ.
+# opencode/agy/codex/cursor-agent are bind-mounted from the host by
+# docker-compose.dev.hostbins.yml, layered on by scripts/dev-sandbox.sh on LINUX
+# hosts only (macOS host binaries are Mach-O and can't run in the Linux container;
+# on a Mac those harnesses show "not found"). Override paths with OPENCODE_BIN,
+# CURSOR_AGENT_VERSIONS, AGY_BIN, CODEX_PLATFORM_DIR if yours differ.
+# macOS: claude auth REQUIRES the long-lived token (`claude setup-token`) — the
+# Keychain-held login is not readable from the container.
 #
 # Real credentials for claude/cursor/opencode/agy are piped in too (read-only
 # "seed" mounts under /seed/*, copied by scripts/dev-entrypoint.sh into a
@@ -101,38 +106,19 @@ services:
       # AGY_ACP_BIN if yours differs.
       AGY_ACP_BIN: "/usr/local/bin/agy-acp"
     volumes:
-      # Mount CLI binaries read-only so the daemon can shell out to them.
-      # Paths use $HOME — override with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN, CODEX_PLATFORM_DIR, PI_BUNDLE_DIR if yours differ.
-      - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
-      - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
-      - ${AGY_BIN:-${HOME}/.local/bin/agy}:/usr/local/bin/agy:ro
-      # codex — the real binary is the static-pie ELF inside the platform npm
-      # package (@openai/codex-linux-x64), NOT the Node.js launcher script.
-      # It needs siblings (codex-resources/ for bwrap/voice/zsh assets), so
-      # mount the whole x86_64-unknown-linux-musl/ vendor dir at /opt/codex-platform
-      # and let scripts/dev-entrypoint.sh symlink bin/codex into /usr/local/bin.
-      - ${CODEX_PLATFORM_DIR:-/var/empty}:/opt/codex-platform:ro
+      # Agent CLI binaries: `claude` is installed INSIDE the image (dev.Dockerfile),
+      # so it never depends on the host. The other host-installed harness binaries
+      # (opencode, agy, codex, cursor-agent) are bind-mounted by the OPTIONAL
+      # docker-compose.dev.hostbins.yml, which scripts/dev-sandbox.sh layers on
+      # only for Linux hosts — a macOS host's binaries are Mach-O and would fail
+      # with ENOEXEC inside the Linux container. Without that file those harnesses
+      # simply show as "not found" in the doctor. pi is a pure-JS bundle (runs on
+      # the image's node), so it is mounted on every host.
       # pi — requires sibling files from its dist/bundle/ directory (cli-runtime.js,
       # chunks/, etc.) so a single-file mount silently breaks it. Same pattern as
       # cursor-agent: mount the whole bundle dir, symlink cli.js → /usr/local/bin/pi
       # from inside the container where siblings are reachable.
       - ${PI_BUNDLE_DIR:-/var/empty}:/opt/pi-bundle:ro
-      # cursor-agent is NOT a single-file mount like the others — its own
-      # launcher script does `realpath "$0"` and expects a bundled `node`
-      # binary + numbered chunk `.js` files to sit in the SAME directory as
-      # itself. Docker resolves a host symlink to its target's CONTENTS at
-      # single-file-mount time (verified: `docker run -v host-symlink:...`
-      # produces a plain regular file in the container, not a working
-      # symlink pointing anywhere), so a single-file mount of just the
-      # launcher silently loses those sibling files — the container-side
-      # symptom is `Error: Cannot find module '.../index.js'`. Mount the
-      # WHOLE `versions/` directory (every installed version, not just the
-      # current one — cheap for a read-only bind mount, and avoids needing
-      # this compose file to know which version is "current") and let
-      # scripts/dev-entrypoint.sh symlink the newest one into
-      # /usr/local/bin/cursor-agent from inside the container, where the
-      # sibling files are actually reachable.
-      - ${CURSOR_AGENT_VERSIONS:-${HOME}/.local/share/cursor-agent/versions}:/opt/cursor-agent-versions:ro
       # Gemini/agy creds: mount host ~/.gemini READ-ONLY as a seed. The container
       # entrypoint (see `command:` below) copies it into a WRITABLE /home/vst/.gemini
       # on startup — agy (antigravity-cli) writes logs/cache/conversations under

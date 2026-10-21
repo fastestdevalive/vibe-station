@@ -483,6 +483,9 @@ impl WorktreeRoutes {
     }
 
     async fn release_worktree_session(&self, session: &SessionRecord, clear_attachments: bool) {
+        if let Some(sink) = self.json_registry.activity_sink() {
+            sink.forget(&session.id);
+        }
         let direct_pty = self.build_direct_pty_registry();
         let on_clear_idle: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
         let on_clear_attachments: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
@@ -728,6 +731,9 @@ impl WorktreeRoutes {
                         parent_session_id: source_agent_id.clone(),
                         superseded_by: None,
                         pr: None,
+                        last_activity_at: None,
+                        last_line: None,
+                        last_tool: None,
                     };
                     vec![main_session]
                 }),

@@ -66,6 +66,7 @@ impl JsonAgentSession {
         self.persist_event(ev);
         self.0.stream.emit_message(ev);
         self.update_turn_state(ev.kind);
+        self.note_activity(ev);
         self.emit_meta();
     }
 

@@ -350,6 +350,69 @@ impl StoreHandle {
         .map_err(|e| StoreError::Mutation(e.to_string()))?
     }
 
+    /// Fast-path activity write (`lastActivityAt` / `lastTool*`). Only
+    /// `vst-activity`'s tracker calls this. `last_tool = None` keeps the stored
+    /// tool. `lastLine` is a reserved column: never written here. Updates the
+    /// cached `SessionRecord` in place (no project reload). Returns false if the
+    /// session isn't in the DB.
+    pub async fn update_session_activity(
+        &self,
+        project_id: &str,
+        session_id: &str,
+        at: &str,
+        last_tool: Option<&vst_types::activity::ToolActivity>,
+    ) -> StoreResult<bool> {
+        let _lock = self.project_lock(project_id).await;
+        self.ensure_loaded().await;
+        let inner = self.0.clone();
+        let project_id = project_id.to_string();
+        let session_id = session_id.to_string();
+        let at = at.to_string();
+        let tool = last_tool.cloned();
+        let tool_name = tool.as_ref().map(|t| t.name.clone());
+        let tool_detail = tool.as_ref().and_then(|t| t.detail.clone());
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let changes = conn.execute(
+                "UPDATE sessions SET lastActivityAt = ?1, \
+                 lastToolName = COALESCE(?2, lastToolName), \
+                 lastToolDetail = CASE WHEN ?2 IS NULL THEN lastToolDetail ELSE ?3 END \
+                 WHERE id = ?4",
+                params![at, tool_name, tool_detail, session_id],
+            )?;
+            if changes == 0 {
+                return Ok(false);
+            }
+            let patched = {
+                let mut cache = inner.cache.write().unwrap();
+                cache
+                    .get_mut(&project_id)
+                    .and_then(|p| {
+                        p.direct_sessions
+                            .iter_mut()
+                            .chain(p.worktrees.iter_mut().flat_map(|w| w.sessions.iter_mut()))
+                            .find(|s| s.id == session_id)
+                    })
+                    .map(|s| {
+                        s.last_activity_at = Some(at.clone());
+                        if let Some(t) = tool.clone() {
+                            s.last_tool = Some(t);
+                        }
+                    })
+                    .is_some()
+            };
+            if !patched {
+                // Cache doesn't hold the session (cold/stale): fall back to a reload.
+                if let Some(p) = refresh_project(&conn, &project_id) {
+                    inner.cache.write().unwrap().insert(project_id.clone(), p);
+                }
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
     // ── Scheduled messages ─────────────────────────────────────────────────────
     //
     // Lifecycle: `pending` (claimedAt NULL) → claimed (`pending`, claimedAt set —
@@ -872,7 +935,7 @@ fn scheduled_from_row(
     })
 }
 
-const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon";
+const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail";
 
 fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -912,6 +975,10 @@ fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
         pr_error: r.get(33)?,
         pr_error_kind: r.get(34)?,
         mode_icon: r.get(35)?,
+        last_activity_at: r.get(36)?,
+        last_line: r.get(37)?,
+        last_tool_name: r.get(38)?,
+        last_tool_detail: r.get(39)?,
     })
 }
 
@@ -1086,6 +1153,10 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
             ],
         )?;
 
+        // Activity fields have a single writer (`update_session_activity`).
+        // A save from a cached clone must never rewind them, so remember the
+        // stored pair and re-insert the later of stored vs record.
+        let stored_activity = read_stored_activity(&txn, &record.id)?;
         txn.execute("DELETE FROM sessions WHERE projectId = ?1", [&record.id])?;
         txn.execute("DELETE FROM worktrees WHERE projectId = ?1", [&record.id])?;
 
@@ -1102,15 +1173,44 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
                 ],
             )?;
             for s in &w.sessions {
-                insert_session(&txn, s, &record.id, Some(&w.id))?;
+                insert_session(&txn, s, &record.id, Some(&w.id), &stored_activity)?;
             }
         }
         for s in &record.direct_sessions {
-            insert_session(&txn, s, &record.id, None)?;
+            insert_session(&txn, s, &record.id, None, &stored_activity)?;
         }
     }
     txn.commit()?;
     Ok(())
+}
+
+/// `sessionId -> (lastActivityAt, lastLine, lastToolName, lastToolDetail)` as
+/// currently stored for a project.
+type StoredActivity = HashMap<
+    String,
+    (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+>;
+
+fn read_stored_activity(conn: &Connection, project_id: &str) -> StoreResult<StoredActivity> {
+    let mut stmt =
+        conn.prepare("SELECT id, lastActivityAt, lastLine, lastToolName, lastToolDetail FROM sessions WHERE projectId = ?1")?;
+    let rows = stmt.query_map([project_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+        ))
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, pair) = row?;
+        map.insert(id, pair);
+    }
+    Ok(map)
 }
 
 fn insert_session(
@@ -1118,11 +1218,21 @@ fn insert_session(
     s: &SessionRecord,
     project_id: &str,
     worktree_id: Option<&str>,
+    stored_activity: &StoredActivity,
 ) -> StoreResult<()> {
-    let row = session_to_row(s, project_id, worktree_id);
+    let mut row = session_to_row(s, project_id, worktree_id);
+    if let Some((stored_at, stored_line, stored_tool, stored_detail)) = stored_activity.get(&s.id) {
+        // ISO-8601 strings compare lexicographically.
+        if stored_at.is_some() && stored_at.as_deref() > row.last_activity_at.as_deref() {
+            row.last_activity_at = stored_at.clone();
+            row.last_line = stored_line.clone();
+            row.last_tool_name = stored_tool.clone();
+            row.last_tool_detail = stored_detail.clone();
+        }
+    }
     conn.execute(
-        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig, modeIcon)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
+        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)",
         params![
             row.id, row.worktree_id, row.project_id, row.is_main, row.sort_order, row.r#type, row.mode_id,
             row.name, row.name_source, row.tmux_name, row.use_tmux, row.channel, row.state, row.reason,
@@ -1130,7 +1240,8 @@ fn insert_session(
             row.acp_session_id, row.model_override, row.pinned_at, row.initial_prompt, row.archived_at,
             row.handoff_summary, row.spawned_from, row.superseded_by, row.pr_state, row.pr_number,
             row.pr_url, row.pr_checked_at, row.pr_branch, row.pr_error, row.pr_error_kind,
-            row.draft_prompt, row.draft_config, row.mode_icon
+            row.draft_prompt, row.draft_config, row.mode_icon, row.last_activity_at, row.last_line,
+            row.last_tool_name, row.last_tool_detail
         ],
     )?;
     Ok(())

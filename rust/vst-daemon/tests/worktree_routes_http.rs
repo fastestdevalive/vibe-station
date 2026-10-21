@@ -123,3 +123,107 @@ async fn create_worktree_on_non_git_project_returns_422_not_git() {
     let val: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(val, serde_json::json!({ "error": "NOT_GIT" }));
 }
+
+/// An orphan worktree (listed in the store, folder deleted outside
+/// vibe-station) with a still-"working" session must delete cleanly through the
+/// plain `DELETE /api/worktrees/:id` the doctor's Forget button calls: no
+/// done-check, no failure on the missing directory.
+#[tokio::test]
+async fn delete_orphan_worktree_with_running_session_succeeds() {
+    use vst_types::{LifecycleState, SessionLifecycle, SessionRecord, SessionType, WorktreeRecord};
+
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("test.db")).unwrap();
+
+    let repo_dir = tempdir().unwrap();
+    let session = SessionRecord {
+        id: "orph-s1".into(),
+        worktree_id: Some("orph-1".into()),
+        project_id: "proj-orph".into(),
+        is_main: true,
+        sort_order: 0.0,
+        r#type: SessionType::Agent,
+        mode_id: None,
+        mode_icon: None,
+        name: None,
+        name_source: None,
+        tmux_name: "orph-s1-pane".into(),
+        use_tmux: true,
+        channel: None,
+        lifecycle: SessionLifecycle {
+            state: LifecycleState::Working,
+            reason: None,
+            last_transition_at: "2026-01-01T00:00:00.000Z".into(),
+        },
+        transcript_ref: None,
+        agent_chat_id: None,
+        acp_session_id: None,
+        model_override: None,
+        pinned_at: None,
+        initial_prompt: None,
+        archived_at: None,
+        handoff_summary: None,
+        draft_prompt: None,
+        draft_config: None,
+        parent_session_id: None,
+        superseded_by: None,
+        pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
+    };
+    store
+        .add_project(ProjectRecord {
+            id: "proj-orph".into(),
+            absolute_path: repo_dir.path().to_string_lossy().to_string(),
+            prefix: "vs".into(),
+            is_git: true,
+            default_branch: Some("main".into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            hidden: None,
+            direct_sessions: vec![],
+            direct_session_seq: Some(1),
+            worktrees: vec![WorktreeRecord {
+                id: "orph-1".into(),
+                name: None,
+                branch: "feat".into(),
+                branch_is_placeholder: None,
+                base_branch: "main".into(),
+                base_sha: "a".repeat(40),
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                pinned_at: None,
+                hidden_at: None,
+                sort_order: 0.0,
+                terminal_seq: Some(0),
+                agent_seq: Some(1),
+                lsp_enabled: None,
+                sessions: vec![session],
+                open_files: vec![],
+            }],
+            next_worktree_num: Some(2),
+            lsp_enabled: None,
+            open_files: vec![],
+        })
+        .await
+        .unwrap();
+
+    let router = build_app(make_opts(tmp.path(), store.clone()));
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/worktrees/orph-1")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let project = store.get_project("proj-orph").await.unwrap();
+    assert!(
+        project.worktrees.iter().all(|w| w.id != "orph-1"),
+        "worktree must be gone from the store"
+    );
+}

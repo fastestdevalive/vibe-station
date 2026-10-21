@@ -167,3 +167,64 @@ async fn test_post_api_oobe_step2_advances_to_step_3() {
     let state: OobeStateResponse = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(state.current_step, 3);
 }
+
+#[tokio::test]
+async fn test_post_kill_orphan_session_rejects_names_that_are_not_orphans() {
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("test.db")).unwrap();
+    let router = build_app(make_opts(tmp.path(), store));
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/doctor/orphan-sessions/vr-not-real/kill")
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body, serde_json::json!({ "error": "NOT_ORPHAN" }));
+}
+
+#[tokio::test]
+async fn test_get_api_doctor_every_check_carries_an_items_array() {
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("test.db")).unwrap();
+    let router = build_app(make_opts(tmp.path(), store));
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/doctor")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    for check in body["checks"].as_array().unwrap() {
+        assert!(
+            check["items"].is_array(),
+            "{} has no items array",
+            check["name"]
+        );
+        assert!(
+            check.get("hint").is_some(),
+            "{} has no hint key",
+            check["name"]
+        );
+    }
+}

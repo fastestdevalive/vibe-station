@@ -267,6 +267,9 @@ fn session(id: &str, worktree: &str, is_main: bool, state: LifecycleState) -> Se
         pr: None,
         draft_prompt: None,
         draft_config: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     })
 }
 

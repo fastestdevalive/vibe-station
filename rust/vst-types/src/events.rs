@@ -52,6 +52,18 @@ pub enum ServerEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// A session's last-activity timestamp / last tool changed (throttled by
+    /// `vst-activity`; broadcast only on real change).
+    #[serde(rename = "session:activity", rename_all = "camelCase")]
+    SessionActivity {
+        session_id: String,
+        last_activity_at: String,
+        /// Reserved, no longer written (never emitted).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_line: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_tool: Option<crate::activity::ToolActivity>,
+    },
     /// A session's metadata changed (non-lifecycle).
     #[serde(rename = "session:updated", rename_all = "camelCase")]
     SessionUpdated {

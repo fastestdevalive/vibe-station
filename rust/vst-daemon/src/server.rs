@@ -868,6 +868,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/oobe/complete", post(handle_oobe_complete))
         // Doctor
         .route("/doctor", get(handle_doctor))
+        .route(
+            "/doctor/orphan-sessions/:name/kill",
+            post(handle_doctor_kill_orphan_session),
+        )
         // Settings
         .route(
             "/settings",
@@ -4011,6 +4015,20 @@ async fn handle_oobe_step2(State(state): State<AppState>) -> Json<ConfirmStep2Re
 
 async fn handle_doctor(State(state): State<AppState>) -> Json<DoctorReport> {
     Json(crate::doctor::build_report(&state.store, &state.tmux, &state.paths).await)
+}
+
+/// Thin wrapper: all validation lives in `doctor::kill_orphan_session`.
+async fn handle_doctor_kill_orphan_session(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match crate::doctor::kill_orphan_session(&state.store, &state.tmux, &name).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        Err(crate::doctor::KillOrphanError::NotOrphan) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "NOT_ORPHAN" })),
+        ),
+    }
 }
 
 async fn handle_oobe_detect_and_bundle(

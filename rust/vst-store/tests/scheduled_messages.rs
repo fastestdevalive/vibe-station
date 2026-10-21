@@ -36,6 +36,9 @@ fn session(id: &str, project_id: &str, worktree_id: Option<&str>) -> SessionReco
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     }
 }
 
