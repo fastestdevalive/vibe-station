@@ -6,7 +6,7 @@
 //!   - `GET /supported-clis` (returns all 6 CLIs with defaults, capabilities, native history support)
 //!   - `GET /cli-models?cli=` (caches results with TTL, deduplicates concurrent requests)
 //!   - `GET /modes` (lists all modes from file/cache)
-//!   - `POST /modes` (validation: name 1-64, context 1-10000, model <= 100, conflict 409, max 20 400, broadcasts `ModeCreated`)
+//!   - `POST /modes` (validation: name 1-64, context <= 10000 (empty allowed), model <= 100, conflict 409, max 20 400, broadcasts `ModeCreated`)
 //!   - `PUT /modes/:id` (patch semantics: update name, context, model, cli change clears model unless supplied, conflict 409, 404, broadcasts `ModeUpdated`)
 //!   - `DELETE /modes/:id` (404, computes affected_sessions across worktree and direct sessions, broadcasts `ModeDeleted`)
 //! - Open:
@@ -813,8 +813,9 @@ async fn test_modes_validation_and_limits() {
         "Long name should fail validation"
     );
 
-    // Empty context
-    let err_empty_context = routes
+    // Empty context is allowed (optional extra context) — creates a real mode
+    // named "valid" that counts toward MAX_MODES below.
+    let ok_empty_context = routes
         .create_mode(CreateModeBody {
             name: "valid".to_string(),
             cli: CliId::Claude,
@@ -825,8 +826,8 @@ async fn test_modes_validation_and_limits() {
         })
         .await;
     assert!(
-        matches!(err_empty_context, Err(ModeRouteError::Validation(_))),
-        "Empty context should fail validation"
+        ok_empty_context.is_ok(),
+        "Empty context should be allowed (optional)"
     );
 
     // Context > MAX_CONTEXT_LEN
@@ -861,8 +862,9 @@ async fn test_modes_validation_and_limits() {
         "Overlong model should fail validation"
     );
 
-    // Fill up to MAX_MODES (20)
-    for i in 1..=MAX_MODES {
+    // Fill up to MAX_MODES (20) — the empty-context "valid" mode above already
+    // occupies one slot, so fill the remaining MAX_MODES - 1.
+    for i in 1..MAX_MODES {
         routes
             .create_mode(CreateModeBody {
                 name: format!("Mode {i}"),
@@ -890,6 +892,64 @@ async fn test_modes_validation_and_limits() {
     assert!(
         matches!(err_max, Err(ModeRouteError::Validation(ref msg)) if msg.contains("Maximum 20 modes allowed")),
         "Expected Maximum 20 modes error"
+    );
+}
+
+#[tokio::test]
+async fn test_mode_update_can_clear_context() {
+    // Regression: editing a mode to an empty (or whitespace-only) context used
+    // to be rejected as "between 1 and 10000" — empty context is optional and
+    // must be accepted, for both create and update.
+    let dir = tempdir().unwrap();
+    let modes_file = dir.path().join("modes.json");
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let routes = ModeRoutes::new(store, broadcaster).with_modes_file(modes_file);
+
+    let created = routes
+        .create_mode(CreateModeBody {
+            name: "emptyable".to_string(),
+            cli: CliId::Claude,
+            context: "Some context".to_string(),
+            preset_id: None,
+            model: None,
+            icon: None,
+        })
+        .await
+        .expect("create should succeed");
+
+    // Clearing context to empty must succeed.
+    let cleared = routes
+        .update_mode(
+            &created.id,
+            UpdateModeBody {
+                name: None,
+                context: Some("   ".to_string()),
+                cli: None,
+                model: None,
+                icon: None,
+            },
+        )
+        .await
+        .expect("clearing context to empty should succeed");
+    assert_eq!(cleared.context, "");
+
+    // Overlong context must still be rejected on update.
+    let err = routes
+        .update_mode(
+            &created.id,
+            UpdateModeBody {
+                name: None,
+                context: Some("c".repeat(MAX_CONTEXT_LEN + 1)),
+                cli: None,
+                model: None,
+                icon: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(err, Err(ModeRouteError::Validation(_))),
+        "Overlong context on update should fail validation"
     );
 }
 
