@@ -403,10 +403,10 @@ describe("WorkspaceCanvas - tile status/PR class emission (D21 dedup)", () => {
 
   const worktree = { id: W1, projectId: "proj-a", branch: "feature-x", name: "feature-x" } as never;
 
-  function renderOneAgentTile(session: Record<string, unknown>) {
+  function renderOneAgentTile(session: Record<string, unknown>, kind: "agent" | "terminal" = "agent") {
     const canvas: CanvasGeometry = {
       mode: "free",
-      tiles: [{ id: "tile-a", kind: "agent", sessionId: "sess-a" }],
+      tiles: [{ id: "tile-a", kind, sessionId: session.id as string }],
       tree: null,
       freeRects: { "tile-a": { x: 0, y: 0, w: 100, h: 100 } },
     };
@@ -419,8 +419,8 @@ describe("WorkspaceCanvas - tile status/PR class emission (D21 dedup)", () => {
         <PaneOutletProvider>
           <WorkspaceCanvas
             worktreeId={W1}
-            agentSessions={[session as never]}
-            terminalSessions={[]}
+            agentSessions={kind === "agent" ? [session as never] : []}
+            terminalSessions={kind === "terminal" ? [session as never] : []}
             hasTools={false}
             toolPanelVisible
             terminalDockVisible
@@ -476,6 +476,26 @@ describe("WorkspaceCanvas - tile status/PR class emission (D21 dedup)", () => {
     expect(tile.className).not.toContain("pr-merged");
     expect(tile.className).not.toContain("pr-open");
     expect(tile.className.match(/workspace-canvas__tile--exited/g)).toHaveLength(1);
+  });
+
+  it("a live terminal session gets no status class or dot (terminals have no idle/waiting lifecycle)", () => {
+    const session = {
+      id: "sess-t",
+      worktreeId: W1,
+      projectId: "proj-a",
+      modeId: null,
+      type: "terminal",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-t",
+      createdAt: "",
+      pr: { state: "merged", checkedAt: "", prBranch: "feature-x" },
+    };
+    const { container } = renderOneAgentTile(session, "terminal");
+    const tile = container.querySelector(".workspace-canvas__tile") as HTMLElement;
+    expect(tile.className).not.toMatch(/workspace-canvas__tile--(working|pr-merged|pr-open)/);
+    expect(tile.querySelector(".status-dot")).toBeNull();
   });
 });
 

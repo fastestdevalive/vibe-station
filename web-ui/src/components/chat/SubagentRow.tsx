@@ -297,9 +297,9 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
             }}
             title={
               sameWorktree
-                ? child.type === "terminal"
-                  ? sessionLabel(child)
-                  : `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
+                ? child.type === "agent"
+                  ? `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
+                  : sessionLabel(child)
                 : "This subagent is in a different worktree"
             }
           >

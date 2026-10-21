@@ -5,7 +5,7 @@ use tokio::time::sleep;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
-use vst_types::domain::{Attachment, Channel, LifecycleState};
+use vst_types::domain::{Attachment, Channel, LifecycleState, SessionType};
 use vst_types::rest::attachments::AttachmentsResult;
 use vst_types::rest::sessions::{InputBody, SessionOrDraft, SessionOutput};
 
@@ -201,6 +201,13 @@ pub async fn run_send(
                 daemon_get::<SessionOrDraft>(&format!("/sessions/{encoded_id}")).await?;
             let state = match status_result {
                 DaemonResult::Ok { data, .. } => match data {
+                    // A plain terminal has no idle/waiting state (the lifecycle
+                    // poller does no idle detection on it) and no reply to
+                    // print, so there is nothing to settle on — don't block
+                    // the full timeout waiting for a state that never comes.
+                    SessionOrDraft::Session(s) if s.r#type == SessionType::Terminal => {
+                        return Ok(());
+                    }
                     SessionOrDraft::Session(s) => s.state,
                     SessionOrDraft::GlobalDraft(g) => g.state,
                 },
