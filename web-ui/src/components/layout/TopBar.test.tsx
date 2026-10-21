@@ -228,3 +228,48 @@ describe("TopBar - project workspace", () => {
     expect(screen.getByText("Proj A")).toBeInTheDocument();
   });
 });
+
+describe("TopBar - Tauri drag region (3.T1)", () => {
+  it("the main header is a deep drag region and its inner row carries no attribute of its own", () => {
+    const { container } = renderTopBar();
+    const header = container.querySelector("header.top-bar") as HTMLElement;
+    expect(header.getAttribute("data-tauri-drag-region")).toBe("deep");
+    const row = header.querySelector(".top-bar__row") as HTMLElement;
+    expect(row.hasAttribute("data-tauri-drag-region")).toBe(false);
+  });
+});
+
+describe("TopBar - dashboardTitle (R2F-04)", () => {
+  function renderDash(isMobile: boolean, title?: string) {
+    return render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            layoutMode="dashboard"
+            dashboardTitle={title}
+            projects={[]}
+            worktrees={[]}
+            isMobile={isMobile}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  for (const isMobile of [false, true]) {
+    const label = isMobile ? "mobile" : "desktop";
+    it(`${label}: custom title replaces Dashboard`, () => {
+      renderDash(isMobile, "New agent");
+      expect(screen.getAllByText("New agent").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
+    });
+    it(`${label}: defaults to Dashboard`, () => {
+      renderDash(isMobile);
+      expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
+    });
+  }
+});

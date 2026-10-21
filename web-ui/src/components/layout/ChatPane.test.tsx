@@ -185,6 +185,38 @@ describe("ChatPane (4.T2)", () => {
     }
   });
 
+  it("2.T0 — chat prose base is 16px on phones (max-width: 640px) and 14px otherwise", async () => {
+    const api = createMockApi();
+    const original = window.matchMedia;
+    const stub = (matches: boolean) =>
+      (window.matchMedia = ((query: string) => ({
+        matches: query === "(max-width: 640px)" ? matches : false,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+        onchange: null,
+      })) as unknown as typeof window.matchMedia);
+    try {
+      stub(true);
+      const phone = render(<ChatPane api={api} session={jsonSession("js-phone")} visible />);
+      await screen.findByText("Start chatting");
+      const phonePane = phone.container.querySelector(".chat-pane") as HTMLElement;
+      expect(phonePane.style.getPropertyValue("--font-size-base")).toBe("16px");
+      phone.unmount();
+
+      stub(false);
+      const desktop = render(<ChatPane api={api} session={jsonSession("js-desk")} visible />);
+      await screen.findByText("Start chatting");
+      const deskPane = desktop.container.querySelector(".chat-pane") as HTMLElement;
+      expect(deskPane.style.getPropertyValue("--font-size-base")).toBe("14px");
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("pinch/trackpad-zoom on the message viewport bumps the shared terminalFontScale (same control as Aa −/+)", async () => {
     const api = createMockApi();
     try {

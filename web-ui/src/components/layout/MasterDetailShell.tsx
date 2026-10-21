@@ -139,7 +139,7 @@ export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, l
   // `.pane-stack` (flex:1 + height:100%) fills whatever's left beneath it.
   const rightPaneContent = (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
-      {rightPaneTopbar ? <div className="files-topbar">{rightPaneTopbar}</div> : null}
+      {rightPaneTopbar ? <div className="files-topbar" data-tauri-drag-region="deep">{rightPaneTopbar}</div> : null}
       <div style={{ flex: 1, minHeight: 0 }}>{rightPane}</div>
     </div>
   );
@@ -147,7 +147,7 @@ export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, l
   return (
     <div className="files-panel">
       {treeToggle || layoutToggle || topbarExtra ? (
-        <div className={`files-topbar${topbarClassName ? ` ${topbarClassName}` : ""}`}>
+        <div className={`files-topbar${topbarClassName ? ` ${topbarClassName}` : ""}`} data-tauri-drag-region="deep">
           {treeToggle ? (
             <button
               type="button"

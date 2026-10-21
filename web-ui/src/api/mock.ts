@@ -1499,6 +1499,13 @@ export function createMockApi(seed: MockSeed = {}) {
           usingFallbackOnly: false,
           defaultChannel: "json",
           defaultChannelOverridden: false,
+          installHint: {
+            title: null,
+            why: "Optional agent CLI for opencode agents.",
+            commands: [{ os: "any", command: "curl -fsSL https://opencode.ai/install | bash" }],
+            docsUrl: null,
+            action: null,
+          },
         },
         {
           id: "agy",
@@ -1525,6 +1532,13 @@ export function createMockApi(seed: MockSeed = {}) {
           usingFallbackOnly: false,
           defaultChannel: "json",
           defaultChannelOverridden: false,
+          installHint: {
+            title: null,
+            why: "Optional agent CLI. Needs Node 18+.",
+            commands: [{ os: "any", command: "npm install -g @openai/codex" }],
+            docsUrl: null,
+            action: null,
+          },
         },
         {
           id: "pi",
@@ -1537,6 +1551,13 @@ export function createMockApi(seed: MockSeed = {}) {
           usingFallbackOnly: false,
           defaultChannel: "tmux",
           defaultChannelOverridden: false,
+          installHint: {
+            title: null,
+            why: "Optional agent CLI.",
+            commands: [{ os: "any", command: "npm install -g @mariozechner/pi-coding-agent" }],
+            docsUrl: null,
+            action: null,
+          },
         },
       ];
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
@@ -1690,6 +1711,10 @@ export function createMockApi(seed: MockSeed = {}) {
           { name: "plugin-claude", status: "ok", required: false, group: "agent_cli", message: "claude found on PATH", resolvedPath: "/usr/local/bin/claude", installHint: null },
         ],
       };
+    },
+
+    async killOrphanSession(_name: string): Promise<{ ok: true }> {
+      return { ok: true };
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

@@ -46,6 +46,20 @@ describe("bucketForRollup (4.T1, inverted by 5.T3/D19, split by 6.T1/6.6)", () =
 
 /** Mirrors production wiring (useServerSync lives in Workspace) so WS events
  *  emitted via api.__test.emit flow into the central store. */
+/** Name links (`a.acard__name`) of the agent cards under `root` whose card text matches `text`
+ *  (the link's own name is just the agent label; project/branch live in the path row). */
+function cardLinks(root: HTMLElement, text: RegExp): HTMLElement[] {
+  return within(root)
+    .getAllByRole("article")
+    .filter((a) => text.test(a.textContent ?? ""))
+    .map((a) => a.querySelector("a.acard__name") as HTMLElement);
+}
+function cardLink(root: HTMLElement, text: RegExp): HTMLElement {
+  const links = cardLinks(root, text);
+  if (links.length !== 1) throw new Error(`expected exactly one card matching ${text}, got ${links.length}`);
+  return links[0]!;
+}
+
 function Harness({ api, children }: { api: ApiInstance; children: ReactNode }) {
   useServerSync(api);
   return <>{children}</>;
@@ -187,7 +201,7 @@ describe("DashboardPanel", () => {
     const workingSection = screen.getByText("working").closest("section");
     expect(workingSection).not.toBeNull();
     // Only sess-main is working at this point — one card in this section.
-    expect(within(workingSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+    expect(cardLink(workingSection!, /Proj A/i)).toHaveAttribute(
       "href",
       "/worktree/wt-1",
     );
@@ -204,7 +218,7 @@ describe("DashboardPanel", () => {
       // sess-main now joins sess-agent2 (idle since fixture setup) — two
       // separate cards, both linking to /worktree/wt-1 (one per session,
       // 6.1 — no rollup to a single worktree card anymore).
-      const links = within(idleSection!).getAllByRole("link", { name: /Proj A/i });
+      const links = cardLinks(idleSection!, /Proj A/i);
       expect(links.length).toBe(2);
       for (const link of links) expect(link).toHaveAttribute("href", "/worktree/wt-1");
     });
@@ -233,13 +247,13 @@ describe("DashboardPanel", () => {
     await waitFor(() => {
       const workingSection = screen.getByText("working").closest("section");
       expect(workingSection).not.toBeNull();
-      expect(within(workingSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+      expect(cardLink(workingSection!, /Proj A/i)).toHaveAttribute(
         "href",
         "/worktree/wt-1",
       );
       const needsYouSection = screen.getByText("needs you").closest("section");
       expect(needsYouSection).not.toBeNull();
-      expect(within(needsYouSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+      expect(cardLink(needsYouSection!, /Proj A/i)).toHaveAttribute(
         "href",
         "/worktree/wt-1",
       );
@@ -281,7 +295,7 @@ describe("DashboardPanel", () => {
     await waitFor(() => {
       const prSection = screen.getByText("pr created").closest("section");
       expect(prSection).not.toBeNull();
-      const links = within(prSection!).getAllByRole("link", { name: /Proj A/i });
+      const links = cardLinks(prSection!, /Proj A/i);
       // Rolled up to 1 worktree card (Phase 3)
       expect(links).toHaveLength(1);
       for (const link of links) expect(link).toHaveAttribute("href", "/worktree/wt-1");
@@ -341,7 +355,7 @@ describe("DashboardPanel", () => {
     await waitFor(() => {
       const prSection = screen.getByText("pr created").closest("section");
       expect(prSection).not.toBeNull();
-      expect(within(prSection!).getByRole("link", { name: /Proj B/i })).toHaveAttribute(
+      expect(cardLink(prSection!, /Proj B/i)).toHaveAttribute(
         "href",
         "/worktree/wt-3",
       );
@@ -581,14 +595,14 @@ describe("DashboardPanel", () => {
     const workingSection = screen.getByText("working").closest("section");
     expect(workingSection).not.toBeNull();
     await waitFor(() => {
-      const link = within(workingSection!).getByRole("link", { name: /Proj A/i });
-      expect(link.querySelector(".mode-icon")).not.toBeNull();
+      const link = cardLinks(workingSection!, /Proj A/i)[0]!;
+      expect(link.closest("article")?.querySelector(".acard__head .mode-icon")).not.toBeNull();
     });
 
     // The truncated name keeps the full label in title.
-    const card = within(workingSection!).getByRole("link", { name: /Proj A/i });
-    const primary = card.querySelector(".dashboard-card__primary");
-    expect(primary?.getAttribute("title")).toBeTruthy();
+    const card = cardLinks(workingSection!, /Proj A/i)[0]!;
+    expect(card).toHaveClass("acard__name");
+    expect(card.getAttribute("title")).toBeTruthy();
   });
 
   it("3.T2 — useSessionBuckets with default opts matches the inline dashboard loop for existing fixtures", async () => {
@@ -702,7 +716,7 @@ describe("DashboardPanel", () => {
     expect(workingCol).not.toBeNull();
 
     await waitFor(() => {
-      const chips = workingCol.querySelectorAll(".session-chip");
+      const chips = workingCol.querySelectorAll(".acard");
       expect(chips.length).toBe(10);
       expect(within(workingCol).getByRole("button", { name: /more/i })).toBeInTheDocument();
     });
@@ -711,9 +725,138 @@ describe("DashboardPanel", () => {
     await userEvent.click(moreBtn);
 
     await waitFor(() => {
-      const chips = workingCol.querySelectorAll(".session-chip");
+      const chips = workingCol.querySelectorAll(".acard");
       expect(chips.length).toBe(16);
       expect(within(workingCol).queryByRole("button", { name: /more/i })).toBeNull();
+    });
+  });
+
+  it("4.T6 — cards in a section are ordered by last activity (newest first); activity label shows on Rich Chat Working / Needs-you cards only", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const make = (id: string, name: string, state: "working" | "waiting_for_human" | "idle", min: number, label: string, channel: "json" | "tmux" = "json") => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: id,
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        sessionType: "agent",
+        snapshot: {
+          id: id,
+          worktreeId: "wt-1",
+          projectId: "proj-a",
+          modeId: "mode-1",
+          type: "agent",
+          name,
+          isMain: false,
+          state,
+          lifecycleState: state,
+          tmuxName: id,
+          channel,
+          createdAt: ago(600),
+          lastActivityAt: ago(min),
+          lastLine: "raw terminal line",
+          lastTool: { name: "Edit", detail: label },
+        },
+      });
+    };
+    make("act-a", "Act Alpha", "working", 1, "alpha.ts");
+    make("act-b", "Act Beta", "working", 5, "beta.ts");
+    make("act-c", "Act Gamma", "working", 2, "gamma.ts");
+    make("act-n", "Act Needs", "waiting_for_human", 3, "needs.ts");
+    make("act-i", "Act Idle", "idle", 3, "idle.ts");
+    make("act-t", "Act Term", "working", 8, "term.ts", "tmux");
+
+    const order = (sectionLabel: string) => {
+      const section = screen.getByText(sectionLabel).closest("section") as HTMLElement;
+      return Array.from(section.querySelectorAll(".acard__name"))
+        .map((el) => el.textContent ?? "")
+        .filter((t) => t.startsWith("Act "));
+    };
+    await waitFor(() => {
+      expect(order("working")).toEqual(["Act Alpha", "Act Gamma", "Act Beta", "Act Term"]);
+    });
+
+    const workingSection = screen.getByText("working").closest("section") as HTMLElement;
+    const activityOf = (root: HTMLElement, name: string) => {
+      const art = within(root).getAllByRole("article").find((x) => x.querySelector(".acard__name")?.textContent === name);
+      expect(art).toBeDefined();
+      // Relative time lives in the head of every card; the band exists only when it has content.
+      expect(art!.querySelector(".acard__head > .acard__time")).not.toBeNull();
+      return art!.querySelector(".acard__band .acard__act")?.textContent ?? null;
+    };
+    expect(activityOf(workingSection, "Act Alpha")).toBe("Editing alpha.ts");
+    const needsSection = screen.getByText("needs you").closest("section") as HTMLElement;
+    expect(activityOf(needsSection, "Act Needs")).toBe("Editing needs.ts");
+    const idleSection = screen.getByText("idle", { selector: ".dashboard-section__label" }).closest("section") as HTMLElement;
+    // No tool activity (idle / terminal agents): no band at all, and the raw terminal line is never shown.
+    expect(activityOf(idleSection, "Act Idle")).toBeNull();
+    expect(activityOf(workingSection, "Act Term")).toBeNull();
+    expect(screen.queryByText("raw terminal line")).toBeNull();
+  });
+
+  it("session cards show the worktree BRANCH in the path row, not its display name", async () => {
+    const api = createMockApi({
+      worktrees: [
+        {
+          id: "wt-x",
+          projectId: "proj-a",
+          name: "Pretty Name",
+          branch: "feat/real-branch",
+          baseBranch: "main",
+          baseSha: "abc",
+          createdAt: new Date().toISOString(),
+          pinnedAt: null,
+          hiddenAt: null,
+          sortOrder: 1,
+          lspEnabled: false,
+        },
+      ],
+    });
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+    api.__test.emit({
+      type: "session:created",
+      sessionId: "br-1",
+      worktreeId: "wt-x",
+      projectId: "proj-a",
+      sessionType: "agent",
+      snapshot: {
+        id: "br-1",
+        worktreeId: "wt-x",
+        projectId: "proj-a",
+        modeId: "mode-1",
+        type: "agent",
+        name: "Branch Agent",
+        isMain: false,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "br-1",
+        createdAt: new Date().toISOString(),
+      },
+    });
+    await waitFor(() => {
+      const art = screen.getAllByRole("article").find((x) => x.querySelector(".acard__name")?.textContent === "Branch Agent");
+      expect(art?.querySelector(".acard__branch")?.textContent).toBe("feat/real-branch");
     });
   });
 
@@ -856,7 +999,7 @@ describe("DashboardPanel", () => {
     expect(workingSection).not.toBeNull();
 
     await waitFor(() => {
-      const chips = workingSection.querySelectorAll(".session-chip");
+      const chips = workingSection.querySelectorAll(".acard");
       expect(chips.length).toBe(10);
       expect(within(workingSection).getByRole("button", { name: /more/i })).toBeInTheDocument();
     });
@@ -865,7 +1008,7 @@ describe("DashboardPanel", () => {
     await userEvent.click(moreBtn);
 
     await waitFor(() => {
-      const chips = workingSection.querySelectorAll(".session-chip");
+      const chips = workingSection.querySelectorAll(".acard");
       expect(chips.length).toBe(16);
       expect(within(workingSection).queryByRole("button", { name: /more/i })).toBeNull();
     });

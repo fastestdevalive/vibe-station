@@ -1194,7 +1194,7 @@ function DraftComposerInner({
               ) : null}
             </div>
 
-            {error ? <div className="draft-composer__error" role="alert">{error}</div> : null}
+            {error ? <div className="draft-composer__error error-text" role="alert">{error}</div> : null}
 
             <div className="draft-composer__composer">
               {editorReady ? (

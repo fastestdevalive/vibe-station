@@ -398,7 +398,7 @@ describe("WorkspaceCanvas - tile status/PR class emission (D21 dedup)", () => {
   beforeEach(() => {
     localStorage.clear();
     useWorkspaceStore.persist.clearStorage?.();
-    useWorkspaceStore.setState({ layoutByWorktree: {}, workspaceDocs: {} });
+    useWorkspaceStore.setState({ layoutByWorktree: {}, workspaceDocs: {}, showAgentStatusBorders: true });
   });
 
   const worktree = { id: W1, projectId: "proj-a", branch: "feature-x", name: "feature-x" } as never;

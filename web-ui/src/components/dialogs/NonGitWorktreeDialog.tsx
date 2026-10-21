@@ -72,7 +72,7 @@ export function NonGitWorktreeDialog({ open, onConfirm, onCancel }: NonGitWorktr
         created here.
       </p>
       {error ? (
-        <p style={{ marginTop: 12, marginBottom: 0, fontSize: "var(--font-size-sm)", color: "var(--destructive)" }}>
+        <p className="selectable" style={{ marginTop: 12, marginBottom: 0, fontSize: "var(--font-size-sm)", color: "var(--destructive)" }}>
           {error}
         </p>
       ) : null}

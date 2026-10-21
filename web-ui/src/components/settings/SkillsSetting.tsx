@@ -205,7 +205,7 @@ export function SkillsSetting({ api }: SkillsSettingProps) {
         </button>
       </div>
       {error && (
-        <div
+        <div className="selectable"
           style={{
             fontSize: "var(--font-size-xs)",
             color: "var(--destructive)",

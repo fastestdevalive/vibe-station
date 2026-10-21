@@ -1284,4 +1284,23 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(document.querySelector(".draft-composer__summary")).toBeNull();
     expect(document.querySelector(".draft-composer")).not.toHaveClass("draft-composer--short");
   });
+
+  it("phone block gives attach, discard, channel toggle and project trigger 44px targets (R1F-04)", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/components/draft/DraftComposer.css"), "utf8");
+    const start = css.indexOf("@media (max-width: 640px) {");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start, css.indexOf("\n}\n", start));
+    for (const sel of [
+      ".chat-composer__attach",
+      ".draft-composer__discard",
+      ".chat-composer__channel-toggle",
+      ".draft-row__trigger",
+    ]) {
+      const rule = new RegExp(`\\.draft-composer ${sel.replace(".", "\\.")}[^{]*\\{([^}]*)\\}`).exec(block)?.[1] ?? "";
+      expect(rule, sel).toMatch(/min-height:\s*var\(--h-touch\)/);
+    }
+    const send = /\.draft-composer \.chat-composer__send[^{]*\{([^}]*)\}/.exec(block)?.[1] ?? "";
+    expect(send).toMatch(/min-width:\s*var\(--h-touch\)/);
+    expect(send).toMatch(/min-height:\s*var\(--h-touch\)/);
+  });
 });

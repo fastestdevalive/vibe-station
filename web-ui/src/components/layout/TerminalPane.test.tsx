@@ -5,14 +5,20 @@ import { createMockApi } from "@/api/mock";
 import type { Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useThemeStore } from "@/hooks/useThemeStore";
+import { themeById } from "@/theme/registry";
 
 const writeSpy = vi.fn();
+const termCtorOptions: Array<Record<string, unknown>> = [];
 let mockCols = 80;
 let mockRows = 24;
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options: { fontSize: number; theme?: object } = { fontSize: 14 };
+    constructor(opts: Record<string, unknown> = {}) {
+      termCtorOptions.push(opts);
+    }
     buffer = { active: { viewportY: 0, length: 100 } };
     get cols() { return mockCols; }
     get rows() { return mockRows; }
@@ -62,6 +68,42 @@ describe("TerminalPane", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("2.T3 — constructs xterm at 13px, lineHeight 1, letterSpacing 0, Geist Mono first", async () => {
+    termCtorOptions.length = 0;
+    useWorkspaceStore.setState({ terminalFontScale: 1, terminalLineHeight: 1 });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    await waitFor(() => expect(termCtorOptions.length).toBeGreaterThan(0));
+    const opts = termCtorOptions[0]!;
+    expect(opts.fontSize).toBe(13);
+    expect(opts.lineHeight).toBe(1);
+    expect(opts.letterSpacing).toBe(0);
+    expect(String(opts.fontFamily).startsWith('"Geist Mono"')).toBe(true);
+  });
+
+  it("R1F-05 — host background follows the light terminal theme and updates on theme change", async () => {
+    termCtorOptions.length = 0;
+    const light = themeById["vibestation-light"]!.cssVars["--term-background"];
+    const dark = themeById["vibestation-dark"]!.cssVars["--term-background"];
+    useWorkspaceStore.setState({ themeAgentTerminals: true });
+    act(() => useThemeStore.setState({ themeId: "vibestation-light" }));
+    const { container } = render(<TerminalPane api={api} sessionId="sess-main" />);
+    const host = () => container.querySelector(".terminal-host") as HTMLElement;
+    await waitFor(() => expect(termCtorOptions.length).toBeGreaterThan(0));
+    const toRgb = (c: string) => {
+      const el = document.createElement("div");
+      el.style.backgroundColor = c;
+      return el.style.backgroundColor;
+    };
+    expect(host().style.backgroundColor).toBe(toRgb(light!));
+    act(() => useThemeStore.setState({ themeId: "vibestation-dark" }));
+    expect(host().style.backgroundColor).toBe(toRgb(dark!));
+  });
+
+  it("2.T3 — mounts without throwing when document.fonts is unavailable", () => {
+    Object.defineProperty(document, "fonts", { value: undefined, configurable: true });
+    expect(() => render(<TerminalPane api={api} sessionId="sess-main" />)).not.toThrow();
   });
 
   it("shows no 'waiting for input' hint when the session is waiting_for_human", () => {

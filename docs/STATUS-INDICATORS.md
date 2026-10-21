@@ -112,10 +112,11 @@ done.
 | `--status-working` | `#eab308` | `#a16207` |
 | `--status-waiting` | `#ef4444` | `#dc2626` |
 | `--pr-open` | `#22c55e` | `#15803d` |
-| `--pr-merged` | `#8250df` | `#6e40c9` |
+| `--pr-merged` | `#a371f7` | `#6e40c9` |
 | `--pr-draft` | `#8a8a8a` | `#737373` |
-| `--pr-closed` | `#6b6b6b` | `#737373` |
+| `--pr-closed` | `#7f7f7f` | `#737373` |
 
+- Light `--fg-warning` (text colour for warnings, not a status dot) is `#92600a`.
 - Per-theme is mandatory: a single hex fails light-mode contrast (dark-theme `#22c55e` on white ≈
   2.1:1 vs the ≥3:1 bar for non-text UI).
 - Non-colour cues that must survive any recolour: `tile--spawning { border-style: dashed }`,
@@ -127,10 +128,12 @@ done.
 |---|---|---|
 | Sidebar rows | `LeftSidebar.tsx` (4 `<StatusDot>` sites) | worktree rows roll up per worktree; the sidebar's session rows are both direct-session sites, hardcoded to `pr={null}` — a direct session never has a worktree to show a PR for |
 | Dashboard cards | `DashboardPanel.tsx` | one card per non-archived agent session (Phase 6) for the `working`/`needs-you`/`idle`/`finished` buckets — **except** the `pr` bucket, which rolls up to one card per worktree (dashboard-polish, 2026-09) — see below |
+| Dashboard card status carrier | `SessionChip.tsx` (renders the `.acard` agent card, `AgentCard.css`: head = agent icon + stretched name link, path row `project / branch` or project + `direct` pill, time top-right of the head on every card; footer band only when there is an activity label or a PR chip) | **No status glyph on the card.** The card shows the AGENT icon (`ModeIcon`); the status category is carried by the kanban column / list section heading (`bucketForRollup`). The state resolves via `sessionStates[id] ?? session.state` and is exposed only as the icon's `aria-label`/`title` (`status: <resolved class>`). No new colours. Sidebar rows, canvas tile borders and agent pane borders are unchanged and still use `StatusDot`/`--status-*`. The band activity label (last tool call, Rich Chat Working/Needs-you only; terminal agents get no band and no empty slot) is informational: it never affects colour or bucket |
 | Project overview rows | `ProjectHomeTab.tsx` | same per-session-except-`pr`-bucket rule as the Dashboard, reusing `bucketForRollup`/`rollupPrSessionsByWorktree` verbatim (`worktreeOnly: true` — direct sessions get their own list, never bucketed) |
-| Canvas tile border | `WorkspaceCanvas.tsx` | gated on the `showAgentStatusBorders` setting; per-session (`sessionStatus(session.state)` + a per-tile branch-guarded `session.pr`), not rolled up |
+| Canvas tile border | `WorkspaceCanvas.tsx` | gated on the `showAgentStatusBorders` setting (default off; Settings > Appearance); per-session (`sessionStatus(session.state)` + a per-tile branch-guarded `session.pr`), not rolled up |
 | Agent pane border | `AgentPaneSlot.tsx` | single session, so no rollup |
 | VCS panel PR pill | `workspace.css` `.vcs-pr--*` | must use the same `--pr-*` tokens |
+| Card band PR chip (list and kanban, worktree cards only; never on direct agents) | `PrChip.tsx` (icon + `#number`; state in icon, tint and aria-label) via `SessionChip.tsx` | `worktreePrStatus()` (isMain, branch-guarded); all states incl. `draft`/`closed`; informational only — never changes dot colour or bucket; tinted by the same `--pr-*` tokens |
 
 ### Superseded sessions are excluded from rollups
 

@@ -75,9 +75,12 @@ function session(id: string, channel: "tmux" | "pty" | "json"): Session {
 }
 
 describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     terminalMounts = 0;
     terminalUnmounts = 0;
+    // Status borders default to OFF; the border-class tests below opt in.
+    const { useWorkspaceStore } = await import("@/hooks/useStore");
+    useWorkspaceStore.setState({ showAgentStatusBorders: true });
   });
 
   it("keeps TerminalPane mounted when switching a tab between TTY and JSON agents", () => {

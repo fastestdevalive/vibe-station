@@ -895,6 +895,7 @@ export function Workspace() {
               projects={projects}
               worktrees={worktrees}
               viewedWorkspaceName={viewedWorkspace?.name}
+              dashboardTitle={isDraft ? "New agent" : undefined}
               isMobile={isMobile}
               onToggleLeftSidebar={() => {
                 if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
@@ -916,6 +917,7 @@ export function Workspace() {
               projects={projects}
               worktrees={worktrees}
               viewedWorkspaceName={viewedWorkspace?.name}
+              dashboardTitle={isDraft ? "New agent" : undefined}
               isMobile={isMobile}
               onToggleLeftSidebar={() => {
                 if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
@@ -946,6 +948,7 @@ export function Workspace() {
                   projects={projects}
                   worktrees={worktrees}
                   viewedWorkspaceName={viewedWorkspace?.name}
+                  dashboardTitle={isDraft ? "New agent" : undefined}
                   isMobile={isMobile}
                   onToggleLeftSidebar={() => {
                     if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);

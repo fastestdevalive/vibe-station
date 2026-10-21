@@ -144,6 +144,50 @@ describe("useServerSync — session:updated reconciliation", () => {
 
 // --- Phase 4c: auto-insert a tile for a session:created carrying parentSessionId
 // (agent-interaction-workspaces/04-workspaces) ---
+describe("useServerSync — session:activity", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+  });
+
+  it("1.T7 — patches lastActivityAt/lastLine; a null line keeps the previous one", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:activity",
+        sessionId: "sess-main",
+        lastActivityAt: "2026-10-21T10:00:00.000Z",
+        lastLine: "Done editing auth.ts",
+        lastTool: { name: "Edit", detail: "auth.ts" },
+      });
+    });
+    await waitFor(() => {
+      const s = useServerStore.getState().sessions.find((x) => x.id === "sess-main");
+      expect(s?.lastActivityAt).toBe("2026-10-21T10:00:00.000Z");
+      expect(s?.lastLine).toBe("Done editing auth.ts");
+      expect(s?.lastTool).toEqual({ name: "Edit", detail: "auth.ts" });
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "session:activity",
+        sessionId: "sess-main",
+        lastActivityAt: "2026-10-21T10:00:05.000Z",
+        lastLine: null,
+      });
+    });
+    await waitFor(() => {
+      const s = useServerStore.getState().sessions.find((x) => x.id === "sess-main");
+      expect(s?.lastActivityAt).toBe("2026-10-21T10:00:05.000Z");
+      expect(s?.lastLine).toBe("Done editing auth.ts");
+      // No lastTool on the event = unchanged.
+      expect(s?.lastTool).toEqual({ name: "Edit", detail: "auth.ts" });
+    });
+  });
+});
+
 describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   const DOC_ID = "doc-1";
   const SOURCE_ID = "sess-source";

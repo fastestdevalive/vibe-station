@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import { useDoctorStatus } from "@/hooks/useDoctorStatus";
 import { DoctorCheckList } from "@/components/doctor/DoctorCheckList";
+import { doctorSummary } from "@/components/doctor/doctorSummary";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SectionHeader } from "./SectionHeader";
 
 interface DoctorSettingProps {
@@ -20,35 +22,36 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
     return () => clearInterval(id);
   }, [lastCheckedAt]);
 
-  // Gate the summary on report.ok (server-computed) so it stays in sync with
-  // the sidebar badge and OOBE Continue button — both use the same field.
-  // The count mirrors the daemon's compute_hard_ok/compute_ok: a required check fails
-  // unless ok/timeout, and the agent-CLI rule is one issue when no CLI is ok
-  // (missing CLIs are "warn", never "error", so they must not be counted raw).
-  const issueCount = report
-    ? report.checks.filter(
-        (c) => c.group === "required" && c.status !== "ok" && c.status !== "timeout",
-      ).length +
-      (report.checks.some((c) => c.group === "agent_cli" && c.status === "ok") ? 0 : 1) +
-      report.checks.filter((c) => c.group === "feature" && c.status === "error").length
-    : 0;
+  // The summary comes from doctorSummary (same wording as onboarding step 3) so it
+  // always agrees with the list below; report.ok still drives the sidebar badge.
+  // "Needs attention" = every non-OK check (warnings included), shown first.
+  const attentionCount = report ? report.checks.filter((c) => c.status !== "ok").length : 0;
+  const [pickedFilter, setPickedFilter] = useState<"all" | "attention" | null>(null);
+  const filter = pickedFilter ?? (attentionCount > 0 ? "attention" : "all");
+
+  const summary = report ? doctorSummary(report.checks) : null;
 
   return (
     <div>
       <SectionHeader title="Doctor" />
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", gap: "var(--space-3)", marginBottom: "var(--space-1)" }}>
-        {report ? (
+        {summary ? (
           <span
+            data-testid="doctor-summary"
             style={{
               fontSize: "var(--font-size-sm)",
               fontWeight: 500,
-              color: report.ok ? "var(--fg-success)" : "var(--fg-danger)",
+              color:
+                summary.tone === "ok"
+                  ? "var(--fg-success)"
+                  : summary.tone === "fail"
+                    ? "var(--fg-danger)"
+                    : "var(--fg-primary)",
             }}
           >
-            {report.ok
-              ? "✓ All checks passing"
-              : `✗ ${issueCount > 0 ? `${issueCount} check${issueCount !== 1 ? "s" : ""} need attention` : "Some checks need attention"}`}
+            {summary.tone === "ok" ? "✓ " : summary.tone === "fail" ? "✗ " : ""}
+            {summary.text}
           </span>
         ) : (
           <span style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
@@ -69,6 +72,21 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
         <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", marginBottom: "var(--space-3)" }}>
           Checked on {report.hostname} ({report.hostOs})
           {lastCheckedAt !== null && secondsAgo !== null && ` · Last checked ${secondsAgo}s ago`}
+          {summary && summary.counts.missing + summary.counts.warnings > 0 &&
+            ` · ${summary.counts.missing} missing · ${summary.counts.warnings} warning${summary.counts.warnings === 1 ? "" : "s"}`}
+        </div>
+      )}
+
+      {report && (
+        <div style={{ marginBottom: "var(--space-2)" }}>
+          <SegmentedControl
+            options={[
+              { value: "all", label: `All ${report.checks.length}` },
+              { value: "attention", label: `Needs attention ${attentionCount}` },
+            ]}
+            value={filter}
+            onChange={(v) => setPickedFilter(v === "attention" ? "attention" : "all")}
+          />
         </div>
       )}
 
@@ -79,10 +97,13 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
       ) : report ? (
         <>
           <DoctorCheckList
+            api={api}
             checks={report.checks}
             hostname={report.hostname}
             hostOs={report.hostOs}
             groupBy
+            filter={filter}
+            onChanged={recheck}
           />
         </>
       ) : (

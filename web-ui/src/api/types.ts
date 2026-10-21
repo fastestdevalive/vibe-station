@@ -204,6 +204,21 @@ export interface Session {
   /** Draft config while the session is `"drafting"` (see `DraftConfig`).
    *  Cleared (null) once the draft is started. */
   draftConfig?: DraftConfig | null;
+  /** ISO time of the session's last visible activity (daemon-pushed via
+   *  `session:activity`, throttled to one push per 5 s). null/absent = never
+   *  seen since upgrade — fall back to `createdAt`. */
+  lastActivityAt?: string | null;
+  /** Last meaningful output line (single line, <= 200 chars). */
+  lastLine?: string | null;
+  /** Tool call the Rich Chat agent most recently made (kept until the next
+   *  one). Absent for terminal agents. `name` is a canonical (Claude) tool
+   *  name; `detail` is a basename / first command word / MCP server. */
+  lastTool?: ToolActivity | null;
+}
+
+export interface ToolActivity {
+  name: string;
+  detail?: string | null;
 }
 
 /**
@@ -548,6 +563,8 @@ export interface SupportedCli {
    * distinctly from an explicit override (round-2 m3).
    */
   defaultChannelOverridden: boolean;
+  /** Install guidance from the daemon's hint table; present only when `detected` is false. */
+  installHint?: DoctorHintDto | null;
 }
 
 /** Response from GET /api/oobe/state. */
@@ -571,7 +588,40 @@ export interface DoctorCheckDto {
   group: DoctorCheckGroup;
   message: string;
   resolvedPath: string | null;
+  /** Host-OS command (back-compat); `hint` is the structured form. */
   installHint: string | null;
+  /** Structured corrective hint from the daemon's hint table. Absent/null on
+   *  OK checks, checks with no hint, and pre-upgrade daemons. */
+  hint?: DoctorHintDto | null;
+  /** Per-item rows for list-style checks (orphan worktrees / sessions). */
+  items?: DoctorItemDto[];
+}
+
+export type HintOs = "macos" | "linux" | "windows" | "any";
+export type DoctorAction = "forget" | "kill" | "retry";
+
+export interface HintCommandDto {
+  os: HintOs;
+  command: string;
+}
+
+/** Mirror of `vst-types` `DoctorHintDto` — why + per-OS commands + docs + action. */
+export interface DoctorHintDto {
+  title: string | null;
+  why: string;
+  commands: HintCommandDto[];
+  docsUrl: string | null;
+  action: DoctorAction | null;
+}
+
+/** One row of a list-style doctor check (e.g. a single orphan worktree). */
+export interface DoctorItemDto {
+  id: string;
+  label: string;
+  path: string | null;
+  /** Copyable CLI equivalent of `action`. */
+  command: string;
+  action: DoctorAction;
 }
 
 /** Response from GET /api/doctor. */
@@ -603,6 +653,8 @@ export interface DetectAndBundleResult {
   created: Mode[];
   /** Per-CLI live model-list failures (keyed by CLI id); no starter modes were created for them. */
   modelsErrors?: Record<string, string>;
+  /** Fix-it hints for recognised `modelsErrors` (e.g. ENOEXEC); omitted when none. */
+  modelsErrorHints?: Record<string, DoctorHintDto>;
 }
 
 export interface Mode {
@@ -715,6 +767,15 @@ export type WSEvent =
       sessionId: string;
       state: SessionState;
       reason?: string;
+    }
+  | {
+      type: "session:activity";
+      sessionId: string;
+      lastActivityAt: string;
+      /** Reserved: the daemon no longer emits it; clients keep whatever they have. */
+      lastLine?: string | null;
+      /** Present only when the tool changed; absent = keep the last one. */
+      lastTool?: ToolActivity;
     }
   | {
       type: "session:opened";

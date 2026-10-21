@@ -546,7 +546,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
 
       <div className="search-panel__results">
         {error ? (
-          <div className="search-panel__banner search-panel__banner--error">
+          <div className="search-panel__banner search-panel__banner--error error-text">
             {error}
           </div>
         ) : null}

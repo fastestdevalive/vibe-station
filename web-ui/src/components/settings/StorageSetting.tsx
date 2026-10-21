@@ -2,9 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiskUsageResponse, Session, Worktree } from "@/api/types";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { SegmentedControl } from "@/components/ui/SegmentedControl";
+import { SectionHeader } from "./SectionHeader";
+import { SettingsRow } from "./SettingsRow";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { excludeSuperseded } from "@/lib/sessionVisibility";
+import "./settings.css";
 
 interface StorageSettingProps {
   api: ApiInstance;
@@ -146,80 +150,62 @@ export function StorageSetting({ api }: StorageSettingProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: "var(--space-5)", color: "var(--fg-muted)" }}>
-        Calculating disk usage…
+      <div>
+        <SectionHeader title="Storage" description="Disk usage and cleanup for worktrees." />
+        <div className="settings-state">Calculating disk usage…</div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ padding: "var(--space-5)", color: "var(--fg-danger)" }}>{error}</div>
+      <div>
+        <SectionHeader title="Storage" description="Disk usage and cleanup for worktrees." />
+        <div className="settings-error selectable" role="alert">{error}</div>
+      </div>
     );
   }
 
   const device = diskUsage?.device;
+  const usedPct =
+    device && device.totalBytes > 0
+      ? Math.min(100, ((device.totalBytes - device.availableBytes) / device.totalBytes) * 100)
+      : 0;
 
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-4)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Device disk bar */}
+    <div>
+      <SectionHeader title="Storage" description="Disk usage and cleanup for worktrees." />
+
       {device && (
-        <div
-          style={{
-            border: "var(--border-width) solid var(--border-default)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-card)",
-            padding: "var(--space-3) var(--space-4)",
-          }}
-        >
-          <div style={{ fontSize: "var(--font-size-sm)", fontWeight: "var(--font-weight-medium)", marginBottom: "var(--space-2)" }}>
-            Device disk
-          </div>
-          <div
-            style={{
-              height: 8,
-              borderRadius: 4,
-              background: "var(--bg-input)",
-              overflow: "hidden",
-              marginBottom: "var(--space-2)",
-            }}
-          >
-            <div
-              style={{
-                height: "100%",
-                width: device.totalBytes > 0
-                  ? `${Math.min(100, ((device.totalBytes - device.availableBytes) / device.totalBytes) * 100).toFixed(1)}%`
-                  : "0%",
-                background: "var(--accent)",
-                borderRadius: 4,
-              }}
-            />
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            <span>{formatBytes(device.totalBytes - device.availableBytes)} / {formatBytes(device.totalBytes)}</span>
-            <span>{formatBytes(device.availableBytes)} free</span>
-          </div>
-        </div>
+        <SettingsRow
+          label="Device disk"
+          description={
+            <>
+              <div className="settings-meter" role="presentation">
+                <div className="settings-meter__fill" style={{ width: `${usedPct.toFixed(1)}%` }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-3)" }}>
+                <span>{formatBytes(device.totalBytes - device.availableBytes)} / {formatBytes(device.totalBytes)}</span>
+                <span>{formatBytes(device.availableBytes)} free</span>
+              </div>
+            </>
+          }
+        />
       )}
 
-      {/* Section header */}
-      <div style={{ borderBottom: "var(--border-width) solid var(--border-default)", paddingBottom: "var(--space-2)" }}>
-        <span style={{ fontSize: "var(--font-size-xs)", fontWeight: "var(--font-weight-medium)", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--fg-muted)" }}>
-          Worktrees
-        </span>
+      <div style={{ marginTop: "var(--space-6)" }}>
+        <SectionHeader
+          title="Worktrees"
+          description={
+            filter === "done"
+              ? `${doneCount} done worktree${doneCount !== 1 ? "s" : ""} · ${formatBytes(totalFilteredDisk)}`
+              : `${filtered.length} worktree${filtered.length !== 1 ? "s" : ""} · ${formatBytes(totalFilteredDisk)}`
+          }
+        />
       </div>
 
-      {/* Controls bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--font-size-sm)", cursor: "pointer" }}>
+      <div className="settings-toolbar">
+        <label className="settings-check" style={{ width: "auto", gap: "var(--space-2)", fontSize: "var(--font-size-sm)", color: "var(--fg-primary)" }}>
           <input
             type="checkbox"
             checked={allChecked}
@@ -228,62 +214,45 @@ export function StorageSetting({ api }: StorageSettingProps) {
           />
           Select all
         </label>
-
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--font-size-sm)" }}>
-          Sort:
-          <select
+        <span className="settings-toolbar__group">
+          Sort
+          <SegmentedControl
+            options={[
+              { value: "created", label: "Created" },
+              { value: "disk", label: "Disk usage" },
+            ]}
             value={sort}
-            onChange={(e) => setSort(e.target.value as Sort)}
-            style={{ font: "inherit", fontSize: "var(--font-size-sm)", background: "var(--bg-input)", border: "var(--border-width) solid var(--border-default)", borderRadius: "var(--radius-sm)", padding: "2px var(--space-2)" }}
-          >
-            <option value="created">Creation date ↑</option>
-            <option value="disk">Disk usage ↓</option>
-          </select>
-        </label>
-
-        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--font-size-sm)" }}>
-          Show:
-          <select
+            onChange={(v) => setSort(v as Sort)}
+          />
+        </span>
+        <span className="settings-toolbar__group">
+          Show
+          <SegmentedControl
+            options={[
+              { value: "done", label: "Done" },
+              { value: "all", label: "All" },
+            ]}
             value={filter}
-            onChange={(e) => { setFilter(e.target.value as Filter); setSelected(new Set()); }}
-            style={{ font: "inherit", fontSize: "var(--font-size-sm)", background: "var(--bg-input)", border: "var(--border-width) solid var(--border-default)", borderRadius: "var(--radius-sm)", padding: "2px var(--space-2)" }}
-          >
-            <option value="done">Done</option>
-            <option value="all">All</option>
-          </select>
-        </label>
-
-        <span style={{ marginLeft: "auto", fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-          {filter === "done"
-            ? `${doneCount} done worktree${doneCount !== 1 ? "s" : ""} · ${formatBytes(totalFilteredDisk)}`
-            : `${filtered.length} worktree${filtered.length !== 1 ? "s" : ""} · ${formatBytes(totalFilteredDisk)}`}
+            onChange={(v) => { setFilter(v as Filter); setSelected(new Set()); }}
+          />
         </span>
       </div>
 
       {deleteError && (
-        <div style={{ padding: "var(--space-2) var(--space-3)", background: "var(--bg-danger-subtle, var(--bg-input))", border: "var(--border-width) solid var(--border-danger, var(--border-default))", borderRadius: "var(--radius-sm)", fontSize: "var(--font-size-sm)", color: "var(--fg-danger)" }}>
-          {deleteError}
-        </div>
+        <div className="settings-error selectable" role="alert">{deleteError}</div>
       )}
 
-      {/* Worktree list */}
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-        {sorted.length === 0 && filter === "done" && (
-          <div style={{ padding: "var(--space-5)", textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
-            {worktrees.length === 0
+      <div style={{ borderTop: "var(--border-width) solid var(--border-subtle, var(--border-default))" }}>
+        {sorted.length === 0 && (
+          <div className="settings-state" style={{ textAlign: "center" }}>
+            {worktrees.length === 0 || filter === "all"
               ? "No worktrees yet. Worktrees appear here once you spawn an agent."
               : "No done worktrees. Switch to All to see active ones."}
-          </div>
-        )}
-        {sorted.length === 0 && filter === "all" && (
-          <div style={{ padding: "var(--space-5)", textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
-            No worktrees yet. Worktrees appear here once you spawn an agent.
           </div>
         )}
 
         {sorted.map((wt) => {
           const done = doneMap[wt.id] ?? false;
-          const bytes = diskMap[wt.id] ?? 0;
           const wtSessions = excludeSuperseded(sessionsByWorktree[wt.id] ?? []);
           const mainSession =
             wtSessions.find((s) => s.type === "agent" && s.isMain) ??
@@ -295,82 +264,65 @@ export function StorageSetting({ api }: StorageSettingProps) {
             <div
               key={wt.id}
               onClick={done ? () => toggleSelect(wt.id) : undefined}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "auto 1fr auto",
-                alignItems: "start",
-                gap: "var(--space-3)",
-                padding: "var(--space-3)",
-                border: "var(--border-width) solid var(--border-default)",
-                borderRadius: "var(--radius-md)",
-                background: "var(--bg-card)",
-                opacity: done ? 1 : 0.7,
-                cursor: done ? "pointer" : "default",
-              }}
+              className={`settings-row settings-wt-row ${done ? "settings-wt-row--clickable" : "settings-wt-row--disabled"}`}
             >
-              <input
-                type="checkbox"
-                checked={selected.has(wt.id)}
-                onChange={() => toggleSelect(wt.id)}
-                onClick={(e) => e.stopPropagation()}
-                disabled={!done}
-                title={done ? undefined : "Only done worktrees can be deleted"}
-                style={{ marginTop: 3 }}
-              />
+              <label className="settings-check" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(wt.id)}
+                  onChange={() => toggleSelect(wt.id)}
+                  disabled={!done}
+                  title={done ? undefined : "Only done worktrees can be deleted"}
+                />
+              </label>
 
-              <div style={{ minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-1)" }}>
+              <div className="settings-row__main">
+                <div className="settings-row__label" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                   <StatusDot status={status} />
-                  <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                  <span className="settings-mono" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {wt.id} · {wt.branch}
                   </span>
-                  <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>
-                    {formatBytes(bytes)}
-                  </span>
                 </div>
-                <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+                <div className="settings-row__desc">
                   Created {new Date(wt.createdAt).toLocaleDateString()} · {wtSessions.length} session{wtSessions.length !== 1 ? "s" : ""}
                 </div>
               </div>
 
-              <button
-                type="button"
-                className="icon-btn"
-                disabled={!done}
-                title={done ? "Delete worktree" : "Only done worktrees can be deleted"}
-                onClick={(e) => { e.stopPropagation(); setPendingDelete([wt]); }}
-                style={{ opacity: done ? 1 : 0.3, cursor: done ? "pointer" : "not-allowed", marginTop: 1 }}
-              >
-                ×
-              </button>
+              <div className="settings-row__control">
+                <span className="settings-mono" style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
+                  {formatBytes(diskMap[wt.id] ?? 0)}
+                </span>
+                <button
+                  type="button"
+                  className="icon-btn settings-btn settings-btn--icon"
+                  disabled={!done}
+                  aria-label={`Delete worktree ${wt.branch}`}
+                  title={done ? "Delete worktree" : "Only done worktrees can be deleted"}
+                  onClick={(e) => { e.stopPropagation(); setPendingDelete([wt]); }}
+                  style={{ opacity: done ? 1 : 0.3, cursor: done ? "pointer" : "not-allowed" }}
+                >
+                  ×
+                </button>
+              </div>
             </div>
           );
         })}
 
         {hiddenCount > 0 && filter === "done" && (
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", textAlign: "center", padding: "var(--space-2)" }}>
+          <div className="settings-state" style={{ textAlign: "center", fontSize: "var(--font-size-xs)" }}>
             {hiddenCount} other{hiddenCount !== 1 ? "s" : ""} hidden by filter
           </div>
         )}
       </div>
 
-      {/* Bulk delete footer */}
       {selected.size > 0 && (
-        <div
-          style={{
-            borderTop: "var(--border-width) solid var(--border-default)",
-            paddingTop: "var(--space-3)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
+        <div className="settings-footer">
           <span style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-muted)" }}>
             {selected.size} selected ({formatBytes(selectedDisk)})
           </span>
           <button
             type="button"
-            className="btn btn--danger"
+            className="btn btn--secondary settings-btn settings-btn--danger"
             onClick={() => setPendingDelete(selectedWorktrees)}
           >
             Delete selected

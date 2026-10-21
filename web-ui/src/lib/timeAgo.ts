@@ -29,3 +29,24 @@ export function formatTimeAgo(
   const years = Math.floor(days / 365);
   return `${years}y`;
 }
+
+/**
+ * Full local timestamp for tooltips: "Tue 20 Oct 2026, 23:44" (24h, en-GB
+ * order, local time). Empty string for missing/invalid input.
+ */
+export function formatFullTimestamp(isoOrDate: string | number | Date | null | undefined): string {
+  if (!isoOrDate) return "";
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")}`;
+}

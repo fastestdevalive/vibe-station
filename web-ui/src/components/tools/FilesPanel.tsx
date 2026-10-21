@@ -466,6 +466,7 @@ export function FilesPanel({
             Padded left by rail width only when panel is closed or stacked so tabs avoid the rail icons (§4b). */}
         <div
           className="files-topbar"
+          data-tauri-drag-region="deep"
           style={{
             height: "35px",
             minHeight: "35px",

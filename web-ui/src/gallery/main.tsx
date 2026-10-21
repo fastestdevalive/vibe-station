@@ -20,6 +20,8 @@ import { AttachmentPicker } from "@/components/chat/AttachmentPicker";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { useServerSync } from "@/hooks/useServerSync";
 import { DraftComposer } from "@/components/draft/DraftComposer";
+import { DashboardPanel } from "@/components/layout/DashboardPanel";
+import { SessionChip } from "@/components/layout/SessionChip";
 
 import "@/styles/tokens.css";
 import "@/styles/global.css";
@@ -455,6 +457,79 @@ function TabStripScene() {
   );
 }
 
+/** Real DashboardPanel over mock sessions decorated with Rich Chat tool calls. */
+function DashboardScene() {
+  const api = useMemo(() => {
+    const a = createMockApi();
+    const base = a.listSessions.bind(a);
+    const tools = [
+      { name: "Edit", detail: "parseConfig.ts" },
+      { name: "Bash", detail: "cd" },
+      { name: "Read", detail: "README.md" },
+      { name: "Grep" },
+      { name: "mcp__github__create_issue", detail: "github" },
+      { name: "WebFetch" },
+      { name: "TodoWrite" },
+      { name: "FrobnicateTool" },
+    ];
+    const states = ["working", "waiting_for_human", "idle"] as const;
+    a.listSessions = async (w?: string) => {
+      const seed = await base(w);
+      const all: Session[] = [];
+      for (let i = 0; i < 9; i++) {
+        const x = seed[i % seed.length]!;
+        // Every third working card stays a terminal agent (no activity slot).
+        const term = i === 3;
+        all.push({
+          ...x,
+          id: `${x.id}-g${i}`,
+          state: states[i % 3],
+          lifecycleState: states[i % 3],
+          channel: term ? "tmux" : "json",
+          lastActivityAt: new Date(Date.now() - (i + 1) * 3 * 60_000).toISOString(),
+          lastTool: term ? null : tools[i % tools.length],
+        } as Session);
+      }
+      return all;
+    };
+    return a;
+  }, []);
+  useServerSync(api);
+  return (
+    <BrowserRouter>
+      <div style={{ width: "100%", maxWidth: 1200 }}>
+        <DashboardPanel api={api} />
+      </div>
+    </BrowserRouter>
+  );
+}
+
+/** Agent-card stress matrix (path truncation, direct, terminal, PR chip) for visual QA. */
+function AgentCardsScene() {
+  const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  const prOf = (state: "open" | "draft" | "closed", number: number) =>
+    ({ state, number, url: `https://github.com/acme/repo/pull/${number}`, checkedAt: ago(1) }) as const;
+  type P = React.ComponentProps<typeof SessionChip>;
+  const cases: Array<[string, P]> = [
+    ["Long project + long branch", { status: "working", modeIconKey: "claude", channel: "json", sessionLabel: "Agent 12 · review-and-cleanup", projectLabel: "northstar-api-gateway-service", worktreeLabel: "gb/vs-269-dashboard-card-cohesion-footer-activity-label", lastTool: { name: "Edit", detail: "DashboardCardGroup.tsx" }, pr: prOf("open", 1287), activityAt: ago(5) }],
+    ["Short project + very long branch", { status: "working", modeIconKey: "cursor", channel: "json", sessionLabel: "main", projectLabel: "forge-cli", worktreeLabel: "feat/plugin-system-loader-hot-reload-with-sandboxed-wasm-runtime", lastTool: { name: "Bash", detail: "cargo test --workspace" }, pr: null, activityAt: ago(0) }],
+    ["Long project + short branch", { status: "working", modeIconKey: "opencode", channel: "json", sessionLabel: "Agent 4", projectLabel: "luminary-documentation-site", worktreeLabel: "fix/csp", lastTool: { name: "Read", detail: "README.md" }, pr: prOf("draft", 37), activityAt: ago(180) }],
+    ["Direct agent, long project", { status: "working", modeIconKey: "claude", channel: "json", isDirect: true, sessionLabel: "Agent 7 · migrate-config-loader", projectLabel: "northstar-api-gateway-service", lastTool: { name: "mcp__github__x", detail: "github" }, pr: null, activityAt: ago(1) }],
+    ["Terminal agent, long everything", { status: "working", modeIconKey: "codex", channel: "tmux", sessionLabel: "Agent 3 · image pipeline rewrite", projectLabel: "luminary-documentation-site", worktreeLabel: "feat/image-renderer-avif-fallback", pr: prOf("closed", 12), activityAt: ago(60 * 24 * 21) }],
+  ];
+  const w = Number(new URLSearchParams(window.location.search).get("w") ?? 300);
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+      {cases.map(([label, props]) => (
+        <div key={label} style={{ width: w }} data-case={label}>
+          <div className="gallery-label" style={{ marginBottom: 6 }}>{label}</div>
+          <SessionChip {...props} href="#x" onClick={() => {}} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CreateDialogScene() {
   const api = useMemo(() => createMockApi(), []);
   return (
@@ -502,6 +577,8 @@ function App() {
     case "queued-failed": body = <QueuedFailedScene />; break;
     case "attachments": body = <AttachmentsScene />; break;
     case "tabstrip": body = <TabStripScene />; break;
+    case "dashboard": body = <DashboardScene />; break;
+    case "agentcards": body = <AgentCardsScene />; break;
     case "create-json": body = <CreateDialogScene />; break;
     default: body = <div style={{ color: "#e5e5e5" }}>Unknown scene: {scene}</div>;
   }

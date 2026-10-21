@@ -3,25 +3,17 @@ import { Github } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import { Logo } from "@/components/shared/Logo";
 import { SectionHeader } from "./SectionHeader";
+import { SettingsRow } from "./SettingsRow";
 import { THIRD_PARTY_LICENSES } from "./thirdPartyLicenses";
+import "./settings.css";
 
 function AgentName({ children }: { children: ReactNode }) {
-  return (
-    <strong
-      style={{
-        fontWeight: "var(--font-weight-semibold)",
-        color: "var(--fg-primary)",
-      }}
-    >
-      {children}
-    </strong>
-  );
+  return <strong style={{ fontWeight: "var(--font-weight-semibold)", color: "var(--fg-primary)" }}>{children}</strong>;
 }
 
 /**
- * Last item in the settings nav. Version, a short mission statement, and
- * credits — the same purpose every IDE's "About" panel serves, styled to
- * match this app's settings conventions (inline styles + design tokens).
+ * Last item in the settings nav: version, a short mission statement, source
+ * link and third-party credits, built from the shared settings row anatomy.
  */
 export function AboutSetting({ api }: { api: ApiInstance }) {
   // Not `web-ui/package.json`'s version — that file is a placeholder
@@ -34,20 +26,16 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
   }, [api]);
 
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto" }}>
+    <div>
       <SectionHeader title="About" description="Version, credits, and a bit of context." />
 
       <div
         style={{
           display: "flex",
-          flexDirection: "column",
           alignItems: "center",
-          textAlign: "center",
           gap: "var(--space-3)",
-          padding: "var(--space-6) var(--space-4)",
-          borderRadius: "var(--radius-md)",
-          border: "var(--border-width) solid var(--border-default)",
-          background: "var(--bg-card)",
+          paddingBottom: "var(--space-3)",
+          borderBottom: "var(--border-width) solid var(--border-subtle, var(--border-default))",
         }}
       >
         <div
@@ -55,156 +43,90 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 56,
-            height: 56,
+            width: 44,
+            height: 44,
+            flexShrink: 0,
             borderRadius: "var(--radius-md)",
             background: "var(--bg-active)",
             color: "var(--fg-primary)",
           }}
         >
-          <Logo size={30} />
+          <Logo size={24} />
         </div>
-
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontSize: "var(--font-size-lg)",
+              fontSize: "var(--font-size-base)",
               fontWeight: "var(--font-weight-semibold)",
               color: "var(--fg-primary)",
             }}
           >
             Vibe Station
           </div>
-          <div
-            style={{
-              fontSize: "var(--font-size-xs)",
-              color: "var(--fg-muted)",
-              marginTop: "var(--space-1)",
-            }}
-          >
-            {version ? `Version ${version}` : "Version —"}
-          </div>
-          <div
-            style={{
-              fontSize: "var(--font-size-xs)",
-              color: "var(--fg-muted)",
-              marginTop: "var(--space-1)",
-            }}
-          >
-            An <span style={{ textDecoration: "line-through" }}>IDE</span> ADE
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+            An <span style={{ textDecoration: "line-through" }}>IDE</span> ADE · Vibe code in parallel. Ship at scale.
           </div>
         </div>
-
-        <div
-          style={{
-            fontSize: "var(--font-size-sm)",
-            fontWeight: "var(--font-weight-medium)",
-            color: "var(--fg-primary)",
-          }}
-        >
-          Vibe code in parallel. Ship at scale.
-        </div>
-
-        <p
-          style={{
-            maxWidth: 460,
-            fontSize: "var(--font-size-sm)",
-            lineHeight: 1.6,
-            color: "var(--fg-secondary)",
-            margin: 0,
-          }}
-        >
-          Vibe Station was built because managing multiple projects — with multiple agents
-          working across a pile of terminal tabs — was getting hard to keep straight. And
-          orchestrating them was harder still:{" "}
-          <span style={{ color: "var(--fg-primary)" }}>
-            plan with <AgentName>Claude Opus</AgentName>, get it reviewed by{" "}
-            <AgentName>Gemini</AgentName>, implement with <AgentName>DeepSeek</AgentName>.
-          </span>{" "}
-          Now you can run all of that side by side, in one place, without losing track of any of
-          it.
-        </p>
-
-        <a
-          href="https://github.com/fastestdevalive/vibe-station"
-          target="_blank"
-          rel="noreferrer"
-          className="icon-btn"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            width: "auto",
-            height: "auto",
-            padding: "var(--space-2) var(--space-3)",
-            marginTop: "var(--space-1)",
-          }}
-        >
-          <Github size={14} />
-          <span style={{ fontSize: "var(--font-size-xs)" }}>Source on GitHub</span>
-        </a>
       </div>
 
-      <div
-        style={{
-          marginTop: "var(--space-4)",
-          textAlign: "center",
-          fontSize: "var(--font-size-xs)",
-          color: "var(--fg-muted)",
-          lineHeight: 1.6,
-        }}
-      >
+      <SettingsRow
+        label="Version"
+        description="The running daemon's version."
+        control={
+          <span className="settings-mono selectable" style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
+            {version ?? "—"}
+          </span>
+        }
+      />
+      <SettingsRow
+        label="Source code"
+        description="Open source on GitHub."
+        control={
+          <a
+            href="https://github.com/fastestdevalive/vibe-station"
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn--secondary settings-btn"
+          >
+            <Github size={14} aria-hidden />
+            <span>Source on GitHub</span>
+          </a>
+        }
+      />
+
+      <p className="settings-help">
+        Vibe Station was built because managing multiple projects — with multiple agents working
+        across a pile of terminal tabs — was getting hard to keep straight. And orchestrating them
+        was harder still:{" "}
+        <span style={{ color: "var(--fg-primary)" }}>
+          plan with <AgentName>Claude Opus</AgentName>, get it reviewed by <AgentName>Gemini</AgentName>,
+          implement with <AgentName>DeepSeek</AgentName>.
+        </span>{" "}
+        Now you can run all of that side by side, in one place, without losing track of any of it.
+      </p>
+      <p className="settings-help" style={{ color: "var(--fg-muted)", fontSize: "var(--font-size-xs)" }}>
         Made with care & crafted with ❤️ from India.
-      </div>
+      </p>
 
-      <div
-        style={{
-          marginTop: "var(--space-6)",
-          paddingTop: "var(--space-4)",
-          borderTop: "var(--border-width) solid var(--border-default)",
-        }}
-      >
+      <div style={{ marginTop: "var(--space-6)" }}>
         <SectionHeader
           title="Third-party licenses"
           description="Components redistributed with Vibe Station, with links to their upstream licenses."
         />
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--space-3)",
-          }}
-        >
-          {THIRD_PARTY_LICENSES.map((item) => (
-            <div
-              key={item.name}
-              style={{
-                fontSize: "var(--font-size-xs)",
-                lineHeight: 1.6,
-              }}
-            >
-              <div
-                style={{
-                  fontWeight: "var(--font-weight-semibold)",
-                  color: "var(--fg-primary)",
-                }}
-              >
-                {item.name}
-              </div>
-              <div style={{ color: "var(--fg-muted)" }}>
+        {THIRD_PARTY_LICENSES.map((item) => (
+          <SettingsRow
+            key={item.name}
+            label={item.name}
+            description={
+              <>
                 {item.role} ·{" "}
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "var(--accent)" }}
-                >
+                <a href={item.url} target="_blank" rel="noreferrer" className="settings-link">
                   {item.license}
                 </a>
-              </div>
-            </div>
-          ))}
-        </div>
+              </>
+            }
+          />
+        ))}
       </div>
     </div>
   );

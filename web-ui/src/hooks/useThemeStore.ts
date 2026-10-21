@@ -5,7 +5,7 @@ import { getThemeRoot } from "@/lib/demoRoots";
 export type ThemeAppearance = "dark" | "light";
 export type Font = "mono" | "sans";
 
-export const DEFAULT_FONT: Font = "mono";
+export const DEFAULT_FONT: Font = "sans";
 
 /**
  * Resolve a raw theme id to a registry entry, falling back to the default

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import { useDoctorStatus } from "@/hooks/useDoctorStatus";
 import { DoctorCheckList } from "@/components/doctor/DoctorCheckList";
+import { doctorSummary } from "@/components/doctor/doctorSummary";
 
 interface OobeStep3DoctorProps {
   api: ApiInstance;
@@ -47,6 +48,8 @@ export function OobeStep3Doctor({ api, onCompleted }: OobeStep3DoctorProps) {
     );
   }
 
+  const summary = report ? doctorSummary(report.checks) : null;
+
   const canContinue = !!report?.ok;
   const showContinueAnyway = !!report && report.hardOk && !report.ok;
 
@@ -75,11 +78,27 @@ export function OobeStep3Doctor({ api, onCompleted }: OobeStep3DoctorProps) {
       </div>
 
       {report ? (
-        <DoctorCheckList
-          checks={report.checks}
-          hostname={report.hostname}
-          hostOs={report.hostOs}
-        />
+        <>
+          <div data-testid="oobe-step3-summary" style={{ marginBottom: "var(--space-3)" }}>
+            <div style={{ fontSize: "var(--fs-ui)", color: "var(--fg-primary)" }}>
+              {summary?.text}
+            </div>
+            {summary && summary.counts.missing + summary.counts.warnings > 0 ? (
+              <div style={{ fontSize: "var(--fs-meta)", color: "var(--fg-muted)", marginTop: 2 }}>
+                {summary.counts.missing} missing · {summary.counts.warnings} warning{summary.counts.warnings === 1 ? "" : "s"}
+              </div>
+            ) : null}
+          </div>
+          <DoctorCheckList
+            api={api}
+            checks={report.checks}
+            hostname={report.hostname}
+            hostOs={report.hostOs}
+            foldPassing
+            itemsCollapsedCount={3}
+            onChanged={recheck}
+          />
+        </>
       ) : (
         <p style={{ color: "var(--fg-secondary)", fontSize: "var(--font-size-sm)" }}>Running checks…</p>
       )}

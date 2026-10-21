@@ -258,6 +258,7 @@ export function ToolPanel({
           {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
           <div
             className="tool-panel__top-actions"
+            data-tauri-drag-region="deep"
             style={{
               position: "absolute",
               top: 0,

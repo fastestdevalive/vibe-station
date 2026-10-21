@@ -376,6 +376,9 @@ export interface WorkspaceState {
   toolsRailHidden: boolean;
   setToolsRailHidden: (hidden: boolean) => void;
   terminalFontScale: number;
+  /** xterm line height multiplier: 1 = Compact (native-terminal feel), 1.1 = Relaxed. */
+  terminalLineHeight: 1 | 1.1;
+  setTerminalLineHeight: (v: 1 | 1.1) => void;
   leftSidebarCollapsed: boolean;
   /** Desktop left sidebar width in px when expanded (persisted, drag-resizable). */
   leftSidebarWidthPx: number;
@@ -895,10 +898,11 @@ const initial = {
   fileTreeVisible: true,
   toolsRailHidden: false,
   terminalFontScale: 1,
+  terminalLineHeight: 1 as 1 | 1.1,
   leftSidebarCollapsed: false,
   leftSidebarWidthPx: 220,
   hideInactiveWorktrees: true,
-  showAgentStatusBorders: true,
+  showAgentStatusBorders: false,
   themeAgentTerminals: true,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
@@ -1787,6 +1791,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setToolsRailHidden: (hidden) => set({ toolsRailHidden: hidden }),
         toggleFileTree: () =>
           set((s) => withTransitionHint("files", { fileTreeVisible: !s.fileTreeVisible })),
+        setTerminalLineHeight: (v) => set({ terminalLineHeight: v }),
         bumpTerminalFont: (delta) =>
           set((s) => ({
             terminalFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.terminalFontScale + delta) * 100) / 100)),
@@ -2439,6 +2444,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         previewFontScaleByWorktree: s.previewFontScaleByWorktree,
         fileTreeVisible: s.fileTreeVisible,
         terminalFontScale: s.terminalFontScale,
+        terminalLineHeight: s.terminalLineHeight,
         leftSidebarCollapsed: s.leftSidebarCollapsed,
         leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,

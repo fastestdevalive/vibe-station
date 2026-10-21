@@ -890,9 +890,16 @@
   white-space: nowrap;
 }
 
+/* Row action button width. ONE source for both the button box and the
+ * relative-time slot (`.wt-row__time` min-width below): the "..." button
+ * replaces the time in exactly the same right-aligned slot on hover. */
+:root {
+  --row-action-w: 28px;
+}
+
 .tree-row__action {
-  width: 28px;
-  height: 28px;
+  width: var(--row-action-w);
+  height: var(--row-action-w);
   flex-shrink: 0;
 }
 
@@ -1108,25 +1115,25 @@
   color: transparent;
 }
 
-.wt-row__id {
+.wt-row__time {
   box-sizing: border-box;
   display: block;
-  min-width: 0;
-  max-width: 11rem;
+  flex-shrink: 0;
+  /* Slot = max(time width, button width), so hiding the time on hover (the
+   * button takes its place) never shifts anything. */
+  min-width: var(--row-action-w);
   padding-right: 2px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
   color: var(--fg-muted);
   text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
   transition: opacity var(--transition-fast);
 }
 
 /* Item 10 — `+N −N` LOC indicator against the base branch, immediately
- * before `wt-row__id`. Hidden alongside it on hover/focus (same rule as
- * `.wt-row__id` below) and on the collapsed rail (gated by the same
+ * before `wt-row__time`. Hidden alongside it on hover/focus (same rule as
+ * `.wt-row__diffstat` hover rule below) and on the collapsed rail (gated by the same
  * `!collapsed` condition at each render site). */
 .wt-row__diffstat {
   display: inline-flex;
@@ -1149,7 +1156,9 @@
  * separate click (now safely inside a settled hover state) opens the menu.
  * Always-auto removes the race outright; opacity alone still hides the
  * trigger visually at rest. */
-.tree-row--worktree .wt-menu-trigger {
+.tree-row--worktree .wt-menu-trigger,
+.tree-row--direct-session .wt-menu-trigger,
+.tree-row--worktree-session .wt-menu-trigger {
   position: absolute;
   right: 0;
   top: 50%;
@@ -1159,10 +1168,17 @@
   transition: opacity var(--transition-fast);
 }
 
-.tree-row--worktree:hover .wt-row__id,
-.tree-row--worktree:focus-within .wt-row__id,
 .tree-row--worktree:hover .wt-row__diffstat,
 .tree-row--worktree:focus-within .wt-row__diffstat {
+  opacity: 0;
+}
+
+/* On hover / focus / open menu the "..." button REPLACES the time: the time
+ * goes opacity 0 (its box stays, so nothing shifts) and the button appears in
+ * the same right-aligned slot. Badges (diffstat) fade by their own rule. */
+:is(.tree-row--worktree, .tree-row--direct-session, .tree-row--worktree-session):hover .wt-row__time,
+:is(.tree-row--worktree, .tree-row--direct-session, .tree-row--worktree-session):focus-within .wt-row__time,
+:is(.tree-row--worktree, .tree-row--direct-session, .tree-row--worktree-session):has(.wt-menu-trigger[aria-expanded="true"]) .wt-row__time {
   opacity: 0;
 }
 
@@ -1179,6 +1195,10 @@
 
 .tree-row--worktree:hover .wt-menu-trigger,
 .tree-row--worktree:focus-within .wt-menu-trigger,
+.tree-row--direct-session:hover .wt-menu-trigger,
+.tree-row--direct-session:focus-within .wt-menu-trigger,
+.tree-row--worktree-session:hover .wt-menu-trigger,
+.tree-row--worktree-session:focus-within .wt-menu-trigger,
 .wt-menu-trigger[aria-expanded="true"] {
   opacity: 1;
 }
@@ -1645,22 +1665,6 @@
   align-items: flex-start;
 }
 
-/* Unify the trailing ⋯ affordance across the two pinned row types. Worktree rows
- * already hide their ⋯ until hover/focus (showing the id chip at rest); give the
- * direct-session pinned row the same hover-reveal so at rest both rows are clean
- * (id / badge) and hover surfaces the menu. Kept in-flow (opacity only) so the
- * always-on "direct" badge doesn't shift. */
-.tree-row--direct-session.pinned-row .wt-menu-trigger {
-  opacity: 0;
-  pointer-events: auto;
-  transition: opacity var(--transition-fast);
-}
-.tree-row--direct-session.pinned-row:hover .wt-menu-trigger,
-.tree-row--direct-session.pinned-row:focus-within .wt-menu-trigger,
-.tree-row--direct-session.pinned-row .wt-menu-trigger[aria-expanded="true"] {
-  opacity: 1;
-}
-
 /* Touch devices have no `:hover`, so the opacity-only reveal above never
  * fires — force the trigger permanently visible (it was already always
  * interactive; see the `pointer-events: auto` comment near
@@ -1670,17 +1674,41 @@
  * pinned worktree rows, pinned direct-session rows). */
 @media (hover: none) {
   .tree-row--worktree .wt-menu-trigger,
-  .tree-row--direct-session.pinned-row .wt-menu-trigger {
+  .tree-row--direct-session .wt-menu-trigger,
+  .tree-row--worktree-session .wt-menu-trigger {
     opacity: 1;
   }
 
-  /* The trigger and the id chip share the same trailing slot (see
-     `.tree-row--worktree:hover .wt-row__id` above) — now that the trigger is
-     always shown here, hide the chip the same way hover already does, so the
-     two don't render on top of each other. */
-  .tree-row--worktree .wt-row__id {
+  /* Trigger always shown here (non-touch hover:none): it replaces the time. */
+  .left-sidebar:not(.left-sidebar--touch) .wt-row__time {
     opacity: 0;
   }
+}
+
+/* Touch: the row "..." menu buttons are hidden entirely; the same menu opens
+ * on long-press of the row (useSidebarRowLongPress). `visibility: hidden`
+ * keeps the trigger laid out so the menu still anchors at the row's right
+ * edge, while removing it from view, hit-testing and the a11y tree. The
+ * project "+" is untouched. Native callout/selection is suppressed on the
+ * rows so the browser's own long-press UI doesn't compete. */
+.left-sidebar--touch [data-wt-menu-trigger],
+.left-sidebar--touch [data-sess-menu-trigger],
+.left-sidebar--touch [data-proj-menu-trigger] {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* Hidden trigger => no offset: the time stays flush right on phones. */
+.left-sidebar.left-sidebar--touch .tree-row .wt-row__trail {
+  padding-right: 0;
+}
+.left-sidebar--touch .tree-row {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.left-sidebar--touch .tree-row input {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Direct sessions read italic in the project tree (`.direct-session__label`);
@@ -2014,6 +2042,7 @@
   color: var(--fg-muted);
   border-bottom: var(--border-width) solid var(--border-default);
   margin-bottom: var(--space-1);
+  -webkit-user-select: text;
   user-select: text;
   cursor: default;
 }
@@ -2802,11 +2831,15 @@
 /* xterm renders an integer number of rows, so its root `.xterm` element (which
  * has no intrinsic height and sizes to the screen) ends up to one line shorter
  * than the flex-filled host — leaving a gap at the bottom. Force it to fill the
- * host: `.xterm-viewport` is absolutely positioned (top/bottom:0) and carries
- * the terminal background, so it then stretches to cover the sub-row leftover
- * and the gap disappears. */
+ * host. xterm.css hard-codes `.xterm-viewport { background-color: #000 }`, which
+ * showed as a black band in light themes, so the viewport is made transparent
+ * and TerminalPane paints the themed background on the host itself. */
 .terminal-host .xterm {
   height: 100%;
+}
+
+.terminal-host .xterm .xterm-viewport {
+  background-color: transparent;
 }
 
 .terminal-resume-banner {
@@ -5751,18 +5784,6 @@ textarea.input {
   letter-spacing: 0;
 }
 
-.dashboard-header__daemon {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-
-.dashboard-header__daemon-dot {
-  font-size: 9px;
-}
-
 .dashboard-section {
   display: flex;
   flex-direction: column;
@@ -5800,13 +5821,11 @@ textarea.input {
   cursor: default;
 }
 
-.dashboard-card--session,
 .dashboard-card--project {
   cursor: pointer;
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
-.dashboard-card--session:hover,
 .dashboard-card--project:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
@@ -5819,100 +5838,6 @@ button.dashboard-card {
   font-family: inherit;
   font-size: inherit;
   width: 100%;
-}
-
-.dashboard-card.session-chip {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.session-chip__row-1,
-.session-chip__top-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  width: 100%;
-}
-
-.session-chip__top-row .dashboard-card__dot {
-  flex-shrink: 0;
-  width: 14px;
-  text-align: center;
-}
-
-.session-chip__row-1 .dashboard-card__icon {
-  flex-shrink: 0;
-}
-
-.session-chip .dashboard-card__primary,
-.session-chip__session {
-  font-size: var(--font-size-sm);
-  color: var(--fg-primary);
-  font-weight: var(--font-weight-medium);
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.2;
-}
-
-.session-chip__time {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  flex-shrink: 0;
-  margin-left: auto;
-  white-space: nowrap;
-  line-height: 1;
-  padding-left: var(--space-1);
-}
-
-.session-chip .dashboard-card__secondary,
-.session-chip__bottom-row,
-.session-chip__group {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.2;
-  padding-left: calc(14px + var(--space-2));
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.session-chip__worktree-name,
-.session-chip__project-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-chip__separator {
-  color: var(--fg-muted);
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-
-.session-chip__direct-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 4px;
-  font-size: 10px;
-  line-height: 1.35;
-  font-weight: var(--font-weight-medium);
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--fg-muted);
-  border: 1px solid var(--border-default);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
 }
 
 .dashboard-card__dot {
@@ -5938,15 +5863,6 @@ button.dashboard-card {
   flex-shrink: 0;
 }
 
-/* Session row: slot label + dim branch (left cluster), project name stays trailing */
-.dashboard-card--session .dashboard-card__session-main {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-
 /* Mode icon in a session card. The name/branch row is baseline-aligned, which
    would hang the icon off the text baseline (looks too high), so it centres
    itself on the row instead. Its box is collapsed to one text line so the
@@ -5959,11 +5875,6 @@ button.dashboard-card {
   flex-shrink: 0;
   line-height: 0;
   height: 1em;
-}
-
-.dashboard-card--session .dashboard-card__primary {
-  flex: 0 1 auto;
-  min-width: 0;
 }
 
 .dashboard-card__branch {
@@ -8859,9 +8770,10 @@ button.dashboard-card {
  * ───────────────────────────────────────────────────────────────────────── */
 
 /* macOS overlay title bar: shift the top-bar content right to clear the
- * traffic lights (position x:14 y:19, ~58px wide). We set this via
- * window.__TAURI_OS__ injected by main.rs; falls back to the UA-based
- * check done by WindowControls.tsx. */
+ * traffic lights (trafficLightPosition x:14 y:16, tauri.conf.json). The class
+ * hook is body[data-tauri-os], set by desktop/src-tauri/src/main.rs (there is
+ * no WindowControls.tsx / __TAURI_OS__). 70px here + .top-bar__row's 8px
+ * padding = 78px, the same inset as .sidebar-header below. */
 body[data-tauri-os="macos"] .top-bar {
   padding-left: 70px;
 }
@@ -8991,6 +8903,7 @@ body[data-tauri-os="macos"] .sidebar-header {
   margin-top: 4px;
   color: var(--fg-primary);
   white-space: pre-wrap;
+  -webkit-user-select: all;
   user-select: all;
 }
 
@@ -9029,6 +8942,7 @@ body[data-tauri-os="macos"] .sidebar-header {
   font-size: var(--font-size-xs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  -webkit-user-select: all;
   user-select: all;
 }
 

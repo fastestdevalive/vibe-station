@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { createMockApi } from "@/api/mock";
 import { TabsStrip as RawTabsStrip } from "./TabsStrip";
@@ -125,6 +126,27 @@ describe("TabsStrip", () => {
       });
     });
     expect(await screen.findByRole("tab", { name: /store only/i })).toBeInTheDocument();
+  });
+
+  it("3.T2 — the tablist is a deep Tauri drag region, tabs still click, and the scroller hides its scrollbar", async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    const tablist = container.querySelector('[role="tablist"]') as HTMLElement;
+    expect(tablist.getAttribute("data-tauri-drag-region")).toBe("deep");
+    // The tab is a <button role="tab">: Tauri's drag.js skips it, and its own
+    // click handler (focus side-effect) is unchanged.
+    expect(tab.tagName).toBe("BUTTON");
+    const user = userEvent.setup();
+    await user.click(tab);
+    expect(useWorkspaceStore.getState().activeSessionId).not.toBe("sess-main");
+    // No scrollbar thumb inside the deep region for a drag to swallow.
+    const css = readFileSync(resolve(__dirname, "../../styles/workspace.css"), "utf8");
+    const rule = /\.tabs-strip__scroll\s*\{[^}]*\}/.exec(css)![0];
+    expect(rule).toContain("scrollbar-width: none");
   });
 
   it("A2.T2 — main tab has no close control when it is the only agent session (wt-2, sole session)", async () => {

@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { DemoEnvProvider } from "@/context/DemoEnv";
 import { createElement } from "react";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import type { ApiInstance } from "@/api";
@@ -294,6 +296,82 @@ describe("LeftSidebar", () => {
     expect(menus[0]?.className).toContain("wt-menu-trigger");
   });
 
+  describe("touch: long-press opens the row menu", () => {
+    const realMatchMedia = window.matchMedia;
+    function setTouch(on: boolean) {
+      window.matchMedia = ((q: string) => ({
+        matches: on && q.includes("any-pointer: coarse"),
+        media: q,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        onchange: null,
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    }
+    afterEach(() => {
+      window.matchMedia = realMatchMedia;
+      vi.useRealTimers();
+    });
+
+    async function mount() {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      return link;
+    }
+    const touch = { pointerType: "touch", isPrimary: true, clientX: 10, clientY: 10 } as const;
+
+    it("marks the sidebar touch (CSS hides the dots) and a held press opens the worktree menu, swallowing the follow-up click", async () => {
+      setTouch(true);
+      const link = await mount();
+      expect(document.querySelector(".left-sidebar")).toHaveClass("left-sidebar--touch");
+      fireEvent.pointerDown(link, touch);
+      act(() => { vi.advanceTimersByTime(550); });
+      expect(screen.getByRole("menuitem", { name: /pin to top/i })).toBeInTheDocument();
+      fireEvent.pointerUp(link, touch);
+      fireEvent.click(link);
+      // The trailing click must not navigate away from the active worktree.
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+    });
+
+    it("a normal tap still navigates and opens no menu", async () => {
+      setTouch(true);
+      const link = await mount();
+      fireEvent.pointerDown(link, touch);
+      fireEvent.pointerUp(link, touch);
+      fireEvent.click(link);
+      act(() => { vi.advanceTimersByTime(600); });
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-2");
+      expect(screen.queryByRole("menuitem", { name: /pin to top/i })).toBeNull();
+    });
+
+    it("moving the finger cancels the long-press", async () => {
+      setTouch(true);
+      const link = await mount();
+      fireEvent.pointerDown(link, touch);
+      fireEvent.pointerMove(link, { ...touch, clientY: 40 });
+      act(() => { vi.advanceTimersByTime(600); });
+      expect(screen.queryByRole("menuitem", { name: /pin to top/i })).toBeNull();
+    });
+
+    it("hover-capable devices keep the dots and ignore a held pointer", async () => {
+      setTouch(false);
+      const link = await mount();
+      expect(document.querySelector(".left-sidebar")).not.toHaveClass("left-sidebar--touch");
+      fireEvent.pointerDown(link, { pointerType: "mouse", isPrimary: true });
+      act(() => { vi.advanceTimersByTime(600); });
+      expect(screen.queryByRole("menuitem", { name: /pin to top/i })).toBeNull();
+    });
+  });
+
   it("collapsed rail shows one tile per project and no worktree overflow menus", async () => {
     render(
       <MemoryRouter>
@@ -341,6 +419,169 @@ describe("LeftSidebar", () => {
     });
   });
 
+  // ─── Worktree row time (ui-polish 4.T7) ────────────────────────────────
+  it("4.T7 — a worktree row shows the newest session's activity as a relative time (with a 'Last activity' tooltip), not the worktree id", async () => {
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+    const row = link.closest(".tree-row--worktree") as HTMLElement;
+    await waitFor(() => {
+      const store = useServerStore.getState();
+      expect(store.sessions.some((x) => x.worktreeId === "wt-1")).toBe(true);
+    });
+
+    const twoMinAgo = new Date(Date.now() - 150_000).toISOString(); // 2.5 min: floors to "2m" even if the shared tick lags a moment
+    act(() => {
+      const st = useServerStore.getState();
+      for (const sess of st.sessions.filter((x) => x.worktreeId === "wt-1")) {
+        st.applySessionUpdated(sess.id, { lastActivityAt: twoMinAgo });
+      }
+    });
+
+    await waitFor(() => {
+      const time = row.querySelector("time.wt-row__time") as HTMLElement;
+      expect(time).not.toBeNull();
+      expect(time.textContent).toBe("2m");
+      expect(time.getAttribute("title")).toMatch(/^Last activity /);
+    });
+    expect(row.querySelector(".wt-row__id")).toBeNull();
+  });
+
+  // ─── Session rows: own relative time + hover-only dots ─────────────────
+  describe("session row time + hover-only menu", () => {
+    const twoMinAgo = () => new Date(Date.now() - 150_000).toISOString();
+
+    it("a direct-agent row shows ITS OWN lastActivityAt as relative time, before the menu trigger", async () => {
+      const localApi = createMockApi();
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "direct-agent-1",
+      });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await userEvent.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
+      const link = await screen.findByRole("link", { name: /Open direct session direct-agent-1/i });
+      const row = link.closest(".tree-row--direct-session") as HTMLElement;
+      act(() => {
+        useServerStore.getState().applySessionUpdated(sess.id, { lastActivityAt: twoMinAgo() });
+      });
+      await waitFor(() => {
+        const time = row.querySelector("time.wt-row__time") as HTMLElement;
+        expect(time?.textContent).toBe("2m");
+        const trigger = row.querySelector("[data-sess-menu-trigger]") as HTMLElement;
+        expect(trigger).not.toBeNull();
+        // Time precedes the trigger in the same trail; trigger is the hover-revealed one.
+        expect(time.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(trigger.className).toContain("wt-menu-trigger");
+      });
+    });
+
+    it("a pinned direct-agent row shows the time too", async () => {
+      const localApi = createMockApi();
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "pinned-direct",
+      });
+      await localApi.pinSession(sess.id, true);
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const region = await screen.findByRole("region", { name: /^pinned$/i });
+      act(() => {
+        useServerStore.getState().applySessionUpdated(sess.id, { lastActivityAt: twoMinAgo() });
+      });
+      await waitFor(() => {
+        expect(region.querySelector(".pinned-row time.wt-row__time")?.textContent).toBe("2m");
+      });
+    });
+
+    it("an agent row nested under a worktree shows the time", async () => {
+      localStorage.setItem("sidebar:openWorktrees", JSON.stringify(["wt-1"]));
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      act(() => {
+        api.__test.emit({
+          type: "session:created",
+          sessionId: "sess-nested",
+          worktreeId: "wt-1",
+          projectId: "proj-1",
+          sessionType: "agent",
+          mode: "mode-1",
+          snapshot: {
+            id: "sess-nested",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            modeId: "mode-1",
+            type: "agent",
+            name: "nested-agent",
+            isMain: false,
+            state: "not_started",
+            lifecycleState: "not_started",
+            tmuxName: "tm-n",
+            createdAt: new Date().toISOString(),
+            lastActivityAt: twoMinAgo(),
+          },
+        });
+      });
+      const link = await screen.findByRole("link", { name: /Open session nested-agent/i });
+      const row = link.closest(".tree-row--worktree-session") as HTMLElement;
+      await waitFor(() => {
+        expect(row.querySelector("time.wt-row__time")?.textContent).toBe("2m");
+        expect(row.querySelector("[data-sess-menu-trigger]")).not.toBeNull();
+      });
+      localStorage.removeItem("sidebar:openWorktrees");
+    });
+  });
+
+  it("row-action width is the time slot's min width (one token); no time offset/gap token remains", () => {
+    const css = readFileSync(resolve(__dirname, "../../styles/workspace.css"), "utf8");
+    expect(css).toMatch(/--row-action-w:\s*28px/);
+    expect(css).toMatch(/\.tree-row__action\s*\{[^}]*width:\s*var\(--row-action-w\)/);
+    expect(css).toMatch(/\.wt-row__time\s*\{[^}]*min-width:\s*var\(--row-action-w\)/);
+    expect(css).not.toMatch(/--row-action-gap/);
+    expect(css).not.toMatch(/padding-right:\s*calc\(var\(--row-action-w\)/);
+    expect(css).not.toMatch(/margin-right:\s*24px/);
+  });
+
+  it("on hover/focus/open-menu the time is hidden while the trigger is shown (dots replace the time)", () => {
+    const css = readFileSync(resolve(__dirname, "../../styles/workspace.css"), "utf8");
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1] ?? "", body: m[2] ?? "" }));
+    const hides = rules.find((r) => /\.wt-row__time\s*$/.test(r.sel.trim()) && /:hover/.test(r.sel) && /opacity:\s*0/.test(r.body));
+    expect(hides).toBeTruthy();
+    expect(hides!.sel).toMatch(/:focus-within/);
+    expect(hides!.sel).toMatch(/aria-expanded="true"/);
+    const shows = rules.find((r) => /\.wt-menu-trigger/.test(r.sel) && /:hover/.test(r.sel) && /opacity:\s*1/.test(r.body));
+    expect(shows).toBeTruthy();
+    // The time keeps its layout box (no display:none / visibility:hidden).
+    expect(hides!.body).not.toMatch(/display:\s*none|visibility/);
+    // Touch: time never hidden by the hover rule (it is gated on :hover only).
+    expect(css).not.toMatch(/(?<!:not\()\.left-sidebar--touch[^{]*\.wt-row__time/);
+  });
+
   // ─── LOC indicator (item 10, 11.T2) ────────────────────────────────────
   describe("diffstat LOC indicator", () => {
     it("shows +N −N matching a mocked getDiffStat response", async () => {
@@ -362,7 +603,7 @@ describe("LeftSidebar", () => {
       expect(within(row as HTMLElement).getByText("−4")).toBeInTheDocument();
     });
 
-    it("11.T4 regression — collapsed sidebar rail hides the indicator alongside wt-row__id", async () => {
+    it("11.T4 regression — collapsed sidebar rail hides the indicator alongside the row time", async () => {
       vi.spyOn(api, "getDiffStat").mockResolvedValue({ insertions: 7, deletions: 2 });
       render(
         <MemoryRouter>
@@ -3173,5 +3414,58 @@ describe("LeftSidebar - DemoEnv portal root and event root", () => {
     await user.click(host);
     await waitFor(() => expect(screen.queryByRole("menuitem", { name: /^archive$/i })).toBeNull());
     host.remove();
+  });
+});
+
+describe("LeftSidebar doctor button label (R2F-02)", () => {
+  async function renderWithChecks(
+    checks: Array<{ name: string; status: "ok" | "warn"; group: "required" | "feature" }>,
+  ) {
+    const api = createMockApi();
+    const base = await api.getDoctorReport();
+    const dto = checks.map((c) => ({
+      name: c.name,
+      status: c.status,
+      required: c.group === "required",
+      group: c.group,
+      message: "",
+      resolvedPath: null,
+      installHint: null,
+    }));
+    api.getDoctorReport = async () => ({
+      ...base,
+      ok: dto.every((c) => c.status === "ok"),
+      hardOk: true,
+      checks: dto,
+    });
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+  }
+
+  it("agrees with the dot and Doctor page when only optional checks need attention", async () => {
+    await renderWithChecks([
+      { name: "tmux", status: "ok", group: "required" },
+      { name: "plugin-cursor", status: "warn", group: "feature" },
+    ]);
+    expect(
+      await screen.findByRole("button", {
+        name: /Doctor — All required checks pass\. 1 optional item needs attention\./,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /all checks passing/i })).toBeNull();
+  });
+
+  it("reads 'All checks pass.' when every check is OK", async () => {
+    await renderWithChecks([
+      { name: "tmux", status: "ok", group: "required" },
+      { name: "git", status: "ok", group: "required" },
+    ]);
+    expect(await screen.findByRole("button", { name: "Doctor — All checks pass." })).toBeInTheDocument();
   });
 });

@@ -1,0 +1,218 @@
+/* Agent card: dashboard list + kanban + project home (design option E "path and status band").
+   Structure: article.acard > .acard__head (agent icon + .acard__name + .acard__time) > .acard__path > .acard__band (only when it has activity or a PR chip).
+   No status glyph: the column / section header carries status. .acard__name is a stretched link over the
+   card; the PR chip sits above it (z-index) so it can be its own link without nesting interactive content
+   in an anchor. Mirrors `.acard` in design-ui-polish/project/tokens.css. */
+.acard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  text-align: left;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.acard:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+}
+.acard:has(.acard__name:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.acard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px 0;
+}
+.acard__agent {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Terminal agents keep ModeIcon's framed 3-dot icon; the negative margin stops the taller frame
+   from changing the row height. */
+.acard__agent--tty {
+  width: auto;
+  height: auto;
+  margin-block: -4px;
+}
+/* Frame geometry from the design (.acard__agent--tty): 20x22 box, 3 faint dots, glyph kept at 14px. */
+.acard__agent--tty .mode-icon--terminal {
+  box-sizing: border-box;
+  width: 20px;
+  height: 22px;
+  padding: 6px 3px 2px;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.acard__agent--tty .mode-icon--terminal .mode-icon__glyph {
+  margin-top: 0;
+}
+.acard__agent--tty .mode-icon__dots {
+  gap: 1px;
+}
+.acard__agent--tty .mode-icon__dot {
+  background: var(--fg-faint);
+}
+.acard__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--fg-primary);
+  text-decoration: none;
+  /* button reset (card with onClick but no href) */
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.acard__name::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.acard__name:focus-visible {
+  outline: none;
+}
+/* Path: project / worktree. Free space is shared equally between the two minmax tracks, so with both
+   long the project stops near 45% and the worktree keeps the rest; a short branch hands its spare room
+   to the project and vice versa. Never wraps. */
+.acard__path {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) max-content minmax(10%, max-content);
+  justify-content: start;
+  align-items: center;
+  column-gap: 5px;
+  min-width: 0;
+  padding: 3px 12px 10px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  white-space: nowrap;
+}
+.acard__project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-secondary);
+}
+.acard__sep {
+  color: var(--fg-faint);
+}
+.acard__wt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.acard__glyph {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  stroke: var(--fg-muted);
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.acard__branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+}
+/* Direct agent: project + .dtag, no glyph, no slash, never a PR chip */
+.acard__path--direct {
+  grid-template-columns: minmax(0, max-content) max-content;
+  column-gap: 6px;
+}
+.acard__path--plain {
+  grid-template-columns: minmax(0, max-content);
+}
+.dtag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font: 500 var(--fs-micro) / 1 var(--font-ui);
+  text-transform: lowercase;
+}
+/* Band: rendered only when it has content (activity or PR chip); 32px where present. Cards may differ in height. */
+.acard__band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 32px;
+  /* 5px (design: 6px): with the 20px PR chip + 1px border the band would be 33px, 1px taller than chip-less
+     cards; 5px keeps every band exactly 32px. */
+  padding: 5px 12px;
+  border-top: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--fg-primary) 4%, var(--bg-card));
+}
+.acard:hover .acard__band {
+  background: color-mix(in srgb, var(--fg-primary) 4%, var(--bg-elevated));
+}
+.acard__act {
+  /* flex:1 even when empty (PR chip only), so the chip sits on the right */
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--fg-secondary);
+}
+.acard__act-ico {
+  flex: none;
+  stroke-width: 1.7;
+  color: var(--fg-muted);
+}
+.acard__act-t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acard__act code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-primary);
+}
+.acard__band .pr-chip {
+  position: relative;
+  z-index: 1;
+}
+.acard__time {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}

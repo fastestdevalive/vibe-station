@@ -24,6 +24,7 @@ import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
 import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
 import { useDoctorStatus } from "@/hooks/useDoctorStatus";
+import { doctorSummary } from "@/components/doctor/doctorSummary";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -46,6 +47,10 @@ import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialo
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 import { clampPopupPosition } from "@/lib/popupPosition";
+import { RelativeTime } from "@/components/layout/RelativeTime";
+import { sessionActivityAt } from "@/lib/sessionActivity";
+import { useSidebarRowLongPress } from "@/components/layout/useSidebarRowLongPress";
+import { buildWorktreeActivityMap } from "@/lib/sessionActivity";
 
 /** Material Design "search" glyph — a more natural glass-to-handle proportion than Lucide's. */
 function MaterialSearchIcon({ size = 16 }: { size?: number }) {
@@ -254,6 +259,7 @@ export function LeftSidebar({
   header,
 }: LeftSidebarProps) {
   const envWidth = useViewportWidth();
+  const rowLongPress = useSidebarRowLongPress();
   const demoEnv = useDemoEnv();
   const envHeight = demoEnv.viewport?.h ?? (typeof window !== "undefined" ? window.innerHeight : 800);
   const portalRoot = usePortalRoot();
@@ -269,6 +275,8 @@ export function LeftSidebar({
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
+  /** worktreeId -> newest activity over its non-archived sessions (sidebar row time). */
+  const wtActivity = useMemo(() => buildWorktreeActivityMap(sessions), [sessions]);
   /** Non-hidden worktrees, grouped by project — the only ones rendered in the
    *  normal per-project list. Hidden worktrees surface only via `hiddenWorktreeMap`
    *  below (the project's "Archived worktrees" dialog). */
@@ -1550,12 +1558,13 @@ export function LeftSidebar({
 
   return (
     <div
-      className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
+      className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}${rowLongPress.isTouch ? " left-sidebar--touch" : ""}`}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
       {header}
       <div
         ref={scrollRef}
+        {...rowLongPress.handlers}
         className={collapsed ? "left-sidebar__scroll" : "left-sidebar__scroll scroll-stable"}
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
@@ -1757,6 +1766,7 @@ export function LeftSidebar({
                                   <span className="direct-session__badge">archived</span>
                                 ) : null}
                                 <span className="direct-session__badge">direct</span>
+                                <RelativeTime className="wt-row__time" at={sessionActivityAt(sess)} />
                                 <button
                                   type="button"
                                   data-sess-menu-trigger
@@ -1864,9 +1874,7 @@ export function LeftSidebar({
                               </div>
                               <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
                                 <DiffStatBadge stat={diffStats[w.id] ?? null} />
-                                <span className="wt-row__id" title={w.id}>
-                                  {w.id}
-                                </span>
+                                <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
                                 <button
                                   type="button"
                                   data-wt-menu-trigger
@@ -2079,7 +2087,7 @@ export function LeftSidebar({
           )}
         </div>
         {!collapsed && draftError ? (
-          <div className="sidebar-inline-error" role="status">
+          <div className="sidebar-inline-error error-text" role="status">
             <span>{draftError}</span>
             <button type="button" className="icon-btn" aria-label="Dismiss error" onClick={() => setDraftError(null)}>×</button>
           </div>
@@ -2527,6 +2535,7 @@ export function LeftSidebar({
                                       )}
                                       {!collapsed ? (
                                         <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                          <RelativeTime className="wt-row__time" at={sessionActivityAt(sess)} />
                                           <button
                                             type="button"
                                             data-sess-menu-trigger
@@ -2753,9 +2762,7 @@ export function LeftSidebar({
                                     {!collapsed ? (
                                       <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
                                         <DiffStatBadge stat={diffStats[w.id] ?? null} />
-                                        <span className="wt-row__id" title={w.id}>
-                                          {w.id}
-                                        </span>
+                                        <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
                                         <button
                                           type="button"
                                           data-wt-menu-trigger
@@ -2913,6 +2920,7 @@ export function LeftSidebar({
                                                       ) : null}
                                                       {!collapsed ? (
                                                         <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                                          <RelativeTime className="wt-row__time" at={sessionActivityAt(sess)} />
                                                           <button
                                                             type="button"
                                                             data-sess-menu-trigger
@@ -2994,13 +3002,13 @@ export function LeftSidebar({
                   ? "Doctor — can't reach daemon"
                   : !doctorStatus.report
                     ? "Doctor — checking"
-                    : doctorStatus.report.ok
-                    ? "Doctor — all checks passing"
-                    : doctorStatus.report.hardOk
-                      ? "Doctor — some checks need attention"
-                      : "Doctor — required checks failing"
+                    : `Doctor — ${doctorSummary(doctorStatus.report.checks).text}`
               }
-              title="Doctor"
+              title={
+                doctorStatus.report
+                  ? `Doctor — ${doctorSummary(doctorStatus.report.checks).text}`
+                  : "Doctor"
+              }
               onClick={() => navigate("/settings/doctor")}
               style={{ position: "relative" }}
             >

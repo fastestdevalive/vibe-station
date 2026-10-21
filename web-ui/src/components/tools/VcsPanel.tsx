@@ -326,7 +326,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
       {/* Same top bar as the commit view (`VcsCommitView`): `.files-topbar.vcs-topbar`
           with the breadcrumb-style title on the left, refresh on the right. The
           branch chip + "Diff from" toggle live in a row below, out of the bar. */}
-      <div className="files-topbar vcs-topbar">
+      <div className="files-topbar vcs-topbar" data-tauri-drag-region="deep">
         <div className="files-topbar__breadcrumb">
           <span className="diff-scope-selector__breadcrumb">
             Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
@@ -364,7 +364,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
       ) : null}
       {pr ? <PrBanner pr={pr} /> : null}
       {!pr && prStatus?.errorKind && !prStatus?.url ? (
-        <div className="vcs-pr-error">
+        <div className="vcs-pr-error error-text">
           {prStatus.errorKind === "no_credentials" && "No GitHub credentials — run gh auth login"}
           {prStatus.errorKind === "auth" && "GitHub token can't access this repo"}
           {prStatus.errorKind === "not_found" && "Repo not visible to configured accounts"}
