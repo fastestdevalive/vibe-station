@@ -62,6 +62,16 @@ describe("SubagentRow — child rows (3.T1, 3.T1b, 3.T2, 3.T3)", () => {
     expect(row.querySelector(".status-dot--done")).toBeTruthy();
   });
 
+  it("3.T1c — a terminal child still renders but shows no status dot (terminals have no lifecycle status)", () => {
+    const parent = makeSession({ id: "p1" });
+    const term = makeSession({ id: "t1", parentSessionId: "p1", name: "my-shell", type: "terminal", state: "working" });
+    seedSessions([parent, term]);
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const row = screen.getByText("my-shell").closest(".chat-subagent-row__item")!;
+    expect(row.querySelector(".status-dot")).toBeNull();
+    expect(row.getAttribute("title")).toBe("my-shell");
+  });
+
   it("3.T2 — a reset child shows once, as its successor; an archived-but-not-superseded child still shows, styled archived", () => {
     const parent = makeSession({ id: "p1" });
     const oldChild = makeSession({ id: "c1", parentSessionId: "p1", name: "old-child", supersededBy: "c2" });

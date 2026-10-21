@@ -64,6 +64,16 @@ describe("TerminalPane", () => {
     vi.useRealTimers();
   });
 
+  it("shows no 'waiting for input' hint when the session is waiting_for_human", () => {
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "waiting_for_human" },
+      sessionAttachState: {},
+    });
+    const { container } = render(<TerminalPane api={api} sessionId="sess-main" />);
+    expect(screen.queryByText(/waiting for your input/i)).toBeNull();
+    expect(container.querySelector(".terminal-waiting-hint")).toBeNull();
+  });
+
   it("shows spawning placeholder when session is not_started", () => {
     useWorkspaceStore.setState({
       sessionStates: { "sess-main": "not_started" },

@@ -11,6 +11,12 @@
 //! - Idle detection: SHA-1 of the captured pane content.
 //! - `stableSince` resets whenever the hash changes.
 //! - Skipped states: `NotStarted`, `Done`, `Exited`, `Drafting`, plus `Json`-channel.
+//! - Plain terminal sessions (`SessionType::Terminal`) get liveness only: a vanished
+//!   tmux session still goes `Exited`, but there is no idle detection — no pane
+//!   capture, no `Working` <-> `WaitingForHuman` flapping, no `session:state` noise.
+//!   They stay `Working` until exited/done; a terminal found stuck at
+//!   `WaitingForHuman`/`Idle` (written by an older daemon) is normalised back to
+//!   `Working` once.
 //! - Pane disappears from `list-sessions` snapshot → transition to `Exited` +
 //!   broadcast `SessionState { state: Exited }`.
 //! - `mark_session_exited`: idempotent — no-ops for already `Done`/`Exited`.
@@ -21,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use sha1::{Digest, Sha1};
 use vst_proc::tmux::{CapturePaneOptions, Tmux};
 use vst_store::StoreHandle;
-use vst_types::domain::{Channel, LifecycleState, SessionLifecycle, SessionRecord};
+use vst_types::domain::{Channel, LifecycleState, SessionLifecycle, SessionRecord, SessionType};
 use vst_types::events::{Broadcaster, ServerEvent};
 
 use crate::util::{now_iso, now_ms};
@@ -72,6 +78,33 @@ fn should_skip(session: &SessionRecord) -> bool {
         // for direct-pty sessions is meant to be event-driven (PTY exit),
         // not detected by this poller.
         || !session.use_tmux
+}
+
+/// Idle-detection decision for an agent session, given whether the pane hash
+/// changed this tick and how long it has been stable.
+fn agent_next_state(
+    current: LifecycleState,
+    hash_changed: bool,
+    stable_age_ms: u64,
+) -> Option<LifecycleState> {
+    if hash_changed {
+        (current == LifecycleState::WaitingForHuman).then_some(LifecycleState::Working)
+    } else if stable_age_ms >= IDLE_THRESHOLD_MS && current != LifecycleState::WaitingForHuman {
+        // ever_worked is always true → always WaitingForHuman
+        Some(LifecycleState::WaitingForHuman)
+    } else {
+        None
+    }
+}
+
+/// Plain terminals have no idle/waiting state. The only transition is the
+/// one-shot repair of a value an older daemon left behind.
+fn terminal_next_state(current: LifecycleState) -> Option<LifecycleState> {
+    matches!(
+        current,
+        LifecycleState::WaitingForHuman | LifecycleState::Idle
+    )
+    .then_some(LifecycleState::Working)
 }
 
 /// Private (this module only) lifecycle-state setter.
@@ -193,6 +226,23 @@ impl LifecyclePollerHandle {
                     continue;
                 }
 
+                // Liveness is all a plain terminal gets (checked above): no pane
+                // capture and no idle tracking.
+                if session.r#type == SessionType::Terminal {
+                    if let Some(state) = terminal_next_state(session.lifecycle.state) {
+                        set_lifecycle_state(
+                            &project.id,
+                            session,
+                            state,
+                            None,
+                            &self.store,
+                            &self.broadcaster,
+                        )
+                        .await;
+                    }
+                    continue;
+                }
+
                 let captured = {
                     let tmux2 = tmux.clone();
                     let name = session.tmux_name.clone();
@@ -212,7 +262,6 @@ impl LifecyclePollerHandle {
                 };
 
                 let new_hash = sha1_of(&captured);
-                let current_state = session.lifecycle.state;
 
                 let new_state = {
                     let mut map = self.tracks.lock().expect("poisoned");
@@ -225,25 +274,16 @@ impl LifecyclePollerHandle {
                                 ever_worked: true,
                             });
 
-                    if track.hash != new_hash {
+                    let hash_changed = track.hash != new_hash;
+                    if hash_changed {
                         track.hash = new_hash;
                         track.stable_since_ms = now;
-                        if current_state == LifecycleState::WaitingForHuman {
-                            Some(LifecycleState::Working)
-                        } else {
-                            None
-                        }
-                    } else {
-                        let stable_age = now.saturating_sub(track.stable_since_ms);
-                        if stable_age >= IDLE_THRESHOLD_MS
-                            && current_state != LifecycleState::WaitingForHuman
-                        {
-                            // ever_worked is always true → always WaitingForHuman
-                            Some(LifecycleState::WaitingForHuman)
-                        } else {
-                            None
-                        }
                     }
+                    agent_next_state(
+                        session.lifecycle.state,
+                        hash_changed,
+                        now.saturating_sub(track.stable_since_ms),
+                    )
                 };
 
                 if let Some(state) = new_state {
@@ -359,5 +399,47 @@ mod should_skip_tests {
         session.use_tmux = false;
         session.lifecycle.state = LifecycleState::WaitingForHuman;
         assert!(should_skip(&session));
+    }
+}
+
+#[cfg(test)]
+mod next_state_tests {
+    use super::{agent_next_state, terminal_next_state, IDLE_THRESHOLD_MS};
+    use vst_types::domain::LifecycleState::{Done, Exited, Idle, WaitingForHuman, Working};
+
+    #[test]
+    fn terminal_never_enters_waiting_or_idle() {
+        assert_eq!(terminal_next_state(Working), None);
+        assert_eq!(terminal_next_state(Done), None);
+        assert_eq!(terminal_next_state(Exited), None);
+    }
+
+    #[test]
+    fn terminal_stuck_at_waiting_or_idle_is_repaired_to_working() {
+        assert_eq!(terminal_next_state(WaitingForHuman), Some(Working));
+        assert_eq!(terminal_next_state(Idle), Some(Working));
+    }
+
+    #[test]
+    fn agent_idle_detection_is_unchanged() {
+        // Stable long enough → waiting for human.
+        assert_eq!(
+            agent_next_state(Working, false, IDLE_THRESHOLD_MS),
+            Some(WaitingForHuman)
+        );
+        // Not stable long enough → no change.
+        assert_eq!(
+            agent_next_state(Working, false, IDLE_THRESHOLD_MS - 1),
+            None
+        );
+        // Already waiting and still stable → no change.
+        assert_eq!(
+            agent_next_state(WaitingForHuman, false, IDLE_THRESHOLD_MS),
+            None
+        );
+        // Output resumed while waiting → working.
+        assert_eq!(agent_next_state(WaitingForHuman, true, 0), Some(Working));
+        // Output changed while already working → no change.
+        assert_eq!(agent_next_state(Working, true, 0), None);
     }
 }
