@@ -2,6 +2,7 @@ name: Rust CI
 
 on:
   push:
+    branches: [main]
     paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
   pull_request:
     paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
