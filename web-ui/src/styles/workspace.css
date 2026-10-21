@@ -2809,20 +2809,6 @@
   height: 100%;
 }
 
-.terminal-waiting-hint {
-  position: absolute;
-  top: var(--space-3);
-  left: 50%;
-  transform: translateX(-50%);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  background: var(--bg-elevated);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  pointer-events: none;
-  z-index: 1;
-}
-
 .terminal-resume-banner {
   padding: var(--space-2) var(--space-3);
   background: var(--bg-elevated);

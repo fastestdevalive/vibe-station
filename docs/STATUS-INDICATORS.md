@@ -149,6 +149,19 @@ done.
   broadcasts `isMain: false` on the old row), and `worktreePrStatus` also excludes them via
   `excludeSuperseded()` as a backstop, so the worktree PR colour/bucket follows the replacement.
 
+## Terminal sessions have no idle/waiting state
+
+Plain terminal sessions (`type === "terminal"`) are not agents, so the lifecycle poller does **no
+idle detection** on them: no pane capture, no `working` ↔ `waiting_for_human` flapping, no
+`session:state` events from it. A terminal is created `working` and stays `working` until the pane
+dies (`exited`, still detected by the poller's tmux-liveness check) or the user marks it `done`.
+A terminal an older daemon left at `waiting_for_human`/`idle` is repaired to `working` once.
+Consequences: no surface shows a status dot for a terminal (`SubagentRow` hides it for terminal
+children), the old "Waiting for your input" overlay in `TerminalPane` is gone for every tmux pane,
+and a parent agent is no longer woken with "<terminal> is waiting for your reply".
+`vst agent send <terminal> --wait` waits for `idle`/`waiting_for_human`, which a terminal never
+reaches, so it runs to `--timeout` and warns.
+
 ## Per-session vs per-worktree
 
 - The **dot** is always per session.

@@ -297,11 +297,17 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
             }}
             title={
               sameWorktree
-                ? `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
+                ? child.type === "terminal"
+                  ? sessionLabel(child)
+                  : `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
                 : "This subagent is in a different worktree"
             }
           >
-            <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
+            {/* Terminals have no idle/waiting lifecycle (docs/STATUS-INDICATORS.md) —
+                a dot would read "working" forever. */}
+            {child.type === "agent" ? (
+              <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
+            ) : null}
             <ChipIcon session={child} api={api} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>
             {api && confirmDelink?.id !== child.id ? (
