@@ -48,7 +48,7 @@ export function Workspace() {
     "modes": "Modes",
     "appearance": "Appearance",
     "projects": "Projects",
-    "hidden-projects": "Hidden projects",
+    "hidden-projects": "Archived projects",
     "storage": "Storage",
     "remote-access": "Remote Access",
   };

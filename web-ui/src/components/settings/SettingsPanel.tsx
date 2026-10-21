@@ -37,7 +37,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     { id: "markdown", label: "Markdown", content: <MarkdownStyleSetting /> },
     { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },
     { id: "skills", label: "Skills", content: <SkillsSetting api={api} /> },
-    { id: "hidden-projects", label: "Hidden projects", content: <HiddenProjectsSetting api={api} /> },
+    { id: "hidden-projects", label: "Archived projects", content: <HiddenProjectsSetting api={api} /> },
     { id: "storage", label: "Storage", content: <StorageSetting api={api} /> },
     { id: "remote-access", label: "Remote Access", content: <RemoteAccessSetting api={api} /> },
     { id: "lsp", label: "LSP", content: <LspSetting api={api} /> },

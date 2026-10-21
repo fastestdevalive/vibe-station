@@ -25,13 +25,13 @@ describe("HiddenProjectsSetting", () => {
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: true });
   });
 
-  it("shows an empty state when no projects are hidden", () => {
+  it("shows an empty state when no projects are archived", () => {
     useServerStore.setState({ projects: [proj("a", "Alpha", false)] });
     render(<HiddenProjectsSetting api={createMockApi()} />);
-    expect(screen.getByText(/no hidden projects/i)).toBeInTheDocument();
+    expect(screen.getByText(/no archived projects/i)).toBeInTheDocument();
   });
 
-  it("lists hidden projects and not visible ones", () => {
+  it("lists archived projects and not visible ones", () => {
     useServerStore.setState({
       projects: [proj("a", "Alpha", false), proj("b", "Beta", true)],
     });
@@ -40,7 +40,7 @@ describe("HiddenProjectsSetting", () => {
     expect(screen.queryByText("Alpha")).toBeNull();
   });
 
-  it("clicking Unhide calls api.unhideProject", async () => {
+  it("clicking Unarchive calls api.unhideProject", async () => {
     const user = userEvent.setup();
     useServerStore.setState({ projects: [proj("b", "Beta", true)] });
     const api = createMockApi();
@@ -49,7 +49,7 @@ describe("HiddenProjectsSetting", () => {
       project: proj("b", "Beta", false),
     });
     render(<HiddenProjectsSetting api={api} />);
-    await user.click(screen.getByRole("button", { name: /Unhide project Beta/i }));
+    await user.click(screen.getByRole("button", { name: /Unarchive project Beta/i }));
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith("b");
     });
