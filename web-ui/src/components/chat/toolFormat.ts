@@ -335,3 +335,9 @@ export function extractToolDiffs(tool: ToolCallEntry): ToolDiff[] | undefined {
 
   return undefined;
 }
+
+/** Byte size from the daemon's `(diff omitted — N bytes)` placeholder (size cap), or null for a real diff. */
+export function omittedDiffBytes(diff: ToolDiff): number | null {
+  const m = /^\(diff omitted — (\d+) bytes\)$/.exec(diff.newText);
+  return m ? Number(m[1]) : null;
+}
