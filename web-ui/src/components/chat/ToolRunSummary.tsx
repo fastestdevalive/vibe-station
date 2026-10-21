@@ -6,6 +6,7 @@ import { useRowOpen } from "./rowUiState";
 import {
   capForDisplay,
   extractToolDiffs,
+  omittedDiffBytes,
   isWriteToolName,
   looksLikeUnifiedDiff,
   prettyToolInput,
@@ -298,14 +299,21 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
             </pre>
           ) : null}
           {hasDiffs
-            ? diffs!.map((diff, i) => (
-                <DiffView
-                  key={`${diff.path}-${i}`}
-                  oldText={diff.oldText ?? ""}
-                  newText={diff.newText}
-                  filePath={relativize(diff.path, cwd)}
-                />
-              ))
+            ? diffs!.map((diff, i) => {
+                const omitted = omittedDiffBytes(diff);
+                return omitted !== null ? (
+                  <pre key={`${diff.path}-${i}`} className="chat-tool-entry__pre">
+                    <code>{`Diff too large to display — ${omitted} bytes`}</code>
+                  </pre>
+                ) : (
+                  <DiffView
+                    key={`${diff.path}-${i}`}
+                    oldText={diff.oldText ?? ""}
+                    newText={diff.newText}
+                    filePath={relativize(diff.path, cwd)}
+                  />
+                );
+              })
             : null}
           {hasResultBody ? (
             isDiff ? (
