@@ -474,9 +474,9 @@ impl ModeRoutes {
         }
 
         let context = body.context.trim();
-        if context.is_empty() || context.len() > MAX_CONTEXT_LEN {
+        if context.len() > MAX_CONTEXT_LEN {
             return Err(ModeRouteError::validation(format!(
-                "Mode context must be between 1 and {MAX_CONTEXT_LEN} characters."
+                "Mode context must not exceed {MAX_CONTEXT_LEN} characters."
             )));
         }
 
@@ -566,9 +566,9 @@ impl ModeRoutes {
 
         if let Some(ref context) = body.context {
             let trimmed = context.trim();
-            if trimmed.is_empty() || trimmed.len() > MAX_CONTEXT_LEN {
+            if trimmed.len() > MAX_CONTEXT_LEN {
                 return Err(ModeRouteError::validation(format!(
-                    "Mode context must be between 1 and {MAX_CONTEXT_LEN} characters."
+                    "Mode context must not exceed {MAX_CONTEXT_LEN} characters."
                 )));
             }
         }
