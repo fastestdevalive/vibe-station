@@ -110,7 +110,7 @@ export function useSessionBuckets(
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
   /** Hidden projects (and all their worktrees) are excluded from every dashboard
-   *  list — visibility only; unhide from Settings. */
+   *  list — visibility only; unarchive from Settings. */
   const hiddenProjectIds = useMemo(
     () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
     [projects],

@@ -271,7 +271,7 @@ export function LeftSidebar({
   const sessions = useServerStore((s) => s.sessions);
   /** Non-hidden worktrees, grouped by project — the only ones rendered in the
    *  normal per-project list. Hidden worktrees surface only via `hiddenWorktreeMap`
-   *  below (the project's "Hidden worktrees" dialog). */
+   *  below (the project's "Archived worktrees" dialog). */
   const worktreeMap = useMemo(() => {
     const m: Record<string, Worktree[]> = {};
     for (const w of worktrees) {
@@ -287,7 +287,7 @@ export function LeftSidebar({
     [worktrees],
   );
   const diffStats = useWorktreeDiffStats(api, visibleWorktreeIds);
-  /** Hidden worktrees, grouped by project — feeds the "Hidden worktrees" dialog
+  /** Hidden worktrees, grouped by project — feeds the "Archived worktrees" dialog
    *  and the count shown in the project overflow menu. */
   const hiddenWorktreeMap = useMemo(() => {
     const m: Record<string, Worktree[]> = {};
@@ -898,7 +898,7 @@ export function LeftSidebar({
   const visible = isMobile ? mobileSidebarOpen : !collapsed;
   const prevVisibleRef = useRef<boolean>(!visible);
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
-  /** Id of the project whose "Hidden worktrees" dialog is open, or null when closed. */
+  /** Id of the project whose "Archived worktrees" dialog is open, or null when closed. */
   const [hiddenWtDialogProjectId, setHiddenWtDialogProjectId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingHideProject, setPendingHideProject] = useState<{ project: Project; rect: DOMRect } | null>(null);
@@ -3203,7 +3203,7 @@ export function LeftSidebar({
                   }}
                 >
                   <EyeOff size={13} aria-hidden />
-                  Hide
+                  Archive
                 </button>
                 <button
                   type="button"
@@ -3405,7 +3405,7 @@ export function LeftSidebar({
                   }}
                 >
                   <EyeOff size={13} aria-hidden />
-                  Hide project
+                  Archive project
                 </button>
                 {(() => {
                   if (hiddenCount === 0) return null;
@@ -3421,7 +3421,7 @@ export function LeftSidebar({
                       }}
                     >
                       <Eye size={13} aria-hidden />
-                      {`Hidden worktrees (${hiddenCount})`}
+                      {`Archived worktrees (${hiddenCount})`}
                     </button>
                   );
                 })()}
@@ -3463,7 +3463,7 @@ export function LeftSidebar({
                 data-hide-project-popup
                 role="dialog"
                 aria-modal="true"
-                aria-label="Hide project?"
+                aria-label="Archive project?"
                 style={{
                   position: "fixed",
                   top,
@@ -3486,7 +3486,7 @@ export function LeftSidebar({
                     color: "var(--fg-primary)",
                   }}
                 >
-                  Hide project?
+                  Archive project?
                 </div>
                 <div
                   style={{
@@ -3495,7 +3495,7 @@ export function LeftSidebar({
                     lineHeight: 1.4,
                   }}
                 >
-                  {`Hide “${pendingHideProject.project.name}”? Hidden projects can be managed in settings later.`}
+                  {`Archive “${pendingHideProject.project.name}”? Archived projects can be managed in settings later.`}
                 </div>
                 <div
                   style={{
@@ -3543,7 +3543,7 @@ export function LeftSidebar({
                       textAlign: "center",
                     }}
                   >
-                    Hide
+                    Archive
                   </button>
                 </div>
               </div>,

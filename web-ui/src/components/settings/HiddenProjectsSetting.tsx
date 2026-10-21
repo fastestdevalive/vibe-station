@@ -9,8 +9,8 @@ interface HiddenProjectsSettingProps {
 }
 
 /**
- * Lists projects the user has hidden from the sidebar + dashboard, with a
- * per-row Unhide action. Hidden state is server-side (project manifest), so the
+ * Lists projects the user has archived from the sidebar + dashboard, with a
+ * per-row Unarchive action. Hidden state is server-side (project manifest), so the
  * list stays in sync via the `project:updated` WS event (no manual refetch).
  */
 export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
@@ -41,7 +41,7 @@ export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
   return (
     <div>
       <SectionHeader
-        description="Projects you've hidden from the sidebar and dashboard. Unhiding restores a project and all its worktrees."
+        description="Projects you've archived from the sidebar and dashboard. Unarchiving restores a project and all its worktrees."
       />
 
       {hidden.length === 0 ? (
@@ -52,7 +52,7 @@ export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
             padding: "var(--space-3) 0",
           }}
         >
-          No hidden projects.
+          No archived projects.
         </div>
       ) : (
         <div>
@@ -96,7 +96,7 @@ export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
               <button
                 type="button"
                 disabled={busy.has(p.id)}
-                aria-label={`Unhide project ${p.name}`}
+                aria-label={`Unarchive project ${p.name}`}
                 onClick={() => unhide(p.id)}
                 style={{
                   flexShrink: 0,
@@ -120,7 +120,7 @@ export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
                 }}
               >
                 <Eye size={14} aria-hidden style={{ flexShrink: 0 }} />
-                <span>Unhide</span>
+                <span>Unarchive</span>
               </button>
             </div>
           ))}

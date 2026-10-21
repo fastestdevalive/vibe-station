@@ -10,15 +10,15 @@ interface HiddenWorktreesDialogProps {
   onClose: () => void;
 }
 
-/** Per-project list of hidden worktrees (see `wtMenu`'s "Hide" item in
- *  LeftSidebar), with an "Unhide" action per row. Opened from the project's
- *  overflow menu — a hidden worktree has no other UI surface once hidden. */
+/** Per-project list of archived worktrees (see `wtMenu`'s "Archive" item in
+ *  LeftSidebar), with an "Unarchive" action per row. Opened from the project's
+ *  overflow menu — an archived worktree has no other UI surface. */
 export function HiddenWorktreesDialog({ open, worktrees, api, onClose }: HiddenWorktreesDialogProps) {
   return (
-    <Dialog open={open} title="Hidden worktrees" onClose={onClose}>
+    <Dialog open={open} title="Archived worktrees" onClose={onClose}>
       {worktrees.length === 0 ? (
         <p style={{ margin: 0, fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
-          No hidden worktrees.
+          No archived worktrees.
         </p>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
@@ -37,7 +37,7 @@ export function HiddenWorktreesDialog({ open, worktrees, api, onClose }: HiddenW
                   </span>
                   <button
                     type="button"
-                    aria-label={`Unhide ${label}`}
+                    aria-label={`Unarchive ${label}`}
                     onClick={() => {
                       void (async () => {
                         try {
@@ -49,7 +49,7 @@ export function HiddenWorktreesDialog({ open, worktrees, api, onClose }: HiddenW
                       })();
                     }}
                   >
-                    Unhide
+                    Unarchive
                   </button>
                 </li>
               );

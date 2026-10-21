@@ -718,8 +718,8 @@ describe("LeftSidebar", () => {
   });
 
   // ─── Worktree hiding ─────────────────────────────────────────────────────
-  describe("worktree hiding", () => {
-    it("Hide action in the ⋯ menu calls api.hideWorktree and the row disappears from the sidebar", async () => {
+  describe("worktree archiving", () => {
+    it("Archive action in the ⋯ menu calls api.hideWorktree and the row disappears from the sidebar", async () => {
       const localApi = createMockApi();
       const user = userEvent.setup();
       render(
@@ -735,7 +735,7 @@ describe("LeftSidebar", () => {
       const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
       await user.click(trigger);
 
-      const hideItem = await screen.findByRole("menuitem", { name: /^hide$/i });
+      const hideItem = await screen.findByRole("menuitem", { name: /^archive$/i });
       await user.click(hideItem);
 
       await waitFor(() => {
@@ -761,7 +761,7 @@ describe("LeftSidebar", () => {
       const trigger = pinnedRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
       await user.click(trigger);
 
-      const hideItem = await screen.findByRole("menuitem", { name: /^hide$/i });
+      const hideItem = await screen.findByRole("menuitem", { name: /^archive$/i });
       await user.click(hideItem);
 
       await waitFor(() => {
@@ -770,7 +770,7 @@ describe("LeftSidebar", () => {
       expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
     });
 
-    it("project menu shows a Hidden worktrees item only once the project has a hidden worktree, and Unhide restores it", async () => {
+    it("project menu shows an Archived worktrees item only once the project has a hidden worktree, and Unarchive restores it", async () => {
       const localApi = createMockApi();
       const user = userEvent.setup();
       render(
@@ -784,22 +784,22 @@ describe("LeftSidebar", () => {
 
       // No hidden worktrees yet — the item shouldn't be in the project menu.
       await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
-      expect(screen.queryByRole("menuitem", { name: /Hidden worktrees/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /Archived worktrees/i })).not.toBeInTheDocument();
       await user.keyboard("{Escape}");
 
       await localApi.hideWorktree("wt-1");
 
       await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
-      const hiddenItem = await screen.findByRole("menuitem", { name: /Hidden worktrees \(1\)/i });
+      const hiddenItem = await screen.findByRole("menuitem", { name: /Archived worktrees \(1\)/i });
       await user.click(hiddenItem);
 
-      const dialog = await screen.findByRole("dialog", { name: /Hidden worktrees/i });
+      const dialog = await screen.findByRole("dialog", { name: /Archived worktrees/i });
       expect(within(dialog).getByText("wt-1")).toBeInTheDocument();
 
-      await user.click(within(dialog).getByRole("button", { name: /unhide/i }));
+      await user.click(within(dialog).getByRole("button", { name: /unarchive/i }));
 
       await waitFor(() => {
-        expect(within(dialog).getByText("No hidden worktrees.")).toBeInTheDocument();
+        expect(within(dialog).getByText("No archived worktrees.")).toBeInTheDocument();
       });
       // The worktree is back in the normal sidebar list.
       expect(screen.getByRole("link", { name: /Open worktree wt-1/i })).toBeInTheDocument();
@@ -808,7 +808,7 @@ describe("LeftSidebar", () => {
 
   // ─── Project hiding ──────────────────────────────────────────────────────
   describe("project hiding", () => {
-    it("project row exposes a project actions (⋮) menu with Hide project (New worktree moved to the + menu)", async () => {
+    it("project row exposes a project actions (⋮) menu with Archive project (New worktree moved to the + menu)", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi();
       render(
@@ -821,13 +821,13 @@ describe("LeftSidebar", () => {
       await screen.findByText("Proj A");
       const trigger = screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!;
       await user.click(trigger);
-      expect(await screen.findByRole("menuitem", { name: /Hide project/i })).toBeInTheDocument();
+      expect(await screen.findByRole("menuitem", { name: /Archive project/i })).toBeInTheDocument();
       // "New worktree" was intentionally removed from the ⋮ menu — it lives in
       // the project + (plus) menu instead.
       expect(screen.queryByRole("menuitem", { name: /New worktree/i })).not.toBeInTheDocument();
     });
 
-    it("clicking Hide project opens confirmation dialog and confirming calls api.hideProject", async () => {
+    it("clicking Archive project opens confirmation dialog and confirming calls api.hideProject", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi();
       const spy = vi.spyOn(localApi, "hideProject");
@@ -840,19 +840,19 @@ describe("LeftSidebar", () => {
       );
       await screen.findByText("Proj A");
       await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
-      await user.click(await screen.findByRole("menuitem", { name: /Hide project/i }));
+      await user.click(await screen.findByRole("menuitem", { name: /Archive project/i }));
       expect(spy).not.toHaveBeenCalled();
       expect(await screen.findByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByText("Hide project?")).toBeInTheDocument();
+      expect(screen.getByText("Archive project?")).toBeInTheDocument();
       expect(
-        screen.getByText(/Hide “Proj A”\? Hidden projects can be managed in settings later\./i),
+        screen.getByText(/Archive “Proj A”\? Archived projects can be managed in settings later\./i),
       ).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: /^Hide$/i }));
+      await user.click(screen.getByRole("button", { name: /^Archive$/i }));
       expect(spy).toHaveBeenCalledWith("proj-a");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("cancelling Hide project confirmation dialog does not call api.hideProject", async () => {
+    it("cancelling Archive project confirmation dialog does not call api.hideProject", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi();
       const spy = vi.spyOn(localApi, "hideProject");
@@ -865,7 +865,7 @@ describe("LeftSidebar", () => {
       );
       await screen.findByText("Proj A");
       await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
-      await user.click(await screen.findByRole("menuitem", { name: /Hide project/i }));
+      await user.click(await screen.findByRole("menuitem", { name: /Archive project/i }));
       expect(spy).not.toHaveBeenCalled();
       expect(await screen.findByRole("dialog")).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: /Cancel/i }));
@@ -3147,7 +3147,7 @@ describe("LeftSidebar - DemoEnv portal root and event root", () => {
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
     const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
     await user.click(wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement);
-    return { user, item: await screen.findByRole("menuitem", { name: /^hide$/i }) };
+    return { user, item: await screen.findByRole("menuitem", { name: /^archive$/i }) };
   }
 
   it("renders the worktree menu into env.portalRoot, not document.body", async () => {
@@ -3169,9 +3169,9 @@ describe("LeftSidebar - DemoEnv portal root and event root", () => {
       await new Promise((r) => setTimeout(r, 5));
     });
     fireEvent.click(document.body);
-    expect(screen.getByRole("menuitem", { name: /^hide$/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^archive$/i })).toBeInTheDocument();
     await user.click(host);
-    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /^hide$/i })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /^archive$/i })).toBeNull());
     host.remove();
   });
 });
