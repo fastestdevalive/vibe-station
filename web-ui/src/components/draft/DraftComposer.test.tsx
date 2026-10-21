@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi, type MockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
 import type { Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
@@ -77,7 +77,7 @@ async function selectNewDirectoryAndStart() {
 
 describe("DraftComposer new-directory creation", () => {
   let api: MockApi;
-  let onStarted: ReturnType<typeof vi.fn>;
+  let onStarted: Mock<(...args: unknown[]) => void>;
 
   beforeEach(() => {
     api = makeApi();
@@ -401,7 +401,7 @@ describe("DraftComposer new-directory creation", () => {
 
 describe("Phase 4 — channel default follows the mode's CLI defaultChannel", () => {
   let api: MockApi;
-  let onStarted: ReturnType<typeof vi.fn>;
+  let onStarted: Mock<(...args: unknown[]) => void>;
 
   beforeEach(() => {
     api = makeApi();
