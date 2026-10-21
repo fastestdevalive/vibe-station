@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi, type MockApi } from "@/api/mock";
 import type { Project } from "@/api/types";
 import { ProjectCombobox } from "./ProjectCombobox";
@@ -22,10 +22,10 @@ function makeProject(over: Partial<Project>): Project {
 
 describe("ProjectCombobox", () => {
   let api: MockApi;
-  let onSelectExisting: ReturnType<typeof vi.fn>;
-  let onNewName: ReturnType<typeof vi.fn>;
-  let onAddPath: ReturnType<typeof vi.fn>;
-  let onClear: ReturnType<typeof vi.fn>;
+  let onSelectExisting: Mock<(...args: unknown[]) => void>;
+  let onNewName: Mock<(...args: unknown[]) => void>;
+  let onAddPath: Mock<(...args: unknown[]) => void>;
+  let onClear: Mock<(...args: unknown[]) => void>;
 
   beforeEach(() => {
     api = createMockApi();
