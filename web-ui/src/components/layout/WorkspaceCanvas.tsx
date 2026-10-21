@@ -1005,8 +1005,14 @@ export function WorkspaceCanvas({
               .filter(Boolean)
               .join(" > ")
           : tile.kind;
+    // Terminals have no idle/waiting lifecycle (docs/STATUS-INDICATORS.md), so a
+    // live one would read "working" forever (and mask the worktree's PR colour).
+    // Only the terminal-ending states carry meaning for them.
+    const tracksStatus =
+      !!session &&
+      (session.type === "agent" || session.state === "exited" || session.state === "done");
     const status =
-      tile.kind !== "tools" && session && showAgentStatusBorders
+      tile.kind !== "tools" && session && tracksStatus && showAgentStatusBorders
         ? sessionStatus(session.state)
         : null;
     // BLOCKING-2 — PR is resolved per WORKTREE via `worktreePrById` (built

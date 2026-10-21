@@ -156,11 +156,11 @@ idle detection** on them: no pane capture, no `working` ↔ `waiting_for_human` 
 `session:state` events from it. A terminal is created `working` and stays `working` until the pane
 dies (`exited`, still detected by the poller's tmux-liveness check) or the user marks it `done`.
 A terminal an older daemon left at `waiting_for_human`/`idle` is repaired to `working` once.
-Consequences: no surface shows a status dot for a terminal (`SubagentRow` hides it for terminal
-children), the old "Waiting for your input" overlay in `TerminalPane` is gone for every tmux pane,
+Consequences: no surface shows a status dot for a *live* terminal (`SubagentRow` hides it for
+terminal children; `WorkspaceCanvas` terminal tiles get a dot/border only once `exited`/`done`), the old "Waiting for your input" overlay in `TerminalPane` is gone for every tmux pane,
 and a parent agent is no longer woken with "<terminal> is waiting for your reply".
-`vst agent send <terminal> --wait` waits for `idle`/`waiting_for_human`, which a terminal never
-reaches, so it runs to `--timeout` and warns.
+`vst agent send <terminal>` returns right after sending instead of waiting to settle (a terminal
+never reaches `idle`/`waiting_for_human`, and has no reply to print).
 
 ## Per-session vs per-worktree
 
