@@ -4,6 +4,7 @@ members = [
     "vst-types",
     "vst-testkit",
     "vst-store",
+    "vst-activity",
     "vst-proc",
     "vst-git",
     "vst-rpc",
@@ -48,6 +49,7 @@ percent-encoding = "2"
 vst-types = { path = "vst-types" }
 vst-testkit = { path = "vst-testkit", default-features = false }
 vst-store = { path = "vst-store" }
+vst-activity = { path = "vst-activity" }
 vst-proc = { path = "vst-proc" }
 vst-git = { path = "vst-git" }
 vst-rpc = { path = "vst-rpc" }

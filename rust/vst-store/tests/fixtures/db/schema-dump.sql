@@ -65,7 +65,7 @@ CREATE TABLE sessions (
       initialPrompt TEXT,
       archivedAt TEXT,
       handoffSummary TEXT
-    , spawnedFrom TEXT, supersededBy TEXT, prState TEXT, prNumber INTEGER, prUrl TEXT, prCheckedAt TEXT, prBranch TEXT, acpSessionId TEXT, draftPrompt TEXT, draftConfig TEXT, prError TEXT, prErrorKind TEXT, modeIcon TEXT);
+    , spawnedFrom TEXT, supersededBy TEXT, prState TEXT, prNumber INTEGER, prUrl TEXT, prCheckedAt TEXT, prBranch TEXT, acpSessionId TEXT, draftPrompt TEXT, draftConfig TEXT, prError TEXT, prErrorKind TEXT, modeIcon TEXT, lastActivityAt TEXT, lastLine TEXT, lastToolName TEXT, lastToolDetail TEXT);
 CREATE TABLE tunnel_state (
       id         INTEGER PRIMARY KEY,
       enabled    INTEGER NOT NULL DEFAULT 0,

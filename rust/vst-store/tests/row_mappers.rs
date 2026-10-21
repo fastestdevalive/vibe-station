@@ -48,6 +48,10 @@ fn base_row() -> SessionRow {
         pr_branch: None,
         pr_error: None,
         pr_error_kind: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool_name: None,
+        last_tool_detail: None,
     }
 }
 
@@ -96,6 +100,9 @@ fn session_round_trip_every_field() {
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     let row = session_to_row(&session, "proj-1", Some("vs-1"));
     let back = row_to_session(&row);
@@ -136,6 +143,9 @@ fn session_omits_optionals_when_null() {
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     let row = session_to_row(&minimal, "proj-1", None);
     let back = row_to_session(&row);
@@ -181,6 +191,9 @@ fn parent_session_id_round_trips_through_spawned_from() {
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     with_parent.parent_session_id = Some("sess-parent-1".into());
     let row = session_to_row(&with_parent, "proj-1", Some("vs-1"));
@@ -294,6 +307,9 @@ fn session_to_row_writes_pr_branch_null_when_absent() {
             error_kind: None,
             pr_branch: Some("feature-x".into()),
         }),
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
     assert_eq!(
         session_to_row(&session, "proj-1", None)

@@ -348,6 +348,9 @@ pub fn serialize_session(
         pr: s.pr.clone(),
         draft_prompt: s.draft_prompt.clone(),
         draft_config: s.draft_config.clone(),
+        last_activity_at: s.last_activity_at.clone(),
+        last_line: None, // reserved: legacy stored lines are never served
+        last_tool: s.last_tool.clone(),
     }
 }
 
@@ -391,6 +394,9 @@ pub fn serialize_global_draft(row: &GlobalDraftRow) -> GlobalDraft {
         pr: None,
         draft_prompt: row.draft_prompt.clone(),
         draft_config,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     }
 }
 
@@ -1009,6 +1015,9 @@ impl SessionRoutes {
             pinned_at: None,
             superseded_by: None,
             pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         };
 
         if r#type == SessionType::Terminal {
@@ -1175,6 +1184,9 @@ impl SessionRoutes {
             pinned_at: None,
             superseded_by: None,
             pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         };
 
         if r#type == SessionType::Terminal {
@@ -1606,6 +1618,7 @@ impl SessionRoutes {
                     .await
                     .map_err(delete_err)?;
                 self.prune_notice_and_forget(id, session.parent_session_id.as_deref());
+                self.forget_activity(id);
                 // No FK to cascade — drop the session's scheduled messages here.
                 let _ = self.store.delete_scheduled_messages_for_session(id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
@@ -1746,6 +1759,7 @@ impl SessionRoutes {
                     });
                 }
                 self.prune_notice_and_forget(&id, session.parent_session_id.as_deref());
+                self.forget_activity(&id);
                 // No FK to cascade — drop the session's scheduled messages here.
                 let _ = self.store.delete_scheduled_messages_for_session(&id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
@@ -2483,6 +2497,9 @@ impl SessionRoutes {
             parent_session_id: session.parent_session_id.clone(),
             superseded_by: session.superseded_by.clone(),
             pr: session.pr.clone(),
+            last_activity_at: session.last_activity_at.clone(),
+            last_line: session.last_line.clone(),
+            last_tool: session.last_tool.clone(),
         }
     }
 
@@ -3332,6 +3349,9 @@ impl SessionRoutes {
             acp_session_id: None,
             model_override: None,
             pinned_at: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         };
 
         // Archive the old row + append the replacement in this SAME
@@ -5080,6 +5100,13 @@ impl SessionRoutes {
     /// Prune a child from its parent's live notice slot, then forget its
     /// subagent-notify state (mirrors `pruneNoticeSlotChild` +
     /// `forgetSubagentNotify`).
+    /// Drop the activity tracker's entry for a deleted session.
+    fn forget_activity(&self, id: &str) {
+        if let Some(sink) = self.json_registry.activity_sink() {
+            sink.forget(id);
+        }
+    }
+
     fn prune_notice_and_forget(&self, id: &str, parent_session_id: Option<&str>) {
         if let Some(pid) = parent_session_id {
             if let Some(parent) = self.json_registry.get(pid) {
@@ -5445,6 +5472,9 @@ fn draft_session_record(
         parent_session_id: None,
         superseded_by: None,
         pr: None,
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     }
 }
 

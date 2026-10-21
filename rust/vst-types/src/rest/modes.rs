@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
+use super::doctor::DoctorHintDto;
 use crate::domain::{Channel, CliId};
 
 /// One element of `GET /supported-clis`.
@@ -23,6 +24,10 @@ pub struct SupportedCli {
     /// hardwired default) — lets the Settings UI label the plugin-default
     /// option distinctly from an explicit override (round-2 m3).
     pub default_channel_overridden: bool,
+    /// Install guidance from the daemon's hint table; present only when the CLI
+    /// is not detected on PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<DoctorHintDto>,
 }
 
 /// `GET /cli-models` response.

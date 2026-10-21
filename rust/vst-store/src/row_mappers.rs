@@ -163,6 +163,10 @@ pub struct SessionRow {
     pub r#type: String,
     pub mode_id: Option<String>,
     pub mode_icon: Option<String>,
+    pub last_activity_at: Option<String>,
+    pub last_line: Option<String>,
+    pub last_tool_name: Option<String>,
+    pub last_tool_detail: Option<String>,
     pub name: Option<String>,
     pub name_source: Option<String>,
     pub tmux_name: String,
@@ -267,6 +271,15 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
         parent_session_id: row.spawned_from.clone(),
         superseded_by: row.superseded_by.clone(),
         pr: pr.or(legacy_pr),
+        last_activity_at: row.last_activity_at.clone(),
+        last_line: row.last_line.clone(),
+        last_tool: row
+            .last_tool_name
+            .clone()
+            .map(|name| vst_types::activity::ToolActivity {
+                name,
+                detail: row.last_tool_detail.clone(),
+            }),
     }
 }
 
@@ -286,6 +299,10 @@ pub fn session_to_row(
         r#type: type_str(session.r#type).to_string(),
         mode_id: session.mode_id.clone(),
         mode_icon: session.mode_icon.clone(),
+        last_activity_at: session.last_activity_at.clone(),
+        last_line: session.last_line.clone(),
+        last_tool_name: session.last_tool.as_ref().map(|t| t.name.clone()),
+        last_tool_detail: session.last_tool.as_ref().and_then(|t| t.detail.clone()),
         name: session.name.clone(),
         name_source: session.name_source.map(name_source_str).map(str::to_string),
         tmux_name: session.tmux_name.clone(),

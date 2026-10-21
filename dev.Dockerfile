@@ -1,6 +1,8 @@
 # Dev sandbox for testing vibe-station on a feature branch.
 # Runs daemon + Vite dev server in one container.
-# Agent CLIs (opencode, cursor-agent, claude) are volume-mounted from the host.
+# `claude` is installed in the image (works on Linux arm64 + amd64, so macOS hosts
+# never mount their Mach-O binary). opencode/agy/codex/cursor-agent are mounted
+# from the host only on Linux hosts (docker-compose.dev.hostbins.yml).
 # Gemini can use `scripts/fake-gemini.sh` mounted as `/usr/local/bin/gemini` (see docker-compose.dev.yml).
 #
 # Usage:
@@ -40,11 +42,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+# TARGETARCH is amd64/arm64 (BuildKit) — an amd64 binary on an arm64 (Apple
+# Silicon) Docker VM would fail with "Exec format error".
+ARG TARGETARCH
+RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${TARGETARCH:-amd64}" \
     -o /usr/local/bin/cloudflared \
   && chmod +x /usr/local/bin/cloudflared
 
-RUN npm install -g pnpm@9.0.0 @google/gemini-cli
+# @anthropic-ai/claude-code: the Linux `claude` CLI, installed in-image so the
+# sandbox never mounts the host's binary (a macOS host's is Mach-O -> ENOEXEC).
+# Ships per-platform optional deps for linux-arm64 and linux-x64.
+# Pinned to the version installed in the existing sandbox image (2.1.306) so
+# rebuilds are reproducible; bump deliberately.
+RUN npm install -g pnpm@9.0.0 @google/gemini-cli @anthropic-ai/claude-code@2.1.306
 
 # Runtime user: Claude Code hard-refuses to run with
 # --dangerously-skip-permissions (which this codebase always passes when

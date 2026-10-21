@@ -73,6 +73,9 @@ fn project_with_session(project_id: &str, wt_id: &str, sess_id: &str) -> Project
             parent_session_id: None,
             superseded_by: None,
             pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         }],
         open_files: vec![],
     }];

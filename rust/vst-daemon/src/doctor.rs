@@ -20,8 +20,10 @@ use vst_agents::registry::SUPPORTED_CLIS;
 use vst_git::paths::Paths;
 use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
+use vst_types::rest::doctor::{DoctorAction, DoctorHintDto, DoctorItemDto};
+use vst_types::rest::doctor_hints::hint_dto;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorCheck {
     pub name: String,
@@ -31,20 +33,26 @@ pub struct DoctorCheck {
     pub message: String,
     pub resolved_path: Option<String>,
     pub install_hint: Option<String>,
+    /// Structured hint, filled centrally from `doctor_hints.rs` for non-OK checks.
+    pub hint: Option<DoctorHintDto>,
+    /// Per-item rows for list-style checks (orphans); empty otherwise.
+    pub items: Vec<DoctorItemDto>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DoctorStatus {
+    #[default]
     Ok,
     Warn,
     Error,
     Timeout,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckGroup {
+    #[default]
     Required,
     AgentCli,
     Optional,
@@ -82,7 +90,7 @@ async fn with_timeout(
             group,
             message: format!("{name} timed out after 3s"),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         },
     }
 }
@@ -97,7 +105,7 @@ pub fn check_tmux() -> DoctorCheck {
             group: CheckGroup::Required,
             message: "tmux found on PATH".to_string(),
             resolved_path: Some(path),
-            install_hint: None,
+            ..Default::default()
         }
     } else {
         DoctorCheck {
@@ -107,7 +115,7 @@ pub fn check_tmux() -> DoctorCheck {
             group: CheckGroup::Required,
             message: "tmux not found on PATH".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         }
     }
 }
@@ -125,7 +133,7 @@ pub fn check_git_version() -> DoctorCheck {
                 group: CheckGroup::Required,
                 message: "git not found on PATH".to_string(),
                 resolved_path,
-                install_hint: None,
+                ..Default::default()
             }
         }
     };
@@ -150,7 +158,7 @@ pub fn check_git_version() -> DoctorCheck {
             group: CheckGroup::Required,
             message: "Could not parse git version".to_string(),
             resolved_path,
-            install_hint: None,
+            ..Default::default()
         };
     }
 
@@ -164,7 +172,7 @@ pub fn check_git_version() -> DoctorCheck {
             group: CheckGroup::Required,
             message: format!("git {major}.{minor} found; git >= 2.20 required"),
             resolved_path,
-            install_hint: None,
+            ..Default::default()
         }
     } else {
         DoctorCheck {
@@ -174,7 +182,7 @@ pub fn check_git_version() -> DoctorCheck {
             group: CheckGroup::Required,
             message: format!("git {version_str}"),
             resolved_path,
-            install_hint: None,
+            ..Default::default()
         }
     }
 }
@@ -187,7 +195,7 @@ pub fn check_daemon_reachable() -> DoctorCheck {
         group: CheckGroup::Required,
         message: "Daemon reachable".to_string(),
         resolved_path: None,
-        install_hint: None,
+        ..Default::default()
     }
 }
 
@@ -202,7 +210,7 @@ pub fn check_cloudflared() -> DoctorCheck {
                 group: CheckGroup::Optional,
                 message: format!("cloudflared found at {bin} (bundled)"),
                 resolved_path: Some(bin),
-                install_hint: None,
+                ..Default::default()
             };
         }
     }
@@ -214,7 +222,7 @@ pub fn check_cloudflared() -> DoctorCheck {
             group: CheckGroup::Optional,
             message: "cloudflared found on PATH".to_string(),
             resolved_path: Some(path),
-            install_hint: None,
+            ..Default::default()
         }
     } else {
         DoctorCheck {
@@ -224,7 +232,7 @@ pub fn check_cloudflared() -> DoctorCheck {
             group: CheckGroup::Optional,
             message: "cloudflared not found on PATH".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         }
     }
 }
@@ -241,6 +249,7 @@ pub fn check_tailscale_binary(
         message,
         resolved_path,
         install_hint,
+        ..Default::default()
     };
     match located {
         Located::OnPath => mk(
@@ -265,10 +274,10 @@ pub fn check_tailscale_binary(
     }
 }
 
-/// Check for orphan tmux sessions (named vr-* whose project is no longer in store).
-pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCheck {
-    let sessions = tmux.list_sessions();
-    let vr_sessions: Vec<String> = sessions
+/// tmux sessions named `vr-*` that no stored session references.
+pub async fn list_orphan_session_names(store: &StoreHandle, tmux: &Tmux) -> Vec<String> {
+    let vr_sessions: Vec<String> = tmux
+        .list_sessions()
         .into_iter()
         .filter(|s| s.starts_with("vr-"))
         .collect();
@@ -286,10 +295,31 @@ pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCh
         }
     }
 
-    let orphans: Vec<String> = vr_sessions
+    vr_sessions
         .into_iter()
         .filter(|s| !known_tmux_names.contains(s))
-        .collect();
+        .collect()
+}
+
+/// Quote `s` for safe pasting into a POSIX shell. Names can originate outside
+/// the daemon (tmux session names, ids), so anything beyond a conservative safe
+/// set is single-quoted with embedded `'` escaped.
+fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '+' | '=' | ',')
+        });
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// Check for orphan tmux sessions (named vr-* whose project is no longer in store).
+pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCheck {
+    let orphans = list_orphan_session_names(store, tmux).await;
 
     if !orphans.is_empty() {
         DoctorCheck {
@@ -297,13 +327,19 @@ pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCh
             status: DoctorStatus::Warn,
             required: false,
             group: CheckGroup::Diagnostic,
-            message: format!(
-                "Found {} orphan tmux session(s): {}. Run 'tmux kill-session -t <name>' to clean up.",
-                orphans.len(),
-                orphans.join(", ")
-            ),
+            message: format!("Found {} orphan tmux session(s)", orphans.len()),
             resolved_path: None,
-            install_hint: None,
+            items: orphans
+                .into_iter()
+                .map(|name| DoctorItemDto {
+                    command: format!("tmux kill-session -t {}", shell_quote(&name)),
+                    id: name.clone(),
+                    label: name,
+                    path: None,
+                    action: DoctorAction::Kill,
+                })
+                .collect(),
+            ..Default::default()
         }
     } else {
         DoctorCheck {
@@ -313,41 +349,68 @@ pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCh
             group: CheckGroup::Diagnostic,
             message: "No orphan tmux sessions".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         }
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum KillOrphanError {
+    /// The name is not (or is no longer) in the freshly computed orphan list.
+    NotOrphan,
+}
+
+/// Kill one orphan tmux session. The orphan list is recomputed first and any
+/// name outside it is refused, so this can never become an arbitrary
+/// `tmux kill-session`.
+pub async fn kill_orphan_session(
+    store: &StoreHandle,
+    tmux: &Tmux,
+    name: &str,
+) -> Result<(), KillOrphanError> {
+    if !list_orphan_session_names(store, tmux)
+        .await
+        .iter()
+        .any(|n| n == name)
+    {
+        return Err(KillOrphanError::NotOrphan);
+    }
+    let tmux = tmux.clone();
+    let name = name.to_string();
+    let _ = tokio::task::spawn_blocking(move || tmux.kill_session(&name)).await;
+    Ok(())
+}
+
 /// Check for orphan worktree directories referenced in store but missing from disk.
 pub async fn check_orphan_worktrees(store: &StoreHandle, paths: &Paths) -> DoctorCheck {
-    let mut orphans = Vec::new();
+    let mut items = Vec::new();
     let projects = store.get_all_projects().await;
     for project in projects {
         for wt in project.worktrees {
             let wt_path = paths.worktree_path(&project.id, &wt.id);
             if !Path::new(&wt_path).exists() {
-                orphans.push(format!(
-                    "{}/{} (expected at {})",
-                    project.id,
-                    wt.id,
-                    wt_path.display()
-                ));
+                items.push(DoctorItemDto {
+                    command: format!("vst worktree rm {} --yes", shell_quote(&wt.id)),
+                    // The project's display name is its id (see `serialize_project`).
+                    label: format!("{} / {}", project.id, wt.id),
+                    path: Some(wt_path.display().to_string()),
+                    id: wt.id,
+                    action: DoctorAction::Forget,
+                });
             }
         }
     }
 
-    if !orphans.is_empty() {
+    if !items.is_empty() {
         DoctorCheck {
             name: "orphan-worktrees".to_string(),
             status: DoctorStatus::Warn,
             required: false,
             group: CheckGroup::Diagnostic,
-            message: format!(
-                "Manifest references missing worktree directories:\n{}",
-                orphans.join("\n")
-            ),
+            message: format!("{} worktree(s) missing on disk", items.len()),
             resolved_path: None,
-            install_hint: None,
+            items,
+            ..Default::default()
         }
     } else {
         DoctorCheck {
@@ -357,7 +420,7 @@ pub async fn check_orphan_worktrees(store: &StoreHandle, paths: &Paths) -> Docto
             group: CheckGroup::Diagnostic,
             message: "All worktree directories exist".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         }
     }
 }
@@ -380,6 +443,7 @@ pub async fn check_github_cli() -> DoctorCheck {
                 message: "gh CLI not installed (requires 2.40+)".to_string(),
                 resolved_path: None,
                 install_hint: Some("https://cli.github.com".to_string()),
+                ..Default::default()
             };
         }
     };
@@ -402,7 +466,7 @@ pub async fn check_github_cli() -> DoctorCheck {
                     group: CheckGroup::Feature,
                     message: format!("gh {version_str}"),
                     resolved_path: None,
-                    install_hint: None,
+                    ..Default::default()
                 }
             } else {
                 DoctorCheck {
@@ -413,6 +477,7 @@ pub async fn check_github_cli() -> DoctorCheck {
                     message: format!("gh {version_str} found, requires 2.40+"),
                     resolved_path: None,
                     install_hint: Some("https://cli.github.com".to_string()),
+                    ..Default::default()
                 }
             }
         }
@@ -424,6 +489,7 @@ pub async fn check_github_cli() -> DoctorCheck {
             message: "gh CLI not installed (requires 2.40+)".to_string(),
             resolved_path: None,
             install_hint: Some("https://cli.github.com".to_string()),
+            ..Default::default()
         },
     }
 }
@@ -441,7 +507,7 @@ pub async fn check_github_auth() -> DoctorCheck {
             group: CheckGroup::Feature,
             message: "PR status active via GITHUB_TOKEN env var".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         };
     }
 
@@ -455,7 +521,7 @@ pub async fn check_github_auth() -> DoctorCheck {
             group: CheckGroup::Feature,
             message: "requires gh CLI (see github-cli check)".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         };
     }
 
@@ -475,7 +541,7 @@ pub async fn check_github_auth() -> DoctorCheck {
                 group: CheckGroup::Feature,
                 message: "Not logged in — run gh auth login".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             };
         }
     };
@@ -488,7 +554,7 @@ pub async fn check_github_auth() -> DoctorCheck {
             group: CheckGroup::Feature,
             message: "Not logged in — run gh auth login".to_string(),
             resolved_path: None,
-            install_hint: None,
+            ..Default::default()
         };
     }
 
@@ -500,7 +566,7 @@ pub async fn check_github_auth() -> DoctorCheck {
         group: CheckGroup::Feature,
         message: format!("Logged in as {}", logins.join(", ")),
         resolved_path: None,
-        install_hint: None,
+        ..Default::default()
     }
 }
 
@@ -571,7 +637,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                         group: CheckGroup::AgentCli,
                         message: format!("{name_str} found on PATH"),
                         resolved_path: Some(path),
-                        install_hint: None,
+                        ..Default::default()
                     }
                 } else {
                     DoctorCheck {
@@ -581,7 +647,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                         group: CheckGroup::AgentCli,
                         message: format!("{name_str} not found on PATH (plugin unavailable)"),
                         resolved_path: None,
-                        install_hint: None,
+                        ..Default::default()
                     }
                 }
             })
@@ -617,7 +683,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                 group: CheckGroup::Optional,
                 message: "tailscale timed out after 3s".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
         },
     );
@@ -640,7 +706,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                 group: CheckGroup::Feature,
                 message: format!("codex-acp adapter found at {entry} (Codex Rich Chat / ACP)"),
                 resolved_path: Some(entry),
-                install_hint: None,
+                ..Default::default()
             }
         } else {
             DoctorCheck {
@@ -648,9 +714,11 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                 status: DoctorStatus::Warn,
                 required: false,
                 group: CheckGroup::Feature,
-                message: "codex-acp adapter not found — Codex Rich Chat (ACP) will fail.".to_string(),
+                message: "codex-acp adapter not found — Codex Rich Chat (ACP) will fail."
+                    .to_string(),
                 resolved_path: None,
-                install_hint: Some("./scripts/install-codex-acp-vendor.sh  (or set VST_CODEX_ACP_ENTRY to an existing dist/index.js)".to_string()),
+                // The hint table supplies the VST_CODEX_ACP_ENTRY text.
+                ..Default::default()
             }
         });
     }
@@ -667,7 +735,8 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
     // 12. github-auth (Feature, false)
     checks.push(check_github_auth().await);
 
-    // Central install_hint population for all non-Ok checks
+    // Central hint population for all non-Ok checks: `installHint` (host-OS
+    // command, back-compat) and the structured `hint`, both from the one table.
     for check in &mut checks {
         if check.status != DoctorStatus::Ok {
             if let Some(hint) =
@@ -675,6 +744,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
             {
                 check.install_hint = Some(hint.to_string());
             }
+            check.hint = hint_dto(&check.name);
         }
     }
 
@@ -714,6 +784,8 @@ impl From<DoctorCheck> for vst_types::rest::doctor::DoctorCheckDto {
             message: c.message,
             resolved_path: c.resolved_path,
             install_hint: c.install_hint,
+            hint: c.hint,
+            items: c.items,
         }
     }
 }
@@ -772,7 +844,7 @@ mod tests {
                 group: CheckGroup::Optional,
                 message: "completed".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             }
         })
         .await;
@@ -804,6 +876,7 @@ mod tests {
             check.message
         );
         assert_eq!(check.install_hint, None);
+        assert_eq!(check.hint, None);
         assert_eq!(check.resolved_path, Some(temp_path));
     }
 
@@ -829,7 +902,7 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "tmux ok".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
             DoctorCheck {
                 name: "git".to_string(),
@@ -838,7 +911,7 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "git ok".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
             DoctorCheck {
                 name: "daemon-reachable".to_string(),
@@ -847,7 +920,7 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "timed out".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
         ];
         assert!(
@@ -863,7 +936,7 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "tmux ok".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
             DoctorCheck {
                 name: "git".to_string(),
@@ -872,7 +945,7 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "git ok".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
             DoctorCheck {
                 name: "daemon-reachable".to_string(),
@@ -881,12 +954,99 @@ mod tests {
                 group: CheckGroup::Required,
                 message: "failed".to_string(),
                 resolved_path: None,
-                install_hint: None,
+                ..Default::default()
             },
         ];
         assert!(
             !compute_hard_ok(&checks_with_error),
             "A Required check with Error must block hard_ok"
         );
+    }
+
+    // 5.T4
+    #[tokio::test]
+    async fn orphan_worktrees_lists_one_forget_item_per_missing_dir() {
+        use vst_types::{ProjectRecord, WorktreeRecord};
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::with_home(tmp.path().to_path_buf());
+        let store = StoreHandle::open(tmp.path().join("t.db")).unwrap();
+        store
+            .add_project(ProjectRecord {
+                id: "proj".into(),
+                absolute_path: "/fake/proj".into(),
+                prefix: "pr".into(),
+                is_git: true,
+                default_branch: Some("main".into()),
+                created_at: "2024-01-01T00:00:00.000Z".into(),
+                hidden: None,
+                direct_sessions: vec![],
+                direct_session_seq: None,
+                worktrees: vec![WorktreeRecord {
+                    id: "pr-1".into(),
+                    name: None,
+                    branch: "b".into(),
+                    branch_is_placeholder: None,
+                    base_branch: "main".into(),
+                    base_sha: "a".repeat(40),
+                    created_at: "2024-01-01T00:00:00.000Z".into(),
+                    pinned_at: None,
+                    hidden_at: None,
+                    sort_order: 0.0,
+                    terminal_seq: Some(0),
+                    agent_seq: Some(0),
+                    lsp_enabled: None,
+                    sessions: vec![],
+                    open_files: vec![],
+                }],
+                next_worktree_num: None,
+                lsp_enabled: None,
+                open_files: vec![],
+            })
+            .await
+            .unwrap();
+
+        let check = check_orphan_worktrees(&store, &paths).await;
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert_eq!(check.message, "1 worktree(s) missing on disk");
+        assert_eq!(check.items.len(), 1);
+        let item = &check.items[0];
+        assert_eq!(item.id, "pr-1");
+        assert_eq!(item.command, "vst worktree rm pr-1 --yes");
+        assert_eq!(item.action, DoctorAction::Forget);
+        assert!(item.path.is_some());
+    }
+
+    #[test]
+    fn shell_quote_handles_spaces_quotes_and_substitution() {
+        assert_eq!(shell_quote("vr-abc_1"), "vr-abc_1");
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote("$(rm -rf ~)"), "'$(rm -rf ~)'");
+        assert_eq!(shell_quote("`x`;y"), "'`x`;y'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn wire_conversion_keeps_hint_and_items() {
+        let check = DoctorCheck {
+            name: "orphan-worktrees".to_string(),
+            status: DoctorStatus::Warn,
+            required: false,
+            group: CheckGroup::Diagnostic,
+            message: "1 worktree(s) missing on disk".to_string(),
+            resolved_path: None,
+            install_hint: None,
+            hint: hint_dto("orphan-worktrees"),
+            items: vec![DoctorItemDto {
+                id: "w1".into(),
+                label: "p / w1".into(),
+                path: None,
+                command: "vst worktree rm w1 --yes".into(),
+                action: DoctorAction::Forget,
+            }],
+        };
+        let dto: vst_types::rest::doctor::DoctorCheckDto = check.into();
+        assert_eq!(dto.items.len(), 1);
+        assert_eq!(dto.hint.unwrap().action, Some(DoctorAction::Forget));
     }
 }

@@ -44,6 +44,16 @@ pub struct Session {
     pub pr: Option<PrStatus>,
     pub draft_prompt: Option<String>,
     pub draft_config: Option<DraftConfig>,
+    /// ISO8601 time of the session's last visible activity (`null` = never
+    /// seen since upgrade; clients fall back to `createdAt`).
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
+    /// Reserved, no longer written or served (always null).
+    #[serde(default)]
+    pub last_line: Option<String>,
+    /// Tool call the Rich Chat agent most recently made (`{name, detail?}`).
+    #[serde(default)]
+    pub last_tool: Option<crate::activity::ToolActivity>,
 }
 
 /// A global (project-less) draft session — same key set as `Session`, with
@@ -77,6 +87,16 @@ pub struct GlobalDraft {
     pub pr: Option<PrStatus>,
     pub draft_prompt: Option<String>,
     pub draft_config: Option<DraftConfig>,
+    /// ISO8601 time of the session's last visible activity (`null` = never
+    /// seen since upgrade; clients fall back to `createdAt`).
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
+    /// Reserved, no longer written or served (always null).
+    #[serde(default)]
+    pub last_line: Option<String>,
+    /// Tool call the Rich Chat agent most recently made (`{name, detail?}`).
+    #[serde(default)]
+    pub last_tool: Option<crate::activity::ToolActivity>,
 }
 
 /// The canonical serialized worktree object (`serializeWorktree`).

@@ -20,6 +20,7 @@ pub mod child_stdio;
 pub mod daemonize;
 pub mod error;
 pub mod flock;
+pub mod path_lookup;
 pub mod pty;
 pub mod raw_fd_write;
 pub mod resolve_use_tmux;

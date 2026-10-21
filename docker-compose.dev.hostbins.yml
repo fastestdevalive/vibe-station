@@ -1,0 +1,35 @@
+# Optional overlay: bind-mount HOST-installed agent CLI binaries into the dev
+# sandbox. Used by scripts/dev-sandbox.sh ONLY on Linux hosts (same OS/arch as
+# the container). Never layered on macOS: a Mac's binaries are Mach-O and would
+# fail inside the Linux container with `ENOEXEC ... posix_spawn`. `claude` is
+# not here — it is installed in the image (dev.Dockerfile).
+#
+# Plain use: docker compose -f docker-compose.dev.yml -f docker-compose.dev.hostbins.yml up
+services:
+  vst-dev:
+    volumes:
+      # Mount CLI binaries read-only so the daemon can shell out to them.
+      - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
+      - ${AGY_BIN:-${HOME}/.local/bin/agy}:/usr/local/bin/agy:ro
+      # codex — the real binary is the static-pie ELF inside the platform npm
+      # package (@openai/codex-linux-x64), NOT the Node.js launcher script.
+      # It needs siblings (codex-resources/ for bwrap/voice/zsh assets), so
+      # mount the whole x86_64-unknown-linux-musl/ vendor dir at /opt/codex-platform
+      # and let scripts/dev-entrypoint.sh symlink bin/codex into /usr/local/bin.
+      - ${CODEX_PLATFORM_DIR:-/var/empty}:/opt/codex-platform:ro
+      # cursor-agent is NOT a single-file mount like the others — its own
+      # launcher script does `realpath "$0"` and expects a bundled `node`
+      # binary + numbered chunk `.js` files to sit in the SAME directory as
+      # itself. Docker resolves a host symlink to its target's CONTENTS at
+      # single-file-mount time (verified: `docker run -v host-symlink:...`
+      # produces a plain regular file in the container, not a working
+      # symlink pointing anywhere), so a single-file mount of just the
+      # launcher silently loses those sibling files — the container-side
+      # symptom is `Error: Cannot find module '.../index.js'`. Mount the
+      # WHOLE `versions/` directory (every installed version, not just the
+      # current one — cheap for a read-only bind mount, and avoids needing
+      # this compose file to know which version is "current") and let
+      # scripts/dev-entrypoint.sh symlink the newest one into
+      # /usr/local/bin/cursor-agent from inside the container, where the
+      # sibling files are actually reachable.
+      - ${CURSOR_AGENT_VERSIONS:-${HOME}/.local/share/cursor-agent/versions}:/opt/cursor-agent-versions:ro

@@ -271,10 +271,18 @@ impl OobeRoutes {
         // just created.
         supported_clis = self.mode_routes.list_supported_clis().await;
 
+        let models_error_hints = models_errors
+            .iter()
+            .filter_map(|(cli, err)| {
+                models_error_hint(err, vst_proc::path_lookup::which).map(|h| (*cli, h))
+            })
+            .collect();
+
         DetectAndBundleResult {
             supported_clis,
             created,
             models_errors,
+            models_error_hints,
         }
     }
 
@@ -302,5 +310,56 @@ impl OobeRoutes {
             ok: true,
             completed: true,
         })
+    }
+}
+
+/// A structured fix-it hint for a recognised `models_errors` string, or `None`
+/// (the UI then keeps today's raw message). `which` resolves the failing
+/// program on the daemon's PATH — injected so tests need no real binaries.
+pub fn models_error_hint(
+    err: &str,
+    which: impl Fn(&str) -> Option<PathBuf>,
+) -> Option<vst_types::rest::doctor::DoctorHintDto> {
+    use vst_types::rest::doctor_hints::{classify_spawn_error, enoexec_hint, SpawnFailureKind};
+    let failure = classify_spawn_error(err)?;
+    match failure.kind {
+        SpawnFailureKind::Enoexec => {
+            let program = failure.program.as_deref().unwrap_or("the agent");
+            let resolved = failure.program.as_deref().and_then(&which);
+            Some(enoexec_hint(
+                program,
+                resolved.as_ref().map(|p| p.to_string_lossy()).as_deref(),
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    const ENOEXEC: &str = r#"claude: ACP request failed: Internal error: { "details": "ENOEXEC: unknown error, posix_spawn 'claude'" }"#;
+
+    // 5.T7
+    #[test]
+    fn enoexec_error_gets_a_hint_with_the_resolved_path() {
+        let hint = models_error_hint(ENOEXEC, |_| Some(PathBuf::from("/usr/local/bin/claude")))
+            .expect("recognised");
+        assert!(hint.why.contains("/usr/local/bin/claude"));
+        assert!(hint.commands.iter().any(
+            |c| c.command == "head -c 64 /usr/local/bin/claude; file -L /usr/local/bin/claude"
+        ));
+    }
+
+    #[test]
+    fn unresolved_program_keeps_the_path_placeholder() {
+        let hint = models_error_hint(ENOEXEC, |_| None).expect("recognised");
+        assert!(hint.commands.iter().any(|c| c.command.contains("<path>")));
+    }
+
+    #[test]
+    fn unrecognised_error_has_no_hint() {
+        assert!(models_error_hint("ENOENT: no such file", |_| None).is_none());
+        assert!(models_error_hint("ACP request failed: rate limited", |_| None).is_none());
     }
 }

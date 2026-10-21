@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use sha1::{Digest, Sha1};
 use vst_proc::tmux::{CapturePaneOptions, Tmux};
 use vst_store::StoreHandle;
+use vst_types::activity::ActivitySink;
 use vst_types::domain::{Channel, LifecycleState, SessionLifecycle, SessionRecord, SessionType};
 use vst_types::events::{Broadcaster, ServerEvent};
 
@@ -95,6 +96,13 @@ fn agent_next_state(
     } else {
         None
     }
+}
+
+/// Whether a poll tick counts as session activity: real pane-output change, or
+/// a transition INTO `Working`. Other transitions (e.g. a post-restart
+/// working->waiting) are bookkeeping, not activity.
+fn activity_worth_recording(hash_changed: bool, new_state: Option<LifecycleState>) -> bool {
+    hash_changed || new_state == Some(LifecycleState::Working)
 }
 
 /// Plain terminals have no idle/waiting state. The only transition is the
@@ -169,6 +177,8 @@ pub struct LifecyclePollerHandle {
     store: StoreHandle,
     broadcaster: Broadcaster,
     tracks: Arc<Mutex<IdleTrackMap>>,
+    /// Optional activity sink (terminal sessions report pane-output changes).
+    activity: Option<Arc<dyn ActivitySink>>,
 }
 
 impl LifecyclePollerHandle {
@@ -177,7 +187,14 @@ impl LifecyclePollerHandle {
             store,
             broadcaster,
             tracks: Arc::new(Mutex::new(IdleTrackMap::default())),
+            activity: None,
         }
+    }
+
+    /// Report pane-output changes and state transitions to `sink`.
+    pub fn with_activity(mut self, sink: Arc<dyn ActivitySink>) -> Self {
+        self.activity = Some(sink);
+        self
     }
 
     /// Clear idle tracking for a specific tmux name (e.g. after a mode toggle).
@@ -223,6 +240,9 @@ impl LifecyclePollerHandle {
                         map.0.remove(&session.tmux_name);
                     }
                     mark_session_exited(&project.id, session, &self.store, &self.broadcaster).await;
+                    if let Some(sink) = &self.activity {
+                        sink.forget(&session.id);
+                    }
                     continue;
                 }
 
@@ -263,7 +283,7 @@ impl LifecyclePollerHandle {
 
                 let new_hash = sha1_of(&captured);
 
-                let new_state = {
+                let (new_state, hash_changed) = {
                     let mut map = self.tracks.lock().expect("poisoned");
                     let track =
                         map.0
@@ -279,12 +299,24 @@ impl LifecyclePollerHandle {
                         track.hash = new_hash;
                         track.stable_since_ms = now;
                     }
-                    agent_next_state(
-                        session.lifecycle.state,
+                    (
+                        agent_next_state(
+                            session.lifecycle.state,
+                            hash_changed,
+                            now.saturating_sub(track.stable_since_ms),
+                        ),
                         hash_changed,
-                        now.saturating_sub(track.stable_since_ms),
                     )
                 };
+
+                if let Some(sink) = &self.activity {
+                    // Only real output change or a transition INTO Working counts
+                    // as activity; e.g. a post-restart working->idle must not
+                    // stamp "now".
+                    if activity_worth_recording(hash_changed, new_state) {
+                        sink.record(&project.id, &session.id);
+                    }
+                }
 
                 if let Some(state) = new_state {
                     set_lifecycle_state(
@@ -355,6 +387,9 @@ mod should_skip_tests {
             parent_session_id: None,
             superseded_by: None,
             pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
         }
     }
 
@@ -404,8 +439,19 @@ mod should_skip_tests {
 
 #[cfg(test)]
 mod next_state_tests {
-    use super::{agent_next_state, terminal_next_state, IDLE_THRESHOLD_MS};
+    use super::{
+        activity_worth_recording, agent_next_state, terminal_next_state, IDLE_THRESHOLD_MS,
+    };
     use vst_types::domain::LifecycleState::{Done, Exited, Idle, WaitingForHuman, Working};
+
+    #[test]
+    fn activity_recorded_on_output_change_or_entering_working_only() {
+        assert!(activity_worth_recording(true, None));
+        assert!(activity_worth_recording(false, Some(Working)));
+        assert!(!activity_worth_recording(false, Some(WaitingForHuman)));
+        assert!(!activity_worth_recording(false, Some(Idle)));
+        assert!(!activity_worth_recording(false, None));
+    }
 
     #[test]
     fn terminal_never_enters_waiting_or_idle() {

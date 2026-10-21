@@ -24,5 +24,8 @@
   "draftConfig": {
     "entryPoint": "global",
     "useWorktree": true
-  }
+  },
+  "lastActivityAt": null,
+  "lastLine": null,
+  "lastTool": null
 }

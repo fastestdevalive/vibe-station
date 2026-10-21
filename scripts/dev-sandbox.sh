@@ -66,6 +66,15 @@ case "$SEED_MODE" in
     ;;
 esac
 
+# Host-installed harness binaries (opencode, agy, codex, cursor-agent) are only
+# bind-mounted on Linux hosts, via docker-compose.dev.hostbins.yml. On macOS they
+# are Mach-O and the container is Linux, so mounting them fails with ENOEXEC;
+# those harnesses just show "not found" in the doctor. `claude` is in the image.
+COMPOSE_ARGS=(-f docker-compose.dev.yml)
+if [ "$(uname -s)" != "Darwin" ]; then
+  COMPOSE_ARGS+=(-f docker-compose.dev.hostbins.yml)
+fi
+
 CMD="${1:-}"
 WORKTREE="${2:-$(basename "$PWD")}"
 
@@ -111,7 +120,7 @@ case "$CMD" in
     # present (see the codex/pi blocks in docker-compose.dev.yml and
     # scripts/dev-entrypoint.sh). Override with CODEX_PLATFORM_DIR / PI_BUNDLE_DIR.
     NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || true)"
-    if [ -z "${CODEX_PLATFORM_DIR:-}" ] && [ -n "$NPM_GLOBAL_ROOT" ]; then
+    if [ "$(uname -s)" != "Darwin" ] && [ -z "${CODEX_PLATFORM_DIR:-}" ] && [ -n "$NPM_GLOBAL_ROOT" ]; then
       for d in "$NPM_GLOBAL_ROOT"/@openai/codex/node_modules/@openai/codex-linux-*/vendor/*; do
         [ -f "$d/bin/codex" ] && export CODEX_PLATFORM_DIR="$d" && break
       done
@@ -132,6 +141,11 @@ case "$CMD" in
     fi
     if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
       echo "    claude: long-lived token (CLAUDE_CODE_OAUTH_TOKEN)"
+    elif [ "$(uname -s)" = "Darwin" ]; then
+      echo "    claude: WARNING — no long-lived token, and on macOS your login lives in the" >&2
+      echo "            Keychain (not ~/.claude/.credentials.json), so claude in the sandbox will be" >&2
+      echo "            signed out (the sandbox still starts). On macOS run 'claude setup-token', save the token to" >&2
+      echo "            $CLAUDE_TOKEN_FILE (chmod 600), then re-run this command." >&2
     else
       echo "    claude: WARNING — no long-lived token; the sandbox will use a copy of your"
       echo "            host credentials that stops working at the next token refresh."
@@ -139,6 +153,9 @@ case "$CMD" in
       echo "            (chmod 600), then re-run this command."
     fi
 
+    if [ "$(uname -s)" = "Darwin" ]; then
+      echo "    macOS host: claude runs from the image; opencode/agy/codex/cursor-agent host binaries are NOT mounted (they would be Mach-O in a Linux container) and show as 'not found'."
+    fi
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
     # The dev sandbox mounts host Rust binaries (vst-daemon, vst) read-only into
     # dev.Dockerfile's node:24-slim (Debian bookworm, glibc 2.36) container.
@@ -263,7 +280,7 @@ case "$CMD" in
     # pin the inode at container-create time. A rebuilt binary is a NEW inode,
     # so without recreating, a still-running container (compose sees no config
     # change) keeps executing the stale daemon. Volumes persist across recreate.
-    docker compose -f docker-compose.dev.yml -p "$WORKTREE" up --build --force-recreate -d
+    docker compose "${COMPOSE_ARGS[@]}" -p "$WORKTREE" up --build --force-recreate -d
     echo "Up: http://localhost:${PORT}"
     ;;
 
@@ -274,12 +291,12 @@ case "$CMD" in
     # is a no-op diff against the compose config that created them.
     export VST_SANDBOX_DATA_VOLUME="vst-dev-data-${WORKTREE}"
     export VST_SANDBOX_PROJECTS_VOLUME="vst-dev-projects-${WORKTREE}"
-    docker compose -f docker-compose.dev.yml -p "$WORKTREE" down
+    docker compose "${COMPOSE_ARGS[@]}" -p "$WORKTREE" down
     echo "Stopped sandbox '$WORKTREE'. Volumes ${VST_SANDBOX_DATA_VOLUME}/${VST_SANDBOX_PROJECTS_VOLUME} were left intact (never 'down -v' — that would delete this worktree's seeded daemon state/projects)."
     ;;
 
   logs)
-    docker compose -f docker-compose.dev.yml -p "$WORKTREE" logs -f
+    docker compose "${COMPOSE_ARGS[@]}" -p "$WORKTREE" logs -f
     ;;
 
   *)

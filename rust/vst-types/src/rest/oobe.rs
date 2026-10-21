@@ -47,6 +47,11 @@ pub struct DetectAndBundleResult {
     /// starter modes this call and is retried on the next call.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub models_errors: std::collections::BTreeMap<crate::CliId, String>,
+    /// Structured fix-it hints for the `models_errors` the daemon recognises
+    /// (e.g. `ENOEXEC`). Omitted when empty; unrecognised errors have none.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models_error_hints:
+        std::collections::BTreeMap<crate::CliId, crate::rest::doctor::DoctorHintDto>,
 }
 
 /// `POST /oobe/step2` success — step 2 has no user-supplied fields (the

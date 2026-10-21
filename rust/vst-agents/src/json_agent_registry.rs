@@ -15,17 +15,23 @@
 //! the registry's lock.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use vst_types::activity::ActivitySink;
 
 /// Interior-mutable `sessionId → Arc<T>` map, safe to share across routes.
 pub struct JsonAgentRegistry<T> {
     inner: Mutex<HashMap<String, Arc<T>>>,
+    /// Daemon-wide activity sink, set once from `run.rs`. Sessions created via
+    /// `get_or_create_json_agent_session` attach it so they report activity.
+    activity: OnceLock<Arc<dyn ActivitySink>>,
 }
 
 impl<T> Default for JsonAgentRegistry<T> {
     fn default() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            activity: OnceLock::new(),
         }
     }
 }
@@ -34,6 +40,16 @@ impl<T> JsonAgentRegistry<T> {
     /// An empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install the activity sink (first call wins; later calls are ignored).
+    pub fn set_activity_sink(&self, sink: Arc<dyn ActivitySink>) {
+        let _ = self.activity.set(sink);
+    }
+
+    /// The installed activity sink, if any.
+    pub fn activity_sink(&self) -> Option<Arc<dyn ActivitySink>> {
+        self.activity.get().cloned()
     }
 
     /// The live session registered for `session_id`, if any.

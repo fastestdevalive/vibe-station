@@ -852,6 +852,9 @@ async fn test_attachments_upload_and_delete() {
             reason: None,
             last_transition_at: "2026-01-01T00:00:00Z".into(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
 
     let term_session = SessionRecord {
@@ -886,6 +889,9 @@ async fn test_attachments_upload_and_delete() {
             reason: None,
             last_transition_at: "2026-01-01T00:00:00Z".into(),
         },
+        last_activity_at: None,
+        last_line: None,
+        last_tool: None,
     };
 
     let worktree = WorktreeRecord {
@@ -1059,4 +1065,30 @@ async fn test_attachments_upload_and_delete() {
         .await
         .unwrap_err();
     assert!(matches!(err, AttachmentRouteError::UploadNotFound(_)));
+}
+
+#[tokio::test]
+async fn test_supported_clis_install_hint_only_when_not_detected() {
+    // R1F-02 — a missing CLI carries its install command from the hint table;
+    // a detected CLI carries none.
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let store = StoreHandle::open(tmp.path().join("db.sqlite")).unwrap();
+    let modes = ModeRoutes::new(store, Broadcaster::new(32))
+        .with_paths(paths)
+        .with_binary_checker(|b| b == "claude");
+
+    let clis = modes.list_supported_clis().await;
+    let cursor = clis.iter().find(|c| c.id == CliId::Cursor).unwrap();
+    assert!(!cursor.detected);
+    let hint = cursor
+        .install_hint
+        .as_ref()
+        .expect("missing CLI has a hint");
+    assert!(hint.commands.iter().any(|c| !c.command.is_empty()));
+
+    let claude = clis.iter().find(|c| c.id == CliId::Claude).unwrap();
+    assert!(claude.detected);
+    assert!(claude.install_hint.is_none());
 }

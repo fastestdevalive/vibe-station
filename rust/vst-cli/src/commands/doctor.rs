@@ -147,6 +147,14 @@ fn print_hint(message: &str) {
     println!("\x1b[33m  →\x1b[0m {message}");
 }
 
+/// Print the shared table's fix-it command for a failing check (nothing if the
+/// table has none for this OS). One source with the daemon's `GET /api/doctor`.
+fn print_table_hint(check_name: &str) {
+    if let Some(hint) = vst_types::rest::doctor_hints::hint_for(check_name, std::env::consts::OS) {
+        print_hint(hint);
+    }
+}
+
 fn which(bin: &str) -> bool {
     SyncCommand::new("which")
         .arg(bin)
@@ -182,6 +190,7 @@ async fn check_tailscale() -> bool {
         Ok(Ok(o)) if o.status.success() => o,
         _ => {
             println!("\x1b[31m✗\x1b[0m tailscale not found");
+            print_table_hint("tailscale");
             return false;
         }
     };
@@ -240,7 +249,7 @@ async fn check_tailscale() -> bool {
 pub async fn run_doctor() -> Result<(), (String, i32)> {
     let mut all_ok = true;
 
-    all_ok = check("tmux is available", || {
+    let tmux_ok = check("tmux is available", || {
         SyncCommand::new("tmux")
             .arg("-V")
             .stdout(std::process::Stdio::null())
@@ -248,9 +257,13 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    }) && all_ok;
+    });
+    if !tmux_ok {
+        print_table_hint("tmux");
+    }
+    all_ok = tmux_ok && all_ok;
 
-    all_ok = check("git is available", || {
+    let git_ok = check("git is available", || {
         SyncCommand::new("git")
             .arg("--version")
             .stdout(std::process::Stdio::null())
@@ -258,19 +271,20 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-    }) && all_ok;
+    });
+    if !git_ok {
+        print_table_hint("git");
+    }
+    all_ok = git_ok && all_ok;
 
     for bin in ["claude", "cursor", "opencode", "agy", "codex", "pi"] {
-        check(&format!("{bin} is on PATH"), || which(bin));
+        if !check(&format!("{bin} is on PATH"), || which(bin)) {
+            print_table_hint(&format!("plugin-{bin}"));
+        }
     }
 
-    let cloudflared_found = check("cloudflared", || which("cloudflared"));
-    if !cloudflared_found {
-        if let Some(hint) =
-            vst_types::rest::doctor_hints::hint_for("cloudflared", std::env::consts::OS)
-        {
-            print_hint(hint);
-        }
+    if !check("cloudflared", || which("cloudflared")) {
+        print_table_hint("cloudflared");
     }
 
     check_tailscale().await;
