@@ -1,17 +1,49 @@
 /* Adapted from 100gb-minimalist-design-system — accent / style / accent-level blocks removed */
 
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+/* Fonts are self-hosted (styles/fonts.css, @fontsource) — no runtime font CDN. */
 
 :root {
-  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-family: var(--font-mono);
+  /* ── Type system (Geist / Geist Mono) ────────────────────────────────── */
+  --font-ui: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-prose: var(--font-ui);
+  /* JetBrains Mono stays as the glyph fallback (⎿, box drawing). */
+  --font-mono: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 
-  --font-size-xs: 11px;
-  --font-size-sm: 12px;
-  --font-size-base: 14px;
-  --font-size-lg: 16px;
+  --fs-micro: 11px;
+  --lh-micro: 14px;
+  --fs-meta: 12px;
+  --lh-meta: 16px;
+  --fs-ui: 13px;
+  --lh-ui: 18px;
+  --fs-prose: 14px;
+  --lh-prose: 22px;
+  --fs-input: var(--fs-ui);
+  --fs-title: 16px;
+  --lh-title: 22px;
+  --fs-h2: 20px;
+  --lh-h2: 26px;
+  --fs-h1: 24px;
+  --lh-h1: 30px;
+  --fs-code: 12.5px;
+  --lh-code: 19px;
+  --fs-term: 13px; /* mirrored as TERM_BASE_PX in terminalFont.ts */
+  --ls-caps: 0.06em;
+  --ls-title: -0.01em;
+
+  --h-chip: 20px;
+  --h-sm: 24px;
+  --h-md: 28px;
+  --h-lg: 32px;
+  --h-touch: 44px;
+
+  /* Legacy aliases — existing call sites keep working. */
+  --font-sans: var(--font-ui);
+  --font-family: var(--font-ui);
+
+  --font-size-xs: var(--fs-micro);
+  --font-size-sm: var(--fs-meta);
+  --font-size-base: var(--fs-ui);
+  --font-size-lg: var(--fs-title);
   --font-size-xl: 18px;
   --font-size-2xl: 22px;
   --font-size-3xl: 28px;
@@ -163,9 +195,9 @@
   --status-working: #eab308;
   --status-waiting: #ef4444;
   --pr-open: #22c55e;
-  --pr-merged: #8250df;
+  --pr-merged: #a371f7;
   --pr-draft: #8a8a8a;
-  --pr-closed: #6b6b6b;
+  --pr-closed: #7f7f7f;
   --ref-match-bg: rgba(234, 179, 8, 0.3);
 
   --kind-fn: #a78bfa;
@@ -239,7 +271,7 @@
   --fg-inverse: #fafafa;
   --fg-danger: #dc2626;
   --fg-success: #15803d;
-  --fg-warning: #a16207;
+  --fg-warning: #92600a;
 
   --border-default: #e5e5e5;
   --border-subtle: #f0f0f0;
@@ -328,13 +360,17 @@
 }
 
 html {
-  font-size: var(--font-size-base);
+  /* rem root is frozen per breakpoint (chrome base is 13px, rem stays 14px
+     so rem-based spacing does not shrink). Phone value is in the 640px block. */
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 body {
   font-family: var(--font-family);
+  font-size: var(--fs-ui);
+  -webkit-font-smoothing: antialiased;
   font-weight: var(--font-weight-normal);
   line-height: var(--line-height-normal);
   color: var(--fg-primary);
@@ -364,14 +400,21 @@ body {
 }
 
 @media (max-width: 640px) {
+  /* Phone scale: UI 14, meta 12, prose/inputs 16 (iOS no-zoom floor), 44px
+     controls. Replaces the old blanket +2px on every size token. */
+  html {
+    font-size: 16px;
+  }
+
   :root {
-    --font-size-xs: 13px;
-    --font-size-sm: 14px;
-    --font-size-base: 16px;
-    --font-size-lg: 18px;
-    --font-size-xl: 20px;
-    --font-size-2xl: 24px;
-    --font-size-3xl: 30px;
+    --fs-ui: 14px;
+    --lh-ui: 20px;
+    --fs-prose: 16px;
+    --lh-prose: 23px;
+    --fs-input: 16px;
+    --fs-h1: 22px;
+    --lh-h1: 28px;
+    --h-md: 40px;
 
     --space-3: 14px;
     --space-4: 18px;

@@ -80,7 +80,7 @@ export function HiddenProjectsSetting({ api }: HiddenProjectsSettingProps) {
                 >
                   {p.name}
                 </div>
-                <div
+                <div className="selectable"
                   style={{
                     fontSize: "var(--font-size-xs)",
                     color: "var(--fg-muted)",

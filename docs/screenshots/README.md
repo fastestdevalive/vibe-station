@@ -37,7 +37,7 @@ them without recapturing. Scene times and the wallpaper live at the top of the s
 | File | Shows |
 |---|---|
 | `01-dashboard.png` | Dashboard board — working / needs you / idle / PR created |
-| `02-agents-and-modes.png` | Settings → Agents & modes, all four harnesses detected |
+| `02-agents-and-modes.png` | Settings → Harnesses and modes, all four harnesses detected |
 | `03-subagents-canvas.png` | Canvas: Claude plans, Antigravity reviews, Deepseek implements |
 | `04-remote-access-qr.png` | Settings → Remote Access, pairing a phone with a QR code |
 | `05-mobile.png` | Phone: dashboard list and a Rich Chat session |

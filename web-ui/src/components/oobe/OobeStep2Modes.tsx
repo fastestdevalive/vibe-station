@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Info, Pencil, Trash2 } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { Mode, SupportedCli } from "@/api/types";
+import type { DoctorHintDto, Mode, SupportedCli } from "@/api/types";
+import { DoctorHintBlock } from "@/components/doctor/DoctorHintBlock";
 import { Button } from "@/components/ui/Button";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { CliDetectionPanel } from "@/components/agent/CliDetectionPanel";
@@ -26,6 +27,8 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [modelsErrors, setModelsErrors] = useState<Record<string, string>>({});
+  // Daemon-supplied fix-it hints for the recognised errors above (e.g. ENOEXEC).
+  const [modelsErrorHints, setModelsErrorHints] = useState<Record<string, DoctorHintDto>>({});
   // Bumped after every successful detectAndBundleOobe() call, and threaded
   // into CliDetectionPanel's refreshSignal prop — without this, the panel's
   // own independent getSupportedClis() fetch races this component's own
@@ -39,6 +42,7 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
       const [res, list] = await Promise.all([api.detectAndBundleOobe(), api.listModes()]);
       setSupportedClis(res.supportedClis);
       setModelsErrors(res.modelsErrors ?? {});
+      setModelsErrorHints(res.modelsErrorHints ?? {});
       setModes(list);
       setRefreshSignal((n) => n + 1);
     } catch (e) {
@@ -152,7 +156,52 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
         </div>
       )}
 
-      {Object.entries(modelsErrors).map(([cliId, msg]) => (
+      {Object.entries(modelsErrors).map(([cliId, msg]) => {
+        const hint = modelsErrorHints[cliId];
+        if (hint) {
+          return (
+            <div
+              key={cliId}
+              data-testid={`models-error-${cliId}`}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--space-2)",
+                padding: "var(--space-3)",
+                borderRadius: "var(--radius-sm)",
+                border: "var(--border-width) solid var(--fg-danger)",
+                background: "var(--bg-input)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)" }}>
+                <Info size={14} style={{ flexShrink: 0, marginTop: 3, color: "var(--fg-danger)" }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <DoctorHintBlock hint={hint} hostOs="" />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRecheck()}
+                  disabled={detectBusy}
+                  className="btn btn--secondary"
+                >
+                  Retry
+                </button>
+              </div>
+              <details>
+                <summary style={{ fontSize: "var(--fs-meta)", color: "var(--fg-muted)", cursor: "pointer" }}>
+                  Details
+                </summary>
+                <div
+                  className="selectable"
+                  style={{ fontSize: "var(--fs-meta)", color: "var(--fg-secondary)", marginTop: "var(--space-1)" }}
+                >
+                  Couldn&apos;t set up starter modes for {cliId}: {msg}
+                </div>
+              </details>
+            </div>
+          );
+        }
+        return (
         <div
           key={cliId}
           data-testid={`models-error-${cliId}`}
@@ -167,14 +216,15 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
           }}
         >
           <Info size={14} style={{ flexShrink: 0, color: "var(--fg-danger)" }} />
-          <span style={{ flex: 1, fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5 }}>
+          <span className="selectable" style={{ flex: 1, fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5 }}>
             Couldn&apos;t set up starter modes for {cliId}: {msg}
           </span>
           <button type="button" onClick={() => void handleRecheck()} disabled={detectBusy} className="btn btn--secondary">
             Retry
           </button>
         </div>
-      ))}
+        );
+      })}
 
       {zeroDetected && (
         <div

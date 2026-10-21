@@ -14,6 +14,7 @@ import { RemoteAccessSetting } from "./RemoteAccessSetting";
 import { LspSetting } from "./LspSetting";
 import { DoctorSetting } from "./DoctorSetting";
 import { AboutSetting } from "./AboutSetting";
+import "./settings.css";
 
 interface Section {
   id: string;
@@ -32,7 +33,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const tabLayoutId = useId();
 
   const sections: Section[] = [
-    { id: "modes", label: "Agents & modes", content: <ModesSetting api={api} /> },
+    { id: "modes", label: "Harnesses and modes", content: <ModesSetting api={api} /> },
     { id: "appearance", label: "Appearance", content: <AppearanceSetting /> },
     { id: "markdown", label: "Markdown", content: <MarkdownStyleSetting /> },
     { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },

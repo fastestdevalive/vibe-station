@@ -599,6 +599,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   return (
     <div
       className="tabs-strip"
+      data-tauri-drag-region="deep"
       role="tablist"
       aria-label={ariaLabel}
       style={outerInset.width > 0 ? { paddingRight: `${outerInset.width}px` } : undefined}

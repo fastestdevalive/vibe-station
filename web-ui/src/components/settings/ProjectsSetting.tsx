@@ -102,7 +102,7 @@ export function ProjectsSetting({ api }: ProjectsSettingProps) {
                 style={{ marginBottom: "var(--space-2)" }}
               />
               {error && (
-                <div
+                <div className="selectable"
                   style={{
                     fontSize: "var(--font-size-xs)",
                     color: "var(--fg-error, #e53935)",

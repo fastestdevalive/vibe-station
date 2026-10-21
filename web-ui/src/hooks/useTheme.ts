@@ -138,5 +138,5 @@ export function __resetThemeSyncForTests(): void {
   bootOff?.();
   bootOff = null;
   const entry = themeById[defaultThemeId]!;
-  useThemeStore.setState({ themeId: defaultThemeId, appearance: entry.appearance, font: "mono" });
+  useThemeStore.setState({ themeId: defaultThemeId, appearance: entry.appearance, font: "sans" });
 }

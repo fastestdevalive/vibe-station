@@ -36,7 +36,7 @@ Every agent across every project lands on a single dashboard — **working**, **
 
 Claude Code, Cursor, OpenCode and agy plug in through the same plugin interface. Define **modes** (a CLI + a system context) and mix them per worktree, per session, even per subagent.
 
-<img src="docs/screenshots/02-agents-and-modes.png" alt="Agents and modes settings — Claude, Cursor, OpenCode and agy detected" width="900" />
+<img src="docs/screenshots/02-agents-and-modes.png" alt="Harnesses and modes settings — Claude, Cursor, OpenCode and agy detected" width="900" />
 
 ### Isolated worktrees
 

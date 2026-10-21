@@ -1,0 +1,122 @@
+/* Settings → Harnesses and modes: tab strip + panel. Tokens only. */
+.harness-tabs {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  max-width: 100%;
+  border-bottom: var(--border-width) solid var(--border-default);
+  margin-bottom: var(--space-4);
+}
+
+.harness-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  min-height: var(--h-md);
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.harness-tab:hover {
+  color: var(--fg-primary);
+}
+
+.harness-tab[aria-selected="true"] {
+  color: var(--fg-primary);
+  border-bottom-color: var(--accent);
+}
+
+.harness-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.harness-tab__icon {
+  display: inline-flex;
+}
+
+.harness-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: var(--border-width) solid var(--fg-muted);
+  box-sizing: border-box;
+}
+
+.harness-dot--ok {
+  background: var(--fg-success);
+  border-color: var(--fg-success);
+}
+
+.harness-state {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-muted);
+}
+
+.harness-state--ok {
+  color: var(--fg-success);
+}
+
+.harness-modes__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.harness-modes__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+}
+
+.harness-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.harness-notice {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-input);
+  margin-bottom: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .harness-tab,
+  .harness-mode button,
+  .harness-modes__head button,
+  .harness-panel button,
+  .harness-panel select {
+    min-height: 44px;
+  }
+  .harness-mode button {
+    min-width: 44px;
+  }
+  .harness-mode {
+    flex-wrap: wrap;
+  }
+}

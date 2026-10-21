@@ -1,170 +1,23 @@
 import { useState } from "react";
-import type { DoctorCheckDto, DoctorCheckStatus } from "@/api/types";
-import { copyText } from "@/lib/copyText";
-import { usePortalRoot } from "../../context/DemoEnv";
+import type { ApiInstance } from "@/api";
+import type { DoctorCheckDto } from "@/api/types";
+import { DoctorRow } from "./DoctorRow";
+import "./doctor.css";
 
 interface DoctorCheckListProps {
+  api: ApiInstance;
   checks: DoctorCheckDto[];
   hostname: string;
   hostOs: string;
   groupBy?: boolean;
-}
-
-const STATUS_GLYPH: Record<DoctorCheckStatus, string> = {
-  ok: "✓",
-  warn: "⚠",
-  error: "✗",
-  timeout: "—",
-};
-
-const STATUS_LABEL: Record<DoctorCheckStatus, string> = {
-  ok: "OK",
-  warn: "Warning",
-  error: "Missing",
-  timeout: "Timeout",
-};
-
-const STATUS_BADGE_STYLE: Record<
-  DoctorCheckStatus,
-  { color: string; bg: string; border: string }
-> = {
-  ok: {
-    color: "var(--fg-success, var(--fg-primary))",
-    bg: "color-mix(in srgb, var(--fg-success) 12%, transparent)",
-    border: "color-mix(in srgb, var(--fg-success) 28%, transparent)",
-  },
-  warn: {
-    color: "var(--fg-warning, var(--fg-primary))",
-    bg: "color-mix(in srgb, var(--fg-warning) 12%, transparent)",
-    border: "color-mix(in srgb, var(--fg-warning) 28%, transparent)",
-  },
-  error: {
-    color: "var(--fg-danger, var(--fg-primary))",
-    bg: "color-mix(in srgb, var(--fg-danger) 12%, transparent)",
-    border: "color-mix(in srgb, var(--fg-danger) 28%, transparent)",
-  },
-  timeout: {
-    color: "var(--fg-muted, var(--fg-secondary))",
-    bg: "color-mix(in srgb, var(--fg-muted, var(--fg-secondary)) 12%, transparent)",
-    border: "color-mix(in srgb, var(--fg-muted, var(--fg-secondary)) 28%, transparent)",
-  },
-};
-
-interface CheckRowProps {
-  check: DoctorCheckDto;
-  hostname: string;
-  hostOs: string;
-}
-
-function CheckRow({ check, hostname, hostOs }: CheckRowProps) {
-  const portalRoot = usePortalRoot();
-  const [copied, setCopied] = useState(false);
-  const glyph = STATUS_GLYPH[check.status];
-  const label = STATUS_LABEL[check.status];
-  const badgeStyle = STATUS_BADGE_STYLE[check.status];
-
-  const handleCopy = () => {
-    if (!check.installHint) return;
-    // Normal app: identical single-argument call; the portal root is only passed inside a demo.
-    if (portalRoot !== document.body) copyText(check.installHint, portalRoot);
-    else copyText(check.installHint);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div
-      style={{
-        padding: "var(--space-2) 0",
-        borderBottom: "var(--border-width) solid var(--border-subtle, var(--border-default))",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "space-between",
-        gap: "var(--space-4)",
-      }}
-    >
-      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "flex-start", minWidth: "5.5em" }}>
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-1)",
-            fontSize: "var(--font-size-xs)",
-            fontWeight: "500",
-            lineHeight: 1.2,
-            padding: "2px var(--space-2)",
-            borderRadius: "var(--radius-sm)",
-            color: badgeStyle.color,
-            background: badgeStyle.bg,
-            border: `var(--border-width) solid ${badgeStyle.border}`,
-          }}
-        >
-          <span style={{ fontWeight: "bold" }} aria-hidden="true">
-            {glyph}
-          </span>
-          <span>{label}</span>
-        </span>
-      </div>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", flexWrap: "wrap" }}>
-          <span style={{ fontWeight: "500", color: "var(--fg-primary)" }}>{check.name}</span>
-          {check.message && (
-            <span style={{ color: "var(--fg-secondary)", fontSize: "var(--font-size-sm)" }}>{check.message}</span>
-          )}
-        </div>
-        {check.resolvedPath && (
-          <div style={{ marginTop: "var(--space-1)" }}>
-            <code style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>
-              Resolved: {check.resolvedPath}
-            </code>
-          </div>
-        )}
-        {check.status !== "ok" && check.installHint && (
-          <div style={{ marginTop: "var(--space-1)" }}>
-            <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)", marginBottom: "var(--space-1)" }}>
-              Run on {hostname} ({hostOs}):
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-              <code
-                style={{
-                  fontSize: "var(--font-size-xs)",
-                  color: "var(--fg-primary)",
-                  background: "var(--bg-input)",
-                  border: "var(--border-width) solid var(--border-default)",
-                  borderRadius: "var(--radius-sm)",
-                  padding: "2px var(--space-2)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  maxWidth: "100%",
-                }}
-              >
-                {check.installHint}
-              </code>
-              <button
-                type="button"
-                onClick={handleCopy}
-                style={{
-                  flexShrink: 0,
-                  fontSize: "var(--font-size-xs)",
-                  fontFamily: "inherit",
-                  lineHeight: 1,
-                  padding: "4px var(--space-3)",
-                  border: "var(--border-width) solid var(--border-default)",
-                  borderRadius: "var(--radius-md)",
-                  background: "var(--bg-surface, var(--bg-card))",
-                  color: "var(--fg-primary)",
-                  cursor: "pointer",
-                }}
-              >
-                {copied ? "Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  /** Re-run the doctor after an in-app action (Forget / Kill). */
+  onChanged?: () => void;
+  /** Flat list only: failing checks first, passing ones folded into one row. */
+  foldPassing?: boolean;
+  /** "attention" hides OK rows. */
+  filter?: "all" | "attention";
+  /** Collapse per-item lists (orphans) to this many rows. */
+  itemsCollapsedCount?: number;
 }
 
 function SectionHeading({ title, detail }: { title: string; detail?: string }) {
@@ -179,20 +32,71 @@ function SectionHeading({ title, detail }: { title: string; detail?: string }) {
       }}
     >
       <span style={{ fontWeight: "600", fontSize: "var(--font-size-sm)" }}>{title}</span>
-      {detail && (
-        <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>{detail}</span>
-      )}
+      {detail && <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>{detail}</span>}
     </div>
   );
 }
 
-export function DoctorCheckList({ checks, hostname, hostOs, groupBy }: DoctorCheckListProps) {
+export function DoctorCheckList({
+  api,
+  checks,
+  hostname,
+  hostOs,
+  groupBy,
+  onChanged,
+  foldPassing,
+  filter = "all",
+  itemsCollapsedCount,
+}: DoctorCheckListProps) {
+  const [passingOpen, setPassingOpen] = useState(false);
+  const refresh = onChanged ?? (() => {});
+
+  const row = (c: DoctorCheckDto) => (
+    <DoctorRow
+      key={c.name}
+      api={api}
+      check={c}
+      hostOs={hostOs}
+      hostname={hostname}
+      onChanged={refresh}
+      itemsCollapsedCount={itemsCollapsedCount}
+    />
+  );
+  const visible = (list: DoctorCheckDto[]) =>
+    filter === "attention" ? list.filter((c) => c.status !== "ok") : list;
+
   if (!groupBy) {
+    const list = visible(checks);
+    if (!foldPassing) return <div>{list.map(row)}</div>;
+
+    // Severity first (Missing → Warning → Timeout); stable sort keeps daemon order within a severity.
+    const rank: Record<string, number> = { error: 0, warn: 1, timeout: 2 };
+    const failing = list
+      .filter((c) => c.status !== "ok")
+      .sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3));
+    const passing = list.filter((c) => c.status === "ok");
     return (
       <div>
-        {checks.map((c) => (
-          <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
-        ))}
+        {failing.map(row)}
+        {passing.length > 0 ? (
+          <>
+            <div className="doctor-fold">
+              <span>
+                {passing.length} check{passing.length === 1 ? "" : "s"} passed ·{" "}
+                {passing.map((c) => c.name).join(", ")}
+              </span>
+              <button
+                type="button"
+                className="doctor-fold__toggle"
+                aria-expanded={passingOpen}
+                onClick={() => setPassingOpen((o) => !o)}
+              >
+                {passingOpen ? "Hide" : "Show"}
+              </button>
+            </div>
+            {passingOpen ? passing.map(row) : null}
+          </>
+        ) : null}
       </div>
     );
   }
@@ -207,42 +111,28 @@ export function DoctorCheckList({ checks, hostname, hostOs, groupBy }: DoctorChe
 
   return (
     <div>
-      {required.length > 0 && (
+      {visible(required).length > 0 && (
         <>
-          <SectionHeading
-            title="Required"
-            detail={`${reqPass} of ${required.length} required checks OK`}
-          />
-          {required.map((c) => (
-            <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
-          ))}
+          <SectionHeading title="Required" detail={`${reqPass} of ${required.length} required checks OK`} />
+          {visible(required).map(row)}
         </>
       )}
-      {agentCli.length > 0 && (
+      {visible(agentCli).length > 0 && (
         <>
-          <SectionHeading
-            title="Agent CLIs"
-            detail={`${agentPass} of ${agentCli.length} found (need ≥1)`}
-          />
-          {agentCli.map((c) => (
-            <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
-          ))}
+          <SectionHeading title="Agent CLIs" detail={`${agentPass} of ${agentCli.length} found (need ≥1)`} />
+          {visible(agentCli).map(row)}
         </>
       )}
-      {feature.length > 0 && (
+      {visible(feature).length > 0 && (
         <>
           <SectionHeading title="Features" />
-          {feature.map((c) => (
-            <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
-          ))}
+          {visible(feature).map(row)}
         </>
       )}
-      {rest.length > 0 && (
+      {visible(rest).length > 0 && (
         <>
           <SectionHeading title="Optional" />
-          {rest.map((c) => (
-            <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
-          ))}
+          {visible(rest).map(row)}
         </>
       )}
     </div>

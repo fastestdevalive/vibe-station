@@ -15,6 +15,8 @@ import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
+import { openExternal } from "@/lib/openExternal";
+import { TERM_BASE_PX, TERM_FONT_FAMILY, refreshWhenFontReady } from "./terminalFont";
 import { useThemeStore } from "@/hooks/useThemeStore";
 import { themeById, defaultThemeId } from "@/theme/registry";
 
@@ -139,6 +141,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   const markSessionAttached = useWorkspaceStore((s) => s.markSessionAttached);
   const clearSessionAttach = useWorkspaceStore((s) => s.clearSessionAttach);
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+  const terminalLineHeight = useWorkspaceStore((s) => s.terminalLineHeight);
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
 
   const [atBottom, setAtBottom] = useState(true);
@@ -235,21 +238,16 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     let mounted = true;
 
     const initialScale = useWorkspaceStore.getState().terminalFontScale;
+    const initialTheme = resolveTerminalTheme(themed);
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: Math.round(14 * initialScale),
-      // JetBrains Mono is loaded from Google Fonts (tokens.css), which serves
-      // only a limited per-family character subset — it doesn't cover every
-      // Unicode symbol block a CLI's TUI may emit (e.g. Claude Code's ⎿
-      // connector glyphs, box-drawing logo art, bullet/sparkle markers).
-      // xterm falls back per-glyph within this list, so more named fonts
-      // before the generic `monospace` keyword means more chances to land on
-      // one the OS actually has with that glyph, instead of falling straight
-      // to whatever `monospace` happens to resolve to. Matches (and extends)
-      // the site's own --font-mono fallback chain (tokens.css).
-      fontFamily:
-        "JetBrains Mono, Fira Code, SF Mono, Cascadia Code, Noto Sans Mono, monospace",
-      lineHeight: 1.2,
+      fontSize: Math.round(TERM_BASE_PX * initialScale),
+      // Geist Mono (self-hosted) first; JetBrains Mono / system monos cover the
+      // Unicode blocks a CLI's TUI emits (⎿ connectors, box drawing, sparkles)
+      // that the Geist Mono subset lacks — xterm falls back per glyph.
+      fontFamily: TERM_FONT_FAMILY,
+      lineHeight: useWorkspaceStore.getState().terminalLineHeight,
+      letterSpacing: 0,
       scrollback: 10000,
       allowProposedApi: true,
       // On macOS the Option key is not a true Alt/Meta key by default — the OS
@@ -262,8 +260,15 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       // the standalone terminal dock (Ctrl/Cmd+Shift+Z) is a plain shell,
       // not part of the themed agent UI, and keeps its own fixed look
       // regardless of the "Theme agent terminals" setting below.
-      theme: resolveTerminalTheme(themed),
+      theme: initialTheme,
     });
+    // xterm's own viewport is transparent (workspace.css); the host's background
+    // fills the sub-row space below the last integer row, so keep it in sync.
+    const applyTheme = (t: ITheme) => {
+      term.options.theme = t;
+      host.style.backgroundColor = t.background ?? "";
+    };
+    host.style.backgroundColor = initialTheme.background ?? "";
     termRef.current = term;
 
     const fit = new FitAddon();
@@ -284,18 +289,12 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     }
 
     // Make http:// and https:// URLs clickable — opens in system browser (Tauri) or new tab (browser dev)
-    term.loadAddon(new WebLinksAddon((_, url) => {
-      const tauri = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
-      if (/^https?:/.test(url) && typeof tauri !== 'undefined') {
-        tauri.invoke('plugin:shell|open', { path: url, openWith: null }).catch(() => {
-          window.open(url, '_blank', 'noopener,noreferrer');
-        });
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      }
-    }));
+    term.loadAddon(new WebLinksAddon((_, url) => openExternal(url)));
 
     term.open(host);
+    // Geist Mono may not be decoded yet — re-measure after it loads (never
+    // awaited before open(): mount timing matters, see AGENTS.md Terminal).
+    refreshWhenFontReady(term, () => fitRef.current?.fit(), () => !mounted);
 
     // Both the app theme itself and the "Theme agent terminals" setting can
     // change while this terminal stays mounted (this effect deliberately
@@ -307,14 +306,14 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     const unsubTheme = themed
       ? useThemeStore.subscribe((state, prev) => {
           if (state.themeId !== prev.themeId) {
-            term.options.theme = resolveTerminalTheme(themed);
+            applyTheme(resolveTerminalTheme(themed));
           }
         })
       : undefined;
     const unsubThemeAgentTerminals = themed
       ? useWorkspaceStore.subscribe((state, prev) => {
           if (state.themeAgentTerminals !== prev.themeAgentTerminals) {
-            term.options.theme = resolveTerminalTheme(themed);
+            applyTheme(resolveTerminalTheme(themed));
           }
         })
       : undefined;
@@ -626,13 +625,25 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   useEffect(() => {
     const term = termRef.current;
     if (!term?.options || !mountTerminal) return;
-    term.options.fontSize = Math.round(14 * terminalFontScale);
+    term.options.fontSize = Math.round(TERM_BASE_PX * terminalFontScale);
     term.clearTextureAtlas?.();
     fitRef.current?.fit();
     if (activeSessionId) {
       void api.resizeSession(activeSessionId, term.cols, term.rows);
     }
   }, [terminalFontScale, activeSessionId, api, mountTerminal]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term?.options || !mountTerminal) return;
+    if (term.options.lineHeight === terminalLineHeight) return;
+    term.options.lineHeight = terminalLineHeight;
+    term.clearTextureAtlas?.();
+    fitRef.current?.fit();
+    if (activeSessionId) {
+      void api.resizeSession(activeSessionId, term.cols, term.rows);
+    }
+  }, [terminalLineHeight, activeSessionId, api, mountTerminal]);
 
   useEffect(() => {
     // Re-attach on reconnect ONLY — not on the initial connect. The big
@@ -709,7 +720,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       {showBanner ? (
         <>
           <div className="terminal-resume-banner">
-            <span className="terminal-resume-banner__msg">{bannerMsg}</span>
+            <span className="terminal-resume-banner__msg error-text">{bannerMsg}</span>
             <span className="terminal-resume-banner__action">
               {resumePending ? (
                 <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">

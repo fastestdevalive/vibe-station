@@ -381,7 +381,7 @@
   flex-direction: column;
   background: var(--bg-primary);
   color: var(--fg-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-prose);
   container-type: inline-size;
   /* Re-resolve the base text size HERE, from this subtree's (possibly zoomed)
      --font-size-base — ChatPane overrides the --font-size-* tokens inline for

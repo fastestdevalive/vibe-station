@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode, SupportedCli } from "@/api/types";
 import { ModeIcon } from "@/components/agent/ModeIcon";
+import { DoctorHintBlock } from "@/components/doctor/DoctorHintBlock";
 import { Select } from "@/components/ui/Select";
 import { cliDisplayName } from "@/lib/cliNames";
 
@@ -134,16 +135,23 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
               padding: "var(--space-3)",
               borderRadius: "var(--radius-sm)",
               border: "var(--border-width) solid var(--border-default)",
-              opacity: cli.detected ? 1 : 0.6,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flex: 1, minWidth: 0 }}>
-              <span aria-hidden="true" style={{ display: "inline-flex", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)", flex: 1, minWidth: 0 }}>
+              <span
+                aria-hidden="true"
+                style={{ display: "inline-flex", flexShrink: 0, marginTop: 1, opacity: cli.detected ? 1 : 0.6 }}
+              >
                 <ModeIcon iconKey={cli.id} channel="json" size={18} />
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <span style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{cliDisplayName(cli.id)}</span>
+                  <span
+                    data-testid={`cli-name-${cli.id}`}
+                    style={{ fontWeight: 500, color: cli.detected ? "var(--fg-primary)" : "var(--fg-secondary)" }}
+                  >
+                    {cliDisplayName(cli.id)}
+                  </span>
                 </div>
                 {bundleErrors[cli.id] ? (
                   <div
@@ -165,7 +173,10 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                     {cli.detected ? "✓ detected" : "✘ not found"}
                   </span>
                 </div>
-                {!cli.detected && (
+                {!cli.detected && cli.installHint && (
+                  <DoctorHintBlock hint={cli.installHint} hostOs="any" />
+                )}
+                {!cli.detected && !cli.installHint && (
                   <div style={{ marginTop: 4, fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>
                     Install with your package manager, then re-check.
                   </div>

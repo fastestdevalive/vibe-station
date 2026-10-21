@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Info, Pencil, Trash2 } from "lucide-react";
+import { Info } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { Mode } from "@/api/types";
+import type { Mode, SupportedCli } from "@/api/types";
 import { Button } from "@/components/ui/Button";
 import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
-import { SectionHeader } from "./SectionHeader";
-import { ModeIcon } from "@/components/agent/ModeIcon";
-import { CliDetectionPanel } from "@/components/agent/CliDetectionPanel";
 import { cliDisplayName } from "@/lib/cliNames";
+import { SectionHeader } from "./SectionHeader";
+import { HarnessTabs } from "./HarnessTabs";
+import { HarnessPanel } from "./HarnessPanel";
+import { ModeList } from "./ModeList";
+import { readHarnessTab, writeHarnessTab } from "./harnessStorage";
+import "./harness.css";
 
 interface ModesSettingProps {
   api: ApiInstance;
@@ -25,14 +28,34 @@ export function ModesSetting({ api }: ModesSettingProps) {
   // `modes`), so this can't be shown inline per-row.
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
 
+  const [clis, setClis] = useState<SupportedCli[]>([]);
+  const [clisLoaded, setClisLoaded] = useState(false);
+  const [tab, setTab] = useState<string | null>(() => readHarnessTab());
+
   const load = useCallback(async () => {
     const list = await api.listModes();
     setModes(list);
   }, [api]);
 
+  const loadClis = useCallback(async () => {
+    setClis(await api.getSupportedClis());
+    setClisLoaded(true);
+  }, [api]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadClis();
+  }, [load, loadClis]);
+
+  // Selected harness: the remembered tab if it still exists, else the first
+  // detected harness, else the first one.
+  const selected =
+    clis.find((c) => c.id === tab) ?? clis.find((c) => c.detected) ?? clis[0] ?? null;
+
+  function selectTab(id: string) {
+    setTab(id);
+    writeHarnessTab(id);
+  }
 
   useEffect(() => {
     const off1 = api.on("mode:created", (ev) => {
@@ -84,33 +107,44 @@ export function ModesSetting({ api }: ModesSettingProps) {
     }
   }
 
+  const harnessModes = selected ? modes.filter((m) => m.cli === selected.id) : [];
+
   return (
     <div style={{ paddingBottom: "var(--space-8)" }}>
       <SectionHeader
-        description="Orchestrator modes define the CLI, system prompt, and model used when starting a new agent session."
+        title="Harnesses and modes"
+        description="A harness is an agent CLI. Modes define the harness, system prompt, and model used when starting a new agent session."
       />
 
-      <CliDetectionPanel api={api} variant="settings" />
+      {!clisLoaded ? (
+        <div className="settings-state">Loading harnesses…</div>
+      ) : selected ? (
+        <>
+          <HarnessTabs clis={clis} selectedId={selected.id} onSelect={selectTab} />
+          <HarnessPanel
+            key={selected.id}
+            api={api}
+            cli={selected}
+            hasAnyMode={modes.some((m) => m.cli === selected.id)}
+            onChanged={async () => {
+              await Promise.all([loadClis(), load()]);
+            }}
+          />
 
-      <div
-        style={{
-          display: "flex",
-          gap: "var(--space-2)",
-          padding: "var(--space-3)",
-          borderRadius: "var(--radius-sm)",
-          border: "var(--border-width) solid var(--border-default)",
-          background: "var(--bg-input)",
-          marginBottom: "var(--space-5)",
-          alignItems: "flex-start",
-        }}
-      >
-        <Info size={14} style={{ marginTop: 2, flexShrink: 0, color: "var(--fg-muted)" }} />
-        <span style={{ fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5 }}>
-          Editing a mode only affects new sessions — running sessions continue with their original
-          settings. Deleting a mode is allowed even if sessions are using it.
-        </span>
-      </div>
+          <div className="harness-modes__head">
+            <span className="harness-modes__title">{cliDisplayName(selected.id)} modes</span>
+            <Button type="button" variant="solid" onClick={() => setNewOpen(true)}>
+              + New mode
+            </Button>
+          </div>
 
+          <div className="harness-notice">
+            <Info size={14} style={{ marginTop: 2, flexShrink: 0, color: "var(--fg-muted)" }} />
+            <span>
+              Editing a mode only affects new sessions — running sessions continue with their original
+              settings. Deleting a mode is allowed even if sessions are using it.
+            </span>
+          </div>
       {deleteNotice && (
         <div
           style={{
@@ -139,103 +173,29 @@ export function ModesSetting({ api }: ModesSettingProps) {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-        {modes.length === 0 && (
-          <div style={{ padding: "var(--space-5) 0", textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
-            No modes yet. Create one to get started.
-          </div>
-        )}
-        {modes.map((m) => (
-          <div
-            key={m.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-3)",
-              padding: "var(--space-3)",
-              borderRadius: "var(--radius-sm)",
-              border: "var(--border-width) solid var(--border-default)",
+          <ModeList
+            modes={harnessModes}
+            pendingDeleteId={pendingDeleteId}
+            deleteError={deleteError}
+            onEdit={setEditing}
+            onAskDelete={(id) => {
+              setDeleteError(null);
+              setPendingDeleteId(id);
             }}
-          >
-            <span aria-hidden="true" style={{ display: "inline-flex" }}>
-              <ModeIcon iconKey={m.icon} channel="json" size={20} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{m.name}</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginTop: 4 }}>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    padding: "2px 6px",
-                    borderRadius: 4,
-                    background: "var(--bg-input)",
-                    color: "var(--fg-muted)",
-                    border: "var(--border-width) solid var(--border-default)",
-                  }}
-                >
-                  {cliDisplayName(m.cli)}
-                </span>
-                {m.model ? (
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      padding: "2px 6px",
-                      borderRadius: 4,
-                      background: "var(--bg-input)",
-                      color: "var(--fg-secondary)",
-                      border: "var(--border-width) solid var(--border-default)",
-                    }}
-                  >
-                    {m.model}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-              {pendingDeleteId === m.id ? (
-                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "13px" }}>
-                  Delete?
-                  <button type="button" onClick={() => void confirmDelete(m.id)}
-                    style={{ background: "none", border: "none", color: "var(--fg-primary)", cursor: "pointer", textDecoration: "underline", padding: 0, font: "inherit" }}>
-                    Yes
-                  </button>
-                  <button type="button" onClick={() => setPendingDeleteId(null)}
-                    style={{ background: "none", border: "none", color: "var(--fg-muted)", cursor: "pointer", padding: 0, font: "inherit" }}>
-                    No
-                  </button>
-                </span>
-              ) : (
-                <div style={{ display: "flex", gap: 4 }}>
-                  <Button type="button" variant="ghost" aria-label={`Edit ${m.name}`} onClick={() => setEditing(m)}>
-                    <Pencil size={16} />
-                  </Button>
-                  <Button type="button" variant="ghost" aria-label={`Delete ${m.name}`}
-                    onClick={() => { setDeleteError(null); setPendingDeleteId(m.id); }}>
-                    <Trash2 size={16} />
-                  </Button>
-                </div>
-              )}
-              {deleteError?.id === m.id && (
-                <div className="field-error" style={{ fontSize: "var(--font-size-xs)", textAlign: "right" }}>
-                  {deleteError.msg}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: "var(--space-5)" }}>
-        <Button type="button" variant="solid" onClick={() => setNewOpen(true)}>
-          + New mode
-        </Button>
-      </div>
+            onCancelDelete={() => setPendingDeleteId(null)}
+            onConfirmDelete={(id) => void confirmDelete(id)}
+          />
+        </>
+      ) : (
+        <div className="settings-state">No harnesses are supported by this daemon.</div>
+      )}
 
       <NewModeDialog
         open={newOpen}
         onClose={() => setNewOpen(false)}
         api={api}
         existingNames={existingNames}
+        initialCli={selected?.id}
         onSaved={() => void load()}
       />
 

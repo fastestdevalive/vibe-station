@@ -20,6 +20,7 @@ import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow"
 import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 import { attachPinchZoom } from "@/lib/pinchZoom";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -30,12 +31,16 @@ import { attachPinchZoom } from "@/lib/pinchZoom";
 const CHAT_FONT_BASE_PX: Record<string, number> = {
   "--font-size-xs": 11,
   "--font-size-sm": 12,
-  "--font-size-base": 14,
+  "--font-size-base": 14, // phone: PHONE_CHAT_BASE_PX (prose floor, iOS no-zoom)
   "--font-size-lg": 16,
   "--font-size-xl": 18,
   "--font-size-2xl": 22,
   "--font-size-3xl": 28,
 };
+
+/** Chat prose base on phones (≤640px) — the inline vars below override the
+ *  tokens.css media query, so the phone value has to be chosen here. */
+const PHONE_CHAT_BASE_PX = 16;
 
 interface ChatPaneProps {
   api: ApiInstance;
@@ -92,13 +97,15 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const insertTileIntoScratchCanvas = useWorkspaceStore((s) => s.insertTileIntoScratchCanvas);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
+  const isPhone = useMediaQuery("(max-width: 640px)");
   const chatFontVars = useMemo(() => {
     const vars: Record<string, string> = {};
     for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
-      vars[name] = `${Math.round(base * terminalFontScale)}px`;
+      const px = name === "--font-size-base" && isPhone ? PHONE_CHAT_BASE_PX : base;
+      vars[name] = `${Math.round(px * terminalFontScale)}px`;
     }
     return vars as CSSProperties;
-  }, [terminalFontScale]);
+  }, [terminalFontScale, isPhone]);
 
   // Two-finger pinch (touch) / trackpad pinch (ctrl+wheel) zoom, on the same
   // shared `terminalFontScale` the Aa −/+ buttons already drive — the

@@ -617,12 +617,16 @@ describe("ReferencesPanel", () => {
 
       // The mark sits at offset 18 (the second call), not 0 (the first) —
       // walk the text nodes preceding it, robust to Shiki span splitting.
-      const mark = container.querySelector("mark.references-panel__match");
-      let offset = 0;
-      for (let node = mark?.previousSibling; node; node = node.previousSibling) {
-        offset += node.textContent?.length ?? 0;
-      }
-      expect(offset).toBe(18);
+      // A Range from the preview root to the mark measures the text before it
+      // regardless of whether Shiki has already wrapped the mark in a token
+      // span (the highlighter resolves asynchronously, so a sibling walk was
+      // timing-dependent).
+      const mark = container.querySelector("mark.references-panel__match")!;
+      const preview = container.querySelector(".references-panel__preview")!;
+      const range = document.createRange();
+      range.setStart(preview, 0);
+      range.setEndBefore(mark);
+      expect(range.toString().length).toBe(18);
     });
 
     it("retries LSP_NOT_READY with backoff and then renders the result", async () => {

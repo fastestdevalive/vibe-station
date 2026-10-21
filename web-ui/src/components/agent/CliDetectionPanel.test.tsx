@@ -19,15 +19,43 @@ beforeEach(() => {
  * multiple detected CLIs render the same button/label simultaneously.
  */
 describe("CliDetectionPanel (3.T2)", () => {
-  it("renders a ✘ not-found badge + hint for an undetected CLI, no action button", async () => {
+  it("renders a ✘ not-found badge + generic fallback when no install hint, no action button", async () => {
     render(<CliDetectionPanel api={testApi} variant="oobe" />);
 
-    const badge = await screen.findByTestId("cli-detected-opencode");
+    // agy has no installer in the hint table (mock carries no hint for it).
+    const badge = await screen.findByTestId("cli-detected-agy");
     expect(badge).toHaveTextContent("✘ not found");
-    expect(screen.getAllByText(/Install with your package manager, then re-check\./).length).toBeGreaterThan(0);
+    const agyRow = within(screen.getByTestId("cli-row-agy"));
+    expect(agyRow.getByText(/Install with your package manager, then re-check\./)).toBeInTheDocument();
+    expect(agyRow.queryByRole("button")).toBeNull();
+  });
 
-    const opencodeRow = within(screen.getByTestId("cli-row-opencode"));
-    expect(opencodeRow.queryByRole("button")).toBeNull();
+  it("R1F-02 — an undetected CLI with an install hint shows the command and a Copy button, not the generic line", async () => {
+    const clis = await testApi.getSupportedClis();
+    const cursor = clis.find((c) => c.id === "cursor")!;
+    vi.spyOn(testApi, "getSupportedClis").mockResolvedValue(
+      clis.map((c) =>
+        c.id === "cursor"
+          ? {
+              ...cursor,
+              detected: false,
+              installHint: {
+                title: null,
+                why: "Optional agent CLI for Cursor agents.",
+                commands: [{ os: "any", command: "curl https://cursor.com/install -fsS | bash" }],
+                docsUrl: null,
+                action: null,
+              },
+            }
+          : c,
+      ),
+    );
+    render(<CliDetectionPanel api={testApi} variant="oobe" />);
+
+    const row = within(await screen.findByTestId("cli-row-cursor"));
+    expect(await row.findByText("curl https://cursor.com/install -fsS | bash")).toBeInTheDocument();
+    expect(row.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(row.queryByText(/Install with your package manager/)).toBeNull();
   });
 
   it("renders 'Create starter modes' for a detected CLI with no matching modes", async () => {
@@ -128,13 +156,13 @@ describe("CliDetectionPanel (3.T2)", () => {
     // it always uses var(--border-default).
     expect(row.style.border).toContain("var(--border-width) solid var(--border-default)");
     expect(row.style.border).not.toContain("var(--fg-success)");
-    expect(row.style.opacity).toBe("1");
+    expect(row.style.opacity).toBe("");
 
     const undetectedRow = screen.getByTestId("cli-row-opencode");
-    // Undetected keeps the same border plus dimming.
+    // Undetected keeps the same border; only name/icon are muted (R3F-02), never the row.
     expect(undetectedRow.style.border).toContain("var(--border-default)");
     expect(undetectedRow.style.border).not.toContain("var(--fg-success)");
-    expect(undetectedRow.style.opacity).toBe("0.6");
+    expect(undetectedRow.style.opacity).toBe("");
 
     // Badge is plain text — no border/background, colour from fg tokens only.
     const badge = screen.getByTestId("cli-detected-claude");
@@ -374,5 +402,38 @@ describe("CliDetectionPanel default-channel toggle (6.T4)", () => {
     const toggle = await screen.findByTestId("default-channel-weird");
     expect(within(toggle).getByRole("option", { name: /Rich Chat/ }) as HTMLOptionElement).toBeDisabled();
     expect(within(toggle).getByRole("option", { name: /Terminal/ }) as HTMLOptionElement).toBeEnabled();
+  });
+
+  it("R3F-02 — an undetected CLI mutes only its name; install command and Copy render at full strength", async () => {
+    const clis = await testApi.getSupportedClis();
+    const cursor = clis.find((c) => c.id === "cursor")!;
+    vi.spyOn(testApi, "getSupportedClis").mockResolvedValue(
+      clis.map((c) =>
+        c.id === "cursor"
+          ? {
+              ...cursor,
+              detected: false,
+              installHint: {
+                title: null,
+                why: "Optional agent CLI for Cursor agents.",
+                commands: [{ os: "any", command: "curl https://cursor.com/install -fsS | bash" }],
+                docsUrl: null,
+                action: null,
+              },
+            }
+          : c,
+      ),
+    );
+    render(<CliDetectionPanel api={testApi} variant="oobe" />);
+
+    const rowEl = await screen.findByTestId("cli-row-cursor");
+    expect(rowEl.style.opacity).toBe("");
+    let el: HTMLElement | null = within(rowEl).getByRole("button", { name: "Copy" });
+    while (el) {
+      expect(["", "1"]).toContain(el.style.opacity);
+      if (el === rowEl) break;
+      el = el.parentElement;
+    }
+    expect(screen.getByTestId("cli-name-cursor").style.color).toBe("var(--fg-secondary)");
   });
 });

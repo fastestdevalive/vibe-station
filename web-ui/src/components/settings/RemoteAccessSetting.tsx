@@ -137,7 +137,7 @@ const SENTIMENT_COLOR: Record<Sentiment, string> = {
 function StatusBox({ sentiment, children }: { sentiment: Sentiment; children: ReactNode }) {
   const isBusy = sentiment === "busy";
   return (
-    <div
+    <div className="selectable"
       role={sentiment === "busy" || sentiment === "info" ? "status" : sentiment === "error" ? "alert" : undefined}
       style={{
         display: "flex",
@@ -542,7 +542,7 @@ function TailscaleCard({
                 wordBreak: "break-all",
               }}
             >
-              This machine: <code style={{ fontFamily: "var(--font-mono)" }}>{status.dnsName}</code>
+              This machine: <code className="selectable" style={{ fontFamily: "var(--font-mono)" }}>{status.dnsName}</code>
             </div>
           )}
           <a

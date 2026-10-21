@@ -1,3 +1,4 @@
+import { buildWorktreeActivityMap, sessionActivityAt } from "@/lib/sessionActivity";
 import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GitBranch, GitCommitHorizontal, Sparkles } from "lucide-react";
@@ -176,7 +177,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
         groupLabel={wt ? worktreeLabel(wt) : project.name}
         isDirect={!wt}
         channel={s.channel}
-        createdAt={s.createdAt}
+        activityAt={sessionActivityAt(s)}
         onClick={() => onOpenAgent({ worktreeId: s.worktreeId ?? undefined, sessionId: s.id })}
       />
     );
@@ -207,7 +208,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
         groupLabel={project.name}
         isDirect={false}
         channel={mainSession?.channel}
-        createdAt={mainSession?.createdAt ?? wt.createdAt}
+        activityAt={buildWorktreeActivityMap(sessionsForWt).get(wt.id) ?? mainSession?.createdAt ?? wt.createdAt}
         onClick={() => onOpenAgent({ worktreeId: wt.id, sessionId: mainSession?.id })}
       />
     );

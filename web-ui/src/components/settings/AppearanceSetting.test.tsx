@@ -5,6 +5,7 @@ import { AppearanceSetting } from "./AppearanceSetting";
 import { DiffView } from "@/components/preview/DiffView";
 import { CodeView } from "@/components/preview/CodeView";
 import { useThemeStore } from "@/hooks/useThemeStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { __resetThemeSyncForTests } from "@/hooks/useTheme";
 
 let testApi: MockApi;
@@ -116,5 +117,36 @@ describe("AppearanceSetting theme picker (3.T1 / 3.T3)", () => {
       expect(previewScope?.getAttribute("data-theme")).toBe("vibestation-dark");
     });
     expect(updateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppearanceSetting type rows (2.T2)", () => {
+  it("renders 'Interface font' (not 'Text style') and the Relaxed toggle sets terminalLineHeight", () => {
+    useWorkspaceStore.setState({ terminalLineHeight: 1 });
+    render(<AppearanceSetting />);
+    expect(screen.getByText("Interface font")).toBeTruthy();
+    expect(screen.queryByText("Text style")).toBeNull();
+    expect(screen.getByText("Terminal line spacing")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Relaxed" }));
+    expect(useWorkspaceStore.getState().terminalLineHeight).toBe(1.1);
+    fireEvent.click(screen.getByRole("radio", { name: "Compact" }));
+    expect(useWorkspaceStore.getState().terminalLineHeight).toBe(1);
+  });
+});
+
+describe("AppearanceSetting agent status borders", () => {
+  it("defaults to Off and toggling On updates the store", () => {
+    // Store default (a fresh install): borders are off.
+    expect(useWorkspaceStore.getInitialState().showAgentStatusBorders).toBe(false);
+    useWorkspaceStore.setState({ showAgentStatusBorders: false });
+    render(<AppearanceSetting />);
+    let group: HTMLElement = screen.getByText("Agent status borders");
+    while (!group.querySelector('[role="radio"]')) group = group.parentElement!;
+    const off = Array.from(group.querySelectorAll('[role="radio"]')).find((r) => r.textContent === "Off")!;
+    expect(off.getAttribute("aria-checked")).toBe("true");
+    const on = Array.from(group.querySelectorAll('[role="radio"]')).find((r) => r.textContent === "On")!;
+    fireEvent.click(on);
+    expect(useWorkspaceStore.getState().showAgentStatusBorders).toBe(true);
+    useWorkspaceStore.setState({ showAgentStatusBorders: false });
   });
 });

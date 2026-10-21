@@ -43,6 +43,41 @@ describe("OobeStep2Modes", () => {
     await waitFor(() => expect(detect.mock.calls.length).toBeGreaterThan(before));
   });
 
+  it("6.T4 — a recognised error shows the daemon's hint (commands + Details); an unrecognised one keeps the legacy block", async () => {
+    const api = createMockApi() as MockApi;
+    const raw = "ACP request failed: ENOEXEC: unknown error, posix_spawn 'claude'";
+    vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({
+      supportedClis: [cli({ id: "claude", detected: true }), cli({ id: "cursor", detected: true })],
+      created: [],
+      modelsErrors: { claude: raw, cursor: "timed out fetching models" },
+      modelsErrorHints: {
+        claude: {
+          title: "The system refused to run claude (ENOEXEC)",
+          why: "Found at /usr/local/bin/claude, but the OS won't run it.",
+          commands: [
+            { os: "any", command: "head -c 64 /usr/local/bin/claude; file -L /usr/local/bin/claude" },
+          ],
+          docsUrl: null,
+          action: "retry",
+        },
+      },
+    } as DetectAndBundleResult);
+    vi.spyOn(api, "listModes").mockResolvedValue([]);
+
+    render(<OobeStep2Modes api={api} onStep2Confirmed={vi.fn()} />);
+
+    const hinted = await screen.findByTestId("models-error-claude");
+    expect(hinted.textContent).toContain("head -c 64 /usr/local/bin/claude");
+    expect(hinted.textContent).toContain("The system refused to run claude (ENOEXEC)");
+    const details = hinted.querySelector("details");
+    expect(details?.textContent).toContain(raw);
+    expect(hinted.textContent).toContain("Retry");
+
+    const legacy = screen.getByTestId("models-error-cursor");
+    expect(legacy.textContent).toContain("Couldn't set up starter modes for cursor: timed out fetching models");
+    expect(legacy.querySelector("details")).toBeNull();
+  });
+
   it("4.T3 — with zero detected CLIs the Next button is disabled", async () => {
     const api = createMockApi() as MockApi;
     vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({

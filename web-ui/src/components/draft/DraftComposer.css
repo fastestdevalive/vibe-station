@@ -777,3 +777,66 @@
   max-height: 280px;
   overflow-y: auto;
 }
+
+/* ── Phone scale (≤640px): prompt 16px (iOS no-zoom floor), title 16px,
+   44px controls, agent picker icon-only, composer anchored at the top. ───── */
+@media (max-width: 640px) {
+  .draft-composer .chat-skill-editor__content,
+  .draft-composer .chat-skill-editor__placeholder {
+    font-size: var(--fs-input);
+    line-height: 23px;
+  }
+
+  .draft-composer__caption {
+    font-size: var(--fs-title);
+  }
+
+  .draft-mode-chip {
+    min-height: var(--h-touch);
+  }
+
+  .draft-composer .chat-composer__send {
+    min-width: var(--h-touch);
+    min-height: var(--h-touch);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .draft-composer .chat-composer__attach,
+  .draft-composer .draft-composer__discard {
+    min-width: var(--h-touch);
+    min-height: var(--h-touch);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .draft-composer .chat-composer__channel-toggle,
+  .draft-composer .draft-row__trigger {
+    min-height: var(--h-touch);
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* Icon only — the chip keeps its aria-label / title for assistive tech. */
+  .draft-mode-chip__name {
+    display: none;
+  }
+
+  .draft-composer__body {
+    justify-content: flex-start;
+  }
+
+  /* `margin: auto` on the stage would still centre it vertically. */
+  .draft-composer__stage-inner {
+    margin: 0 auto;
+  }
+}
+
+/* Keyboard hints make no sense without a hardware keyboard. */
+@media (hover: none) and (pointer: coarse) {
+  .draft-composer .draft-composer__hint {
+    display: none;
+  }
+}

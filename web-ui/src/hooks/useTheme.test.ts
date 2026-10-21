@@ -24,11 +24,11 @@ beforeEach(() => {
 });
 
 describe("useTheme", () => {
-  it("defaults to dark appearance + mono font before the server resolves", () => {
+  it("defaults to dark appearance + sans font before the server resolves", () => {
     const { result } = renderHook(() => useTheme());
     expect(result.current.theme).toBe("dark");
     expect(result.current.themeId).toBe("vibestation-dark");
-    expect(result.current.font).toBe("mono");
+    expect(result.current.font).toBe("sans");
   });
 
   it("seeds from GET /settings and writes BOTH data-theme and data-appearance (server value wins)", async () => {
@@ -148,6 +148,6 @@ describe("useTheme — legacy localStorage migration (3.T4)", () => {
     localStorage.setItem("vibestation:font", "comic-sans");
     const { result } = renderHook(() => useTheme());
     expect(result.current.theme).toBe("dark");
-    expect(result.current.font).toBe("mono");
+    expect(result.current.font).toBe("sans");
   });
 });

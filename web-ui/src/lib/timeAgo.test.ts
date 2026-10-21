@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTimeAgo } from "./timeAgo";
+import { formatFullTimestamp, formatTimeAgo } from "./timeAgo";
 
 describe("formatTimeAgo", () => {
   const base = new Date("2026-09-27T12:00:00.000Z").getTime();
@@ -45,5 +45,17 @@ describe("formatTimeAgo", () => {
 
   it("formats years ago", () => {
     expect(formatTimeAgo(new Date(base - 400 * 24 * 3600_000), base)).toBe("1y");
+  });
+});
+
+describe("formatFullTimestamp (4.T2)", () => {
+  it("formats a local time as 'Tue 20 Oct 2026, 23:44'", () => {
+    expect(formatFullTimestamp("2026-10-20T23:44:00")).toBe("Tue 20 Oct 2026, 23:44");
+  });
+
+  it("returns '' for invalid or missing input", () => {
+    expect(formatFullTimestamp("garbage")).toBe("");
+    expect(formatFullTimestamp(null)).toBe("");
+    expect(formatFullTimestamp(undefined)).toBe("");
   });
 });

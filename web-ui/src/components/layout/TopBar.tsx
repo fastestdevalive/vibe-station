@@ -74,6 +74,8 @@ interface TopBarProps {
   onOpenQuickOpen: () => void;
   /** Mobile settings drill-in: label of the active section (e.g. "Remote Access") */
   settingsSectionLabel?: string;
+  /** Title shown for `layoutMode="dashboard"` (default "Dashboard"); drafts pass "New agent". */
+  dashboardTitle?: string;
   /** Mobile settings drill-in: back to section list */
   onSettingsBack?: () => void;
   /** Keyboard-shortcuts reference dialog — controlled by the parent. */
@@ -103,6 +105,7 @@ export function TopBar({
   mobileSidebarOpen,
   onOpenQuickOpen,
   settingsSectionLabel,
+  dashboardTitle = "Dashboard",
   onSettingsBack,
   shortcutsOpen = false,
   onOpenShortcuts,
@@ -169,7 +172,7 @@ export function TopBar({
 
   const crumbParts: { label: string; highlight?: boolean }[] = [];
   if (layoutMode === "dashboard") {
-    crumbParts.push({ label: "Dashboard" });
+    crumbParts.push({ label: dashboardTitle });
   } else if (layoutMode === "settings") {
     crumbParts.push({ label: "Settings" });
     if (settingsSectionLabel) crumbParts.push({ label: settingsSectionLabel, highlight: true });
@@ -185,7 +188,7 @@ export function TopBar({
 
   const mobileTitle =
     layoutMode === "dashboard"
-      ? "Dashboard"
+      ? dashboardTitle
       : layoutMode === "settings"
         ? (settingsSectionLabel ?? "Settings")
         : layoutMode === "workspace-view"
@@ -207,8 +210,8 @@ export function TopBar({
   // Login mode — minimal header, no sidebar or workspace controls
   if (layoutMode === "login") {
     return (
-      <header className="top-bar" data-tauri-drag-region>
-        <div className="top-bar__row" data-tauri-drag-region>
+      <header className="top-bar" data-tauri-drag-region="deep">
+        <div className="top-bar__row">
           <span
             className="top-bar__brand"
             style={{
@@ -241,7 +244,7 @@ export function TopBar({
     return (
       <div
         className={`sidebar-header${leftSidebarCollapsed ? " sidebar-header--collapsed" : ""}`}
-        data-tauri-drag-region
+        data-tauri-drag-region="deep"
       >
         <button
           type="button"
@@ -264,7 +267,7 @@ export function TopBar({
 
   if (variant === "floating") {
     return (
-      <div className="top-bar-floating-actions" data-tauri-drag-region>
+      <div className="top-bar-floating-actions" data-tauri-drag-region="deep">
         <ConnectionStatus />
         {layoutMode === "workspace" || layoutMode === "project-workspace" ? (
           <>
@@ -401,8 +404,8 @@ export function TopBar({
   }
 
   return (
-    <header className={`top-bar${!isMobile ? " top-bar--desktop" : ""}`} data-tauri-drag-region>
-      <div className="top-bar__row" data-tauri-drag-region>
+    <header className={`top-bar${!isMobile ? " top-bar--desktop" : ""}`} data-tauri-drag-region="deep">
+      <div className="top-bar__row">
       {isMobile && layoutMode === "settings" && onSettingsBack ? (
         <button
           type="button"
@@ -433,7 +436,7 @@ export function TopBar({
       ) : (
         <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
           {layoutMode === "dashboard" ? (
-            <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
+            <span className="top-bar__crumb-seg top-bar__mobile-line">{dashboardTitle}</span>
           ) : layoutMode === "settings" ? (
             <span
               className="top-bar__crumb-seg top-bar__mobile-line"

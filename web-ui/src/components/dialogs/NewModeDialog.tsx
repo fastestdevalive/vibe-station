@@ -31,6 +31,8 @@ interface NewModeDialogProps {
   onClose: () => void;
   api: ApiInstance;
   existingNames?: string[];
+  /** Harness to pre-select when the dialog opens (e.g. the active Settings tab). */
+  initialCli?: string;
   onSaved?: () => void;
 }
 
@@ -39,6 +41,7 @@ export function NewModeDialog({
   onClose,
   api,
   existingNames = [],
+  initialCli,
   onSaved,
 }: NewModeDialogProps) {
   const [clis, setClis] = useState<SupportedCli[]>([]);
@@ -62,7 +65,9 @@ export function NewModeDialog({
           const nextId =
             list.some((c) => c.id === prev)
               ? prev
-              : (list.find((c) => c.id === "claude") ?? list[0])?.id ?? "";
+              : (list.find((c) => c.id === initialCli) ??
+                  list.find((c) => c.id === "claude") ??
+                  list[0])?.id ?? "";
           const def = list.find((c) => c.id === nextId)?.defaultModel ?? "";
           setModel(modelPreference(nextId, def));
           return nextId;
@@ -75,6 +80,16 @@ export function NewModeDialog({
       cancelled = true;
     };
   }, [api]);
+
+  // Re-apply the caller's preferred harness each time the dialog opens.
+  useEffect(() => {
+    if (!open || !initialCli) return;
+    const match = clis.find((c) => c.id === initialCli);
+    if (!match) return;
+    setCli(match.id);
+    setModel(modelPreference(match.id, match.defaultModel));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialCli, clis]);
 
   const namesLower = useMemo(
     () => new Set(existingNames.map((n) => n.toLowerCase())),

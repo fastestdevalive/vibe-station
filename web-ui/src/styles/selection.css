@@ -1,0 +1,37 @@
+/* Deny-by-default text selection.
+ *
+ * App chrome (title bar, sidebar, tabs, buttons, cards) is not selectable, so
+ * a drag over it never paints a stray highlight. Content people copy from is
+ * allowlisted below. The explicit -webkit- prefix matters: there is no
+ * autoprefixer in the build and WKWebView (Tauri on macOS) needs it.
+ *
+ * `.xterm` is deliberately NOT here: xterm owns its own selection
+ * (SelectionService) and sets user-select: none on itself.
+ *
+ * Error text is always copyable: use `.error-text` (or role="alert").
+ *
+ * To make any other element selectable, add `className="selectable"`. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.selectable,
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]),
+.chat-message-list,
+.preview-body,
+.workspace-code-viewer,
+.workspace-markdown-preview,
+.search-panel__results,
+.diff-line-text,
+.cmd-block,
+.field-error,
+.error-text,
+[role="alert"],
+.vcs-graph__subject,
+.vcs-graph__body {
+  -webkit-user-select: text;
+  user-select: text;
+}

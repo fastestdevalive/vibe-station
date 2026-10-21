@@ -297,6 +297,17 @@ export function useServerSync(api: ApiInstance): void {
         patchSessionState(ev.sessionId, ev.state);
       }
     });
+    const offSessActivity = sessionRepo.on("session:activity", (ev) => {
+      if (ev.type === "session:activity") {
+        // A null line means "unknown" (e.g. right after a daemon restart):
+        // keep the line we already have rather than blanking the card.
+        applySessionUpdated(ev.sessionId, {
+          lastActivityAt: ev.lastActivityAt,
+          ...(ev.lastLine != null ? { lastLine: ev.lastLine } : {}),
+          ...(ev.lastTool != null ? { lastTool: ev.lastTool } : {}),
+        });
+      }
+    });
     const offSessExited = sessionRepo.on("session:exited", (ev) => {
       if (ev.type === "session:exited") {
         applySessionUpdated(ev.sessionId, { state: "exited" });
@@ -416,6 +427,7 @@ export function useServerSync(api: ApiInstance): void {
       offWtUpdated();
       offSessCreated();
       offSessState();
+      offSessActivity();
       offSessExited();
       offSessError();
       offSessResumed();

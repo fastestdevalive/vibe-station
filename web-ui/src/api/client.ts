@@ -1277,6 +1277,15 @@ export function createClientApi() {
       return parseJson<DoctorReport>(res);
     },
 
+    /** Kill one orphan tmux session. 404 `NOT_ORPHAN` when it is no longer orphaned. */
+    async killOrphanSession(name: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/doctor/orphan-sessions/${encodeURIComponent(name)}/kill`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
     // ── Settings ────────────────────────────────────────────────────────────────
 
     async getSettings(): Promise<Settings> {

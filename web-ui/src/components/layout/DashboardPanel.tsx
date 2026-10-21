@@ -13,6 +13,8 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { Project, PrStatus, Session, SessionState, Worktree } from "@/api/types";
 import { SessionChip } from "@/components/layout/SessionChip";
+import { DashboardCardGroup } from "@/components/layout/DashboardCardGroup";
+import { buildWorktreeActivityMap, sessionActivityAt, sortByActivity } from "@/lib/sessionActivity";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -198,6 +200,8 @@ interface DashboardSessionItemProps {
   sessions: Session[];
   setActiveWorktree: (projectId: string, worktreeId: string, sessions: Session[]) => void;
   navigate: NavigateFunction;
+  /** Which bucket the card sits in — the activity label shows only on Working / Needs-you. */
+  bucket: KanbanColKey;
 }
 
 function DashboardSessionItem({
@@ -210,12 +214,20 @@ function DashboardSessionItem({
   sessions,
   setActiveWorktree,
   navigate,
+  bucket,
 }: DashboardSessionItemProps) {
   const modeIconKey = useModeIcon(sessionModeId(s), api, s.modeIcon);
   const status = sessionStatus(sessionStates[s.id] ?? s.state);
   const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
   const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
   const proj = s.projectId != null ? projectById[s.projectId] : undefined;
+  // Activity label: Working / Needs-you cards of Rich Chat agents only —
+  // terminal agents have no structured tool events, so their slot stays empty.
+  const showActivity = (bucket === "working" || bucket === "needsYou") && s.channel === "json";
+  const chipActivity = {
+    activityAt: sessionActivityAt(s),
+    lastTool: showActivity ? s.lastTool : null,
+  } as const;
 
   if (!wt) {
     const href = s.projectId ? `/project/${s.projectId}/${s.id}` : `/session/${s.id}`;
@@ -231,7 +243,7 @@ function DashboardSessionItem({
           isDirect={true}
           modeIconKey={modeIconKey ?? undefined}
           channel={s.channel}
-          createdAt={s.createdAt}
+          {...chipActivity}
           href={href}
           onClick={() => navigate(href)}
         />
@@ -249,13 +261,13 @@ function DashboardSessionItem({
         status={status}
         pr={sessionPr}
         sessionLabel={sessionLabel(s)}
-        worktreeLabel={wt.name || wt.branch}
+        worktreeLabel={wt.branch || wt.name}
         projectLabel={proj?.name ?? wt.projectId}
         groupLabel={groupLabel}
         isDirect={false}
         modeIconKey={modeIconKey ?? undefined}
         channel={s.channel}
-        createdAt={s.createdAt}
+        {...chipActivity}
         href={href}
         onClick={() => {
           setActiveWorktree(wt.projectId, wt.id, sessionsForWt);
@@ -276,8 +288,11 @@ function DashboardWorktreePrItem({
   setActiveWorktree,
   navigate,
   api,
+  activityAt,
 }: {
   worktree: Worktree;
+  /** Worktree last activity (max over its non-archived sessions). */
+  activityAt: string | null;
   /** Only the sessions that put this worktree in the PR bucket (from
    *  `rollupPrSessionsByWorktree`'s group) — NOT every session on the
    *  worktree, so a `working` sibling outside this bucket can never win the
@@ -319,7 +334,7 @@ function DashboardWorktreePrItem({
         groupLabel={proj?.name ?? "project"}
         modeIconKey={modeIconKey ?? undefined}
         channel={mainSession?.channel}
-        createdAt={mainSession?.createdAt ?? wt.createdAt}
+        activityAt={activityAt ?? mainSession?.createdAt ?? wt.createdAt}
         href={href}
         onClick={() => {
           setActiveWorktree(wt.projectId, wt.id, sessionsForWt);
@@ -453,11 +468,31 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     return map;
   }, [worktrees, sessions]);
 
-  const { working, needsYou, idle, pr, finished } = useSessionBuckets(projectFilter);
+  const buckets = useSessionBuckets(projectFilter);
+
+  /** worktreeId -> newest activity over its non-archived sessions. */
+  const worktreeActivity = useMemo(() => buildWorktreeActivityMap(sessions), [sessions]);
+
+  // Every section / column is ordered by last activity, newest first (stable;
+  // sessions with no activity sort last). The hover-freeze lives in
+  // `DashboardCardGroup`.
+  const { working, needsYou, idle, pr, finished } = useMemo(
+    () => ({
+      working: sortByActivity(buckets.working, sessionActivityAt),
+      needsYou: sortByActivity(buckets.needsYou, sessionActivityAt),
+      idle: sortByActivity(buckets.idle, sessionActivityAt),
+      pr: buckets.pr,
+      finished: sortByActivity(buckets.finished, sessionActivityAt),
+    }),
+    [buckets],
+  );
 
   const rolledUpPr = useMemo(
-    () => rollupPrSessionsByWorktree(pr, worktreeById),
-    [pr, worktreeById],
+    () =>
+      sortByActivity(rollupPrSessionsByWorktree(pr, worktreeById), (g: PrWorktreeGroup) =>
+        worktreeActivity.get(g.worktree.id),
+      ),
+    [pr, worktreeById, worktreeActivity],
   );
 
   /** Count of distinct worktrees whose isMain session has a PR error.
@@ -480,9 +515,10 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   const [expandedCols, setExpandedCols] = useState<Record<string, boolean>>({});
 
   const renderDashboardItem = useCallback(
-    (s: Session) => (
+    (s: Session, bucket: KanbanColKey) => (
       <DashboardSessionItem
         key={s.id}
+        bucket={bucket}
         session={s}
         api={api}
         projectById={projectById}
@@ -501,6 +537,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     (group: PrWorktreeGroup) => (
       <DashboardWorktreePrItem
         key={group.worktree.id}
+        activityAt={worktreeActivity.get(group.worktree.id) ?? null}
         worktree={group.worktree}
         prSessions={group.sessions}
         projectById={projectById}
@@ -512,53 +549,61 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
         api={api}
       />
     ),
-    [projectById, worktreePrById, sessions, sessionStates, setActiveWorktree, navigate, api],
+    [projectById, worktreePrById, sessions, sessionStates, setActiveWorktree, navigate, api, worktreeActivity],
   );
 
-  const renderCardList = <T,>(
-    sectionKey: string,
+  const renderSection = <T,>(
+    sectionKey: KanbanColKey,
+    label: string,
     items: T[],
+    idOf: (item: T) => string,
     renderItem: (item: T) => React.ReactNode,
-  ) => {
-    const isExpanded = !!expandedCols[sectionKey];
-    const visible = isExpanded ? items : items.slice(0, 10);
-    const hasMore = items.length > 10 && !isExpanded;
-    return (
-      <div className="dashboard-card-list">
-        {visible.map(renderItem)}
-        {hasMore ? (
-          <button
-            type="button"
-            className="dashboard-kanban__more-btn dashboard-more-btn"
-            onClick={() => setExpandedCols((prev) => ({ ...prev, [sectionKey]: true }))}
-          >
-            More (+{items.length - 10})
-          </button>
-        ) : null}
-      </div>
-    );
-  };
+  ) => (
+    <DashboardCardGroup
+      key={sectionKey}
+      as="section"
+      className="dashboard-section"
+      header={<div className="dashboard-section__label">{label}</div>}
+      items={items}
+      idOf={idOf}
+      renderItem={renderItem}
+      expanded={!!expandedCols[sectionKey]}
+      onExpand={() => setExpandedCols((prev) => ({ ...prev, [sectionKey]: true }))}
+    />
+  );
 
   const renderKanbanCol = <T,>(
-    colKey: keyof typeof KANBAN_COLS,
+    colKey: KanbanColKey,
     items: T[],
+    idOf: (item: T) => string,
     renderItem: (item: T) => React.ReactNode,
   ) => {
     const config = KANBAN_COLS[colKey];
     const Icon = config.icon;
     return (
-      <div className={`dashboard-kanban__col dashboard-kanban__col--${colKey}`} key={colKey}>
-        <div className="dashboard-kanban__col-header">
-          <span className="dashboard-kanban__col-title">
-            <Icon size={13} className="dashboard-kanban__col-icon" aria-hidden="true" />
-            <span>{config.label}</span>
-          </span>
-          <span className="dashboard-kanban__col-count">{items.length}</span>
-        </div>
-        {renderCardList(colKey, items, renderItem)}
-      </div>
+      <DashboardCardGroup
+        key={colKey}
+        className={`dashboard-kanban__col dashboard-kanban__col--${colKey}`}
+        header={
+          <div className="dashboard-kanban__col-header">
+            <span className="dashboard-kanban__col-title">
+              <Icon size={13} className="dashboard-kanban__col-icon" aria-hidden="true" />
+              <span>{config.label}</span>
+            </span>
+            <span className="dashboard-kanban__col-count">{items.length}</span>
+          </div>
+        }
+        items={items}
+        idOf={idOf}
+        renderItem={renderItem}
+        expanded={!!expandedCols[colKey]}
+        onExpand={() => setExpandedCols((prev) => ({ ...prev, [colKey]: true }))}
+      />
     );
   };
+
+  const sessionId = (s: Session) => s.id;
+  const groupId = (g: PrWorktreeGroup) => g.worktree.id;
 
   const toggleViewLabel =
     dashboardView === "list" ? "Switch to kanban layout" : "Switch to list layout";
@@ -616,40 +661,35 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
         {/* On mobile always render the list layout — kanban columns don't work on narrow screens */}
         {isMobile || dashboardView === "list" ? (
           <>
-            {working.length > 0 ? (
-              <section className="dashboard-section">
-                <div className="dashboard-section__label">working</div>
-                {renderCardList("working", working, renderDashboardItem)}
-              </section>
-            ) : null}
+            {working.length > 0
+              ? renderSection("working", "working", working, sessionId, (s) =>
+                  renderDashboardItem(s, "working"),
+                )
+              : null}
 
-            {needsYou.length > 0 ? (
-              <section className="dashboard-section">
-                <div className="dashboard-section__label">needs you</div>
-                {renderCardList("needsYou", needsYou, renderDashboardItem)}
-              </section>
-            ) : null}
+            {needsYou.length > 0
+              ? renderSection("needsYou", "needs you", needsYou, sessionId, (s) =>
+                  renderDashboardItem(s, "needsYou"),
+                )
+              : null}
 
-            {idle.length > 0 ? (
-              <section className="dashboard-section">
-                <div className="dashboard-section__label">idle</div>
-                {renderCardList("idle", idle, renderDashboardItem)}
-              </section>
-            ) : null}
+            {idle.length > 0
+              ? renderSection("idle", "idle", idle, sessionId, (s) =>
+                  renderDashboardItem(s, "idle"),
+                )
+              : null}
 
-            {rolledUpPr.length > 0 ? (
-              <section className="dashboard-section">
-                <div className="dashboard-section__label">pr created</div>
-                {renderCardList("pr", rolledUpPr, renderDashboardWorktreeItem)}
-              </section>
-            ) : null}
+            {rolledUpPr.length > 0
+              ? renderSection("pr", "pr created", rolledUpPr, groupId, (g) =>
+                  renderDashboardWorktreeItem(g),
+                )
+              : null}
 
-            {showFinished && finished.length > 0 ? (
-              <section className="dashboard-section">
-                <div className="dashboard-section__label">finished</div>
-                {renderCardList("finished", finished, renderDashboardItem)}
-              </section>
-            ) : null}
+            {showFinished && finished.length > 0
+              ? renderSection("finished", "finished", finished, sessionId, (s) =>
+                  renderDashboardItem(s, "finished"),
+                )
+              : null}
 
             {working.length === 0 &&
             needsYou.length === 0 &&
@@ -661,11 +701,19 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
           </>
         ) : (
           <div className={`dashboard-kanban${showFinished ? " dashboard-kanban--with-finished" : ""}`}>
-            {renderKanbanCol("working", working, renderDashboardItem)}
-            {renderKanbanCol("needsYou", needsYou, renderDashboardItem)}
-            {renderKanbanCol("idle", idle, renderDashboardItem)}
-            {renderKanbanCol("pr", rolledUpPr, renderDashboardWorktreeItem)}
-            {showFinished ? renderKanbanCol("finished", finished, renderDashboardItem) : null}
+            {renderKanbanCol("working", working, sessionId, (s) =>
+              renderDashboardItem(s, "working"),
+            )}
+            {renderKanbanCol("needsYou", needsYou, sessionId, (s) =>
+              renderDashboardItem(s, "needsYou"),
+            )}
+            {renderKanbanCol("idle", idle, sessionId, (s) => renderDashboardItem(s, "idle"))}
+            {renderKanbanCol("pr", rolledUpPr, groupId, (g) => renderDashboardWorktreeItem(g))}
+            {showFinished
+              ? renderKanbanCol("finished", finished, sessionId, (s) =>
+                  renderDashboardItem(s, "finished"),
+                )
+              : null}
           </div>
         )}
 
