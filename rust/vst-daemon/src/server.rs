@@ -3509,6 +3509,18 @@ async fn handle_patch_session_channel(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),
             ),
+            ChannelError::NoMode(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m, "code": "no_mode" })),
+            ),
+            ChannelError::ModeNotFound(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m, "code": "mode_not_found" })),
+            ),
+            ChannelError::BadRequest(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m })),
+            ),
             ChannelError::JsonUnsupported(m) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),

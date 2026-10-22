@@ -133,7 +133,7 @@ fn make_project(id: &str) -> ProjectRecord {
     }
 }
 
-fn routes(store: StoreHandle) -> SessionRoutes {
+fn routes_with_tmux(store: StoreHandle, tmux: vst_proc::tmux::Tmux) -> SessionRoutes {
     SessionRoutes {
         store,
         broadcaster: Broadcaster::new(16),
@@ -142,7 +142,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         direct_streams: std::sync::Arc::new(
             std::sync::Mutex::new(std::collections::HashMap::new()),
         ),
-        tmux: vst_proc::tmux::Tmux::new(),
+        tmux,
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
         subagent_notify: SubagentNotifyHandle::new(),
@@ -150,6 +150,10 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         model_catalog: Default::default(),
         handoff_timeout: std::time::Duration::from_secs(120),
     }
+}
+
+fn routes(store: StoreHandle) -> SessionRoutes {
+    routes_with_tmux(store, vst_proc::tmux::Tmux::new())
 }
 
 async fn add_project(store: &StoreHandle, p: ProjectRecord) {
@@ -184,6 +188,7 @@ async fn patch_channel_missing_session_404() {
             "s-none",
             PatchChannelBody {
                 channel: Channel::Json,
+                mode_id: None,
             },
         )
         .await
@@ -201,6 +206,7 @@ async fn patch_channel_global_draft_404() {
             "gd1",
             PatchChannelBody {
                 channel: Channel::Json,
+                mode_id: None,
             },
         )
         .await
@@ -221,6 +227,7 @@ async fn patch_channel_terminal_session_400() {
             "t1",
             PatchChannelBody {
                 channel: Channel::Json,
+                mode_id: None,
             },
         )
         .await
@@ -230,30 +237,9 @@ async fn patch_channel_terminal_session_400() {
 
 #[tokio::test]
 async fn patch_channel_tty_to_json_rejected_for_agy() {
-    use vst_agents::home::{home_dir, with_home};
-    use vst_types::rest::shared::Mode;
-    use vst_types::CliId;
-
     // agy is terminal-only — toggling it to Rich Chat must be rejected, not
     // silently fork a fresh session.
-    let dir = tempdir().unwrap();
-    let _guard = with_home(dir.path().to_path_buf());
-    let home_path = home_dir();
-    std::fs::create_dir_all(home_path.join(".vibe-station")).unwrap();
-    std::fs::write(
-        home_path.join(".vibe-station").join("modes.json"),
-        serde_json::to_string(&vec![Mode {
-            id: "agy-mode".to_string(),
-            name: "Agy".to_string(),
-            cli: CliId::Agy,
-            context: String::new(),
-            created_at: "2026-09-15T00:00:00Z".to_string(),
-            model: None,
-            icon: None,
-        }])
-        .unwrap(),
-    )
-    .unwrap();
+    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy", "agy", None)]);
 
     let (_d, store) = store();
     let mut p = make_project("p1");
@@ -268,6 +254,7 @@ async fn patch_channel_tty_to_json_rejected_for_agy() {
             "s1",
             PatchChannelBody {
                 channel: Channel::Json,
+                mode_id: None,
             },
         )
         .await
@@ -288,6 +275,7 @@ async fn patch_channel_idempotent_noop_ok() {
             "s1",
             PatchChannelBody {
                 channel: Channel::Tmux,
+                mode_id: None,
             },
         )
         .await
@@ -310,6 +298,7 @@ async fn patch_channel_idempotent_noop_json_ok() {
             "s1",
             PatchChannelBody {
                 channel: Channel::Json,
+                mode_id: None,
             },
         )
         .await
@@ -317,6 +306,550 @@ async fn patch_channel_idempotent_noop_json_ok() {
     assert!(res.ok);
     assert_eq!(res.channel, Channel::Json);
     assert!(!res.history_imported);
+}
+
+fn home_with_modes(
+    modes: &[(&str, &str, &str, Option<&str>)],
+) -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
+    use vst_agents::home::with_home;
+    let home = tempdir().unwrap();
+    let modes_dir = home.path().join(".vibe-station");
+    std::fs::create_dir_all(&modes_dir).unwrap();
+    let arr: Vec<serde_json::Value> = modes
+        .iter()
+        .map(|(id, name, cli, icon)| {
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "cli": cli,
+                "context": "",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "model": null,
+                "icon": icon,
+            })
+        })
+        .collect();
+    std::fs::write(
+        modes_dir.join("modes.json"),
+        serde_json::to_string(&arr).unwrap(),
+    )
+    .unwrap();
+    let guard = with_home(home.path().to_path_buf());
+    (home, guard)
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_deleted_mode_with_mode_id_persists_and_broadcasts() {
+    use vst_types::events::ServerEvent;
+
+    let (_home, _guard) = home_with_modes(&[(
+        "replacement-mode",
+        "Replacement",
+        "claude",
+        Some("sparkles"),
+    )]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".to_string());
+    s.mode_icon = Some("old-icon".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let res = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("replacement-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(res.ok);
+    assert_eq!(res.channel, Channel::Json);
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Json));
+    assert_eq!(persisted.mode_id, Some("replacement-mode".to_string()));
+    assert_eq!(persisted.mode_icon, Some("sparkles".to_string()));
+
+    let mut saw_broadcast = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            channel,
+            mode_id,
+            mode_icon,
+            ..
+        } = ev
+        {
+            if session_id == "s1" {
+                assert_eq!(channel, Some(Channel::Json));
+                assert_eq!(mode_id, Some("replacement-mode".to_string()));
+                assert_eq!(mode_icon, Some(Some("sparkles".to_string())));
+                saw_broadcast = true;
+            }
+        }
+    }
+    assert!(
+        saw_broadcast,
+        "expected SessionUpdated broadcast with modeId and modeIcon"
+    );
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_no_mode_without_mode_id_rejected() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = None;
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ChannelError::NoMode(_)));
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Tmux));
+    assert_eq!(persisted.mode_id, None);
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_deleted_mode_without_mode_id_rejected() {
+    let (_home, _guard) = home_with_modes(&[("other-mode", "Other", "claude", None)]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ChannelError::ModeNotFound(_)));
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Tmux));
+    assert_eq!(persisted.mode_id, Some("deleted-mode".to_string()));
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_unknown_mode_id_rejected_record_unchanged() {
+    let (_home, _guard) = home_with_modes(&[("existing-mode", "Existing", "claude", None)]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("existing-mode".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("non-existent-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ChannelError::ModeNotFound(_)));
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Tmux));
+    assert_eq!(persisted.mode_id, Some("existing-mode".to_string()));
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_mode_id_unsupported_json_rejected_record_unchanged() {
+    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy", "agy", None)]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("agy-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ChannelError::JsonUnsupported(_)));
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Tmux));
+    assert_eq!(persisted.mode_id, Some("deleted-mode".to_string()));
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_mode_by_name_resolves_to_id() {
+    let (_home, _guard) =
+        home_with_modes(&[("claude-id-456", "Claude Special", "claude", Some("zap"))]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let res = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("Claude Special".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(res.ok);
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Json));
+    assert_eq!(persisted.mode_id, Some("claude-id-456".to_string()));
+    assert_eq!(persisted.mode_icon, Some("zap".to_string()));
+}
+
+#[tokio::test]
+async fn patch_channel_json_to_tty_with_mode_id_rejected() {
+    // json→tty never needs a mode change; a supplied modeId must be rejected
+    // (400), not silently dropped (review #5).
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Tmux,
+                mode_id: Some("some-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChannelError::BadRequest(_)));
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Json));
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_replacing_unresolved_mode_clears_chat_ids() {
+    use vst_types::events::ServerEvent;
+
+    // When a `modeId` replaces a session whose own mode never resolved, the old
+    // CLI is unknown — the persisted agent_chat_id/acp_session_id are foreign to
+    // the replacement CLI and must be cleared so the first Rich Chat turn mints a
+    // fresh id instead of trying to resume one (review #2).
+    let (_home, _guard) = home_with_modes(&[("replacement-mode", "Replacement", "claude", None)]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".to_string());
+    s.agent_chat_id = Some("old-cli-native-id".to_string());
+    s.acp_session_id = Some("old-cli-acp-id".to_string());
+    s.model_override = Some("gpt-5".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let res = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("replacement-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(res.ok);
+    assert_eq!(res.channel, Channel::Json);
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Json));
+    assert_eq!(persisted.mode_id, Some("replacement-mode".to_string()));
+    assert_eq!(persisted.agent_chat_id, None);
+    assert_eq!(persisted.acp_session_id, None);
+    assert_eq!(persisted.model_override, None);
+
+    let mut saw_broadcast = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            channel,
+            mode_id,
+            ..
+        } = ev
+        {
+            if session_id == "s1" {
+                assert_eq!(channel, Some(Channel::Json));
+                assert_eq!(mode_id, Some("replacement-mode".to_string()));
+                saw_broadcast = true;
+            }
+        }
+    }
+    assert!(
+        saw_broadcast,
+        "expected SessionUpdated broadcast with the replacement modeId"
+    );
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_same_cli_mode_replacement_keeps_chat_id() {
+    use vst_types::events::ServerEvent;
+
+    // The old mode still resolves to the SAME CLI as the replacement, so the
+    // persisted native chat id stays usable: it is kept, and only the mode moves.
+    let (_home, _guard) = home_with_modes(&[
+        ("claude-a", "Claude A", "claude", None),
+        ("claude-b", "Claude B", "claude", None),
+    ]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("claude-a".to_string());
+    s.agent_chat_id = Some("x".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    r.patch_session_channel(
+        "s1",
+        PatchChannelBody {
+            channel: Channel::Json,
+            mode_id: Some("claude-b".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.mode_id, Some("claude-b".to_string()));
+    assert_eq!(persisted.agent_chat_id, Some("x".to_string()));
+
+    let mut saw_mode = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            mode_id,
+            ..
+        } = ev
+        {
+            if session_id == "s1" && mode_id == Some("claude-b".to_string()) {
+                saw_mode = true;
+            }
+        }
+    }
+    assert!(saw_mode, "broadcast should carry the new modeId");
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_unknown_mode_id_does_not_kill_tmux() {
+    use vst_proc::tmux::{NewSessionOptions, Tmux};
+
+    // Unknown modeId fails validation BEFORE any teardown, so the session's tmux
+    // must survive the failed toggle (review #17).
+    let (_home, _guard) = home_with_modes(&[("existing-mode", "Existing", "claude", None)]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("existing-mode".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    // Isolate against a dedicated tmux server so the test never touches a live one.
+    let sock = format!("vst-test-{}", std::process::id());
+    let tmux = Tmux::with_socket(&sock);
+    let _ = tmux.kill_server(); // clear any leftover from a prior aborted run
+    tmux.new_session(&NewSessionOptions {
+        name: "vst-s1".to_string(),
+        cwd: None,
+        env: std::collections::HashMap::new(),
+        command: None,
+    })
+    .unwrap();
+
+    let r = routes_with_tmux(store.clone(), tmux.clone());
+    let err = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: Some("non-existent-mode".to_string()),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChannelError::ModeNotFound(_)));
+
+    // The tmux session the failed toggle would have killed is still alive.
+    assert!(tmux.has_session("vst-s1"));
+    let _ = tmux.kill_server();
+}
+
+#[tokio::test]
+async fn patch_channel_tty_to_json_valid_mode_without_mode_id_no_mode_change() {
+    use vst_types::events::ServerEvent;
+
+    // A valid-mode session with no `modeId` supplied is the "zero behaviour
+    // change" path: the mode is untouched and the broadcast carries no modeId /
+    // modeIcon (review #18).
+    let (_home, _guard) = home_with_modes(&[("existing-mode", "Existing", "claude", Some("zap"))]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("existing-mode".to_string());
+    s.mode_icon = Some("old-icon".to_string());
+    s.agent_chat_id = Some("native-id".to_string());
+    s.channel = Some(Channel::Tmux);
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let res = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Json,
+                mode_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(res.ok);
+    assert_eq!(res.channel, Channel::Json);
+
+    let project = store.get_project("p1").await.unwrap();
+    let persisted = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(persisted.channel, Some(Channel::Json));
+    assert_eq!(persisted.mode_id, Some("existing-mode".to_string()));
+    assert_eq!(persisted.mode_icon, Some("old-icon".to_string()));
+    assert_eq!(persisted.agent_chat_id, Some("native-id".to_string()));
+
+    let mut saw_broadcast = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            channel,
+            mode_id,
+            mode_icon,
+            ..
+        } = ev
+        {
+            if session_id == "s1" {
+                assert_eq!(channel, Some(Channel::Json));
+                assert_eq!(mode_id, None);
+                assert_eq!(mode_icon, None);
+                saw_broadcast = true;
+            }
+        }
+    }
+    assert!(
+        saw_broadcast,
+        "expected SessionUpdated broadcast with no mode change"
+    );
 }
 
 // ---------------------------------------------------------------------------

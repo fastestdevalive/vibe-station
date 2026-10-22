@@ -218,6 +218,8 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             worktree_id,
             draft_prompt,
             draft_config,
+            mode_id,
+            mode_icon,
         } => ServerMessage::SessionUpdated {
             session_id,
             pinned_at,
@@ -232,6 +234,8 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             worktree_id,
             draft_prompt,
             draft_config: draft_config.map(|v| *v),
+            mode_id,
+            mode_icon,
         },
         ServerEvent::SessionDeleted { session_id } => ServerMessage::SessionDeleted { session_id },
         ServerEvent::ProjectCreated { project } => ServerMessage::ProjectCreated { project },

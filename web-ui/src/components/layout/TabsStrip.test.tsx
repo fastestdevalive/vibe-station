@@ -430,6 +430,48 @@ describe("TabsStrip", () => {
     expect(within(dialog).getByText(/Agent.*will become the new main session/i)).toBeInTheDocument();
   });
 
+  it("session:updated{modeId/modeIcon} (via useServerSync → store) updates the tab icon; modeIcon:null falls back to the live mode", async () => {
+    // Tabs derive from `useServerStore`, so `useServerSync`'s patch is the only
+    // writer — TabsStrip needs no handler of its own. The tab icon is
+    // `aria-hidden`, so assert on the ModeIcon's `aria-label` DOM attribute.
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /^main\b/i });
+    const mainTab = screen.getByRole("tab", { name: /^main\b/i });
+
+    // A channel-switch mode replacement: modeId mode-2 + snapshot modeIcon "x".
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        modeId: "mode-2",
+        modeIcon: "x",
+      });
+    });
+    await waitFor(() => {
+      expect(mainTab.querySelector('[aria-label="x"]')).not.toBeNull();
+    });
+
+    // Emit modeIcon: null → the snapshot is cleared, so the icon falls back to
+    // the live mode lookup for mode-2 (cursor).
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        modeId: "mode-2",
+        modeIcon: null,
+      });
+    });
+    await waitFor(() => {
+      expect(mainTab.querySelector('[aria-label="cursor"]')).not.toBeNull();
+    });
+    expect(mainTab.querySelector('[aria-label="x"]')).toBeNull();
+  });
+
   it("click + creates a draft tab", async () => {
     const user = userEvent.setup();
     render(

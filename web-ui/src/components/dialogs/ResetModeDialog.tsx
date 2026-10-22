@@ -1,42 +1,66 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode } from "@/api/types";
 import { Dialog } from "./Dialog";
 
-interface ResetModeDialogProps {
+export interface ResetModeDialogProps {
   open: boolean;
   api: Pick<ApiInstance, "listModes">;
-  /** Why the reset couldn't proceed (the daemon's error text). */
-  reason: string;
+  /** Why the mode picker was shown (the daemon's error text or context). */
+  reason?: string | null;
+  /** Custom dialog title (defaults to "Choose a mode to reset with"). */
+  title?: string;
+  /** Custom confirm button label (defaults to "Reset with this mode"). */
+  confirmLabel?: string;
+  /** Custom prompt text (defaults to "Pick a mode for the fresh session."). */
+  prompt?: string;
+  /** Empty-state text shown once modes are loaded but none match the filter. */
+  emptyMessage?: string;
+  /** Pure filter to restrict selectable modes (e.g. only supportsJson CLIs). */
+  filterMode?: (m: Mode) => boolean;
   onConfirm: (modeId: string) => void;
   onCancel: () => void;
 }
 
 /**
- * Shown when a reset is rejected because the session's own mode is gone (or it
- * never had one). Lets the user pick a replacement mode and retry the reset
- * with it, instead of dead-ending on an error.
+ * Shown when a reset or channel switch needs a mode because the session's own mode
+ * is missing or deleted. Lets the user pick a valid mode and continue instead of dead-ending.
  */
-export function ResetModeDialog({ open, api, reason, onConfirm, onCancel }: ResetModeDialogProps) {
+export function ResetModeDialog({
+  open,
+  api,
+  reason,
+  title,
+  confirmLabel,
+  prompt,
+  emptyMessage,
+  filterMode,
+  onConfirm,
+  onCancel,
+}: ResetModeDialogProps) {
   const [modes, setModes] = useState<Mode[]>([]);
   const [selected, setSelected] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!open) return undefined;
     let cancelled = false;
+    setLoaded(false);
+    setLoadFailed(false);
     void api
       .listModes()
       .then((ms) => {
         if (cancelled) return;
         setLoadFailed(false);
         setModes(ms);
-        setSelected((cur) => (ms.some((m) => m.id === cur) ? cur : (ms[0]?.id ?? "")));
+        setLoaded(true);
       })
       .catch(() => {
         if (!cancelled) {
           setModes([]);
           setLoadFailed(true);
+          setLoaded(true);
         }
       });
     return () => {
@@ -44,10 +68,31 @@ export function ResetModeDialog({ open, api, reason, onConfirm, onCancel }: Rese
     };
   }, [open, api]);
 
+  const displayModes = useMemo(
+    () => (filterMode ? modes.filter(filterMode) : modes),
+    [modes, filterMode],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setSelected("");
+      return;
+    }
+    if (displayModes.length > 0) {
+      setSelected((cur) => (displayModes.some((m) => m.id === cur) ? cur : (displayModes[0]?.id ?? "")));
+    } else {
+      setSelected("");
+    }
+  }, [open, displayModes]);
+
+  const displayTitle = title ?? "Choose a mode to reset with";
+  const displayConfirmLabel = confirmLabel ?? "Reset with this mode";
+  const displayPrompt = prompt ?? "Pick a mode for the fresh session.";
+
   return (
     <Dialog
       open={open}
-      title="Choose a mode to reset with"
+      title={displayTitle}
       onClose={onCancel}
       footer={
         <>
@@ -55,7 +100,7 @@ export function ResetModeDialog({ open, api, reason, onConfirm, onCancel }: Rese
             Cancel
           </button>
           <button type="button" disabled={!selected} onClick={() => onConfirm(selected)}>
-            Reset with this mode
+            {displayConfirmLabel}
           </button>
         </>
       }
@@ -68,22 +113,27 @@ export function ResetModeDialog({ open, api, reason, onConfirm, onCancel }: Rese
           whiteSpace: "pre-line",
         }}
       >
-        {reason}
-        {"\n"}
-        {loadFailed ? "Couldn't load the mode list — close this and try again." : "Pick a mode for the fresh session."}
+        {reason && <>{reason}{"\n"}</>}
+        {loadFailed
+          ? "Couldn't load the mode list — close this and try again."
+          : loaded && displayModes.length === 0
+            ? (emptyMessage ?? "No modes — create one in Settings → Modes.")
+            : displayPrompt}
       </p>
-      <select
-        aria-label="Mode"
-        value={selected}
-        onChange={(e) => setSelected(e.target.value)}
-        style={{ width: "100%" }}
-      >
-        {modes.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.name} ({m.cli})
-          </option>
-        ))}
-      </select>
+      {!loadFailed && displayModes.length > 0 && (
+        <select
+          aria-label="Mode"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          style={{ width: "100%" }}
+        >
+          {displayModes.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.cli})
+            </option>
+          ))}
+        </select>
+      )}
     </Dialog>
   );
 }

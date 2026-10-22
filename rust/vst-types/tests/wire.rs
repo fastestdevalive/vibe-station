@@ -154,6 +154,8 @@ fn session_updated_omits_unchanged_optionals() {
         worktree_id: None,
         draft_prompt: None,
         draft_config: None,
+        mode_id: None,
+        mode_icon: None,
     };
     let value = serde_json::to_value(&msg).unwrap();
     let obj = value.as_object().unwrap();
@@ -162,6 +164,8 @@ fn session_updated_omits_unchanged_optionals() {
     assert!(!obj.contains_key("pinnedAt"));
     assert!(!obj.contains_key("channel"));
     assert!(!obj.contains_key("pr"));
+    assert!(!obj.contains_key("modeId"));
+    assert!(!obj.contains_key("modeIcon"));
     // changed fields appear
     assert_eq!(obj.get("name").unwrap(), "renamed");
     assert_eq!(obj.get("sortOrder").unwrap(), 2.0);
@@ -184,6 +188,8 @@ fn session_updated_pinned_at_is_tri_state() {
         worktree_id: None,
         draft_prompt: None,
         draft_config: None,
+        mode_id: None,
+        mode_icon: None,
     };
     let v = serde_json::to_value(mk(Some(None))).unwrap();
     assert_eq!(v.get("pinnedAt"), Some(&serde_json::Value::Null));
@@ -191,6 +197,78 @@ fn session_updated_pinned_at_is_tri_state() {
     assert!(!v.as_object().unwrap().contains_key("pinnedAt"));
     let v = serde_json::to_value(mk(Some(Some("t".into())))).unwrap();
     assert_eq!(v.get("pinnedAt").unwrap(), "t");
+}
+
+#[test]
+fn session_updated_mode_icon_is_tri_state() {
+    let mk = |mode_icon: Option<Option<String>>| ServerMessage::SessionUpdated {
+        session_id: "s".into(),
+        pinned_at: None,
+        channel: None,
+        name: None,
+        archived_at: None,
+        sort_order: None,
+        pr: None,
+        superseded_by: None,
+        is_main: None,
+        parent_session_id: None,
+        worktree_id: None,
+        draft_prompt: None,
+        draft_config: None,
+        mode_id: None,
+        mode_icon,
+    };
+    let v = serde_json::to_value(mk(Some(None))).unwrap();
+    assert_eq!(v.get("modeIcon"), Some(&serde_json::Value::Null));
+    let v = serde_json::to_value(mk(None)).unwrap();
+    assert!(!v.as_object().unwrap().contains_key("modeIcon"));
+    let v = serde_json::to_value(mk(Some(Some("star".into())))).unwrap();
+    assert_eq!(v.get("modeIcon").unwrap(), "star");
+}
+
+#[test]
+fn session_updated_mode_id_serialized() {
+    let msg = ServerMessage::SessionUpdated {
+        session_id: "s".into(),
+        pinned_at: None,
+        channel: None,
+        name: None,
+        archived_at: None,
+        sort_order: None,
+        pr: None,
+        superseded_by: None,
+        is_main: None,
+        parent_session_id: None,
+        worktree_id: None,
+        draft_prompt: None,
+        draft_config: None,
+        mode_id: Some("mode-123".into()),
+        mode_icon: None,
+    };
+    let v = serde_json::to_value(&msg).unwrap();
+    assert_eq!(v.get("modeId").unwrap(), "mode-123");
+}
+
+#[test]
+fn patch_channel_body_serde_roundtrips() {
+    use vst_types::rest::sessions::PatchChannelBody;
+    use vst_types::Channel;
+
+    // Deserializing without modeId defaults to None
+    let json_without = serde_json::json!({ "channel": "json" });
+    let parsed: PatchChannelBody = serde_json::from_value(json_without).unwrap();
+    assert_eq!(parsed.channel, Channel::Json);
+    assert_eq!(parsed.mode_id, None);
+
+    // Serializing with None omits modeId
+    let serialized = serde_json::to_value(&parsed).unwrap();
+    assert!(!serialized.as_object().unwrap().contains_key("modeId"));
+
+    // Deserializing with modeId parses correctly
+    let json_with = serde_json::json!({ "channel": "json", "modeId": "new-mode" });
+    let parsed_with: PatchChannelBody = serde_json::from_value(json_with.clone()).unwrap();
+    assert_eq!(parsed_with.mode_id, Some("new-mode".into()));
+    assert_eq!(serde_json::to_value(&parsed_with).unwrap(), json_with);
 }
 
 #[test]
@@ -209,6 +287,8 @@ fn session_updated_delink_serializes_parent_session_id_null() {
         worktree_id: None,
         draft_prompt: None,
         draft_config: None,
+        mode_id: None,
+        mode_icon: None,
     };
     let value = serde_json::to_value(&msg).unwrap();
     let obj = value.as_object().unwrap();

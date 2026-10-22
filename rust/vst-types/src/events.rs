@@ -97,6 +97,13 @@ pub enum ServerEvent {
         draft_prompt: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         draft_config: Option<Box<serde_json::Value>>,
+        /// Set only when a tty→json channel switch replaced the session's mode.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode_id: Option<String>,
+        /// Tri-state: `None` = no change (key omitted), `Some(Some(icon))` =
+        /// updated icon, `Some(None)` = cleared (serializes `"modeIcon": null`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode_icon: Option<Option<String>>,
     },
     /// A session was deleted.
     #[serde(rename = "session:deleted", rename_all = "camelCase")]

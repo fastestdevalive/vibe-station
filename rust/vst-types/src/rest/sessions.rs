@@ -326,10 +326,13 @@ pub struct PatchModelResult {
 }
 
 /// `PATCH /sessions/:id/channel` request body.
+#[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchChannelBody {
     pub channel: Channel,
+    #[serde(default)]
+    pub mode_id: Option<String>,
 }
 
 /// `PATCH /sessions/:id/channel` success.

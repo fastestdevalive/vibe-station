@@ -402,6 +402,8 @@ export function useServerSync(api: ApiInstance): void {
         if (ev.worktreeId !== undefined) patch.worktreeId = ev.worktreeId ?? null;
         if (ev.draftPrompt !== undefined) patch.draftPrompt = ev.draftPrompt ?? null;
         if (ev.draftConfig !== undefined) patch.draftConfig = ev.draftConfig ?? null;
+        if (ev.modeId !== undefined) patch.modeId = ev.modeId;
+        if (ev.modeIcon !== undefined) patch.modeIcon = ev.modeIcon ?? null;
         applySessionUpdated(ev.sessionId, patch);
         // A reset's replacement takes the archived session's place in every
         // canvas it was tiled in — same tile id/position, just repointed.

@@ -15,7 +15,7 @@ describe("ChannelToggleButton (item 4, Decision 6) — 4.T1", () => {
     await userEvent.click(trigger);
     expect(screen.getByText("Switch to terminal?")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /Switch to terminal/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux", undefined));
   });
 
   it("toJson: renders '⇄ Rich Chat', dialog copy, and switches to json on confirm", async () => {
@@ -27,7 +27,7 @@ describe("ChannelToggleButton (item 4, Decision 6) — 4.T1", () => {
     await userEvent.click(trigger);
     expect(screen.getByText("Switch to Rich Chat?")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "json"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "json", undefined));
   });
 
   it("triggerDisabled disables the trigger button", () => {
@@ -88,4 +88,87 @@ describe("ChannelToggleButton (item 4, Decision 6) — 4.T1", () => {
       expect(screen.getByText("Couldn't switch — the session is busy. Try again when idle.")).toBeTruthy(),
     );
   });
+
+  it("needsMode: opens mode picker first, then confirm dialog, then sends modeId", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<ChannelToggleButton api={api} sessionId="s1" direction="toJson" needsMode={true} />);
+
+    // Clicking trigger opens mode picker instead of confirm dialog
+    await userEvent.click(screen.getByRole("button", { name: "⇄ Rich Chat" }));
+    expect(await screen.findByText("Choose a mode for Rich Chat")).toBeTruthy();
+    expect(screen.queryByText("Switch to Rich Chat?")).toBeNull();
+
+    // Selecting a mode and confirming in picker opens the confirm dialog
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+    expect(await screen.findByText("Switch to Rich Chat?")).toBeTruthy();
+    // The server starts a fresh conversation in this flow — the confirm copy must
+    // not promise the "same conversation" / backfill.
+    expect(screen.queryByText(/same conversation/i)).toBeNull();
+    expect(screen.getByText(/new Rich Chat conversation/i)).toBeTruthy();
+
+    // Confirming in the dialog calls setSessionChannel with chosen modeId
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "json", "mode-1"));
+  });
+
+  it("needsMode: cancelling in picker does not open confirm dialog or call API", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<ChannelToggleButton api={api} sessionId="s1" direction="toJson" needsMode={true} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "⇄ Rich Chat" }));
+    await screen.findByText("Choose a mode for Rich Chat");
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Choose a mode for Rich Chat")).toBeNull();
+    expect(screen.queryByText("Switch to Rich Chat?")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("needsMode: cancelling in confirm dialog does not call API", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<ChannelToggleButton api={api} sessionId="s1" direction="toJson" needsMode={true} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "⇄ Rich Chat" }));
+    await screen.findByText("Choose a mode for Rich Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+
+    expect(await screen.findByText("Switch to Rich Chat?")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText("Switch to Rich Chat?")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("catches mode_not_found from server and opens mode picker to retry", async () => {
+    const api = createMockApi();
+    const spy = vi
+      .spyOn(api, "setSessionChannel")
+      .mockRejectedValueOnce(
+        new ApiError(JSON.stringify({ error: "Mode 'gone' not found", code: "mode_not_found" }), 400, "mode_not_found"),
+      )
+      .mockResolvedValueOnce({ ok: true } as never);
+
+    render(<ChannelToggleButton api={api} sessionId="s1" direction="toJson" needsMode={false} />);
+
+    // Direct toggle opens confirm dialog
+    await userEvent.click(screen.getByRole("button", { name: "⇄ Rich Chat" }));
+    expect(screen.getByText("Switch to Rich Chat?")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+
+    // Rejection opens the picker with fixed copy (not the API-facing daemon text)
+    expect(await screen.findByText("Choose a mode for Rich Chat")).toBeTruthy();
+    expect(screen.getByText(/mode no longer exists/i)).toBeTruthy();
+
+    // Confirm picker opens confirm dialog again with replacement mode
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+    expect(await screen.findByText("Switch to Rich Chat?")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(spy).toHaveBeenLastCalledWith("s1", "json", "mode-1");
+  });
 });
+
