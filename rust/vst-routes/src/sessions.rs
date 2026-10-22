@@ -638,7 +638,7 @@ impl SessionRoutes {
             let json_ctx = find_json_session_context(&self.store, id)
                 .await
                 .ok_or_else(|| format!("json session context missing for '{id}'"))?;
-            let page = read_session_tail(&json_ctx, &self.json_registry, n);
+            let page = read_session_tail(&json_ctx, &self.json_registry, n, usize::MAX);
             let output = group_json_output(&page.events);
             return Ok(SessionOutput {
                 id: id.to_string(),
@@ -3743,7 +3743,7 @@ impl SessionRoutes {
             return Ok(ChatActionResult { ok: true });
         }
 
-        // Attachments only make sense on the json channel (D5).
+        // Attachments only make sense on the json channel.
         if let Some(ids) = body.attachment_ids.as_deref() {
             if !ids.is_empty() {
                 return Err(ChatRouteError::AttachmentsRequireJson(
@@ -4656,7 +4656,7 @@ impl SessionRoutes {
         if limit <= 0 {
             return Err(TranscriptError::InvalidQuery("invalid limit".to_string()));
         }
-        let page = read_session_tail(&ctx, &self.json_registry, limit);
+        let page = read_session_tail(&ctx, &self.json_registry, limit, usize::MAX);
         Ok(TranscriptResponse::Page(TranscriptPage {
             events: page.events,
             oldest_seq: page.oldest_seq,
@@ -4978,7 +4978,7 @@ impl SessionRoutes {
         Ok(())
     }
 
-    /// Resolve `attachmentIds` → `Attachment` records (D5). Shared by `/send`,
+    /// Resolve `attachmentIds` → `Attachment` records. Shared by `/send`,
     /// `/chat`, and `/resubmit` (edited). Returns 400 on any missing id.
     async fn resolve_attachments(
         &self,

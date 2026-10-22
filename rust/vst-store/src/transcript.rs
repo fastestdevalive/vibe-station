@@ -56,6 +56,10 @@ pub struct TranscriptPage {
     pub events: Vec<NormalizedEvent>,
     pub oldest_seq: Option<i64>,
     pub has_more: bool,
+    /// Sum of the stored `payload` lengths (UTF-8 bytes) of the rows loaded
+    /// for this page. Approximates the replay frame size: it counts rows
+    /// `parse_row` may drop and excludes the re-serialised frame envelope.
+    pub payload_bytes: usize,
 }
 
 /// A bounded forward window plus its keyset cursor.
@@ -64,6 +68,9 @@ pub struct SincePage {
     pub events: Vec<NormalizedEvent>,
     pub next_seq: Option<i64>,
     pub has_more: bool,
+    /// Sum of the stored `payload` lengths (UTF-8 bytes) of the rows loaded
+    /// for this page; see `TranscriptPage::payload_bytes`.
+    pub payload_bytes: usize,
 }
 
 fn kind_str(kind: NormalizedEventKind) -> &'static str {
@@ -687,7 +694,28 @@ impl TranscriptStore {
     }
 
     /// The last `n_turns` whole turns, turn-aligned, plus a cursor.
-    pub fn tail(&self, n_turns: i64) -> TranscriptPage {
+    ///
+    /// The candidate window is the last `n_turns` turns (newest-first, from
+    /// the `MIN(seq) GROUP BY turn_id` query). The returned turns are then
+    /// narrowed by a **byte** budget: the newest turn is ALWAYS included whole
+    /// (turn-aligned windows are a client invariant — tool_call/result pairing
+    /// would render a broken latest turn if cut inside), and each older turn
+    /// is included only while `acc_bytes + turn_bytes <= max_bytes`, stopping
+    /// at the FIRST turn that does not fit (a contiguous new-turns window).
+    /// `max_bytes == 0` means the newest turn only. Because the newest turn is
+    /// always whole, the worst-case window is `max_bytes + one turn` (a single
+    /// turn is unbounded; 1.9 MB observed) — per-event truncation of oversized
+    /// turns is a follow-up.
+    ///
+    /// Sizing uses ONE query over only the candidate window —
+    /// `SELECT seq, LENGTH(CAST(payload AS BLOB)) FROM message WHERE ... AND
+    /// seq >= starts.last()` — and attributes each row to the turn whose seq
+    /// range it sits in (`turn i` owns `[starts[i], starts[i-1])`), matching
+    /// exactly what `page_from` loads whatever the turn ids (NULL / interleaved).
+    /// It deliberately does NOT add `SUM(LENGTH(payload))` to the GROUP BY
+    /// query, which would read every payload in history. Bytes are UTF-8
+    /// bytes (`CAST AS BLOB`), not chars.
+    pub fn tail(&self, n_turns: i64, max_bytes: usize) -> TranscriptPage {
         let n = n_turns.max(1);
         let starts: Vec<i64> = (|| -> rusqlite::Result<Vec<i64>> {
             let mut stmt = self.conn.prepare(
@@ -704,10 +732,55 @@ impl TranscriptStore {
                 events: vec![],
                 oldest_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             };
         }
         let cut_seq = *starts.last().unwrap();
-        self.page_from(cut_seq)
+        // Size ONLY the candidate window (`seq >= cut_seq`). The query is ASC
+        // by seq; `starts` is DESC (newest first), which is how the per-turn
+        // attribution below walks newest -> oldest.
+        let sizes: Option<Vec<(i64, usize)>> = (|| -> rusqlite::Result<Vec<(i64, usize)>> {
+            let mut stmt = self.conn.prepare(
+                "SELECT seq, LENGTH(CAST(payload AS BLOB)) FROM message WHERE session_id = ?1 AND superseded = 0 AND seq >= ?2 ORDER BY seq ASC",
+            )?;
+            let result = stmt
+                .query_map(params![self.session_id, cut_seq], |r| {
+                    Ok((r.get(0)?, r.get::<_, i64>(1)? as usize))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(result)
+        })()
+        .ok();
+        // Fail closed: if the sizes can't be read, the budget can't be
+        // enforced, so serve the newest turn only rather than the whole window.
+        let Some(sizes) = sizes else {
+            return self.page_from(starts[0]);
+        };
+
+        // Attribute each sized row to the turn whose seq range it sits in —
+        // `turn i` owns `[starts[i], starts[i-1])`, newest (`i = 0`) owns
+        // `[starts[0], inf)`. The sizes query is ASC and `starts` is DESC, so
+        // walk backwards through the ASC tail for each turn.
+        let mut turn_sizes = vec![0usize; starts.len()];
+        let mut pos = sizes.len();
+        for i in 0..starts.len() {
+            let lo = starts[i];
+            let hi = if i == 0 { i64::MAX } else { starts[i - 1] };
+            while pos > 0 && sizes[pos - 1].0 >= lo && sizes[pos - 1].0 < hi {
+                pos -= 1;
+                turn_sizes[i] += sizes[pos].1;
+            }
+        }
+
+        // Walk newest -> oldest, always including the newest; stop at the
+        // first older turn that does not fit.
+        let mut cut_index = 0usize; // oldest included turn (newest-first index)
+        let mut acc = turn_sizes[0];
+        while cut_index + 1 < starts.len() && acc + turn_sizes[cut_index + 1] <= max_bytes {
+            cut_index += 1;
+            acc += turn_sizes[cut_index];
+        }
+        self.page_from(starts[cut_index])
     }
 
     /// Keyset page of events strictly before `seq`, turn-aligned.
@@ -728,6 +801,7 @@ impl TranscriptStore {
                 events: vec![],
                 oldest_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             };
         }
         let (oldest_seq, oldest_turn) = rows.last().unwrap();
@@ -735,11 +809,12 @@ impl TranscriptStore {
             Some(t) => self.turn_first_seq(t),
             None => *oldest_seq,
         };
-        let events = self.range_asc(start_seq, seq);
+        let (events, payload_bytes) = self.range_asc(start_seq, seq);
         TranscriptPage {
             events,
             oldest_seq: Some(start_seq),
             has_more: self.exists_before(start_seq),
+            payload_bytes,
         }
     }
 
@@ -761,8 +836,10 @@ impl TranscriptStore {
                 events: vec![],
                 next_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             };
         }
+        let payload_bytes: usize = rows.iter().map(|(_, p)| p.len()).sum();
         let events: Vec<NormalizedEvent> = rows
             .iter()
             .filter_map(|(s, p)| self.parse_row(*s, p))
@@ -772,6 +849,7 @@ impl TranscriptStore {
             events,
             next_seq: Some(last_seq),
             has_more: self.exists_after(last_seq),
+            payload_bytes,
         }
     }
 
@@ -786,6 +864,7 @@ impl TranscriptStore {
             Ok(result)
         })()
         .unwrap_or_default();
+        let payload_bytes: usize = rows.iter().map(|(_, p)| p.len()).sum();
         let events: Vec<NormalizedEvent> = rows
             .iter()
             .filter_map(|(s, p)| self.parse_row(*s, p))
@@ -794,10 +873,11 @@ impl TranscriptStore {
             oldest_seq: (!events.is_empty()).then_some(from_seq),
             has_more: self.exists_before(from_seq),
             events,
+            payload_bytes,
         }
     }
 
-    fn range_asc(&self, start_seq: i64, end_seq: i64) -> Vec<NormalizedEvent> {
+    fn range_asc(&self, start_seq: i64, end_seq: i64) -> (Vec<NormalizedEvent>, usize) {
         let rows: Vec<(i64, String)> = (|| -> rusqlite::Result<Vec<(i64, String)>> {
             let mut stmt = self.conn.prepare(
                 "SELECT seq, payload FROM message WHERE session_id = ?1 AND superseded = 0 AND seq >= ?2 AND seq < ?3 ORDER BY seq ASC",
@@ -808,9 +888,12 @@ impl TranscriptStore {
             Ok(result)
         })()
         .unwrap_or_default();
-        rows.iter()
+        let payload_bytes: usize = rows.iter().map(|(_, p)| p.len()).sum();
+        let events = rows
+            .iter()
             .filter_map(|(s, p)| self.parse_row(*s, p))
-            .collect()
+            .collect();
+        (events, payload_bytes)
     }
 
     fn turn_first_seq(&self, turn_id: &str) -> i64 {

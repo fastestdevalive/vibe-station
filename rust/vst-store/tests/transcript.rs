@@ -172,7 +172,7 @@ fn tail_returns_last_n_whole_turns() {
     for i in 1..=25 {
         first_seqs.insert(format!("t{i}"), append_turn(&mut store, &format!("t{i}")));
     }
-    let page = store.tail(20);
+    let page = store.tail(20, usize::MAX);
     assert_eq!(page.events.len(), 60);
     assert_eq!(page.oldest_seq, Some(first_seqs["t6"]));
     assert_eq!(page.events[0].turn_id.as_deref(), Some("t6"));
@@ -194,7 +194,7 @@ fn tail_with_fewer_than_n_turns_returns_everything() {
     let mut store = open_transcript_store(dir.path(), SESSION_ID);
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
-    let page = store.tail(20);
+    let page = store.tail(20, usize::MAX);
     assert_eq!(page.events.len(), 6);
     assert_eq!(page.oldest_seq, Some(0));
     assert!(!page.has_more);
@@ -208,7 +208,7 @@ fn page_before_is_turn_aligned_with_has_more() {
     for i in 1..=5 {
         first_seqs.insert(format!("t{i}"), append_turn(&mut store, &format!("t{i}")));
     }
-    let tail = store.tail(2);
+    let tail = store.tail(2, usize::MAX);
     assert_eq!(tail.oldest_seq, Some(first_seqs["t4"]));
 
     let page = store.page_before(tail.oldest_seq.unwrap(), 2);
@@ -301,7 +301,7 @@ fn last_meta_finds_model_older_than_tail_window() {
             serde_json::json!({"turnId": format!("t{i}")}),
         ));
     }
-    let tail = store.tail(20);
+    let tail = store.tail(20, usize::MAX);
     assert!(!tail
         .events
         .iter()
@@ -337,7 +337,7 @@ fn mark_superseded_from_flags_and_hides_rows() {
     assert_eq!(store.first_seq_of_turn("t1"), Some(s1));
     assert_eq!(store.first_seq_of_turn("t2"), None);
 
-    let tail = store.tail(20);
+    let tail = store.tail(20, usize::MAX);
     assert!(tail
         .events
         .iter()
@@ -359,7 +359,7 @@ fn mark_superseded_from_zero_empties_live_transcript() {
     store.mark_superseded_from(0);
     assert_eq!(store.count(), 0);
     assert!(store.read_all().is_empty());
-    assert!(store.tail(20).events.is_empty());
+    assert!(store.tail(20, usize::MAX).events.is_empty());
     let seq = store.append(&mut ev(
         NormalizedEventKind::User,
         serde_json::json!({"text": "new", "turnId": "t3"}),
@@ -812,4 +812,293 @@ fn human_prompt_matching_existing_user_text_is_skipped_new_one_imported() {
     )];
     let out = store.import_transaction(fresh, opts("c"));
     assert_eq!((out.turns_imported, out.turns_skipped), (1, 0));
+}
+
+// ---------------------------------------------------------------------------
+// Budgeted tail (Phase 1 — chat-load-byte-budget)
+// ---------------------------------------------------------------------------
+
+/// Append a turn with a `user` row carrying `text` plus a `result` row, and
+/// return the turn's first seq. `text` controls the serialized payload size.
+fn append_turn_with_text(
+    store: &mut vst_store::transcript::TranscriptStore,
+    turn_id: &str,
+    text: &str,
+) -> i64 {
+    let first = store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"role": "user", "text": text, "turnId": turn_id}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Result,
+        serde_json::json!({"turnId": turn_id}),
+    ));
+    first
+}
+
+// a budget that accommodates the whole candidate window is identical to
+// the old unbudgeted behaviour (all N turns, correct cursor, positive bytes).
+#[test]
+fn tail_under_budget_is_identical_to_old_behaviour() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut first_seqs = std::collections::HashMap::new();
+    for i in 1..=5 {
+        first_seqs.insert(
+            format!("t{i}"),
+            append_turn_with_text(&mut store, &format!("t{i}"), "a"),
+        );
+    }
+    let page = store.tail(5, usize::MAX);
+    assert_eq!(page.events.len(), 10, "five turns of two events each");
+    assert_eq!(page.oldest_seq, Some(first_seqs["t1"]));
+    assert!(!page.has_more);
+    assert!(page.payload_bytes > 0);
+    assert!(page.events.iter().all(|e| e.turn_id.is_some()));
+}
+
+// a budget that fits exactly the newest 2 of 5 turns returns those 2,
+// sets `has_more`, and points `oldest_seq` at the included oldest turn.
+#[test]
+fn tail_budget_fits_two_of_five_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut first_seqs = std::collections::HashMap::new();
+    for i in 1..=5 {
+        first_seqs.insert(
+            format!("t{i}"),
+            append_turn_with_text(&mut store, &format!("t{i}"), "x"),
+        );
+    }
+    // Measure the newest 2 turns' combined size, then request that as the budget.
+    let two = store.tail(2, usize::MAX);
+    let budget = two.payload_bytes;
+    let page = store.tail(5, budget);
+    let turn_ids: std::collections::BTreeSet<String> = page
+        .events
+        .iter()
+        .filter_map(|e| e.turn_id.clone())
+        .collect();
+    assert_eq!(
+        turn_ids,
+        ["t4", "t5"].into_iter().map(String::from).collect()
+    );
+    assert_eq!(page.oldest_seq, Some(first_seqs["t4"]));
+    assert!(page.has_more);
+    assert_eq!(page.payload_bytes, two.payload_bytes);
+}
+
+// a newest turn larger than the budget is returned WHOLE (turn-aligned
+// invariant), older turns are excluded, and `has_more` is set. Budget 0 behaves
+// the same (newest turn only).
+#[test]
+fn oversize_newest_turn_is_returned_whole_older_excluded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    append_turn_with_text(&mut store, "t1", "small");
+    append_turn_with_text(&mut store, "t2", "small");
+    append_turn_with_text(&mut store, "t3", &"雪".repeat(1000)); // newest, huge
+
+    let page = store.tail(5, 100);
+    assert_eq!(page.events.len(), 2);
+    assert!(page
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("t3")));
+    assert!(page.has_more);
+
+    let zero = store.tail(5, 0);
+    assert_eq!(zero.events.len(), 2);
+    assert!(zero
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("t3")));
+    assert!(zero.has_more);
+}
+
+// contiguity: the walk STOPS at the first turn that does not fit, so a
+// small older turn sitting behind an oversize middle turn is NOT pulled in.
+#[test]
+fn tail_does_not_pull_older_turn_behind_oversize_middle() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    append_turn_with_text(&mut store, "t1", "small"); // oldest, small
+    append_turn_with_text(&mut store, "t2", &"雪".repeat(1000)); // middle, huge
+    append_turn_with_text(&mut store, "t3", "small"); // newest, small
+
+    let page = store.tail(5, 200);
+    assert_eq!(page.events.len(), 2);
+    assert!(page
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("t3")));
+    assert!(!page
+        .events
+        .iter()
+        .any(|e| e.turn_id.as_deref() == Some("t1")));
+    assert!(page.has_more);
+}
+
+// `page_before` on a budgeted tail's `oldest_seq` returns the next older
+// turn, so the client can still page earlier past a byte-truncated window.
+#[test]
+fn page_before_budgeted_tail_returns_next_older_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut first_seqs = std::collections::HashMap::new();
+    for i in 1..=5 {
+        first_seqs.insert(
+            format!("t{i}"),
+            append_turn_with_text(&mut store, &format!("t{i}"), "x"),
+        );
+    }
+    let budget = store.tail(2, usize::MAX).payload_bytes;
+    let tail = store.tail(5, budget);
+    assert_eq!(tail.oldest_seq, Some(first_seqs["t4"]));
+
+    let page = store.page_before(tail.oldest_seq.unwrap(), 2);
+    assert_eq!(page.oldest_seq, Some(first_seqs["t3"]));
+    assert!(page
+        .events
+        .iter()
+        .any(|e| e.turn_id.as_deref() == Some("t3")));
+    assert!(page.has_more);
+}
+
+// NULL turn_id rows count toward the SEQ RANGE they sit in (they form
+// their own group in the turn walk), and an old NULL group cannot be used to
+// smuggle an older turn past the budget.
+#[test]
+fn null_turn_rows_count_toward_their_seq_range_and_cannot_bypass_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    append_turn_with_text(&mut store, "t1", "a"); // seq 0, 1
+                                                  // A NULL turn_id row sits between t1 and t2 (seq 2) — its own group.
+    store.append(&mut ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"role": "assistant", "text": "orphan", "turnId": serde_json::Value::Null}),
+    ));
+    append_turn_with_text(&mut store, "t2", "b"); // newest, seq 3, 4
+
+    // Budget fits t2 + the NULL row but not t1: the NULL group is the oldest
+    // included turn and t1 stays out.
+    let budget = store.tail(2, usize::MAX).payload_bytes;
+    let page = store.tail(5, budget);
+    assert!(page.events.iter().any(|e| e.turn_id.is_none()));
+    assert!(!page
+        .events
+        .iter()
+        .any(|e| e.turn_id.as_deref() == Some("t1")));
+    assert_eq!(page.oldest_seq, Some(2));
+    assert!(page.has_more);
+}
+
+// interleaved turn ids are sized by SEQ RANGE (matching `page_from`);
+// superseded rows are excluded from events AND bytes; multibyte (UTF-8)
+// payloads are counted in bytes, not chars.
+#[test]
+fn tail_is_seq_aligned_and_counts_utf8_bytes_and_excludes_superseded() {
+    // Interleaved turn ids: rows alternate, so the only reliable boundary is
+    // the seq range; tail loads a contiguous seq window via `page_from`.
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"role": "user", "text": "u1", "turnId": "t1"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"role": "assistant", "text": "a2", "turnId": "t2"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"role": "user", "text": "u3", "turnId": "t1"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Result,
+        serde_json::json!({"turnId": "t2"}),
+    ));
+    let page = store.tail(2, usize::MAX);
+    assert_eq!(
+        page.events.len(),
+        4,
+        "both interleaved turns, contiguous by seq"
+    );
+    assert_eq!(page.oldest_seq, Some(0));
+    assert!(!page.has_more);
+
+    // Multibyte counted in bytes: 100 CJK chars = 300 UTF-8 bytes; the page's
+    // payload_bytes must reflect the byte count, not a char count.
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut s2 = open_transcript_store(dir2.path(), SESSION_ID);
+    append_turn_with_text(&mut s2, "m", &"雪".repeat(100));
+    let multibyte = s2.tail(1, usize::MAX);
+    assert!(
+        multibyte.payload_bytes >= 300,
+        "multibyte payload counted in bytes, got {}",
+        multibyte.payload_bytes
+    );
+
+    // Superseded rows excluded from both events and the byte total: a huge
+    // NEWER turn is superseded (rows `seq >= fork`), leaving the small live
+    // turn; the big turn's bytes must not be counted.
+    let dir3 = tempfile::tempdir().unwrap();
+    let mut s3 = open_transcript_store(dir3.path(), SESSION_ID);
+    append_turn_with_text(&mut s3, "live", &"B".repeat(50)); // seq 0, 1
+    let dead = append_turn_with_text(&mut s3, "dead", &"A".repeat(500)); // seq 2, 3
+    s3.mark_superseded_from(dead);
+    let live = s3.tail(5, usize::MAX);
+    assert!(live
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("live")));
+    assert!(
+        live.payload_bytes < 500,
+        "superseded turn's bytes not counted, got {}",
+        live.payload_bytes
+    );
+}
+
+// Review follow-up — with a real budget, an interleaved turn's rows are sized
+// by the seq range they sit in (not by turn_id), matching what `page_from` loads.
+#[test]
+fn tail_budget_attributes_interleaved_rows_by_seq_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    for (kind, turn) in [
+        (NormalizedEventKind::User, "t1"),
+        (NormalizedEventKind::Text, "t2"),
+        (NormalizedEventKind::User, "t1"),
+        (NormalizedEventKind::Result, "t2"),
+    ] {
+        store.append(&mut ev(
+            kind,
+            serde_json::json!({"role": "assistant", "text": "x", "turnId": turn}),
+        ));
+    }
+    // t2 starts at seq 1 and owns seq 1..=3 (including t1's second row).
+    let newest = store.tail(1, usize::MAX);
+    assert_eq!(newest.events.len(), 3);
+    let page = store.tail(2, newest.payload_bytes);
+    assert_eq!(page.oldest_seq, Some(1));
+    assert_eq!(page.events.len(), 3);
+    assert!(page.has_more);
+}
+
+// Review follow-up — superseded rows must not count toward a turn's size.
+#[test]
+fn tail_budget_ignores_superseded_rows_when_sizing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    append_turn_with_text(&mut store, "live", "b");
+    let dead = append_turn_with_text(&mut store, "dead", &"A".repeat(5000));
+    store.mark_superseded_from(dead);
+    append_turn_with_text(&mut store, "new", "c");
+    let all = store.tail(5, usize::MAX);
+    assert!(all.payload_bytes < 5000);
+    // A budget of exactly the live bytes keeps `live`; counting the dead rows
+    // against it would push `live` out.
+    let page = store.tail(5, all.payload_bytes);
+    assert_eq!(page.events.len(), all.events.len());
+    assert!(!page.has_more);
 }

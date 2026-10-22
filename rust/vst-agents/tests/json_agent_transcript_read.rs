@@ -62,7 +62,7 @@ fn empty_dir_returns_fallbacks_and_creates_nothing() {
     let events = read_transcript_from_data_dir(&data_dir, SESSION_ID);
     assert!(events.is_empty());
 
-    let tail = read_tail_from_data_dir(&data_dir, SESSION_ID, 5);
+    let tail = read_tail_from_data_dir(&data_dir, SESSION_ID, 5, usize::MAX);
     assert!(tail.events.is_empty());
     assert!(!tail.has_more);
 
@@ -110,7 +110,7 @@ fn read_tail_returns_last_n_turns() {
     append_turn(&mut store, "t3");
     store.close();
 
-    let tail = read_tail_from_data_dir(&data_dir, SESSION_ID, 2);
+    let tail = read_tail_from_data_dir(&data_dir, SESSION_ID, 2, usize::MAX);
     // The tail must be turn-aligned: the last 2 whole turns = t2 + t3.
     let turn_ids: std::collections::BTreeSet<String> = tail
         .events
