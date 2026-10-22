@@ -828,6 +828,10 @@ export type WSEvent =
       draftPrompt?: string | null;
       /** Set on draft updates (PATCH .../draft): the draft config. */
       draftConfig?: DraftConfig | null;
+      /** Set when a channel switch (tty→json) replaced the session's mode. */
+      modeId?: string;
+      /** New modeIcon snapshot when the mode was replaced (null clears it). */
+      modeIcon?: string | null;
     }
   | {
       type: "session:error";

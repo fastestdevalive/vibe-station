@@ -211,6 +211,17 @@ export interface MockSeed {
   settings?: { themeId?: string };
 }
 
+// Mirrors the daemon's per-CLI `supports_json()` capability for the mock's
+// `setSessionChannel` modeId gate (agy/pi are terminal-only, review #16).
+const CLI_SUPPORTS_JSON: Record<string, boolean> = {
+  claude: true,
+  cursor: true,
+  opencode: true,
+  codex: true,
+  agy: false,
+  pi: false,
+};
+
 export function createMockApi(seed: MockSeed = {}) {
   /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
   const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
@@ -2119,27 +2130,85 @@ export function createMockApi(seed: MockSeed = {}) {
     async setSessionChannel(
       sessionId: string,
       channel: Channel,
+      modeId?: string,
     ): Promise<{ ok: true; channel: Channel }> {
       const s = sessions.find((x) => x.id === sessionId);
-      if (s) {
-        s.channel = channel;
-        s.useTmux = channel === "tmux";
-        // Mirror the switch to other tabs (R1.7): patch the session record + meta.
-        emit({ type: "session:updated", sessionId, channel });
-        emit({
-          type: "session:meta",
-          sessionId,
-          meta: {
-            sessionId,
-            channel,
-            cli: "claude",
-            turnState: "idle",
-            queueDepth: 0,
-            queuedTurnIds: [],
-            editingTurnIds: [],
-          },
-        });
+      if (!s) throw new ApiError("not found", 404);
+      if (s.type !== "agent") throw new ApiError("only agent sessions can switch channel", 400);
+
+      // Idempotent no-op: the daemon returns `ok` for current == target BEFORE
+      // any mode validation, so the mock must not throw mode_not_found for an
+      // already-json session whose mode was deleted (review #16).
+      if ((s.channel ?? "tmux") === channel) return { ok: true, channel };
+
+      if (channel === "tmux" && modeId) {
+        throw new ApiError("modeId is only accepted when switching to json", 400);
       }
+
+      let targetModeId: string | undefined;
+      let targetModeIcon: string | null | undefined;
+
+      if (channel === "json") {
+        if (modeId) {
+          const resolvedMode = modes.find((m) => m.id === modeId || m.name === modeId);
+          if (!resolvedMode) {
+            throw new ApiError(`Mode '${modeId}' not found`, 400, "mode_not_found");
+          }
+          // The daemon gates a supplied modeId through the CLI's supports_json
+          // capability too (ChannelError::JsonUnsupported) — mirror it here
+          // (review #16).
+          if (CLI_SUPPORTS_JSON[resolvedMode.cli] === false) {
+            throw new ApiError(
+              `Rich Chat (json) is not supported for CLI '${resolvedMode.cli}'`,
+              400,
+            );
+          }
+          targetModeId = resolvedMode.id;
+          targetModeIcon = resolvedMode.icon ?? null;
+        } else {
+          if (!s.modeId) {
+            throw new ApiError(
+              "Session has no mode; JSON chat requires an agent mode",
+              400,
+              "no_mode",
+            );
+          }
+          const existingMode = modes.find((m) => m.id === s.modeId);
+          if (!existingMode) {
+            throw new ApiError(`Mode '${s.modeId}' not found`, 400, "mode_not_found");
+          }
+        }
+      }
+
+      s.channel = channel;
+      s.useTmux = channel === "tmux";
+      if (targetModeId !== undefined) {
+        s.modeId = targetModeId;
+        s.modeIcon = targetModeIcon;
+      }
+
+      // Mirror the switch to other tabs (R1.7): patch the session record + meta.
+      emit({
+        type: "session:updated",
+        sessionId,
+        channel,
+        ...(targetModeId !== undefined
+          ? { modeId: targetModeId, modeIcon: targetModeIcon }
+          : {}),
+      });
+      emit({
+        type: "session:meta",
+        sessionId,
+        meta: {
+          sessionId,
+          channel,
+          cli: "claude",
+          turnState: "idle",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+        },
+      });
       return { ok: true, channel };
     },
 

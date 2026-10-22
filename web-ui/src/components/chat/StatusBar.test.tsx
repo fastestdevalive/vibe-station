@@ -38,7 +38,7 @@ describe("StatusBar (5.T2)", () => {
     expect((toggle as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: /Switch to terminal/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux", undefined));
   });
 
   it("disables the channel toggle while a turn is active or queued (idle gate)", () => {
@@ -98,7 +98,7 @@ describe("StatusBar (5.T2)", () => {
       render(<StatusBar meta={meta({ turnState: "idle" })} api={api} sessionId="s1" />);
       await userEvent.click(screen.getByRole("button", { name: /Terminal/i }));
       await userEvent.click(screen.getByRole("button", { name: /Switch to terminal/i }));
-      await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux"));
+      await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux", undefined));
     });
   });
 });

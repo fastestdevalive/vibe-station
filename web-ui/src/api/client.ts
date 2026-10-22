@@ -1620,12 +1620,13 @@ export function createClientApi() {
     async setSessionChannel(
       sessionId: string,
       channel: Channel,
+      modeId?: string,
     ): Promise<{ ok: true; channel: Channel }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/channel`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel }),
+        body: JSON.stringify({ channel, modeId }),
       });
       return parseJson<{ ok: true; channel: Channel }>(res);
     },

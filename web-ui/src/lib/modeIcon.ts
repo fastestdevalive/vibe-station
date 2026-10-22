@@ -23,3 +23,17 @@ export function deriveModeIcon(cli: CliId | "", model?: string | null): string |
 export function sessionModeId(s: Pick<Session, "modeId" | "draftConfig">): string | null {
   return s.modeId ?? s.draftConfig?.modeId ?? null;
 }
+
+/**
+ * True when an agent session has no mode (`modeId == null`) or its `modeId`
+ * cannot be resolved in the provided modes lookup (e.g. Map<string, Mode>).
+ * Uses `session.modeId` directly (not draftConfig fallback). Drafts never reach
+ * this — `AgentPaneSlot` renders `DraftComposer` for them, so the toggle only
+ * ever sees a real agent session.
+ */
+export function isSessionModeMissing(
+  session: Pick<Session, "modeId">,
+  modes: ReadonlyMap<string, unknown>,
+): boolean {
+  return !session.modeId || !modes.has(session.modeId);
+}

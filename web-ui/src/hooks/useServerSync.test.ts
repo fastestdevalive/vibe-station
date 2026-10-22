@@ -140,6 +140,40 @@ describe("useServerSync — session:updated reconciliation", () => {
     });
     await waitFor(() => expect(pinned()).toBeNull());
   });
+
+  it("applies modeId and modeIcon from a session:updated event", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        modeId: "new-mode",
+        modeIcon: "sparkles",
+      });
+    });
+
+    await waitFor(() => {
+      const s = useServerStore.getState().sessions.find((x) => x.id === "sess-main");
+      expect(s?.modeId).toBe("new-mode");
+      expect(s?.modeIcon).toBe("sparkles");
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-main",
+        modeIcon: null,
+      });
+    });
+
+    await waitFor(() => {
+      const s = useServerStore.getState().sessions.find((x) => x.id === "sess-main");
+      expect(s?.modeIcon).toBeNull();
+    });
+  });
 });
 
 // --- Phase 4c: auto-insert a tile for a session:created carrying parentSessionId

@@ -169,6 +169,13 @@ pub enum ServerMessage {
         draft_prompt: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         draft_config: Option<serde_json::Value>,
+        /// Set only when a tty→json channel switch replaced the session's mode.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode_id: Option<String>,
+        /// Tri-state: `None` = no change (key omitted), `Some(Some(icon))` =
+        /// updated icon, `Some(None)` = cleared (serializes `"modeIcon": null`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode_icon: Option<Option<String>>,
     },
     #[serde(rename = "session:error", rename_all = "camelCase")]
     SessionError {

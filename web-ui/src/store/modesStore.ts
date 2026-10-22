@@ -119,7 +119,7 @@ export function __resetForDemo(): void {
   sharedOff = null;
 }
 
-function retainSubscription(api: ApiInstance): () => void {
+export function retainSubscription(api: ApiInstance): () => void {
   if (sharedApi !== api) {
     sharedOff?.();
     sharedApi = api;

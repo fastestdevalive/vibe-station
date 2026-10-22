@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveModeIcon, sessionModeId } from "./modeIcon";
+import { deriveModeIcon, isSessionModeMissing, sessionModeId } from "./modeIcon";
 
 describe("deriveModeIcon (mirrors daemon default_mode_icon)", () => {
   it("uses the CLI's own icon for claude/cursor/agy/codex/pi", () => {
@@ -30,5 +30,19 @@ describe("sessionModeId", () => {
   it("is null when neither is set", () => {
     expect(sessionModeId({ modeId: null, draftConfig: null })).toBeNull();
     expect(sessionModeId({ modeId: null })).toBeNull();
+  });
+});
+
+describe("isSessionModeMissing", () => {
+  it("reports missing when modeId is null or empty", () => {
+    const map = new Map([["m1", { id: "m1" }]]);
+    expect(isSessionModeMissing({ modeId: null }, map)).toBe(true);
+    expect(isSessionModeMissing({ modeId: "" }, map)).toBe(true);
+  });
+
+  it("checks presence against a Map lookup", () => {
+    const map = new Map([["m1", { id: "m1" }]]);
+    expect(isSessionModeMissing({ modeId: "m1" }, map)).toBe(false);
+    expect(isSessionModeMissing({ modeId: "deleted" }, map)).toBe(true);
   });
 });

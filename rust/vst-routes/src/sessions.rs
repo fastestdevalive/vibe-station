@@ -1756,6 +1756,8 @@ impl SessionRoutes {
                         worktree_id: None,
                         draft_prompt: None,
                         draft_config: None,
+                        mode_id: None,
+                        mode_icon: None,
                     });
                 }
                 self.prune_notice_and_forget(&id, session.parent_session_id.as_deref());
@@ -1842,6 +1844,8 @@ impl SessionRoutes {
                 worktree_id: None,
                 draft_prompt: body.draft_prompt.clone(),
                 draft_config: body.draft_config.clone().map(Box::new),
+                mode_id: None,
+                mode_icon: None,
             });
             return Ok(DraftPatchResult {
                 ok: true,
@@ -1956,6 +1960,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: body.draft_prompt.clone(),
             draft_config: body.draft_config.clone().map(Box::new),
+            mode_id: None,
+            mode_icon: None,
         });
         Ok(DraftPatchResult {
             ok: true,
@@ -2216,6 +2222,8 @@ impl SessionRoutes {
             worktree_id: Some(wt_id.clone()),
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
         self.broadcaster.send(ServerEvent::SessionState {
             session_id: session.id.clone(),
@@ -2378,6 +2386,8 @@ impl SessionRoutes {
                 worktree_id: Some(wt.id.clone()),
                 draft_prompt: None,
                 draft_config: None,
+                mode_id: None,
+                mode_icon: None,
             });
         } else {
             self.broadcaster.send(ServerEvent::SessionUpdated {
@@ -2394,6 +2404,8 @@ impl SessionRoutes {
                 worktree_id: None,
                 draft_prompt: None,
                 draft_config: None,
+                mode_id: None,
+                mode_icon: None,
             });
         }
         self.broadcaster.send(ServerEvent::SessionState {
@@ -2582,6 +2594,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
         Ok(PinResult {
             ok: true,
@@ -2627,6 +2641,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
         Ok(RenameSessionResult {
             ok: true,
@@ -2666,6 +2682,8 @@ impl SessionRoutes {
                 worktree_id: None,
                 draft_prompt: None,
                 draft_config: None,
+                mode_id: None,
+                mode_icon: None,
             });
             return Ok(ReorderSessionResult {
                 ok: true,
@@ -2689,6 +2707,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
         Ok(ReorderSessionResult {
             ok: true,
@@ -2732,6 +2752,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
         Ok(DelinkResult {})
     }
@@ -3514,6 +3536,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: None,
+            mode_icon: None,
         });
 
         // Spawn the replacement through the SAME channel-aware, guarded helper
@@ -4260,11 +4284,60 @@ impl SessionRoutes {
             });
         }
 
-        let mode = self.resolve_resume_mode(&session);
-        let plugin = resolve_plugin(mode.cli);
-
         let from_json = current == Channel::Json;
         let to_json = target == Channel::Json;
+
+        // A supplied `modeId` is only honoured on tty→json — the only
+        // direction that needs a mode change. On json→tty it would silently
+        // imply a mode change the caller isn't getting, so reject it rather
+        // than drop the field (the plan left this "reject is simpler to reason
+        // about"; nothing in the UI sends it, but an API caller must not get a
+        // `200 ok` for a no-op).
+        if from_json && body.mode_id.is_some() {
+            return Err(ChannelError::BadRequest(
+                "modeId is only accepted when switching to json".to_string(),
+            ));
+        }
+
+        let requested_mode = match (&body.mode_id, to_json) {
+            (Some(req), true) => Some(
+                resolve_mode(req)
+                    .ok_or_else(|| ChannelError::ModeNotFound(format!("Mode '{req}' not found")))?,
+            ),
+            _ => None,
+        };
+
+        let mode = if to_json {
+            if let Some(m) = &requested_mode {
+                m.clone()
+            } else {
+                let mode_id = session.mode_id.as_deref().ok_or_else(|| {
+                    ChannelError::NoMode(
+                        "Session has no mode; JSON chat requires an agent mode".to_string(),
+                    )
+                })?;
+                find_mode(mode_id).ok_or_else(|| {
+                    ChannelError::ModeNotFound(format!("Mode '{mode_id}' not found"))
+                })?
+            }
+        } else {
+            self.resolve_resume_mode(&session)
+        };
+
+        let plugin = resolve_plugin(mode.cli);
+
+        // A replacement `modeId` for a session whose own mode never resolved
+        // (or resolves to a different CLI) means the old CLI is unknown — its
+        // `agent_chat_id` / `acp_session_id` are unusable for the new CLI. The
+        // first Rich Chat turn would otherwise try to resume a foreign id and
+        // fail right after this rescue flow. Clear them and skip the toggle-time
+        // refresh/capture so the new CLI mints its own id.
+        let replacing_unresolved_mode = body.mode_id.is_some()
+            && session
+                .mode_id
+                .as_deref()
+                .and_then(find_mode)
+                .map_or(true, |old| old.cli != mode.cli);
 
         // Generic capability gate: a CLI whose plugin doesn't `supports_json()`
         // cannot be toggled to Rich Chat. agy currently trips it (temporary —
@@ -4335,43 +4408,21 @@ impl SessionRoutes {
                 }
 
                 // Self-heal agentChatId against CLI's own live state. Overwrites even an already-set id.
-                let cwd = match &worktree {
-                    Some(w) => Paths::default()
-                        .project_dir(&project.id)
-                        .join("worktrees")
-                        .join(&w.id)
-                        .display()
-                        .to_string(),
-                    None => project.absolute_path.clone(),
-                };
-                if let Some(refreshed_id) = plugin
-                    .refresh_chat_id_on_toggle(CaptureArgs {
-                        session: &session,
-                        project: &project,
-                        cwd: &cwd,
-                        worktree: worktree.as_ref(),
-                    })
-                    .await
-                {
-                    session.agent_chat_id = Some(refreshed_id);
-                }
-
-                // `refresh_chat_id_on_toggle` is `agy`'s mechanism (tails a
-                // per-session log file); plugins that don't implement it
-                // (default `None`) still need a chance to self-heal a
-                // never-captured id here — e.g. opencode, whose chat id is
-                // normally captured post-spawn/post-toggle via a workspace
-                // hook writing a token file (`capture_chat_id`). Without
-                // this, a session that never had `agent_chat_id` set during
-                // its whole tty phase stays `None` right up to the
-                // `import_native_history` call below, which then silently
-                // no-ops and the subsequent Rich Chat turn mints a brand-new
-                // native session instead of continuing this one. Self-heal
-                // only — never overwrite an already-known id.
-                // See .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B7).
-                if session.agent_chat_id.is_none() {
-                    if let Some(captured_id) = plugin
-                        .capture_chat_id(CaptureArgs {
+                // Skipped when a replacement `modeId` made the old CLI unknown —
+                // the refresh/capture would run the NEW plugin against a TTY that
+                // ran the OLD CLI, minting a bogus id (review #2).
+                if !replacing_unresolved_mode {
+                    let cwd = match &worktree {
+                        Some(w) => Paths::default()
+                            .project_dir(&project.id)
+                            .join("worktrees")
+                            .join(&w.id)
+                            .display()
+                            .to_string(),
+                        None => project.absolute_path.clone(),
+                    };
+                    if let Some(refreshed_id) = plugin
+                        .refresh_chat_id_on_toggle(CaptureArgs {
                             session: &session,
                             project: &project,
                             cwd: &cwd,
@@ -4379,7 +4430,34 @@ impl SessionRoutes {
                         })
                         .await
                     {
-                        session.agent_chat_id = Some(captured_id);
+                        session.agent_chat_id = Some(refreshed_id);
+                    }
+
+                    // `refresh_chat_id_on_toggle` is `agy`'s mechanism (tails a
+                    // per-session log file); plugins that don't implement it
+                    // (default `None`) still need a chance to self-heal a
+                    // never-captured id here — e.g. opencode, whose chat id is
+                    // normally captured post-spawn/post-toggle via a workspace
+                    // hook writing a token file (`capture_chat_id`). Without
+                    // this, a session that never had `agent_chat_id` set during
+                    // its whole tty phase stays `None` right up to the
+                    // `import_native_history` call below, which then silently
+                    // no-ops and the subsequent Rich Chat turn mints a brand-new
+                    // native session instead of continuing this one. Self-heal
+                    // only — never overwrite an already-known id.
+                    // See .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B7).
+                    if session.agent_chat_id.is_none() {
+                        if let Some(captured_id) = plugin
+                            .capture_chat_id(CaptureArgs {
+                                session: &session,
+                                project: &project,
+                                cwd: &cwd,
+                                worktree: worktree.as_ref(),
+                            })
+                            .await
+                        {
+                            session.agent_chat_id = Some(captured_id);
+                        }
                     }
                 }
 
@@ -4409,6 +4487,27 @@ impl SessionRoutes {
                 last_transition_at: now_iso(),
             };
         }
+
+        // A replacement `modeId` for a session whose old mode never resolved (or
+        // was a different CLI) makes the persisted chat id a foreign one — the new
+        // CLI cannot resume it. Drop both ids so the first Rich Chat turn mints a
+        // fresh native id (and model) instead of failing (review #2).
+        if replacing_unresolved_mode {
+            patched_session.agent_chat_id = None;
+            patched_session.acp_session_id = None;
+            // A per-session model override belongs to the old CLI too.
+            patched_session.model_override = None;
+        }
+
+        let (broadcast_mode_id, broadcast_mode_icon) = if let Some(m) = &requested_mode {
+            let new_mode_id = m.id.clone();
+            let new_mode_icon = m.icon.clone();
+            patched_session.mode_id = Some(new_mode_id.clone());
+            patched_session.mode_icon.clone_from(&new_mode_icon);
+            (Some(new_mode_id), Some(new_mode_icon))
+        } else {
+            (None, None)
+        };
 
         let project_id = project.id.clone();
         let sid = id.to_string();
@@ -4570,6 +4669,8 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
+            mode_id: broadcast_mode_id,
+            mode_icon: broadcast_mode_icon,
         });
         // Note: ServerEvent does not have a SessionMeta variant in vst-types::events (cross-part gap).
         if from_json {
@@ -5904,6 +6005,12 @@ pub enum ChannelError {
     NotFound(String),
     /// 400 — non-agent session.
     NotAgent(String),
+    /// 400 — tty→json for a session with no mode and no `modeId` supplied.
+    NoMode(String),
+    /// 400 — specified `modeId` does not exist, or a tty→json session's mode was deleted and none provided.
+    ModeNotFound(String),
+    /// 400 — a supplied `modeId` on a direction that doesn't accept one (json→tty).
+    BadRequest(String),
     /// 400 — this CLI's plugin does not support the JSON (Rich Chat) channel.
     JsonUnsupported(String),
     /// 409 — JSON session has an active turn or queued turns.

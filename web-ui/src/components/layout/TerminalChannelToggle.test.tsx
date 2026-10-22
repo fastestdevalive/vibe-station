@@ -1,8 +1,9 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Mode, Session } from "@/api/types";
 import { createMockApi } from "@/api/mock";
+import { __resetForDemo, useModesStore } from "@/store/modesStore";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 
 // The mock defines mode-1 → claude (has importer) and mode-2 → cursor (no importer).
@@ -24,6 +25,12 @@ function session(extra: Partial<Session> = {}): Session {
 }
 
 describe("TerminalChannelToggle (terminal→JSON)", () => {
+  beforeEach(() => {
+    useModesStore.getState()._reset();
+    // Also drop the module singletons (pendingLoad / sharedApi / sharedRefs) so
+    // test order can't leak a stale subscription or in-flight load (review #21).
+    __resetForDemo();
+  });
   it("shows for a worktree-backed tmux agent whose CLI has an importer, switches on confirm, and shows NO warning", async () => {
     const api = createMockApi();
     const spy = vi.spyOn(api, "setSessionChannel");
@@ -34,7 +41,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     // claude imports its history → no lossy-switch warning in the dialog.
     expect(screen.queryByText(/won't be imported into Rich Chat/i)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", undefined));
   });
 
   it("shows for a CLI without a native-history importer (cursor) and warns before the lossy switch", async () => {
@@ -48,7 +55,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     await screen.findByText(/won't be imported into Rich Chat/i);
     // The toggle still works (lossy return is not a block).
     await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", undefined));
   });
 
   it("hides for a CLI without Rich Chat support (pi: supportsJson false)", async () => {
@@ -82,7 +89,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
     await userEvent.click(toggle);
     await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
-    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", undefined));
   });
 
   it("hides when the session is already on the JSON channel", () => {
@@ -116,4 +123,124 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
 
     expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
   });
+
+  it("shows toggle when session modeId is null, opens picker, and switches channel with selected modeId", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: null })} />);
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    expect(await screen.findByText("Choose a mode for Rich Chat")).toBeTruthy();
+    expect(screen.getByText(/Pick a mode for Rich Chat\./)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+    expect(await screen.findByText("Switch to Rich Chat?")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", "mode-1"));
+  });
+
+  it("shows toggle when mode was deleted, filters out CLIs without Rich Chat support, and calls with chosen mode", async () => {
+    const api = createMockApi({
+      modes: [
+        { id: "m-claude", name: "Claude Mode", cli: "claude", context: "" },
+        { id: "m-agy", name: "Agy Mode", cli: "agy", context: "" },
+      ],
+    });
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: "deleted-mode" })} />);
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    // Picker should only list claude (supportsJson true), agy is filtered out
+    const select = (await screen.findByLabelText("Mode")) as HTMLSelectElement;
+    expect(select.children.length).toBe(1);
+    expect(select.value).toBe("m-claude");
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", "m-claude"));
+  });
+
+  it("cancel at picker does not switch channel", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: null })} />);
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    await screen.findByText("Choose a mode for Rich Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText("Choose a mode for Rich Chat")).toBeNull();
+    expect(screen.queryByText("Switch to Rich Chat?")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("cancel at confirm dialog after picking mode does not switch channel", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: null })} />);
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    await screen.findByText("Choose a mode for Rich Chat");
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+
+    expect(await screen.findByText("Switch to Rich Chat?")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText("Switch to Rich Chat?")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("becomes mode-missing when mode is deleted from modesStore while mounted", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
+    render(<TerminalChannelToggle api={api} session={session({ modeId: "mode-1" })} />);
+
+    // Initially valid mode -> toggle is shown
+    await screen.findByRole("button", { name: /Rich Chat/i });
+
+    // Mode is deleted while mounted
+    await act(async () => {
+      await api.deleteMode("mode-1");
+    });
+
+    // Clicking toggle now opens the mode picker because mode is missing
+    const toggle = screen.getByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    expect(await screen.findByText("Choose a mode for Rich Chat")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this mode" }));
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Rich Chat" }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", "mode-2"));
+  });
+
+  it("shows empty state when no Rich Chat-capable modes exist", async () => {
+    const api = createMockApi({
+      modes: [
+        { id: "m-agy", name: "Agy", cli: "agy", context: "" },
+      ],
+    });
+    render(<TerminalChannelToggle api={api} session={session({ modeId: null })} />);
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+
+    expect(
+      await screen.findByText("No Rich Chat-capable modes — create one in Settings → Modes."),
+    ).toBeTruthy();
+    const confirmBtn = screen.getByRole("button", { name: "Use this mode" }) as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+  });
 });
+

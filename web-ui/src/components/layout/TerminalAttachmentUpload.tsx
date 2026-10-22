@@ -46,9 +46,10 @@ export function TerminalAttachmentUpload({ api, session }: TerminalAttachmentUpl
   // mode's CLI. Skipped entirely when structurally ineligible.
   useEffect(() => {
     if (!eligible) return undefined;
-    // Reset immediately, before the fetch resolves — see the identical
-    // comment in `TerminalChannelToggle` (same stale-CLI-across-tab-switch
-    // hazard: this pane slot isn't keyed by session id).
+    // Reset immediately, before the fetch resolves. This pane slot isn't keyed
+    // by session id, so on a tab switch the previous session's modeId could be
+    // momentarily resolved against the new session's CLI list — clearing first
+    // prevents a stale CLI from gating the upload against the wrong mode.
     setCli(null);
     let live = true;
     void api.listModes().then((modes) => {

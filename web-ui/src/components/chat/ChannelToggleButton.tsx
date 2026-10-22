@@ -1,8 +1,9 @@
 import { useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Channel } from "@/api/types";
+import type { Channel, Mode } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { ResetModeDialog } from "@/components/dialogs/ResetModeDialog";
 
 /**
  * The daemon's PATCH …/channel route returns a specific reason as JSON
@@ -20,6 +21,13 @@ function extractServerReason(err: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function isMissingModeError(err: unknown): boolean {
+  // `parseJson` (client.ts) already extracts the daemon's `{ error, code }` body
+  // into `ApiError.code`, and the mock sets it directly — no need to re-parse the
+  // raw message text (review #9).
+  return err instanceof ApiError && (err.code === "no_mode" || err.code === "mode_not_found");
 }
 
 export type ChannelToggleDirection = "toTerminal" | "toJson";
@@ -49,6 +57,15 @@ interface ChannelToggleButtonProps {
    * can import history.
    */
   warning?: string;
+  /**
+   * When true, opening the toggle shows a mode picker dialog first so the user can
+   * select a valid mode for Rich Chat before confirming.
+   */
+  needsMode?: boolean;
+  /**
+   * Optional filter for modes shown in the mode picker (e.g. only supportsJson CLIs).
+   */
+  filterMode?: (m: Mode) => boolean;
 }
 
 interface DirectionCopy {
@@ -61,6 +78,13 @@ interface DirectionCopy {
   idleTriggerTitle: string;
   busyTriggerTitle: string;
   errorMessage: string;
+  /** Mode-picker copy — only used by `toJson` (the direction that can need a mode). */
+  pickerTitle: string;
+  pickerConfirm: string;
+  pickerPrompt: string;
+  /** Confirm text once a replacement mode was picked (server starts a fresh conversation). */
+  pickedModeMessage: string;
+  pickerEmpty: string;
 }
 
 // UI label is "Rich Chat" (the "(json based)" qualifier appears once, in the
@@ -80,6 +104,11 @@ const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
     idleTriggerTitle: "Switch this session to a raw terminal (keeps the same conversation)",
     busyTriggerTitle: "Finish or clear the queue before switching channel",
     errorMessage: "Couldn't switch — the session is busy. Try again when idle.",
+    pickerTitle: "",
+    pickerConfirm: "",
+    pickerPrompt: "",
+    pickedModeMessage: "",
+    pickerEmpty: "",
   },
   toJson: {
     label: "⇄ Rich Chat",
@@ -92,6 +121,13 @@ const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
     idleTriggerTitle: "Switch this terminal back to Rich Chat (keeps the same conversation)",
     busyTriggerTitle: "Switch this terminal back to Rich Chat (keeps the same conversation)",
     errorMessage: "Couldn't switch — try again in a moment.",
+    pickerTitle: "Choose a mode for Rich Chat",
+    pickerConfirm: "Use this mode",
+    pickerPrompt:
+      "Pick a mode for Rich Chat.\nThe terminal conversation won't carry over — Rich Chat starts a new one with this mode.",
+    pickedModeMessage:
+      "This ends the live terminal and starts a new Rich Chat conversation with the chosen mode. The terminal conversation won't carry over.",
+    pickerEmpty: "No Rich Chat-capable modes — create one in Settings → Modes.",
   },
 };
 
@@ -114,9 +150,14 @@ export function ChannelToggleButton({
   confirmBlocked,
   blockedMessage,
   warning,
+  needsMode,
+  filterMode,
 }: ChannelToggleButtonProps) {
   const copy = COPY[direction];
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedModeId, setSelectedModeId] = useState<string | null>(null);
+  const [pickerReason, setPickerReason] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,9 +165,19 @@ export function ChannelToggleButton({
     setSwitching(true);
     setError(null);
     try {
-      await api.setSessionChannel(sessionId, copy.targetChannel);
+      // `JSON.stringify` drops `undefined`, so the valid-mode request body is
+      // identical to before this feature (no `modeId` key) when none is chosen.
+      await api.setSessionChannel(sessionId, copy.targetChannel, selectedModeId ?? undefined);
       setConfirmOpen(false);
+      setSelectedModeId(null);
     } catch (err) {
+      if (isMissingModeError(err)) {
+        setConfirmOpen(false);
+        // Fixed copy: the daemon text is API-facing (it says "JSON chat").
+        setPickerReason("This session's mode no longer exists.");
+        setPickerOpen(true);
+        return;
+      }
       // "not_idle" (409) is the residual race window the live confirmBlocked
       // check (item 2) can't close (network round trip, not a UI gap) — show
       // the friendly per-direction busy copy for that one. Any OTHER reason
@@ -140,12 +191,21 @@ export function ChannelToggleButton({
     }
   };
 
+  const handleTriggerClick = () => {
+    if (needsMode) {
+      setPickerReason(null);
+      setPickerOpen(true);
+    } else {
+      setConfirmOpen(true);
+    }
+  };
+
   return (
     <>
       <button
         type="button"
         className="channel-toggle-button"
-        onClick={() => setConfirmOpen(true)}
+        onClick={handleTriggerClick}
         disabled={triggerDisabled}
         title={triggerDisabled ? copy.busyTriggerTitle : copy.idleTriggerTitle}
         aria-label={copy.label}
@@ -153,12 +213,43 @@ export function ChannelToggleButton({
         <span className="channel-toggle-button__icon">⇄</span>
         <span className="channel-toggle-button__text">{copy.text}</span>
       </button>
+      {direction === "toJson" && (
+        <ResetModeDialog
+          open={pickerOpen}
+          api={api}
+          title={copy.pickerTitle}
+          confirmLabel={copy.pickerConfirm}
+          prompt={copy.pickerPrompt}
+          emptyMessage={copy.pickerEmpty}
+          reason={pickerReason}
+          filterMode={filterMode}
+          onConfirm={(modeId) => {
+            setSelectedModeId(modeId);
+            setPickerOpen(false);
+            setPickerReason(null);
+            setConfirmOpen(true);
+          }}
+          onCancel={() => {
+            setPickerOpen(false);
+            setSelectedModeId(null);
+            setPickerReason(null);
+          }}
+        />
+      )}
       <ConfirmDialog
         open={confirmOpen}
         title={copy.dialogTitle}
         message={
           error ??
-          [confirmBlocked && blockedMessage ? blockedMessage : copy.defaultMessage, warning]
+          [
+            confirmBlocked && blockedMessage
+              ? blockedMessage
+              : selectedModeId
+                ? copy.pickedModeMessage
+                : copy.defaultMessage,
+            // The lossy-import warning is moot when a fresh conversation starts.
+            selectedModeId ? undefined : warning,
+          ]
             .filter(Boolean)
             .join("\n\n")
         }
@@ -168,6 +259,7 @@ export function ChannelToggleButton({
         onCancel={() => {
           setConfirmOpen(false);
           setError(null);
+          setSelectedModeId(null);
         }}
       />
     </>

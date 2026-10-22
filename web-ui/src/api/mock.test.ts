@@ -444,4 +444,108 @@ describe("mock api contract", () => {
     await expect(api.retryScheduledMessage("sess-main", "f1")).resolves.toEqual({ ok: true });
     await expect(api.dismissScheduledMessage("sess-main", "f1")).resolves.toEqual({ ok: true });
   });
+
+  describe("setSessionChannel", () => {
+    it("switches to json with modeId, updating mode and emitting session:updated with modeId/modeIcon", async () => {
+      const api = createMockApi();
+      const updated = vi.fn();
+      const off = api.on("session:updated", updated);
+
+      const res = await api.setSessionChannel("sess-main", "json", "mode-1");
+      expect(res.ok).toBe(true);
+      expect(res.channel).toBe("json");
+
+      const s = (await api.listSessions("wt-1")).find((x) => x.id === "sess-main");
+      expect(s?.channel).toBe("json");
+      expect(s?.modeId).toBe("mode-1");
+      expect(s?.modeIcon).toBe("claude");
+
+      expect(updated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session:updated",
+          sessionId: "sess-main",
+          channel: "json",
+          modeId: "mode-1",
+          modeIcon: "claude",
+        }),
+      );
+      off();
+    });
+
+    it("throws ApiError code mode_not_found when modeId does not exist", async () => {
+      const api = createMockApi();
+      await expect(api.setSessionChannel("sess-main", "json", "unknown-mode")).rejects.toMatchObject({
+        status: 400,
+        code: "mode_not_found",
+      });
+    });
+
+    it("throws ApiError code no_mode when session has no mode and no modeId is supplied", async () => {
+      const api = createMockApi();
+      api.__test.removeSession("sess-main");
+      api.__test.addSession({
+        id: "sess-main",
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        modeId: null,
+        type: "agent",
+        isMain: true,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "sess-main",
+        createdAt: new Date().toISOString(),
+        sortOrder: 1,
+      });
+
+      await expect(api.setSessionChannel("sess-main", "json")).rejects.toMatchObject({
+        status: 400,
+        code: "no_mode",
+      });
+    });
+
+    it("throws ApiError code mode_not_found when session mode is deleted and no modeId is supplied", async () => {
+      const api = createMockApi();
+      api.__test.removeSession("sess-main");
+      api.__test.addSession({
+        id: "sess-main",
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        modeId: "deleted-mode",
+        type: "agent",
+        isMain: true,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "sess-main",
+        createdAt: new Date().toISOString(),
+        sortOrder: 1,
+      });
+
+      await expect(api.setSessionChannel("sess-main", "json")).rejects.toMatchObject({
+        status: 400,
+        code: "mode_not_found",
+      });
+    });
+
+    it("switches to json without modeId when session mode exists", async () => {
+      const api = createMockApi();
+      const updated = vi.fn();
+      const off = api.on("session:updated", updated);
+      const s = (await api.listSessions("wt-1")).find((x) => x.id === "sess-main");
+      // Precondition: the seed's sess-main already has a valid mode. (listSessions
+      // returns a clone, so mutating `s` here would be a silent no-op — review #20.)
+      expect(s?.modeId).toBe("mode-1");
+
+      const res = await api.setSessionChannel("sess-main", "json");
+      expect(res.ok).toBe(true);
+      expect(res.channel).toBe("json");
+
+      // Valid-mode no-change contract: the emitted session:updated has no modeId
+      // key (the mode is unchanged when none is supplied).
+      const ev = updated.mock.calls.find((c) => c[0]?.type === "session:updated")?.[0];
+      expect(ev).toBeDefined();
+      expect(ev.modeId).toBeUndefined();
+      expect(ev.modeIcon).toBeUndefined();
+      off();
+    });
+  });
 });

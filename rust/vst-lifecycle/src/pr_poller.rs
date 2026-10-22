@@ -89,6 +89,8 @@ async fn set_pr_status(
         worktree_id: None,
         draft_prompt: None,
         draft_config: None,
+        mode_id: None,
+        mode_icon: None,
     });
 }
 

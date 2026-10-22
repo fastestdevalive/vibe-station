@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { CliId, Session } from "@/api/types";
+import type { Mode, Session, SupportedCli } from "@/api/types";
 import { ChannelToggleButton } from "@/components/chat/ChannelToggleButton";
+import { isSessionModeMissing } from "@/lib/modeIcon";
+import { ensureLoaded, retainSubscription, useModesStore } from "@/store/modesStore";
 
 interface TerminalChannelToggleProps {
   api: ApiInstance;
@@ -22,49 +24,75 @@ interface TerminalChannelToggleProps {
  * agent still has them), so we surface a warning before confirming. Unlike
  * json→tty, tty→json has no idle gate (no live JSON turn queue to protect), so
  * the button is always enabled when shown.
+ *
+ * For sessions whose mode is missing or deleted, the toggle is still shown
+ * (as long as modes are loaded and CLIs resolved); clicking it prompts the user
+ * to select a valid Rich Chat mode before confirming the channel switch.
  */
 export function TerminalChannelToggle({ api, session }: TerminalChannelToggleProps) {
-  const [cli, setCli] = useState<CliId | null>(null);
-  // null = unknown yet; default to importing (no warning) until resolved.
-  const [importsHistory, setImportsHistory] = useState<boolean | null>(null);
-  // null = unknown yet; default to showing the toggle until resolved.
-  const [supportsJson, setSupportsJson] = useState<boolean | null>(null);
+  const modes = useModesStore((s) => s.modes);
+  const modesLoaded = useModesStore((s) => s.loaded);
+
+  const [clis, setClis] = useState<SupportedCli[] | null>(null);
+  const [clisFailed, setClisFailed] = useState(false);
 
   const channel = session.channel ?? "tmux";
-  const eligible =
-    session.type === "agent" &&
-    channel !== "json" &&
-    session.modeId != null;
+  const structurallyEligible = session.type === "agent" && channel !== "json";
 
-  // Session carries only `modeId`; the history-import capability is per-CLI, so
-  // resolve the mode's CLI, then join it against the supported-clis capability
-  // list. Skipped entirely when structurally ineligible.
   useEffect(() => {
-    if (!eligible) return undefined;
-    // Reset immediately, before the fetch resolves — this pane slot isn't
-    // keyed by session id, so switching tabs re-renders this component with
-    // new props instead of remounting it. Without this reset, a stale `cli`
-    // from the PREVIOUS session stays in state during the fetch window.
-    setCli(null);
-    setImportsHistory(null);
-    setSupportsJson(null);
+    if (!structurallyEligible) return undefined;
+    void ensureLoaded(api);
+    return retainSubscription(api);
+  }, [api, structurallyEligible]);
+
+  useEffect(() => {
+    if (!structurallyEligible) return undefined;
     let live = true;
-    void Promise.all([api.listModes(), api.getSupportedClis()]).then(([modes, clis]) => {
-      if (!live) return;
-      const resolved = modes.find((m) => m.id === session.modeId)?.cli ?? null;
-      setCli(resolved);
-      const cap = resolved ? clis.find((c) => c.id === resolved) : undefined;
-      setImportsHistory(cap?.importsNativeHistory ?? true);
-      // Hide the toggle for CLIs that can't run Rich Chat (e.g. agy while it
-      // is terminal-only) — driven by the capability, not a hardcoded name.
-      setSupportsJson(cap?.supportsJson ?? true);
-    });
+    setClis(null);
+    setClisFailed(false);
+    api
+      .getSupportedClis()
+      .then((c) => {
+        if (!live) return;
+        setClis(c);
+      })
+      .catch(() => {
+        if (!live) return;
+        setClisFailed(true);
+      });
     return () => {
       live = false;
     };
-  }, [api, session.modeId, eligible]);
+  }, [api, structurallyEligible]);
 
-  if (!eligible || !cli || supportsJson === false) return null;
+  const modeMissing = isSessionModeMissing(session, modes);
+
+  // Stable identity so `ResetModeDialog`'s `displayModes` memo (and the
+  // selection effect it drives) only recompute when the CLIs actually change,
+  // not on every parent render (review #13). Must be called unconditionally —
+  // before the early return below — to keep the hook count stable.
+  const filterMode = useCallback(
+    (m: Mode) => {
+      const cap = clis?.find((c) => c.id === m.cli);
+      return cap?.supportsJson ?? true;
+    },
+    [clis],
+  );
+
+  if (!structurallyEligible || !modesLoaded || !clis || clisFailed) return null;
+
+  // If mode exists, check if its CLI supports Rich Chat (hide if false, e.g. agy/pi).
+  let importsHistory = true;
+  if (!modeMissing) {
+    // Inside `!modeMissing`, modeId is guaranteed non-empty and present in the
+    // store, so the lookup is total (review #14).
+    const resolvedCli = modes.get(session.modeId!)!.cli;
+    const cap = clis.find((c) => c.id === resolvedCli);
+    if (cap?.supportsJson === false) {
+      return null;
+    }
+    importsHistory = cap?.importsNativeHistory ?? true;
+  }
 
   // No idle gate on this direction (there is no live JSON turn queue to
   // protect) — `triggerDisabled`/`confirmBlocked` stay unset.
@@ -73,7 +101,9 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
       api={api}
       sessionId={session.id}
       direction="toJson"
-      {...(importsHistory === false
+      needsMode={modeMissing}
+      filterMode={filterMode}
+      {...(!modeMissing && !importsHistory
         ? {
             warning:
               "⚠ your terminal turns won't be imported into Rich Chat yet — the agent still remembers them.",
