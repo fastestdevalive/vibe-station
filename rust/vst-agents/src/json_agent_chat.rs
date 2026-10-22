@@ -315,7 +315,7 @@ pub struct EnqueueChatTurnOpts {
     pub message: String,
     pub attachments: Vec<Attachment>,
     pub daemon_port: u16,
-    /// `Some(false)` skips steering and always enqueues FIFO (D8).
+    /// `Some(false)` skips steering and always enqueues FIFO.
     pub steer: Option<bool>,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
@@ -498,16 +498,22 @@ pub fn read_session_transcript(
     read_transcript_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id)
 }
 
-/// Bounded tail-N turns + cursor.
+/// Bounded tail-N turns + cursor, narrowed by a byte budget.
 pub fn read_session_tail(
     ctx: &JsonSessionContext,
     registry: &JsonAgentRegistry<JsonAgentSession>,
     n_turns: i64,
+    max_bytes: usize,
 ) -> TranscriptPage {
     if let Some(live) = registry.get(&ctx.session.id) {
-        return live.tail(n_turns);
+        return live.tail(n_turns, max_bytes);
     }
-    read_tail_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id, n_turns)
+    read_tail_from_data_dir(
+        &session_data_dir_for(ctx),
+        &ctx.session.id,
+        n_turns,
+        max_bytes,
+    )
 }
 
 /// Keyset "load earlier" page.

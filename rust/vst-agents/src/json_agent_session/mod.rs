@@ -568,15 +568,16 @@ impl JsonAgentSession {
         store.as_ref().map_or_else(Vec::new, |st| st.read_all())
     }
 
-    pub fn tail(&self, n_turns: i64) -> TranscriptPage {
+    pub fn tail(&self, n_turns: i64, max_bytes: usize) -> TranscriptPage {
         let store = self.0.store.lock().unwrap();
         store.as_ref().map_or(
             TranscriptPage {
                 events: Vec::new(),
                 oldest_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             },
-            |st| st.tail(n_turns),
+            |st| st.tail(n_turns, max_bytes),
         )
     }
 
@@ -587,6 +588,7 @@ impl JsonAgentSession {
                 events: Vec::new(),
                 oldest_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             },
             |st| st.page_before(before_seq, limit),
         )
@@ -599,6 +601,7 @@ impl JsonAgentSession {
                 events: Vec::new(),
                 next_seq: None,
                 has_more: false,
+                payload_bytes: 0,
             },
             |st| st.since(since_seq, limit),
         )
@@ -1000,15 +1003,21 @@ pub fn read_transcript_from_data_dir(data_dir: &Path, session_id: &str) -> Vec<N
 }
 
 /// Bounded tail-N turns page from disk (no live session).
-pub fn read_tail_from_data_dir(data_dir: &Path, session_id: &str, n_turns: i64) -> TranscriptPage {
+pub fn read_tail_from_data_dir(
+    data_dir: &Path,
+    session_id: &str,
+    n_turns: i64,
+    max_bytes: usize,
+) -> TranscriptPage {
     with_disk_store(
         data_dir,
         session_id,
-        |s| s.tail(n_turns),
+        |s| s.tail(n_turns, max_bytes),
         TranscriptPage {
             events: Vec::new(),
             oldest_seq: None,
             has_more: false,
+            payload_bytes: 0,
         },
     )
 }
@@ -1028,6 +1037,7 @@ pub fn read_page_before_from_data_dir(
             events: Vec::new(),
             oldest_seq: None,
             has_more: false,
+            payload_bytes: 0,
         },
     )
 }
@@ -1042,6 +1052,7 @@ pub fn read_since_from_data_dir(data_dir: &Path, session_id: &str, since_seq: i6
             events: Vec::new(),
             next_seq: None,
             has_more: false,
+            payload_bytes: 0,
         },
     )
 }

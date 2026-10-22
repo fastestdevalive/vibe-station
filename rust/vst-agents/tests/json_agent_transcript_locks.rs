@@ -101,7 +101,7 @@ async fn transcript_append_and_read_do_not_wait_on_the_state_lock() {
     holder_entered.wait();
     let started = Instant::now();
     session.persist_event_for_test(&ev(0));
-    let page = session.tail(5);
+    let page = session.tail(5, usize::MAX);
     let elapsed = started.elapsed();
 
     assert_eq!(page.events.len(), 1, "the append is visible to the reader");
@@ -147,7 +147,7 @@ async fn concurrent_appends_and_reads_preserve_order_and_lose_nothing() {
             b.wait();
             for _ in 0..PER_WRITER {
                 // Interleaved reads through both reader shapes.
-                let _ = s.tail(3);
+                let _ = s.tail(3, usize::MAX);
                 let _ = s.since(0, Some(10));
             }
         }));
@@ -214,4 +214,40 @@ async fn release_latches_appends_off_atomically() {
         read_transcript_from_data_dir(&data_dir, SESSION_ID).len(),
         settled
     );
+}
+
+// live-path: `JsonAgentSession::tail` honours the byte budget (the
+// newest turn is ALWAYS whole; an oversize newest turn pushes older turns out).
+#[test]
+fn live_tail_honours_byte_budget() {
+    fn ev_turn(turn_id: &str, text: &str) -> NormalizedEvent {
+        let mut e: NormalizedEvent = serde_json::from_value(serde_json::json!({
+            "id": format!("e-{}", std::process::id()),
+            "sessionId": SESSION_ID,
+            "ts": "2026-01-01T00:00:00Z",
+            "provider": "claude",
+            "kind": serde_json::to_value(NormalizedEventKind::Text).unwrap(),
+        }))
+        .unwrap();
+        e.role = Some(vst_types::Role::Assistant);
+        e.text = Some(text.to_string());
+        e.turn_id = Some(turn_id.to_string());
+        e
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let (session, _data_dir) = live_session(dir.path());
+
+    session.persist_event_for_test(&ev_turn("t1", "small"));
+    session.persist_event_for_test(&ev_turn("t2", &"雪".repeat(1000))); // newest, huge
+
+    let page = session.tail(5, 100);
+    assert_eq!(page.events.len(), 1);
+    assert!(page
+        .events
+        .iter()
+        .all(|e| e.turn_id.as_deref() == Some("t2")));
+    assert!(page.has_more);
+    assert!(page.payload_bytes > 0);
 }
