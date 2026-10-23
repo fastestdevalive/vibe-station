@@ -3060,6 +3060,7 @@ dependencies = [
  "tracing",
  "uuid",
  "vst-agy-acp",
+ "vst-diff",
  "vst-git",
  "vst-proc",
  "vst-rpc",
@@ -3127,6 +3128,14 @@ dependencies = [
  "vst-store",
  "vst-types",
  "vst-ws",
+]
+
+[[package]]
+name = "vst-diff"
+version = "0.0.2-beta"
+dependencies = [
+ "similar",
+ "vst-types",
 ]
 
 [[package]]
@@ -3259,6 +3268,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "vst-diff",
  "vst-types",
 ]
 

@@ -27,6 +27,11 @@ interface DiffViewProps {
    *  either is defined (a new file has `oldText` absent, `newText` required). */
   oldText?: string;
   newText?: string;
+  /** 1-based line numbers of `oldText`/`newText`'s first lines within their
+   *  original files. Set on a server-trimmed hunk (see `vst-diff`); absent
+   *  means the texts start at line 1 (whole file / snippet / new file). */
+  oldStart?: number;
+  newStart?: number;
   /** Used for syntax highlighting (extension → language) */
   filePath?: string;
   themeMode?: "dark" | "light";
@@ -75,6 +80,8 @@ export function DiffView({
   fileContentFallback,
   oldText,
   newText,
+  oldStart,
+  newStart,
   filePath,
   themeMode,
   api,
@@ -117,13 +124,13 @@ export function DiffView({
 
   const hunks = useMemo(() => {
     if (oldText !== undefined || newText !== undefined) {
-      return diffLinesToHunks(oldText ?? "", newText ?? "");
+      return diffLinesToHunks(oldText ?? "", newText ?? "", oldStart ?? 1, newStart ?? 1);
     }
     const trimmed = (diffText ?? "").trim();
     if (trimmed.length > 0) return parseUnifiedDiff(diffText ?? "");
     if (fileContentFallback) return syntheticUntrackedHunks(fileContentFallback);
     return [];
-  }, [diffText, fileContentFallback, oldText, newText]);
+  }, [diffText, fileContentFallback, oldText, newText, oldStart, newStart]);
 
   const flatRows = useMemo(() => flattenHunks(hunks), [hunks]);
 

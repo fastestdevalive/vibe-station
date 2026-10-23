@@ -1102,3 +1102,284 @@ fn tail_budget_ignores_superseded_rows_when_sizing() {
     assert_eq!(page.events.len(), all.events.len());
     assert!(!page.has_more);
 }
+
+// ─── whole-file edit diff trim (one-time backfill) ──────────────────────────
+
+/// A brand-new DB is marked as already-migrated on its first open, so a test
+/// that appends rows with `append` (which bypasses the live trim) and then
+/// reopens must first rewind the marker — exactly the state an upgraded daemon
+/// finds: rows already on disk, marker still 0.
+fn simulate_db_written_before_the_trim_migration(data_dir: &std::path::Path) {
+    rusqlite::Connection::open(transcript_db_path(data_dir))
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 0")
+        .unwrap();
+}
+
+/// A 60-line file, each line padded so the whole file clears the trim threshold.
+fn big_file(tag: &str) -> String {
+    (1..=60)
+        .map(|i| format!("{tag} line {i:03} ........................................\n"))
+        .collect()
+}
+
+fn whole_file_diff() -> vst_types::ToolDiff {
+    let old = big_file("before");
+    let new = old
+        .replace("before line 020 ", "after line 020  ")
+        .replace("before line 050 ", "after line 050  ");
+    vst_types::ToolDiff {
+        path: "/big.ts".into(),
+        old_text: Some(old),
+        new_text: new,
+        old_start: None,
+        new_start: None,
+    }
+}
+
+fn tool_event(kind: NormalizedEventKind, tool_id: &str) -> NormalizedEvent {
+    let mut e = ev(kind, serde_json::json!({"turnId": "t1", "toolId": tool_id}));
+    e.tool_diffs = Some(vec![whole_file_diff()]);
+    e
+}
+
+#[test]
+fn diff_trim_backfill_rewrites_whole_file_rows_on_both_row_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        s.append(&mut ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q1", "turnId": "t1"}),
+        ));
+        // The same whole-file diff is stored twice: once on the tool_use, once
+        // on the tool_result (normalize sets it on both).
+        s.append(&mut tool_event(NormalizedEventKind::ToolUse, "tu-1"));
+        s.append(&mut tool_event(NormalizedEventKind::ToolResult, "tu-1"));
+    }
+
+    simulate_db_written_before_the_trim_migration(dir.path());
+    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let rows: Vec<_> = s2
+        .read_all()
+        .into_iter()
+        .filter(|e| e.tool_diffs.is_some())
+        .collect();
+    assert_eq!(rows.len(), 2, "tool_use and tool_result rows both kept");
+    for row in &rows {
+        let diffs = row.tool_diffs.as_ref().unwrap();
+        assert_eq!(diffs.len(), 2, "two changed regions => two hunks");
+        assert_eq!(diffs[0].old_start, Some(17));
+        assert_eq!(diffs[0].new_start, Some(17));
+        assert_eq!(diffs[1].old_start, Some(47));
+        assert_eq!(diffs[1].new_start, Some(47));
+        assert!(diffs.iter().all(|d| d.new_text.len() < 1024));
+        assert!(diffs[0].new_text.contains("after line 020"));
+    }
+
+    // One-shot marker + byte-identical second open: no re-diff, no rewrite.
+    let db = transcript_db_path(dir.path());
+    let version: i64 = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 1, "backfill marker set after the one-time pass");
+
+    let before: Vec<String> = s2
+        .read_all()
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect();
+    let s3 = open_transcript_store(dir.path(), SESSION_ID);
+    let after: Vec<String> = s3
+        .read_all()
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect();
+    assert_eq!(before, after, "reopen must not rewrite trimmed rows");
+}
+
+#[test]
+fn diff_trim_backfill_leaves_small_and_write_diffs_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let small = vst_types::ToolDiff {
+        path: "/a.ts".into(),
+        old_text: Some("a\nb".into()),
+        new_text: "a\nc".into(),
+        old_start: None,
+        new_start: None,
+    };
+    let write = vst_types::ToolDiff {
+        path: "/new.ts".into(),
+        old_text: Some(String::new()),
+        new_text: big_file("brand new"),
+        old_start: None,
+        new_start: None,
+    };
+    {
+        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        s.append(&mut ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q1", "turnId": "t1"}),
+        ));
+        let mut e = ev(
+            NormalizedEventKind::ToolUse,
+            serde_json::json!({"turnId": "t1", "toolId": "tu-1"}),
+        );
+        e.tool_diffs = Some(vec![small.clone(), write.clone()]);
+        s.append(&mut e);
+    }
+    simulate_db_written_before_the_trim_migration(dir.path());
+    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let row = s2
+        .read_all()
+        .into_iter()
+        .find(|e| e.tool_diffs.is_some())
+        .unwrap();
+    assert_eq!(row.tool_diffs.unwrap(), vec![small, write]);
+}
+
+/// A 400-line file (~26 KB per side), so a whole-file diff trips the 20 KB
+/// `tool_result` cap if the trim has not already shrunk it.
+fn huge_file(tag: &str) -> String {
+    (1..=400)
+        .map(|i| format!("{tag} line {i:03} ................................................\n"))
+        .collect()
+}
+
+/// The property the backfill comment says MUST hold: trim runs BEFORE the
+/// oversized-diff cap. If the two blocks are ever reordered, the cap replaces
+/// the whole file with `(diff omitted — N bytes)` and the hunks are gone.
+#[test]
+fn diff_trim_backfill_runs_before_the_oversized_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = huge_file("before");
+    let new = old
+        .replace("before line 100 ", "after line 100  ")
+        .replace("before line 300 ", "after line 300  ");
+    assert!(
+        old.len() > vst_store::transcript::TOOL_RESULT_MAX_BYTES,
+        "fixture must exceed the per-side cap"
+    );
+    {
+        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut e = ev(
+            NormalizedEventKind::ToolResult,
+            serde_json::json!({"turnId": "t1", "toolId": "tu-huge"}),
+        );
+        e.tool_diffs = Some(vec![vst_types::ToolDiff {
+            path: "/huge.ts".into(),
+            old_text: Some(old),
+            new_text: new,
+            old_start: None,
+            new_start: None,
+        }]);
+        s.append(&mut e);
+    }
+
+    simulate_db_written_before_the_trim_migration(dir.path());
+    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let row = s2
+        .read_all()
+        .into_iter()
+        .find(|e| e.tool_diffs.is_some())
+        .unwrap();
+    let diffs = row.tool_diffs.unwrap();
+
+    assert_eq!(diffs.len(), 2, "two distant edits => two hunks");
+    assert_eq!(diffs[0].old_start, Some(97));
+    assert_eq!(diffs[0].new_start, Some(97));
+    assert_eq!(diffs[1].old_start, Some(297));
+    assert_eq!(diffs[1].new_start, Some(297));
+    for d in &diffs {
+        assert!(
+            !d.new_text.contains("diff omitted"),
+            "trim must beat the cap, not the other way round: {}",
+            d.new_text
+        );
+        assert!(d.new_text.len() < 1024, "hunk-sized, not the whole file");
+        assert!(d.new_text.contains("after line"));
+    }
+}
+
+/// A malformed payload in a `tool_result` row must not abort the open (with
+/// `panic = "abort"` that used to take down every session in the daemon,
+/// because `json_extract` raises on non-JSON before serde ever sees the row).
+#[test]
+fn diff_trim_backfill_survives_a_malformed_payload_row() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        s.append(&mut ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q1", "turnId": "t1"}),
+        ));
+    }
+    let conn = rusqlite::Connection::open(transcript_db_path(dir.path())).unwrap();
+    conn.execute(
+        "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload, superseded)
+         VALUES (?1, 99, '2026-01-01T00:00:00Z', 'tool_result', 't1', 'not json', 0)",
+        [SESSION_ID],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA user_version = 0").unwrap();
+    drop(conn);
+
+    // Must not panic / abort.
+    let s = open_transcript_store(dir.path(), SESSION_ID);
+    assert_eq!(
+        s.read_all().len(),
+        1,
+        "the unparseable row is skipped on read, the valid one survives"
+    );
+
+    let version: i64 = rusqlite::Connection::open(transcript_db_path(dir.path()))
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 1, "the one-shot marker still advances");
+}
+
+/// `import_transaction` trims too (the import path bypasses the live normalize
+/// trim), so a whole-file diff arriving from a native-history import is stored
+/// as hunks.
+#[test]
+fn import_transaction_trims_a_whole_file_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+
+    let old = big_file("before");
+    let new = old.replace("before line 020 ", "after line 020  ");
+    let mut tool = ev(
+        NormalizedEventKind::ToolUse,
+        serde_json::json!({"turnId": "t-imp", "toolId": "tu-imp"}),
+    );
+    tool.tool_diffs = Some(vec![vst_types::ToolDiff {
+        path: "/big.ts".into(),
+        old_text: Some(old),
+        new_text: new,
+        old_start: None,
+        new_start: None,
+    }]);
+    let events = vec![
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"role": "user", "text": "edit it", "turnId": "t-imp"}),
+        ),
+        tool,
+    ];
+
+    let out: ImportOutcome = store.import_transaction(events, opts("c-imp"));
+    assert_eq!(out.imported, 2);
+    let rows = store.read_all();
+    let imported = rows
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::ToolUse)
+        .expect("tool row imported");
+    let diffs = imported.tool_diffs.as_ref().expect("diffs kept");
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].old_start, Some(17));
+    assert_eq!(diffs[0].new_start, Some(17));
+    assert!(diffs[0].new_text.contains("after line 020"));
+    assert!(!diffs[0].new_text.contains("before line 001"));
+}

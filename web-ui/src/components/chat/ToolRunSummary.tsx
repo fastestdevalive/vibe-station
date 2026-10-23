@@ -1,7 +1,9 @@
-import { memo } from "react";
+import { Fragment, memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DiffView } from "@/components/preview/DiffView";
+import { countLines } from "@/preview/diffFromTexts";
+import type { ToolDiff } from "@/api/types";
 import { useRowOpen } from "./rowUiState";
 import {
   capForDisplay,
@@ -298,23 +300,9 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
               <code>{pretty}</code>
             </pre>
           ) : null}
-          {hasDiffs
-            ? diffs!.map((diff, i) => {
-                const omitted = omittedDiffBytes(diff);
-                return omitted !== null ? (
-                  <pre key={`${diff.path}-${i}`} className="chat-tool-entry__pre">
-                    <code>{`Diff too large to display — ${omitted} bytes`}</code>
-                  </pre>
-                ) : (
-                  <DiffView
-                    key={`${diff.path}-${i}`}
-                    oldText={diff.oldText ?? ""}
-                    newText={diff.newText}
-                    filePath={relativize(diff.path, cwd)}
-                  />
-                );
-              })
-            : null}
+          {hasDiffs ? (
+            <ToolDiffList diffs={diffs!} cwd={cwd} />
+          ) : null}
           {hasResultBody ? (
             isDiff ? (
               <DiffView diffText={resultText} />
@@ -338,6 +326,75 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Omitted line count between two consecutive hunks of the SAME file: the
+ * server trimmed a whole-file edit diff into hunks and dropped everything
+ * between them, so the gap is the difference between the second hunk's start
+ * and the end of the first one.
+ *
+ * Both axes must agree. Two `edits[]` entries on one path can come from
+ * different file versions (or an untrimmed hunk with no starts at all), whose
+ * old/new gaps legitimately differ — showing either number would be a lie, so
+ * those pairs render with no gap row.
+ */
+function hiddenLinesBetween(prev: ToolDiff, next: ToolDiff): number {
+  if (prev.path !== next.path) return 0;
+  // A hunk whose body the 20 KB cap replaced with `(diff omitted — N bytes)`
+  // (and which may have lost `oldText`) no longer carries its real line count,
+  // so any gap derived from it is fiction.
+  if (prev.oldText === undefined || omittedDiffBytes(prev) !== null) return 0;
+  if (
+    prev.oldStart == null ||
+    prev.newStart == null ||
+    next.oldStart == null ||
+    next.newStart == null
+  ) {
+    return 0;
+  }
+  const hiddenOld = next.oldStart - (prev.oldStart + countLines(prev.oldText ?? ""));
+  const hiddenNew = next.newStart - (prev.newStart + countLines(prev.newText));
+  return hiddenOld === hiddenNew && hiddenNew > 0 ? hiddenNew : 0;
+}
+
+/**
+ * Renders a tool call's structured diffs. A server-trimmed whole-file edit
+ * arrives as several hunks of the same path, so consecutive same-path hunks
+ * are separated by a non-interactive "N lines hidden" row — the dropped lines
+ * were never sent, so unlike the preview's context gaps this one is not
+ * expandable.
+ */
+function ToolDiffList({ diffs, cwd }: { diffs: ToolDiff[]; cwd?: string }) {
+  return (
+    <>
+      {diffs.map((diff, i) => {
+        const prev = i > 0 ? diffs[i - 1] : undefined;
+        const hidden = prev ? hiddenLinesBetween(prev, diff) : 0;
+        const omitted = omittedDiffBytes(diff);
+        return (
+          <Fragment key={`${diff.path}-${i}`}>
+            {hidden > 0 ? (
+              <div className="chat-diff-trimmed-gap">{`⋯ ${hidden} line${hidden === 1 ? "" : "s"} hidden`}</div>
+            ) : null}
+            {omitted !== null ? (
+              <pre className="chat-tool-entry__pre">
+                <code>{`Diff too large to display — ${omitted} bytes`}</code>
+              </pre>
+            ) : (
+              <DiffView
+                oldText={diff.oldText ?? ""}
+                newText={diff.newText}
+                oldStart={diff.oldStart}
+                newStart={diff.newStart}
+                filePath={relativize(diff.path, cwd)}
+              />
+            )}
+          </Fragment>
+        );
+      })}
+    </>
   );
 }
 

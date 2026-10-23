@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "vst-types",
+    "vst-diff",
     "vst-testkit",
     "vst-store",
     "vst-activity",
@@ -44,9 +45,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nucleo-matcher = "0.3"
 percent-encoding = "2"
+similar = "2"
 
 # workspace internal crates
 vst-types = { path = "vst-types" }
+vst-diff = { path = "vst-diff" }
 vst-testkit = { path = "vst-testkit", default-features = false }
 vst-store = { path = "vst-store" }
 vst-activity = { path = "vst-activity" }

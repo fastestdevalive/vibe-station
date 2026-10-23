@@ -45,6 +45,13 @@
 //   ENV_ECHO_VAR + ENV_OUT_FILE (any mode) — on every session/new and
 //     session/load, write `{ value }` (the spawn-time value of the env var
 //     named by ENV_ECHO_VAR, or null) to ENV_OUT_FILE.
+//   FAKE_ACP_MODE=whole_file_diff — like normal, but session/prompt first sends a
+//     pending `tool_call` with no content followed by a `tool_call_update` whose
+//     content is one `diff` whose oldText AND newText are the ENTIRE 120-line
+//     file (two changed lines) — the shape opencode v2 actually sends. Lets a
+//     test drive the live ACP path (adapter → run_turn_acp → normalize) and
+//     assert the daemon keeps only the changed hunks with real line numbers
+//     (normalize::tool_diffs_from_content) on the ToolResult branch.
 //   FAKE_ACP_MODE=usage_update — like normal, but session/prompt first sends a
 //     mid-turn `usage_update` session/update (used/size/cost from
 //     FAKE_ACP_USAGE_USED / FAKE_ACP_USAGE_SIZE / FAKE_ACP_USAGE_COST_USD,
@@ -297,6 +304,46 @@ rl.on("line", (line) => {
         }
       }, 20);
       return;
+    }
+    if (mode === "whole_file_diff") {
+      // A whole-file edit: both sides carry all 120 lines, only lines 20 and
+      // 90 differ. The daemon's content-based trim must reduce this to two
+      // hunks (±3 context) with old_start/new_start 17 and 87. Sent in the
+      // shape real opencode uses: a PENDING tool_call with no content, then a
+      // tool_call_update carrying the diff and the terminal status.
+      const oldText = Array.from({ length: 120 }, (_, i) =>
+        `line ${String(i + 1).padStart(3, "0")} ${".".repeat(60)}\n`,
+      ).join("");
+      const newText = oldText
+        .replace("line 020 ", "line 020 CHANGED ")
+        .replace("line 090 ", "line 090 CHANGED ");
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: sid,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "tc-whole-file",
+            title: "Edit demo.ts",
+            kind: "edit",
+            status: "pending",
+          },
+        },
+      });
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: sid,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tc-whole-file",
+            status: "completed",
+            content: [{ type: "diff", path: "/tmp/demo.ts", oldText, newText }],
+          },
+        },
+      });
     }
     if (mode === "usage_update") {
       // Mid-turn context-window snapshot BEFORE any content, so a test can

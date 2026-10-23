@@ -317,6 +317,13 @@ pub enum ContentBlockType {
 }
 
 /// A structured file-edit diff from a `ToolCallContent` entry (Gap 2).
+///
+/// A whole-file diff (some agents send the full `oldText`/`newText` for every
+/// edit) is trimmed server-side by `vst-diff`'s `trim_tool_diffs` into ONE
+/// `ToolDiff` per changed hunk; each carries the 1-based line numbers its slice
+/// starts at. Absent starts mean "this diff is the whole file from line 1"
+/// (new-file Write, small snippet, or an untrimmed row written by an older
+/// daemon) — the UI is the only place that resolves that fallback.
 #[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -326,6 +333,14 @@ pub struct ToolDiff {
     /// absent ⇒ new file
     pub old_text: Option<String>,
     pub new_text: String,
+    /// 1-based line in the ORIGINAL old file where `old_text` starts; set only
+    /// on a trimmed hunk (absent ⇒ 1).
+    #[serde(default)]
+    pub old_start: Option<u32>,
+    /// 1-based line in the ORIGINAL new file where `new_text` starts; set only
+    /// on a trimmed hunk (absent ⇒ 1).
+    #[serde(default)]
+    pub new_start: Option<u32>,
 }
 
 /// ACP `ToolKind` union, verbatim (Gap 4).

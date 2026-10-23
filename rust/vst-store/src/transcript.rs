@@ -19,6 +19,12 @@ pub const SINCE_PAGE_SIZE: i64 = 200;
 /// Mirrors `TOOL_RESULT_MAX_BYTES` in `toolResultCap.ts`.
 pub const TOOL_RESULT_MAX_BYTES: usize = 20_000;
 
+/// `PRAGMA user_version` value marking a session DB whose stored whole-file
+/// edit diffs have already been trimmed into hunks (`vst_diff::trim_tool_diffs`).
+/// One-shot per DB: bump only if a future change makes existing rows need
+/// another pass.
+const DIFF_TRIM_BACKFILL_VERSION: i64 = 1;
+
 /// Outcome of a native-history import pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportOutcome {
@@ -314,6 +320,86 @@ impl TranscriptStore {
             migrate_jsonl_into_db(&mut conn, session_id, jsonl)?;
         }
 
+        // One-time whole-file-diff trim — MUST run before the cap below, or a
+        // whole-file diff over the cap has already been replaced by
+        // "(diff omitted — N bytes)" and is unrecoverable.
+        //
+        // `opencode v2` stores the file's full old/new text on every edit; this
+        // rewrites such rows into one diff per changed hunk.
+        // Keyed on `PRAGMA user_version` because it is a per-DB one-shot:
+        // freshly-written rows are already trimmed by the live normalize path,
+        // and without a marker every passthrough row (Write, NUL, all-changed)
+        // would be re-diffed on every open. Idempotent regardless.
+        //
+        // The marker is per-DB while the rewrite filters on `session_id`: one
+        // `messages.db` holds exactly one session's rows today (the path is
+        // `<session>/messages.db`), so those scopes coincide. If a DB ever
+        // holds rows from another session id, drop the `session_id` filter
+        // here or this silently skips them.
+        let diff_trim_done: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap_or(0);
+        if diff_trim_done < DIFF_TRIM_BACKFILL_VERSION {
+            let candidates: Vec<(i64, String)> = {
+                // The predicate is expressed in SQL so only rows that actually
+                // hold a large old side are parsed: `oldText` NULL/empty is a
+                // new-file Write (nothing to trim against). `json_valid` guards
+                // the `json_extract` call: a malformed payload would otherwise
+                // make this query fail, and the failure propagates through
+                // `TranscriptStore::new` to `open_transcript_store`'s
+                // `.expect()` — with `panic = "abort"` that takes down every
+                // session in the daemon over one bad row.
+                let mut stmt = conn.prepare(
+                    "SELECT seq, payload FROM message
+                     WHERE session_id = ?1
+                       AND kind IN ('tool_use', 'tool_result')
+                       AND json_valid(payload)
+                       AND EXISTS (
+                         SELECT 1 FROM json_each(json_extract(payload, '$.toolDiffs')) je
+                         WHERE json_extract(je.value, '$.oldText') IS NOT NULL
+                           AND json_extract(je.value, '$.oldText') <> ''
+                           AND (LENGTH(CAST(json_extract(je.value, '$.oldText') AS BLOB)) >= ?2
+                             OR LENGTH(CAST(json_extract(je.value, '$.newText') AS BLOB)) >= ?2)
+                       )",
+                )?;
+                let result = stmt
+                    .query_map(params![session_id, vst_diff::MIN_TRIM_BYTES as i64], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                result
+            };
+            let txn = conn.transaction()?;
+            {
+                let mut upd = txn.prepare(
+                    "UPDATE message SET payload = ?1 WHERE session_id = ?2 AND seq = ?3",
+                )?;
+                for (seq, payload) in &candidates {
+                    if let Ok(mut ev) = serde_json::from_str::<NormalizedEvent>(payload) {
+                        let Some(diffs) = ev.tool_diffs.as_mut() else {
+                            continue;
+                        };
+                        if !vst_diff::trim_tool_diffs(diffs) {
+                            continue;
+                        }
+                        cap_tool_result_content(&mut ev);
+                        // Never write an empty payload on a serialization
+                        // failure: `""` is malformed JSON, so the row would be
+                        // destroyed AND trip the `json_valid` guard next open.
+                        // Leaving it untouched is safe — the backfill retries.
+                        let Ok(out) = serde_json::to_string(&ev) else {
+                            continue;
+                        };
+                        upd.execute(params![out, session_id, seq])?;
+                    }
+                }
+            }
+            txn.execute_batch(&format!(
+                "PRAGMA user_version = {DIFF_TRIM_BACKFILL_VERSION}"
+            ))?;
+            txn.commit()?;
+        }
+
         // Oversized `tool_result` backfill — runs on every open, idempotent.
         let oversized: Vec<(i64, String)> = {
             let mut stmt = conn.prepare(
@@ -335,7 +421,9 @@ impl TranscriptStore {
                 for (seq, payload) in &oversized {
                     if let Ok(mut ev) = serde_json::from_str::<NormalizedEvent>(payload) {
                         cap_tool_result_content(&mut ev);
-                        let out = serde_json::to_string(&ev).unwrap_or_default();
+                        let Ok(out) = serde_json::to_string(&ev) else {
+                            continue;
+                        };
                         upd.execute(params![out, session_id, seq])?;
                     }
                 }
@@ -624,8 +712,15 @@ impl TranscriptStore {
                 for ev in group_events {
                     let mut ev = ev.clone();
                     ev.log_seq = Some(local_next);
+                    if let Some(diffs) = ev.tool_diffs.as_mut() {
+                        vst_diff::trim_tool_diffs(diffs);
+                    }
                     cap_tool_result_content(&mut ev);
-                    let payload = serde_json::to_string(&ev).unwrap_or_default();
+                    // Skip a row that cannot serialise rather than writing an
+                    // empty payload (malformed JSON) into the transcript.
+                    let Ok(payload) = serde_json::to_string(&ev) else {
+                        continue;
+                    };
                     txn.execute(
                         "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![self.session_id, local_next, ev.ts, Some(kind_str(ev.kind)), ev.turn_id, payload],

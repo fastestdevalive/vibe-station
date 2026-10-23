@@ -340,6 +340,12 @@ export interface ToolDiff {
   path: string;
   oldText?: string;
   newText: string;
+  /** 1-based line number of this hunk's first line in the ORIGINAL old file.
+   *  Absent for an untrimmed diff (whole file / small snippet / Write), which
+   *  starts at line 1 — `diffLinesToHunks` supplies that fallback. */
+  oldStart?: number;
+  /** 1-based line number of this hunk's first line in the ORIGINAL new file. */
+  newStart?: number;
 }
 
 /** ACP `ToolKind` union, verbatim (mirror of daemon `AcpToolKind`). */

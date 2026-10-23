@@ -384,7 +384,9 @@ fn claude_adapter_reconstructs_edit_diffs() {
         vec![vst_types::ToolDiff {
             path: "/p/a.ts".into(),
             old_text: Some("a".into()),
-            new_text: "b".into()
+            new_text: "b".into(),
+            old_start: None,
+            new_start: None,
         }]
     );
     let e2 = by_id["e2"].tool_diffs.clone().unwrap();
@@ -394,12 +396,16 @@ fn claude_adapter_reconstructs_edit_diffs() {
             vst_types::ToolDiff {
                 path: "/p/b.ts".into(),
                 old_text: Some("1".into()),
-                new_text: "2".into()
+                new_text: "2".into(),
+                old_start: None,
+                new_start: None,
             },
             vst_types::ToolDiff {
                 path: "/p/b.ts".into(),
                 old_text: Some("3".into()),
-                new_text: "4".into()
+                new_text: "4".into(),
+                old_start: None,
+                new_start: None,
             },
         ]
     );
@@ -411,7 +417,9 @@ fn claude_adapter_reconstructs_edit_diffs() {
         vec![vst_types::ToolDiff {
             path: "/p/d.ts".into(),
             old_text: Some(String::new()),
-            new_text: "new file content".into()
+            new_text: "new file content".into(),
+            old_start: None,
+            new_start: None,
         }]
     );
 }

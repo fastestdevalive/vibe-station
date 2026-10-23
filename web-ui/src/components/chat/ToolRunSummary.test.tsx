@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ToolRunSummary, toolRunSummaryPropsEqual } from "./ToolRunSummary";
 import type { ToolCallEntry } from "./toolFormat";
+import type { ToolDiff } from "@/api/types";
 
 function tool(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
   return { id: "t1", toolName: "Bash", ...overrides };
@@ -326,6 +327,90 @@ describe("ToolRunSummary structured diffs (Decision 3/4, 4.T2)", () => {
     render(<ToolRunSummary tools={tools} live={false} />);
     expect(document.querySelector(".diff-line")).toBeTruthy();
     expect(screen.queryByText(/old_string/)).toBeNull();
+  });
+});
+
+describe("ToolRunSummary — server-trimmed edit diffs (whole-file-edit-diffs)", () => {
+  /** 7-line hunk body, newline-terminated (countLines === 7). */
+  const sevenLines = (tag: string) =>
+    Array.from({ length: 7 }, (_, i) => `${tag} ${i + 1}`).join("\n") + "\n";
+
+  const hunk = (overrides: Partial<ToolDiff> = {}): ToolDiff => ({
+    path: "/a.ts",
+    oldText: sevenLines("old"),
+    newText: sevenLines("new"),
+    oldStart: 10,
+    newStart: 10,
+    ...overrides,
+  });
+
+  const renderDiffs = (diffs: ToolDiff[]) =>
+    render(
+      <ToolRunSummary
+        tools={[tool({ toolName: "Edit", toolKind: "edit", status: "completed", diffs })]}
+        live={false}
+      />,
+    );
+
+  it("numbers each hunk from its own starts and separates it with a non-clickable hidden-lines row", () => {
+    renderDiffs([hunk(), hunk({ oldStart: 20, newStart: 20 })]);
+
+    // Both hunks render (2 hunks × 7 lines) and the row sits between them.
+    expect(document.querySelectorAll(".preview-diff-hunk").length).toBe(2);
+    expect(screen.getByText("⋯ 3 lines hidden").tagName).toBe("DIV");
+    expect(document.querySelector(".chat-diff-trimmed-gap button")).toBeNull();
+
+    // Gutters continue from the real file lines, not from 1.
+    const gutters = [...document.querySelectorAll(".preview-diff-hunk")].map(
+      (h) => h.querySelector(".diff-gutter")!.textContent,
+    );
+    expect(gutters).toEqual(["10", "20"]);
+  });
+
+  it("renders no hidden-lines row for a single hunk", () => {
+    renderDiffs([hunk()]);
+    expect(document.querySelector(".chat-diff-trimmed-gap")).toBeNull();
+  });
+
+  it("renders no hidden-lines row between hunks of different files", () => {
+    renderDiffs([hunk(), hunk({ path: "/b.ts", oldStart: 20, newStart: 20 })]);
+    expect(document.querySelector(".chat-diff-trimmed-gap")).toBeNull();
+  });
+
+  it("renders no hidden-lines row when the old and new gaps disagree (different file versions)", () => {
+    // A cross-version pair has no single honest "lines hidden" count.
+    renderDiffs([hunk(), hunk({ oldStart: 20, newStart: 19 })]);
+    expect(document.querySelector(".chat-diff-trimmed-gap")).toBeNull();
+  });
+
+  it("renders no hidden-lines row when either side lacks starts (untrimmed diff)", () => {
+    const untrimmed = hunk({ oldStart: undefined, newStart: undefined });
+    renderDiffs([hunk(), { ...untrimmed, path: "/a.ts" }]);
+    expect(document.querySelector(".chat-diff-trimmed-gap")).toBeNull();
+  });
+
+  it("renders no hidden-lines row when the previous hunk was replaced by the size cap", () => {
+    // The cap swaps the body for `(diff omitted — N bytes)` (and may drop
+    // `oldText`). A 1-line old side + 1-line marker makes both computed gaps
+    // agree, which used to render a bogus "9 lines hidden".
+    const capped = hunk({
+      oldText: "one line\n",
+      newText: "(diff omitted — 24006 bytes)",
+      oldStart: 10,
+      newStart: 10,
+    });
+    renderDiffs([capped, hunk({ oldStart: 20, newStart: 20 })]);
+    expect(document.querySelector(".chat-diff-trimmed-gap")).toBeNull();
+  });
+
+  it("counts an EOF hunk with no trailing newline exactly", () => {
+    // 7 lines, the last one unterminated => still 7 lines => 3 hidden.
+    const noTrailingNewline = sevenLines("eof").slice(0, -1);
+    renderDiffs([
+      hunk({ oldText: noTrailingNewline, newText: noTrailingNewline }),
+      hunk({ oldStart: 20, newStart: 20 }),
+    ]);
+    expect(screen.getByText("⋯ 3 lines hidden")).toBeTruthy();
   });
 });
 

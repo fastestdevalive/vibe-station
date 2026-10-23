@@ -237,6 +237,28 @@ describe("groupEvents acp-normalize-superset (Phase 3)", () => {
     expect(tool.status).toBe("in_progress");
   });
 
+  it("a tool_result carrying server-trimmed hunks preserves their order and starts", () => {
+    const hunks = [
+      { path: "/a.ts", oldText: "a\n", newText: "b\n", oldStart: 10, newStart: 10 },
+      { path: "/a.ts", oldText: "c\n", newText: "d\n", oldStart: 40, newStart: 40 },
+    ];
+    const items = groupEvents([
+      toolUseEvent("tc1", "t1"),
+      {
+        id: "r1",
+        sessionId: "s1",
+        ts: "",
+        provider: "opencode",
+        kind: "tool_result",
+        toolId: "tc1",
+        toolDiffs: hunks,
+        toolStatus: "completed",
+      },
+    ]);
+    const tool = items.find((i) => i.type === "tool") as { diffs?: unknown[] };
+    expect(tool.diffs).toEqual(hunks);
+  });
+
   it("3.T2 — a mode_update event produces a status-type RenderItem", () => {
     const items = groupEvents([
       { id: "m1", sessionId: "s1", ts: "", provider: "claude", kind: "mode_update", modeId: "build" },

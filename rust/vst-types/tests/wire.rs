@@ -366,3 +366,45 @@ fn session_without_activity_keys_still_deserializes() {
     assert_eq!(s.last_line, None);
     assert_eq!(s.last_tool, None);
 }
+
+/// The whole-file-trim starts are optional with a serde default: a diff that
+/// was never trimmed must serialize WITHOUT `oldStart`/`newStart`, so existing
+/// persisted rows and the hand-mirrored `web-ui/src/api/types.ts` (where an
+/// absent start means line 1) stay byte-compatible.
+#[test]
+fn tool_diff_omits_absent_trim_starts() {
+    use vst_types::ToolDiff;
+
+    let untrimmed = ToolDiff {
+        path: "/a.ts".into(),
+        old_text: Some("a\n".into()),
+        new_text: "b\n".into(),
+        old_start: None,
+        new_start: None,
+    };
+    let v = serde_json::to_value(&untrimmed).unwrap();
+    assert!(
+        v.get("oldStart").is_none(),
+        "absent oldStart must be omitted: {v}"
+    );
+    assert!(
+        v.get("newStart").is_none(),
+        "absent newStart must be omitted: {v}"
+    );
+
+    let trimmed = ToolDiff {
+        old_start: Some(17),
+        new_start: Some(17),
+        ..untrimmed
+    };
+    let v = serde_json::to_value(&trimmed).unwrap();
+    assert_eq!(v["oldStart"], 17);
+    assert_eq!(v["newStart"], 17);
+
+    // A pre-change payload (no keys at all) still deserializes.
+    let back: ToolDiff = serde_json::from_value(serde_json::json!({
+        "path": "/a.ts", "oldText": "a\n", "newText": "b\n"
+    }))
+    .unwrap();
+    assert_eq!((back.old_start, back.new_start), (None, None));
+}

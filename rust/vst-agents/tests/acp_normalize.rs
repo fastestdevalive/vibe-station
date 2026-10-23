@@ -315,3 +315,69 @@ fn normalized_event_ts_is_iso8601() {
     );
     assert!(ev.ts.ends_with('Z'), "ts must end with Z: {}", ev.ts);
 }
+
+/// A 60-line file, each line padded so the whole file clears the trim threshold.
+fn big_file(tag: &str) -> String {
+    (1..=60)
+        .map(|i| format!("{tag} line {i:03} ........................................\n"))
+        .collect()
+}
+
+#[test]
+fn whole_file_diff_on_tool_call_is_trimmed_to_hunks_with_real_line_numbers() {
+    let old = big_file("before");
+    let new = old
+        .replace("before line 020 ", "after line 020  ")
+        .replace("before line 050 ", "after line 050  ");
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-big", "Edit").content(vec![ToolCallContent::Diff(
+            Diff::new("/big.ts", new).old_text(old),
+        )]),
+    ))
+    .expect("tool_call with a whole-file diff maps to tool_use");
+    let diffs = ev.tool_diffs.expect("toolDiffs populated");
+
+    assert_eq!(diffs.len(), 2, "two changed regions => two hunks");
+    assert_eq!(diffs[0].old_start, Some(17));
+    assert_eq!(diffs[0].new_start, Some(17));
+    assert_eq!(diffs[1].old_start, Some(47));
+    assert_eq!(diffs[1].new_start, Some(47));
+    // Hunk-sized payloads, not the whole file.
+    assert!(diffs.iter().all(|d| d.new_text.len() < 1024));
+    assert!(diffs[0].new_text.contains("after line 020"));
+    assert!(!diffs[0].new_text.contains("before line 001"));
+}
+
+#[test]
+fn whole_file_diff_on_tool_call_update_is_trimmed_too() {
+    let old = big_file("before");
+    let new = old.replace("before line 030 ", "after line 030  ");
+    let ev = norm(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+        "tc-big",
+        ToolCallUpdateFields::new().content(vec![ToolCallContent::Diff(
+            Diff::new("/big.ts", new).old_text(old),
+        )]),
+    )))
+    .expect("tool_call_update with a whole-file diff maps to tool_result");
+    let diffs = ev.tool_diffs.expect("toolDiffs populated");
+
+    assert_eq!(diffs.len(), 1, "one changed region => one hunk");
+    assert_eq!(diffs[0].old_start, Some(27));
+    assert_eq!(diffs[0].new_start, Some(27));
+    assert!(diffs[0].new_text.len() < 1024);
+}
+
+#[test]
+fn small_snippet_diff_is_untouched_by_the_trim() {
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-small", "Edit").content(vec![ToolCallContent::Diff(
+            Diff::new("/a.ts", "new").old_text("old"),
+        )]),
+    ))
+    .expect("tool_call with a small diff maps to tool_use");
+    let diffs = ev.tool_diffs.expect("toolDiffs populated");
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].old_text.as_deref(), Some("old"));
+    assert_eq!(diffs[0].old_start, None);
+    assert_eq!(diffs[0].new_start, None);
+}

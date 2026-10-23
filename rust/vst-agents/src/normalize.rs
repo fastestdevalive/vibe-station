@@ -151,15 +151,21 @@ fn tool_diffs_from_content(content: &[ToolCallContent]) -> Option<Vec<ToolDiff>>
                 path: path.to_string_lossy().into_owned(),
                 old_text: old_text.clone(),
                 new_text: new_text.clone(),
+                old_start: None,
+                new_start: None,
             }),
             _ => None,
         })
         .collect();
     if diffs.is_empty() {
-        None
-    } else {
-        Some(diffs)
+        return None;
     }
+    // A whole-file diff (opencode v2 sends the full file as old/new on every
+    // edit) becomes one diff per changed hunk. Small snippets are untouched by
+    // the size gate, so claude's edits pass through byte-identically.
+    let mut diffs = diffs;
+    vst_diff::trim_tool_diffs(&mut diffs);
+    Some(diffs)
 }
 
 const WRITE_TOOL_NAMES: &[&str] = &[
@@ -249,6 +255,8 @@ fn tool_diffs_from_input(
         path,
         old_text: Some(String::new()),
         new_text: content,
+        old_start: None,
+        new_start: None,
     }])
 }
 

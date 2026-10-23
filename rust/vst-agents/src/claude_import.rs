@@ -308,6 +308,8 @@ pub fn parse_claude_native_history(
                                         path,
                                         old_text: Some(old_string),
                                         new_text: new_string,
+                                        old_start: None,
+                                        new_start: None,
                                     }]);
                                 } else if name == "Write" {
                                     if let Some(content) =
@@ -318,6 +320,8 @@ pub fn parse_claude_native_history(
                                             path,
                                             old_text: Some(String::new()),
                                             new_text: content.to_string(),
+                                            old_start: None,
+                                            new_start: None,
                                         }]);
                                     }
                                 } else if name == "MultiEdit" {
@@ -352,6 +356,8 @@ pub fn parse_claude_native_history(
                                                         path,
                                                         old_text: Some(old_string),
                                                         new_text: new_string,
+                                                        old_start: None,
+                                                        new_start: None,
                                                     });
                                                 }
                                             }
