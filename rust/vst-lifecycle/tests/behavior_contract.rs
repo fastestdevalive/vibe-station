@@ -232,6 +232,8 @@ fn tool_result_cap_diffs_cap_new_text_keeps_small_old() {
         path: "/a.ts".to_string(),
         old_text: Some("small".to_string()),
         new_text: "y".repeat(TOOL_RESULT_MAX_BYTES + 1),
+        old_start: None,
+        new_start: None,
     }]);
     cap_tool_result_content(&mut ev);
     let diff = &ev.tool_diffs.unwrap()[0];
@@ -248,6 +250,8 @@ fn tool_result_cap_diffs_drops_old_when_both_oversized() {
         path: "/a.ts".to_string(),
         old_text: Some("x".repeat(TOOL_RESULT_MAX_BYTES + 1)),
         new_text: "y".repeat(TOOL_RESULT_MAX_BYTES + 1),
+        old_start: None,
+        new_start: None,
     }]);
     cap_tool_result_content(&mut ev);
     let diff = &ev.tool_diffs.unwrap()[0];
@@ -264,6 +268,8 @@ fn tool_result_cap_diffs_normal_size_untouched() {
         path: "/a.ts".to_string(),
         old_text: Some("a\nb".to_string()),
         new_text: "a\nc".to_string(),
+        old_start: None,
+        new_start: None,
     };
     ev.tool_diffs = Some(vec![diff_orig.clone()]);
     cap_tool_result_content(&mut ev);

@@ -450,3 +450,78 @@ async fn stuck_turn_watchdog_recovers_when_adapter_abandons_the_turn() {
         3
     );
 }
+
+/// A live ACP whole-file edit in opencode's real shape — a pending `tool_call`
+/// with no content, then a `tool_call_update` carrying the diff — must reach
+/// the session already trimmed. This crosses the real boundary the unit tests
+/// in `acp_normalize.rs` stop short of: fake adapter → NDJSON JSON-RPC →
+/// `AcpConnection` → `run_turn_acp`'s update drain → `normalize_session_update`
+/// → the emitted `ToolResult` event. If the daemon ever stops calling
+/// `normalize::tool_diffs_from_content` from the live path, this fails while
+/// the store/render tests would still pass. It also covers the update branch
+/// (the one opencode actually populates) rather than only the initial call.
+#[tokio::test]
+async fn run_turn_acp_trims_a_whole_file_diff_to_hunks() {
+    let (ctx, captured) = ctx_with_spec(spec_for("whole_file_diff"));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let params = base_params(NormalizedEventProvider::Claude, "whole_file_diff");
+    let task = tokio::spawn(run_turn_acp(
+        tx,
+        default_input(true),
+        ctx,
+        CancellationToken::new(),
+        params,
+    ));
+    task.await.unwrap();
+    dispose_captured(&captured).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(
+        kinds(&events),
+        vec![
+            NormalizedEventKind::ToolUse,
+            NormalizedEventKind::ToolResult,
+            NormalizedEventKind::Text,
+            NormalizedEventKind::Usage,
+            NormalizedEventKind::Result
+        ],
+        "pending tool_call → ToolUse, then the diff-bearing update → ToolResult"
+    );
+
+    let call = &events[0];
+    assert_eq!(call.tool_id.as_deref(), Some("tc-whole-file"));
+    assert!(
+        call.tool_diffs.is_none(),
+        "the pending call carries no content"
+    );
+
+    let result = &events[1];
+    assert_eq!(result.tool_id.as_deref(), Some("tc-whole-file"));
+    assert_eq!(result.tool_status, Some(vst_types::ToolStatus::Completed));
+    let diffs = result
+        .tool_diffs
+        .as_ref()
+        .expect("the whole-file diff must surface as tool_diffs");
+
+    assert_eq!(diffs.len(), 2, "two changed regions => two hunks");
+    assert_eq!(
+        (diffs[0].old_start, diffs[0].new_start),
+        (Some(17), Some(17)),
+        "first hunk starts at file line 17 (changed line 20 - 3 context lines)"
+    );
+    assert_eq!(
+        (diffs[1].old_start, diffs[1].new_start),
+        (Some(87), Some(87)),
+        "second hunk starts at file line 87 (changed line 90 - 3 context lines)"
+    );
+    assert!(
+        diffs.iter().all(|d| d.new_text.len() < 1024),
+        "hunks must be ~7 lines, not the whole file"
+    );
+    assert!(diffs[0].new_text.contains("line 020 CHANGED"));
+    assert!(diffs[1].new_text.contains("line 090 CHANGED"));
+    assert!(
+        !diffs[0].new_text.contains("line 001"),
+        "unchanged head of the file must not survive the trim"
+    );
+}

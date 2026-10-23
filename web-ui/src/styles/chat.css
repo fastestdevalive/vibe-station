@@ -1045,6 +1045,20 @@
   word-break: break-word;
 }
 
+/* Server-trimmed edit diffs (`vst-diff`): the lines between two hunks of the
+ * same file were never sent, so this row is informational only — no caret, no
+ * hover affordance, deliberately unlike the preview's expandable
+ * `.preview-diff-gap-header`. */
+.chat-diff-trimmed-gap {
+  padding: 1px var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+  user-select: none;
+}
+
 /* ── Error card ───────────────────────────────────────────────────────────── */
 
 .chat-error-card {
