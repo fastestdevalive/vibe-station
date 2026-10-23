@@ -81,6 +81,22 @@ describe("SessionChip (agent card, option E)", () => {
     expect(container.querySelector(".acard__band .pr-chip")).toBeNull();
   });
 
+  it("activityTense=past renders the last tool call as done", () => {
+    const { container } = render(
+      <SessionChip {...wtProps} status="waiting_for_human" channel="json" lastTool={{ name: "Edit", detail: "a.ts" }} activityTense="past" />,
+    );
+    expect(container.querySelector(".acard__band .acard__act")?.textContent).toBe("Edited a.ts");
+  });
+
+  it("activityIcon=progress swaps the tool glyph for a ring", () => {
+    const { container } = render(
+      <SessionChip {...wtProps} status="working" channel="json" lastTool={{ name: "Edit", detail: "a.ts" }} activityIcon="progress" />,
+    );
+    expect(container.querySelector(".acard__act .acard__act-ring")).not.toBeNull();
+    expect(container.querySelector(".acard__act .acard__act-ico")).toBeNull();
+    expect(container.querySelector(".acard__act")?.textContent).toBe("Editing a.ts");
+  });
+
   it("band appears with a PR chip only: empty activity slot stays so the chip sits right", () => {
     const { container } = render(<SessionChip {...wtProps} pr={openPr} />);
     const band = container.querySelector(".acard__band") as HTMLElement;

@@ -194,6 +194,23 @@
   stroke-width: 1.7;
   color: var(--fg-muted);
 }
+/* Working cards: indeterminate ring in place of the tool-kind glyph (reuses
+   workspace.css's status-spin; static ring under reduced motion). */
+.acard__act-ring {
+  flex: none;
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--status-working) 30%, transparent);
+  border-top-color: var(--status-working);
+  animation: status-spin 0.75s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .acard__act-ring {
+    animation: none;
+  }
+}
 .acard__act-t {
   min-width: 0;
   overflow: hidden;

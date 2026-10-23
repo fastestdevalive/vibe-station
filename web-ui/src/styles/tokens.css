@@ -9,6 +9,14 @@
   /* JetBrains Mono stays as the glyph fallback (⎿, box drawing). */
   --font-mono: "Geist Mono", "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 
+  /* Primary body text (chat prose, sidebar/tree/tab labels, dashboard card
+     titles) — ONE size, so those surfaces can't drift apart. Geist Mono is
+     ~10% wider per em than Geist, so the Mono interface font gets 1px less to
+     keep the same text width (`data-font` is set by useThemeStore.setFont).
+     Captions stay on --font-size-xs / -sm. */
+  --fs-body: 14px;
+  /* Sidebar section headings ("Projects", "Workspaces", group headers): 1px under body. */
+  --fs-section: calc(var(--fs-body) - 1px);
   --fs-micro: 11px;
   --lh-micro: 14px;
   --fs-meta: 12px;
@@ -357,6 +365,10 @@
   margin: 0;
   padding: 0;
   -webkit-tap-highlight-color: transparent;
+}
+
+:root[data-font="mono"] {
+  --fs-body: 13px;
 }
 
 html {

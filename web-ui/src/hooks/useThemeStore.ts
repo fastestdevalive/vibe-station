@@ -49,6 +49,9 @@ export const useThemeStore = create<ThemeStore>()((set) => ({
   setFont: (font) => {
     set({ font });
     const fontVar = font === "mono" ? "var(--font-mono)" : "var(--font-sans)";
-    getThemeRoot().style.setProperty("--font-family", fontVar);
+    const root = getThemeRoot();
+    root.style.setProperty("--font-family", fontVar);
+    // Drives the per-font body size (`--fs-body` in tokens.css).
+    root.dataset.font = font;
   },
 }));

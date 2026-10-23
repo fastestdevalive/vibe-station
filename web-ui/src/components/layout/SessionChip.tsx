@@ -1,7 +1,7 @@
 import type { Channel, PrStatus, ToolActivity } from "@/api/types";
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
-import { toolActivityLabel, type ToolActivityKind } from "@/lib/toolActivityLabel";
+import { toolActivityLabel, type ToolActivityKind, type ToolActivityTense } from "@/lib/toolActivityLabel";
 import { formatFullTimestamp } from "@/lib/timeAgo";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { RelativeTime } from "@/components/layout/RelativeTime";
@@ -60,6 +60,10 @@ export interface SessionChipProps {
   /** Last tool call of a Rich Chat agent -> band activity label. Omit for
    *  terminal agents (no structured tool events). */
   lastTool?: ToolActivity | null;
+  /** "past" ("Edited x") for a session that stopped and waits on the user. */
+  activityTense?: ToolActivityTense;
+  /** "progress": a spinning ring instead of the tool-kind glyph (Working cards). */
+  activityIcon?: "kind" | "progress";
   href?: string;
   onClick?: () => void;
 }
@@ -76,12 +80,14 @@ export function SessionChip({
   channel,
   activityAt,
   lastTool,
+  activityTense,
+  activityIcon = "kind",
   href,
   onClick,
 }: SessionChipProps) {
   const direct = isDirect ?? (worktreeLabel === "direct");
   const statusText = (resolveStatusClass(status, pr) ?? status).replace(/_/g, " ");
-  const activity = toolActivityLabel(lastTool);
+  const activity = toolActivityLabel(lastTool, activityTense);
   const ActivityGlyph = activity ? ACTIVITY_GLYPH[activity.kind] : null;
   const terminal = channel !== "json";
   // Band only when it has content: tool activity, or a PR chip (never on a direct agent).
@@ -169,7 +175,11 @@ export function SessionChip({
           <span className="acard__act" title={activity?.text}>
             {activity && ActivityGlyph ? (
               <>
-                <ActivityGlyph size={13} className="acard__act-ico" aria-hidden="true" />
+                {activityIcon === "progress" ? (
+                  <span className="acard__act-ring" aria-hidden="true" />
+                ) : (
+                  <ActivityGlyph size={13} className="acard__act-ico" aria-hidden="true" />
+                )}
                 <span className="acard__act-t">
                   {activity.verb}
                   {activity.target ? (

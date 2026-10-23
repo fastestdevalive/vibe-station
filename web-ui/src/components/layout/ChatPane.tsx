@@ -1,4 +1,5 @@
 import { Minus, Plus } from "lucide-react";
+import { FontResetButton } from "./FontResetButton";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, FileScope, Session } from "@/api/types";
@@ -31,7 +32,6 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 const CHAT_FONT_BASE_PX: Record<string, number> = {
   "--font-size-xs": 11,
   "--font-size-sm": 12,
-  "--font-size-base": 14, // phone: PHONE_CHAT_BASE_PX (prose floor, iOS no-zoom)
   "--font-size-lg": 16,
   "--font-size-xl": 18,
   "--font-size-2xl": 22,
@@ -101,9 +101,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const chatFontVars = useMemo(() => {
     const vars: Record<string, string> = {};
     for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
-      const px = name === "--font-size-base" && isPhone ? PHONE_CHAT_BASE_PX : base;
-      vars[name] = `${Math.round(px * terminalFontScale)}px`;
+      vars[name] = `${Math.round(base * terminalFontScale)}px`;
     }
+    // Body size comes from --fs-body (tokens.css: 14px Sans / 13px Mono) so
+    // chat matches the sidebar/tree; phones keep their 16px iOS no-zoom floor.
+    vars["--font-size-base"] = isPhone
+      ? `${Math.round(PHONE_CHAT_BASE_PX * terminalFontScale)}px`
+      : `calc(var(--fs-body) * ${terminalFontScale})`;
     return vars as CSSProperties;
   }, [terminalFontScale, isPhone]);
 
@@ -503,6 +507,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               <button type="button" className="terminal-font-overlay__btn" aria-label="Increase chat font" onClick={() => bumpTerminalFont(0.05)}>
                 <Plus size={11} />
               </button>
+              <FontResetButton />
             </div>
           }
         />

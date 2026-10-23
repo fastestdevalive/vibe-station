@@ -798,7 +798,7 @@ describe("DashboardPanel", () => {
     };
     expect(activityOf(workingSection, "Act Alpha")).toBe("Editing alpha.ts");
     const needsSection = screen.getByText("needs you").closest("section") as HTMLElement;
-    expect(activityOf(needsSection, "Act Needs")).toBe("Editing needs.ts");
+    expect(activityOf(needsSection, "Act Needs")).toBe("Edited needs.ts");
     const idleSection = screen.getByText("idle", { selector: ".dashboard-section__label" }).closest("section") as HTMLElement;
     // No tool activity (idle / terminal agents): no band at all, and the raw terminal line is never shown.
     expect(activityOf(idleSection, "Act Idle")).toBeNull();

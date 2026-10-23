@@ -49,4 +49,23 @@ describe("toolActivityLabel", () => {
     expect(toolActivityLabel({ name: "mcp__a__b" })?.kind).toBe("mcp");
     expect(toolActivityLabel({ name: "x" })?.kind).toBe("other");
   });
+
+  it("past tense reads as done (Needs-you cards)", () => {
+    const p = (name: string, detail?: string | null) =>
+      toolActivityLabel({ name, detail }, "past")?.text;
+    expect(p("Edit", "a.ts")).toBe("Edited a.ts");
+    expect(p("Edit")).toBe("Edited files");
+    expect(p("Write", "out.json")).toBe("Wrote out.json");
+    expect(p("Read", "README.md")).toBe("Read README.md");
+    expect(p("Read")).toBe("Read files");
+    expect(p("Bash", "cd")).toBe("Ran cd");
+    expect(p("Bash")).toBe("Ran a command");
+    expect(p("Grep")).toBe("Searched");
+    expect(p("WebFetch")).toBe("Browsed");
+    expect(p("Task")).toBe("Ran a subagent");
+    expect(p("TodoWrite")).toBe("Planned");
+    expect(p("Frobnicate")).toBe("Used Frobnicate");
+    expect(p("mcp__github__list", "github")).toBe("Called mcp · github");
+    expect(toolActivityLabel({ name: "Edit", detail: "a.ts" }, "past")?.verb).toBe("Edited");
+  });
 });

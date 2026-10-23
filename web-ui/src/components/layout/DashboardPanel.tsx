@@ -227,6 +227,9 @@ function DashboardSessionItem({
   const chipActivity = {
     activityAt: sessionActivityAt(s),
     lastTool: showActivity ? s.lastTool : null,
+    // Needs-you: the agent has stopped, so its last call reads as done.
+    activityIcon: bucket === "working" ? ("progress" as const) : ("kind" as const),
+    activityTense: bucket === "needsYou" ? ("past" as const) : ("present" as const),
   } as const;
 
   if (!wt) {
