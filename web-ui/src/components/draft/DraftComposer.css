@@ -778,6 +778,14 @@
   overflow-y: auto;
 }
 
+/* The prompt editor sits outside `.chat-pane`, where `--font-size-base` is the
+   global 13px chrome size — pin it to the body size so it matches the chat
+   composer (14px Sans / 13px Mono). Declared before the phone block so that wins. */
+.draft-composer .chat-skill-editor__content,
+.draft-composer .chat-skill-editor__placeholder {
+  font-size: var(--fs-body);
+}
+
 /* ── Phone scale (≤640px): prompt 16px (iOS no-zoom floor), title 16px,
    44px controls, agent picker icon-only, composer anchored at the top. ───── */
 @media (max-width: 640px) {

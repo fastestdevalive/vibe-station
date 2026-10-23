@@ -430,7 +430,7 @@
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 28px;
+  min-height: 30px;
   padding: var(--space-1) var(--space-2);
   box-sizing: border-box;
   border-radius: var(--radius-sm);
@@ -465,7 +465,7 @@
   background: transparent;
   color: var(--fg-primary);
   font-family: inherit;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-weight: var(--font-weight-normal);
   outline: none;
   box-sizing: border-box;
@@ -504,7 +504,7 @@
 
 .sidebar-projects-heading__title {
   flex: 1;
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-section);
   color: var(--fg-muted);
   font-weight: var(--font-weight-medium);
 }
@@ -602,8 +602,8 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
-  min-height: 28px;
-  font-size: var(--font-size-sm);
+  min-height: 30px;
+  font-size: var(--fs-body);
   font-weight: var(--font-weight-normal);
   text-decoration: none;
   color: var(--fg-secondary);
@@ -1308,7 +1308,7 @@
 
 .tree-row--direct-session {
   gap: var(--space-2);
-  min-height: 28px; /* match .tree-row--worktree, not the 32px .tree-row base */
+  min-height: 30px; /* match .tree-row--worktree, not the 32px .tree-row base */
   color: var(--fg-primary);
 }
 
@@ -1362,7 +1362,7 @@
   align-items: center;
   justify-content: space-between;
   min-height: 24px;
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-section);
   color: var(--fg-muted);
   cursor: pointer;
   padding: 2px var(--space-2) 2px calc(var(--space-2) - 2px);
@@ -1400,7 +1400,7 @@
 
 .tree-row--worktree-session {
   gap: var(--space-2);
-  min-height: 26px;
+  min-height: 28px;
   color: var(--fg-primary);
 }
 
@@ -1972,7 +1972,7 @@
 
 .top-bar__crumb {
   flex: 1;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   /* Brighter than --fg-secondary — this is the page title (Dashboard,
      project name, ...), not secondary chrome; --highlight segments already
      use --fg-primary + medium weight, so the two now share brightness and
@@ -2339,7 +2339,7 @@
   box-sizing: border-box;
   padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) - 2px);
   border-left: 2px solid transparent;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
@@ -2352,13 +2352,13 @@
  * indented under the project row. Collapsed rail overrides this back to 0 so
  * the centered abbreviation chip stays centered. */
 .tree-row.tree-row--worktree {
-  font-size: var(--font-size-sm);
-  min-height: 28px;
+  font-size: var(--fs-body);
+  min-height: 30px;
   margin-left: 22px;
 }
 
 .left-sidebar .tree-row--project {
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
 }
 
 .left-sidebar--collapsed .tree-row.tree-row--worktree {
@@ -2562,7 +2562,7 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-secondary);
   border: none;
   background: transparent;
@@ -3422,7 +3422,10 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  /* As wide as its own line (never narrower than the viewport) so the sticky
+   * line-number gutter below has a containing block that spans the scroll. */
+  width: max-content;
+  min-width: 100%;
 }
 
 /* Hidden one-line measure span used to read the effective line-height and
@@ -3439,34 +3442,60 @@
 .workspace-code-line {
   display: flex;
   align-items: flex-start;
-  padding: 0 16px;
+  /* No left padding: the sticky gutter carries it, so it can pin at x=0.
+   * `max-content` so a long line's box spans its whole scroll width. */
+  padding: 0 16px 0 0;
   position: relative;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+}
+
+/* `noGutter` lines have no gutter to carry the left padding. */
+.workspace-code-line > .workspace-code-content:first-child {
+  padding-left: 16px;
 }
 
 .workspace-code-line:hover {
   background: var(--bg-elevated);
 }
 
+/* Line numbers stay pinned to the left while the code scrolls horizontally.
+ * Opaque background (matched on hover/target below) so code slides under it. */
 .workspace-code-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bg-primary);
   color: var(--fg-muted);
   user-select: none;
   text-align: right;
+  padding-left: 16px;
   padding-right: 16px;
   flex-shrink: 0;
 }
 
+.workspace-code-line:hover .workspace-code-gutter {
+  background: var(--bg-elevated);
+}
+
+.workspace-code-line--target .workspace-code-gutter {
+  background: var(--bg-active);
+}
+
+/* Git change marks sit on the RIGHT edge of the numbers (between number and code). */
 .workspace-code-line--added .workspace-code-gutter {
-  box-shadow: inset 2px 0 0 rgb(22, 163, 74);
+  box-shadow: inset -2px 0 0 rgb(22, 163, 74);
 }
 
 .workspace-code-line--modified .workspace-code-gutter {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset -2px 0 0 var(--accent);
 }
 
 .workspace-code-line--deleted .workspace-code-gutter::after {
   content: "";
   position: absolute;
-  left: 0;
+  right: 0;
   bottom: -3px;
   z-index: 3;
   border-left: 4px solid var(--fg-danger);
@@ -3477,7 +3506,7 @@
 .workspace-code-line--deleted-top .workspace-code-gutter::before {
   content: "";
   position: absolute;
-  left: 0;
+  right: 0;
   top: -3px;
   z-index: 3;
   border-left: 4px solid var(--fg-danger);
@@ -5401,6 +5430,13 @@ textarea.input {
   border-radius: var(--radius-sm);
 }
 
+/* Dialog editors sit outside `.chat-pane` (global 13px `--font-size-base`):
+   use the body size, like the chat composer. */
+.chat-composer__textarea--dialog .chat-skill-editor__content,
+.chat-composer__textarea--dialog .chat-skill-editor__placeholder {
+  font-size: var(--fs-body);
+}
+
 .chat-composer__textarea--dialog:focus-within {
   border-color: var(--accent, var(--border-strong));
 }
@@ -5848,7 +5884,7 @@ button.dashboard-card {
 }
 
 .dashboard-card__primary {
-  font-size: var(--font-size-base);
+  font-size: var(--fs-body);
   color: var(--fg-primary);
   flex: 1;
   min-width: 0;
@@ -8748,12 +8784,18 @@ button.dashboard-card {
 .chat-tool-entry__body .preview-diff-hunk-header {
   padding: 2px 4px;
 }
+/* Chat diffs show only the NEW line number, flush left (the old-number column
+   is noise while reading a transcript). */
 .chat-tool-entry__body .diff-line {
-  grid-template-columns: 32px 32px 10px 1fr;
+  grid-template-columns: 32px 10px 1fr;
   padding: 0 4px;
   line-height: 1.25;
 }
+.chat-tool-entry__body .diff-line > .diff-gutter:first-child {
+  display: none;
+}
 .chat-tool-entry__body .diff-gutter {
+  text-align: left;
   padding-right: var(--space-1);
 }
 

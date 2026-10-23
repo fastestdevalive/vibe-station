@@ -520,6 +520,7 @@ export interface WorkspaceState {
   /** Show/hide the Files tool's file-tree column. */
   toggleFileTree: () => void;
   bumpTerminalFont: (delta: number) => void;
+  resetTerminalFont: () => void;
   toggleLeftSidebarCollapsed: () => void;
   setLeftSidebarWidthPx: (px: number) => void;
   setMobileSidebarOpen: (open: boolean) => void;
@@ -1796,6 +1797,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             terminalFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.terminalFontScale + delta) * 100) / 100)),
           })),
+        resetTerminalFont: () => set({ terminalFontScale: 1 }),
         toggleLeftSidebarCollapsed: () =>
           set((s) => ({ leftSidebarCollapsed: !s.leftSidebarCollapsed })),
         setLeftSidebarWidthPx: (px) => set({ leftSidebarWidthPx: clampLeftSidebarWidth(px) }),

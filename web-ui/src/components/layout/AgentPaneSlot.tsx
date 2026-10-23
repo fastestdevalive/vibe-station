@@ -1,4 +1,5 @@
 import { Minus, Plus } from "lucide-react";
+import { FontResetButton } from "./FontResetButton";
 import type { ApiInstance } from "@/api";
 import type { PrStatus, Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
@@ -87,6 +88,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
       <button type="button" className="terminal-font-overlay__btn" aria-label="Increase agent font" onClick={() => bumpTerminalFont(0.05)}>
         <Plus size={11} />
       </button>
+      <FontResetButton />
       <TerminalChannelToggle api={api} session={session!} />
     </div>
   ) : undefined;
@@ -162,6 +164,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
                 >
                   <Plus size={11} />
                 </button>
+                <FontResetButton />
               </div>
               <TerminalChannelToggle api={api} session={session!} />
             </div>

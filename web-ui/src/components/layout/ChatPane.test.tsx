@@ -179,13 +179,30 @@ describe("ChatPane (4.T2)", () => {
       const pane = container.querySelector(".chat-pane") as HTMLElement;
       // Base --font-size-sm is 12px; at 1.2x scale it should round to 14px.
       expect(pane.style.getPropertyValue("--font-size-sm")).toBe("14px");
-      expect(pane.style.getPropertyValue("--font-size-base")).toBe("17px");
+      // Base comes from --fs-body (14px Sans / 13px Mono) × scale, so it is a CSS expression.
+      expect(pane.style.getPropertyValue("--font-size-base")).toBe("calc(var(--fs-body) * 1.2)");
     } finally {
       useWorkspaceStore.setState({ terminalFontScale: 1 });
     }
   });
 
-  it("2.T0 — chat prose base is 16px on phones (max-width: 640px) and 14px otherwise", async () => {
+  it("Reset font size returns the shared terminalFontScale to 1 (disabled at 1)", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({ terminalFontScale: 1.3 });
+    try {
+      render(<ChatPane api={api} session={jsonSession("js-reset")} visible />);
+      await screen.findByText("Start chatting");
+      const reset = screen.getByRole("button", { name: /reset font size/i });
+      expect((reset as HTMLButtonElement).disabled).toBe(false);
+      await userEvent.click(reset);
+      expect(useWorkspaceStore.getState().terminalFontScale).toBe(1);
+      expect((screen.getByRole("button", { name: /reset font size/i }) as HTMLButtonElement).disabled).toBe(true);
+    } finally {
+      useWorkspaceStore.setState({ terminalFontScale: 1 });
+    }
+  });
+
+  it("2.T0 — chat prose base is 16px on phones (max-width: 640px) and --fs-body otherwise", async () => {
     const api = createMockApi();
     const original = window.matchMedia;
     const stub = (matches: boolean) =>
@@ -211,7 +228,7 @@ describe("ChatPane (4.T2)", () => {
       const desktop = render(<ChatPane api={api} session={jsonSession("js-desk")} visible />);
       await screen.findByText("Start chatting");
       const deskPane = desktop.container.querySelector(".chat-pane") as HTMLElement;
-      expect(deskPane.style.getPropertyValue("--font-size-base")).toBe("14px");
+      expect(deskPane.style.getPropertyValue("--font-size-base")).toBe("calc(var(--fs-body) * 1)");
     } finally {
       window.matchMedia = original;
     }
@@ -246,6 +263,15 @@ describe("ChatPane (4.T2)", () => {
     const css = readFileSync(resolve(process.cwd(), "src/styles/chat.css"), "utf8");
     const block = /\.chat-pane \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(block).toMatch(/font-size:\s*var\(--font-size-base\)/);
+  });
+
+  it("composer editor follows the interface font and the same body size as messages", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/styles/chat.css"), "utf8");
+    for (const sel of [".chat-skill-editor__content", ".chat-skill-editor__placeholder"]) {
+      const block = new RegExp(`${sel.replace(".", "\\.")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+      expect(block, sel).toMatch(/font-family:\s*var\(--font-family\)/);
+      expect(block, sel).toMatch(/font-size:\s*var\(--font-size-base\)/);
+    }
   });
 
   // Regression: "during the starting state the blinking dot is not shown on the

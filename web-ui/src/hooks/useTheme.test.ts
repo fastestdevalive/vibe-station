@@ -151,3 +151,12 @@ describe("useTheme — legacy localStorage migration (3.T4)", () => {
     expect(result.current.font).toBe("sans");
   });
 });
+
+describe("interface font → --fs-body", () => {
+  it("setFont mirrors the font onto <html data-font> (tokens.css picks the body size from it)", () => {
+    useThemeStore.getState().setFont("mono");
+    expect(document.documentElement.dataset.font).toBe("mono");
+    useThemeStore.getState().setFont("sans");
+    expect(document.documentElement.dataset.font).toBe("sans");
+  });
+});

@@ -300,10 +300,14 @@
   cursor: pointer;
   opacity: 0.85;
 }
-.terminal-font-overlay__btn:hover {
+.terminal-font-overlay__btn:hover:not(:disabled) {
   color: var(--fg-primary);
   border-color: var(--fg-secondary);
   opacity: 1;
+}
+.terminal-font-overlay__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Exited terminal: the toggle drops out of the top-right overlay and sits in
@@ -381,7 +385,7 @@
   flex-direction: column;
   background: var(--bg-primary);
   color: var(--fg-primary);
-  font-family: var(--font-prose);
+  font-family: var(--font-family);
   container-type: inline-size;
   /* Re-resolve the base text size HERE, from this subtree's (possibly zoomed)
      --font-size-base — ChatPane overrides the --font-size-* tokens inline for
@@ -2201,7 +2205,7 @@
   min-height: 40px;
   padding: var(--space-2);
   color: var(--fg-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-family);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
 }
@@ -2214,7 +2218,7 @@
   left: 0;
   padding: var(--space-2);
   color: var(--fg-faint);
-  font-family: var(--font-sans);
+  font-family: var(--font-family);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
   pointer-events: none;
