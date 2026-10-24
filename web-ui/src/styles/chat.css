@@ -1404,14 +1404,14 @@
   padding-right: 1.75rem;
 }
 .chat-subagent-row__more {
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   color: var(--fg-muted);
 }
 
 /* Names what the chips after it are, so the row isn't a bare cluster of
    session names with no indication of what relationship they represent. */
 .chat-subagent-row__caption {
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   color: var(--fg-muted);
   flex: 0 0 auto;
 }
