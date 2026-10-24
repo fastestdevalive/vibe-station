@@ -385,7 +385,7 @@
   flex-direction: column;
   background: var(--bg-primary);
   color: var(--fg-primary);
-  font-family: var(--font-family);
+  font-family: var(--font-prose);
   container-type: inline-size;
   /* Re-resolve the base text size HERE, from this subtree's (possibly zoomed)
      --font-size-base — ChatPane overrides the --font-size-* tokens inline for
@@ -438,7 +438,7 @@
   gap: var(--space-2);
   height: 100%;
   color: var(--fg-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
 }
 .chat-pane__empty {
   flex-direction: column;
@@ -623,6 +623,18 @@
   margin-top: 2px;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
+}
+.chat-bubble--clickable {
+  cursor: default;
+}
+.chat-bubble__time {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  text-align: right;
+}
+.chat-bubble--assistant .chat-bubble__time {
+  text-align: left;
 }
 .chat-msg--forking {
   width: 100%;
@@ -872,7 +884,7 @@
 }
 .chat-tool-card__inline {
   font-family: var(--font-mono);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -891,7 +903,7 @@
   margin: 0;
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
   overflow-x: auto;
   border-top: var(--border-width) solid var(--border-subtle);
   white-space: pre-wrap;
@@ -980,7 +992,7 @@
 }
 .chat-tool-entry__inline {
   font-family: var(--font-mono);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -997,7 +1009,7 @@
 }
 .chat-tool-entry__dir {
   font-family: var(--font-mono);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1036,7 +1048,7 @@
   margin: 0;
   padding: var(--space-1) var(--space-2);
   font-family: var(--font-mono);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
   color: var(--fg-secondary);
   background: var(--bg-secondary);
   border-radius: var(--radius-sm);
@@ -1070,7 +1082,7 @@
   border: var(--border-width) solid var(--destructive-soft);
   background: var(--destructive-muted);
   border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
 }
 .chat-error-card__body {
   display: flex;
@@ -1124,7 +1136,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
   /* --fg-muted: dimmer than body text, signals a system note not a human message */
   color: var(--fg-muted);
   /* no left padding — chip sits flush at the left edge of the message area */
@@ -1229,7 +1241,7 @@
 }
 .chat-queued-tray__notice-label {
   color: var(--fg-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
 }
 .chat-queued-tray__chip {
   display: inline-flex;
@@ -1355,7 +1367,7 @@
   border: var(--border-width) solid var(--border-subtle);
   background: var(--bg-elevated);
   color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
   cursor: pointer;
   /* The token value is 18rem on desktop and ~8rem on mobile (see tokens.css
      @media (max-width: 640px) so chips narrow alongside the tabs. */
@@ -1499,7 +1511,7 @@
   align-items: last baseline; /* wins on browsers that support it — must be the LAST declaration */
 }
 .chat-working-indicator__label {
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
   color: var(--fg-muted);
   font-style: italic;
 }
@@ -1618,7 +1630,7 @@
   color: var(--fg-secondary);
   cursor: pointer;
   padding: 0 var(--space-1);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   line-height: 1.4;
   white-space: nowrap;
   /* The name (not the caret) truncates with an ellipsis — see the label rule. */
@@ -1667,7 +1679,7 @@
   color: var(--fg-primary);
   cursor: pointer;
   padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   white-space: nowrap;
 }
 .chat-model-switch__option:hover,
@@ -1740,7 +1752,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-3) 0;
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
 }
 .chat-todo-strip__label {
   flex-shrink: 0;
@@ -1890,7 +1902,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   color: var(--fg-muted);
 }
 /* Context-window meter — bar, count / total, (pct) — in the top-right cluster. */
@@ -2062,7 +2074,7 @@
   background: none;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -2113,11 +2125,11 @@
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   border-radius: var(--radius-sm);
 }
 .chat-composer__model-chip {
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   color: var(--fg-muted);
   max-width: 120px;
   overflow: hidden;
@@ -2133,7 +2145,7 @@
   font-style: italic;
 }
 .chat-composer__mode-chip {
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-body-sans);
   color: var(--fg-faint);
   padding: 2px 6px;
   /* One line; the mode name truncates before the toolbar ever wraps. */
@@ -2219,7 +2231,7 @@
   min-height: 40px;
   padding: var(--space-2);
   color: var(--fg-primary);
-  font-family: var(--font-family);
+  font-family: var(--font-sans);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
 }
@@ -2232,7 +2244,7 @@
   left: 0;
   padding: var(--space-2);
   color: var(--fg-faint);
-  font-family: var(--font-family);
+  font-family: var(--font-sans);
   font-size: var(--font-size-base);
   line-height: var(--line-height-normal);
   pointer-events: none;
@@ -2320,7 +2332,7 @@
   cursor: pointer;
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body-sans);
 }
 .chat-skill-popover__option:hover,
 .chat-skill-popover__option--active {
@@ -2447,5 +2459,13 @@
 .chat-msg-skill__args {
   color: var(--fg-muted);
   font-family: var(--font-mono, monospace);
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-code);
+}
+
+/* Markdown code in chat: 13px mono like the tool cards (inline code was 0.9em
+   of the 14px prose; blocks inherited 14px). */
+.chat-pane .workspace-markdown-preview :not(pre) > code,
+.chat-pane .workspace-md-code-block > pre,
+.chat-pane .workspace-markdown-preview pre:not(.workspace-md-code-block > pre) {
+  font-size: var(--font-size-code);
 }

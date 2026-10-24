@@ -116,7 +116,7 @@
 .pane-header {
   padding: var(--space-2) var(--space-3);
   border-bottom: var(--border-width) solid var(--border-default);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-secondary);
 }
 
@@ -731,7 +731,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   cursor: pointer;
   text-align: left;
 }
@@ -1275,7 +1275,7 @@
   border: none;
   background: transparent;
   color: var(--fg-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   text-align: left;
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -1294,7 +1294,7 @@
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Direct Sessions — agents running in project dir (no worktree).
- * Visually distinct from worktrees: dashed left rail, italic label, "direct"
+ * Visually distinct from worktrees: dashed left rail, "direct"
  * badge. Rows lean on the `.tree-row` base for layout, hover and active
  * backgrounds — only the differences live here.
  * ───────────────────────────────────────────────────────────────────────── */
@@ -1338,7 +1338,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-style: italic;
   font-weight: var(--font-weight-light);
 }
 
@@ -1610,17 +1609,13 @@
 }
 
 .pinned-row__primary {
-  /* Inherits font-size: var(--font-size-sm) from `.tree-row.tree-row--worktree`
+  /* Inherits font-size: var(--fs-body) from `.tree-row.tree-row--worktree`
      — same as every other worktree branch label in the sidebar. */
   font-weight: var(--font-weight-light);
-  color: var(--fg-secondary);
+  color: var(--fg-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.pinned-row[data-active="true"] .pinned-row__primary {
-  color: var(--fg-primary);
 }
 
 .pinned-row__subhead {
@@ -1711,13 +1706,6 @@
   user-select: text;
 }
 
-/* Direct sessions read italic in the project tree (`.direct-session__label`);
- * carry that same signal into the Pinned section so one entity looks the same
- * in both places (worktree branch labels stay roman). */
-.tree-row--direct-session .pinned-row__primary {
-  font-style: italic;
-}
-
 /* Menu items with an icon (e.g. Pin/Unpin) — small leading glyph. */
 .menu-pop button.menu-pop__item--icon {
   display: flex;
@@ -1772,7 +1760,7 @@
 
 .changed-file-list {
   background: var(--bg-sidebar-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -2131,7 +2119,7 @@
   gap: var(--space-2);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-family: inherit;
   color: var(--fg-primary);
   background: transparent;
@@ -5187,7 +5175,7 @@
 }
 
 .form-field > label {
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-weight: var(--font-weight-medium);
   color: var(--fg-secondary);
 }
@@ -5237,7 +5225,7 @@
   gap: var(--space-2);
   cursor: pointer;
   user-select: none;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-primary);
   padding: var(--space-1) var(--space-2);
   margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-2));
@@ -5323,7 +5311,7 @@
   cursor: pointer;
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
 }
 
 .combobox-option:hover,
@@ -5360,7 +5348,7 @@
 /* Dialog buttons — layered on the global `button` element style. Without
    these, primary and secondary actions rendered identically. */
 .btn {
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-weight: var(--font-weight-medium);
   line-height: var(--line-height-tight);
   padding: var(--space-2) var(--space-4);
@@ -5400,7 +5388,7 @@
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
   font-family: inherit;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   line-height: var(--line-height-normal);
   padding: var(--space-2) var(--space-3);
   outline: none;
@@ -5434,7 +5422,7 @@ textarea.input {
    use the body size, like the chat composer. */
 .chat-composer__textarea--dialog .chat-skill-editor__content,
 .chat-composer__textarea--dialog .chat-skill-editor__placeholder {
-  font-size: var(--fs-body);
+  font-size: var(--fs-body-sans);
 }
 
 .chat-composer__textarea--dialog:focus-within {
@@ -5530,7 +5518,7 @@ textarea.input {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
 }
 
 .menu-pop button:hover:not(:disabled) {
@@ -5620,7 +5608,7 @@ textarea.input {
   outline: none;
   background: transparent;
   color: var(--fg-primary);
-  font-size: var(--font-size-base);
+  font-size: var(--fs-body);
   font-family: inherit;
 }
 
@@ -5650,7 +5638,7 @@ textarea.input {
   border: none;
   background: transparent;
   color: var(--fg-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   cursor: pointer;
   transition: background var(--transition-fast);
 }
@@ -5756,7 +5744,7 @@ textarea.input {
 }
 
 .quick-open-title {
-  font-size: var(--font-size-base);
+  font-size: var(--fs-body);
   margin: 0 0 var(--space-2);
   padding: 0 var(--space-3);
   padding-top: var(--space-3);
@@ -6157,7 +6145,7 @@ button.dashboard-card {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-weight: var(--font-weight-medium);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
@@ -6284,7 +6272,7 @@ button.dashboard-card {
 .project-home__direct-name {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7421,7 +7409,7 @@ button.dashboard-card {
 }
 
 .vcs-pr__title {
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7582,7 +7570,7 @@ button.dashboard-card {
 
 .vcs-graph__subject {
   flex: 1;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -7885,7 +7873,7 @@ button.dashboard-card {
 .artifacts-list__name {
   grid-row: 1;
   grid-column: 2;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8324,7 +8312,7 @@ button.dashboard-card {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-secondary);
   border-right: var(--border-width) solid var(--border-default);
   border-bottom: 2px solid transparent;
@@ -8456,10 +8444,14 @@ button.dashboard-card {
   cursor: pointer;
   opacity: 0.85;
 }
-.preview-font-overlay__btn:hover {
+.preview-font-overlay__btn:hover:not(:disabled) {
   color: var(--fg-primary);
   border-color: var(--fg-secondary);
   opacity: 1;
+}
+.preview-font-overlay__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Back / Forward navigation controls in preview header. */
@@ -8730,7 +8722,7 @@ button.dashboard-card {
   cursor: pointer;
   outline: none;
   transition: background 0.1s ease;
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   font-family: var(--font-family);
 }
 .folder-chooser__item:hover {
@@ -9138,7 +9130,7 @@ body[data-tauri-os="macos"] .sidebar-header {
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
+  font-size: var(--fs-body);
   color: var(--fg-secondary);
   text-decoration: none;
 }

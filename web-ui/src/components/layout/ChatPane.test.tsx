@@ -179,8 +179,9 @@ describe("ChatPane (4.T2)", () => {
       const pane = container.querySelector(".chat-pane") as HTMLElement;
       // Base --font-size-sm is 12px; at 1.2x scale it should round to 14px.
       expect(pane.style.getPropertyValue("--font-size-sm")).toBe("14px");
-      // Base comes from --fs-body (14px Sans / 13px Mono) × scale, so it is a CSS expression.
-      expect(pane.style.getPropertyValue("--font-size-base")).toBe("calc(var(--fs-body) * 1.2)");
+      // Base comes from --fs-body-sans (14px, chat is always Sans) × scale, so it is a CSS expression.
+      expect(pane.style.getPropertyValue("--font-size-base")).toBe("var(--fs-body-sans)");
+      expect(pane.style.getPropertyValue("--fs-body-sans")).toBe("17px"); // 14 × 1.2, rounded
     } finally {
       useWorkspaceStore.setState({ terminalFontScale: 1 });
     }
@@ -202,7 +203,7 @@ describe("ChatPane (4.T2)", () => {
     }
   });
 
-  it("2.T0 — chat prose base is 16px on phones (max-width: 640px) and --fs-body otherwise", async () => {
+  it("2.T0 — chat prose base is 16px on phones (max-width: 640px) and --fs-body-sans otherwise", async () => {
     const api = createMockApi();
     const original = window.matchMedia;
     const stub = (matches: boolean) =>
@@ -228,7 +229,7 @@ describe("ChatPane (4.T2)", () => {
       const desktop = render(<ChatPane api={api} session={jsonSession("js-desk")} visible />);
       await screen.findByText("Start chatting");
       const deskPane = desktop.container.querySelector(".chat-pane") as HTMLElement;
-      expect(deskPane.style.getPropertyValue("--font-size-base")).toBe("calc(var(--fs-body) * 1)");
+      expect(deskPane.style.getPropertyValue("--font-size-base")).toBe("var(--fs-body-sans)");
     } finally {
       window.matchMedia = original;
     }
@@ -269,7 +270,7 @@ describe("ChatPane (4.T2)", () => {
     const css = readFileSync(resolve(process.cwd(), "src/styles/chat.css"), "utf8");
     for (const sel of [".chat-skill-editor__content", ".chat-skill-editor__placeholder"]) {
       const block = new RegExp(`${sel.replace(".", "\\.")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
-      expect(block, sel).toMatch(/font-family:\s*var\(--font-family\)/);
+      expect(block, sel).toMatch(/font-family:\s*var\(--font-sans\)/);
       expect(block, sel).toMatch(/font-size:\s*var\(--font-size-base\)/);
     }
   });

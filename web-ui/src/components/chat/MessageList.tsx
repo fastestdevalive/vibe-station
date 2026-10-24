@@ -13,8 +13,8 @@ import { RowUiStateProvider } from "./rowUiState";
 import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
 
 type RenderItem =
-  | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
-  | { type: "assistant"; id: string; text: string; turnId?: string }
+  | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean; ts?: string }
+  | { type: "assistant"; id: string; text: string; turnId?: string; ts?: string }
   | {
       type: "thinking";
       id: string;
@@ -183,6 +183,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
               existing.attachments = ev.attachments;
               existing.id = ev.id;
               existing.cancelled = ev.cancelled;
+              existing.ts = ev.ts;
             }
             break;
           }
@@ -192,6 +193,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           id: ev.id,
           text: ev.text ?? "",
           attachments: ev.attachments,
+          ts: ev.ts,
           ...(ev.turnId ? { turnId: ev.turnId } : {}),
           ...(ev.cancelled ? { cancelled: true } : {}),
         });
@@ -209,7 +211,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         if (last && last.type === "assistant" && last.turnId === ev.turnId) {
           last.text += incomingText;
         } else {
-          items.push({ type: "assistant", id: ev.id, text: incomingText, turnId: ev.turnId });
+          items.push({ type: "assistant", id: ev.id, text: incomingText, turnId: ev.turnId, ts: ev.ts });
         }
         break;
       }
@@ -1013,7 +1015,7 @@ export function MessageList({
         if (item.cancelled) {
           return (
             <div className="chat-user-turn chat-user-turn--cancelled" data-role="user">
-              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
+              <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} />
               <span className="chat-user-turn__cancelled" title="This message was cancelled before the agent processed it.">
                 Canceled · not sent to agent
               </span>
@@ -1043,7 +1045,7 @@ export function MessageList({
         } else if (forkable) {
           return (
             <div className="chat-user-turn">
-              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />
+              <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />
               <button
                 type="button"
                 className="chat-user-turn__edit"
@@ -1056,10 +1058,10 @@ export function MessageList({
             </div>
           );
         }
-        return <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />;
+        return <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />;
       }
       case "assistant":
-        return <TextMessage role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} />;
+        return <TextMessage role="assistant" text={item.text} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} />;
       case "thinking":
         // The null-render gate for unclosed/empty thinking groups is folded
         // into the `items` memo (2.2b), so any thinking item that reaches here
