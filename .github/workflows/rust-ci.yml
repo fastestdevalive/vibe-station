@@ -91,7 +91,12 @@ jobs:
           grep -q "test result: ok. 1 passed" /tmp/no-auth-feature.txt \
             || { echo "feature-build variant did not run exactly once and pass" >&2; exit 1; }
 
+      # agy / agy-acp Rich Chat is temporarily off (terminal-only): keep the
+      # walled-garden checks + isolated build, skip only the live ACP
+      # `initialize` contract test (needs a working agy runtime).
       - name: Build + gate agy-acp (walled-garden)
+        env:
+          AGY_ACP_SKIP_CONTRACT: "1"
         run: rust/scripts/agy-acp-gate.sh
 
       # `--manifest-path` is a cargo-deny GLOBAL flag (before the `check`

@@ -319,7 +319,15 @@ async fn test_manager_document_sync_via_owned_watcher() {
     // Trigger manager's document sync callback for that file
     // Construct WatcherCallbacks the same way manager does
     let servers = manager.get_server_handle(&ws_key, "rust").await.unwrap();
-    assert!(servers.open_files.lock().await.contains(&file_path));
+    // The manager tracks files under the canonical workspace root; on macOS the
+    // tempdir (`/var/...`) is a symlink to `/private/var/...`.
+    let canonical_file = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.clone());
+    {
+        let open = servers.open_files.lock().await;
+        assert!(open.contains(&file_path) || open.contains(&canonical_file));
+    }
 
     // Create an owned FileWatcher for this workspace
     let open_files_check = servers.open_files.clone();
@@ -366,7 +374,7 @@ async fn test_manager_document_sync_via_owned_watcher() {
         .await;
 
     // Fire on_changed directly to verify document sync
-    on_changed(file_path.to_string_lossy().into_owned());
+    on_changed(canonical_file.to_string_lossy().into_owned());
 
     server_task
         .await

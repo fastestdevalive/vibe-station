@@ -15,7 +15,10 @@ pub fn collect_descendants(root_pid: i32) -> Vec<i32> {
     let mut children_of: HashMap<i32, Vec<i32>> = HashMap::new();
     let entries = match std::fs::read_dir("/proc") {
         Ok(e) => e,
-        Err(_) => return Vec::new(), // no /proc (non-Linux) — group-kill is the only lever
+        // No /proc (macOS/BSD): walk the process table via `ps` instead, so a
+        // cancelled turn's setsid'd Bash-tool children (a dev server, …) are
+        // still reaped.
+        Err(_) => return collect_descendants_via_ps(root_pid),
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -103,6 +106,35 @@ pub fn kill_process_tree(root_pids: impl IntoIterator<Item = i32>) {
         signal_group(pid, "KILL");
         signal(pid, "KILL");
     }
+}
+
+/// `ps -A -o pid=,ppid=` variant of the descendant walk (no `/proc`).
+fn collect_descendants_via_ps(root_pid: i32) -> Vec<i32> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut children_of: HashMap<i32, Vec<i32>> = HashMap::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut it = line.split_whitespace();
+        if let (Some(pid), Some(ppid)) = (
+            it.next().and_then(|s| s.parse::<i32>().ok()),
+            it.next().and_then(|s| s.parse::<i32>().ok()),
+        ) {
+            children_of.entry(ppid).or_default().push(pid);
+        }
+    }
+    let mut out_pids = Vec::new();
+    let mut stack = vec![root_pid];
+    while let Some(pid) = stack.pop() {
+        for child in children_of.get(&pid).cloned().unwrap_or_default() {
+            out_pids.push(child);
+            stack.push(child);
+        }
+    }
+    out_pids
 }
 
 /// Write the live turn PIDs to the pidfile (one per line). Empty → remove the
