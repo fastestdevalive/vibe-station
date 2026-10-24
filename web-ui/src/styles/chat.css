@@ -2469,3 +2469,21 @@
 .chat-pane .workspace-markdown-preview pre:not(.workspace-md-code-block > pre) {
   font-size: var(--font-size-code);
 }
+
+/* Diffs in chat wrap at 100 columns, not at the chat width: a narrower pane
+   scrolls horizontally inside the block instead of re-wrapping (a wider pane
+   still fills it). Plain code/tool-output blocks keep their existing wrapping.
+   `ch` resolves against the diff's own mono font (`--font-size-code`). */
+/* Diffs: the root scrolls; every row is at least 100 text columns plus its
+   gutter (32px number + 10px marker + 4px padding) so rows keep equal widths. */
+.chat-tool-entry__body .preview-diff-root,
+.chat-tool-card__body .preview-diff-root {
+  overflow-x: auto;
+}
+.chat-tool-entry__body .diff-line,
+.chat-tool-card__body .diff-line {
+  min-width: calc(100ch + 46px);
+}
+.chat-tool-entry__body .preview-diff-hunk-header {
+  min-width: calc(100ch + 46px);
+}

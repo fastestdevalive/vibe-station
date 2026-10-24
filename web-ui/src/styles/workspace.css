@@ -8767,8 +8767,12 @@ button.dashboard-card {
   overflow-wrap: anywhere;
 }
 
-/* Chat-scoped diff overrides — tighter than the full preview pane */
-.chat-tool-entry__body .preview-diff-root {
+/* Chat-scoped diff overrides — tighter than the full preview pane. Diff rows
+   are `font-size: inherit`, which in chat would be the 14px prose base; pin
+   them to the chat code size like every other mono block there. */
+.chat-tool-entry__body .preview-diff-root,
+.chat-tool-card__body .preview-diff-root {
+  font-size: var(--font-size-code);
   padding: 2px 0;
   line-height: 1.25;
   min-height: 0;
