@@ -9184,3 +9184,10 @@ body[data-tauri-os="macos"] .sidebar-header {
 .left-sidebar--collapsed .sidebar-projects-heading {
   display: none;
 }
+
+/* File tree: gitignored entries that are listed anyway (ignored dirs, always-show
+ * matches). A git status colour (M/A/U/...) wins over the dimming. */
+.tree-row--ignored:not([data-git-status]) .tree-row__label,
+.tree-row--ignored:not([data-git-status]) .tree-row__kind-icon {
+  opacity: 0.55;
+}

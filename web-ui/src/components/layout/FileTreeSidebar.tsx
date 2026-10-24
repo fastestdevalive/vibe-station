@@ -67,6 +67,7 @@ interface FlatRow extends RovingRow {
   name: string;
   type: TreeEntry["type"];
   level: number;
+  ignored?: boolean;
 }
 
 /** Depth-first flatten of the visible portion of the tree (expanded dirs whose
@@ -81,7 +82,7 @@ function flattenVisible(
 ): void {
   for (const e of entries) {
     const isDir = e.type === "dir";
-    out.push({ path: e.path, name: e.name, type: e.type, level, expandable: isDir });
+    out.push({ path: e.path, name: e.name, type: e.type, level, expandable: isDir, ...(e.ignored ? { ignored: true } : {}) });
     if (isDir && expanded.has(e.path)) {
       const children = childrenByPath.get(e.path);
       if (children) flattenVisible(children, level + 1, expanded, childrenByPath, out);
@@ -250,7 +251,14 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     }
     if (!activeWorktreeId || expanded.size === 0) return;
     let cancelled = false;
-    const dirs = [...expanded];
+    // Ignored dirs never produce watch events (the daemon prunes them), so
+    // refetching a big one (target/, dist/) on every change is pure cost.
+    const ignoredPaths = new Set<string>();
+    for (const list of [root, ...childrenByPath.values()]) {
+      for (const e of list) if (e.ignored) ignoredPaths.add(e.path);
+    }
+    const dirs = [...expanded].filter((d) => !ignoredPaths.has(d));
+    if (dirs.length === 0) return;
     void (async () => {
       const results = await Promise.all(
         dirs.map(async (dirPath) => {
@@ -364,6 +372,15 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   }, [api, activeWorktreeId, effectiveTreeScope, lastChanged]);
 
   function toggle(path: string) {
+    // Ignored dirs get no live updates (the daemon prunes them), so collapsing
+    // one drops its cached listing (and descendants') — re-expanding refetches.
+    if (expanded.has(path) && [root, ...childrenByPath.values()].some((l) => l.some((e) => e.path === path && e.ignored))) {
+      setChildrenByPath((prev) => {
+        const next = new Map(prev);
+        for (const k of prev.keys()) if (k === path || k.startsWith(`${path}/`)) next.delete(k);
+        return next;
+      });
+    }
     setExpanded((prev) => {
       const n = new Set(prev);
       if (n.has(path)) n.delete(path);
@@ -500,7 +517,8 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
                     if (el) rowRefs.current.set(row.path, el);
                     else rowRefs.current.delete(row.path);
                   }}
-                  className={`tree-row${gitRowClass}${isCursor ? " tree-row--cursor" : ""}`}
+                  className={`tree-row${gitRowClass}${row.ignored ? " tree-row--ignored" : ""}${isCursor ? " tree-row--cursor" : ""}`}
+                  title={row.ignored ? "Ignored by .gitignore" : undefined}
                   role="treeitem"
                   aria-expanded={isDir ? isOpen : undefined}
                   tabIndex={isTabbable(row.path) ? 0 : -1}

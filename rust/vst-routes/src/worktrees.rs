@@ -58,7 +58,7 @@ use vst_types::domain::{
     WorktreeRecord,
 };
 use vst_types::events::{Broadcaster, ServerEvent};
-use vst_types::rest::projects::{TreeEntry, TreeEntryType};
+use vst_types::rest::projects::TreeEntry;
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
@@ -70,8 +70,9 @@ use vst_types::rest::worktrees::{
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::file_search::FileSearchIndex;
-use vst_ws::services::ignore_filter::build_ignore_matcher;
+use vst_ws::services::ignore_filter::load_always_show;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
+use vst_ws::services::tree_list::list_tree_dir;
 
 use crate::modes::{
     find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode,
@@ -1342,59 +1343,10 @@ impl WorktreeRoutes {
         let target_path = resolve_inside_worktree(&wt_path, sub)?;
 
         let hide_dotfiles = show_hidden == Some(false);
-        let mut ignore_matcher = build_ignore_matcher(wt_path.clone());
-
-        let resolved_target = tokio::fs::canonicalize(&target_path)
+        let always_show = load_always_show(self.paths.vst_home()).await;
+        list_tree_dir(&wt_path, &target_path, sub, hide_dotfiles, &always_show)
             .await
-            .unwrap_or(target_path.clone());
-
-        let mut read_dir = tokio::fs::read_dir(&target_path)
-            .await
-            .map_err(|_| WorktreeRouteError::NotFound(format!("Path not found: {sub}")))?;
-
-        let mut entries = Vec::new();
-        while let Ok(Some(entry)) = read_dir.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if hide_dotfiles && name.starts_with('.') {
-                continue;
-            }
-            let file_type = match entry.file_type().await {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            let is_dir = if file_type.is_symlink() {
-                tokio::fs::metadata(entry.path())
-                    .await
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false)
-            } else {
-                file_type.is_dir()
-            };
-
-            let entry_resolved = resolved_target.join(&name);
-            if ignore_matcher.ignores(&entry_resolved.to_string_lossy(), is_dir) {
-                continue;
-            }
-
-            let rel = if sub.is_empty() {
-                name.clone()
-            } else {
-                format!("{sub}/{name}")
-            };
-
-            entries.push(TreeEntry {
-                name,
-                r#type: if is_dir {
-                    TreeEntryType::Dir
-                } else {
-                    TreeEntryType::File
-                },
-                path: rel,
-            });
-        }
-
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(entries)
+            .map_err(|_| WorktreeRouteError::NotFound(format!("Path not found: {sub}")))
     }
 
     // --- 11. GET /worktrees/:id/file-list ---
