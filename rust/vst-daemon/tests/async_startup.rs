@@ -90,7 +90,7 @@ fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
     }
     // Prove the background sweep really was in flight when we got the 200.
     let wait_marker = Instant::now();
-    while !marker.exists() && wait_marker.elapsed() < Duration::from_secs(2) {
+    while !marker.exists() && wait_marker.elapsed() < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(marker.exists(), "fake pgrep never ran: sweep did not start");

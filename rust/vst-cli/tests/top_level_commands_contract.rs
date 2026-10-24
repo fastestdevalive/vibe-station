@@ -414,7 +414,9 @@ fn test_open_resolve_path_normalizes_dot_and_dotdot() {
     std::env::set_current_dir(tmp.path()).expect("set cwd");
 
     let result = resolve_path(Some("./sub/../target"));
-    let expected = tmp.path().join("target").to_string_lossy().to_string();
+    // `current_dir()` is canonical; macOS tempdirs live under the `/var` -> `/private/var` symlink.
+    let base = tmp.path().canonicalize().expect("canonical tempdir");
+    let expected = base.join("target").to_string_lossy().to_string();
     assert_eq!(
         result, expected,
         "normalized path should collapse ./ and .."
@@ -423,7 +425,7 @@ fn test_open_resolve_path_normalizes_dot_and_dotdot() {
     let no_dot = resolve_path(Some("./new"));
     assert_eq!(
         no_dot,
-        tmp.path().join("new").to_string_lossy().to_string(),
+        base.join("new").to_string_lossy().to_string(),
         "a bare ./ must normalize away"
     );
 

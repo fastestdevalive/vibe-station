@@ -191,6 +191,23 @@ fn schedule_debounced(inner: &Arc<Inner>, abs: String, deleted: bool) {
     }
 }
 
+/// Map an event path under the canonical root back onto the registered root.
+/// Paths already under the registered root, or outside both, are unchanged.
+fn rebase_onto_registered(
+    path: &Path,
+    canonical_root: Option<&Path>,
+    registered_root: &Path,
+) -> std::path::PathBuf {
+    if let Some(canon) = canonical_root {
+        if canon != registered_root && !path.starts_with(registered_root) {
+            if let Ok(rel) = path.strip_prefix(canon) {
+                return registered_root.join(rel);
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 impl FileWatcher {
     /// Create a watcher with the given callbacks.
     pub fn new(callbacks: WatcherCallbacks, worktree_root: std::path::PathBuf) -> Self {
@@ -237,8 +254,17 @@ impl FileWatcher {
         watch_tree_pruned(&mut watcher, Path::new(abs_path), &mut matcher, true)?;
         *self.inner.watcher.lock().unwrap() = Some(watcher);
 
+        // FSEvents (macOS) reports CANONICAL paths. Rebase them onto the root the
+        // caller registered (a symlinked checkout, `/var` -> `/private/var`) so
+        // the ignore matcher, `watch_tree_pruned` and downstream `strip_prefix`
+        // consumers (`apply_tree_change`) keep seeing one consistent prefix.
+        let registered_root = me.worktree_root.clone();
+        let canonical_root = std::fs::canonicalize(&registered_root).ok();
+
         tokio::spawn(async move {
             while let Some((path, deleted)) = rx.recv().await {
+                let path =
+                    rebase_onto_registered(&path, canonical_root.as_deref(), &registered_root);
                 let abs = path.to_string_lossy().into_owned();
                 let is_dir = path.is_dir();
                 if matcher.ignores(&abs, is_dir) {
@@ -266,6 +292,14 @@ impl FileWatcher {
             .parent()
             .ok_or_else(|| notify::Error::generic("no parent dir"))?;
         let target_str = abs_path.to_string();
+        // FSEvents (macOS) reports events under the CANONICAL path, so a watch
+        // registered through a symlinked prefix (`/var` -> `/private/var`, a
+        // symlinked checkout) would never match `target_str`. The file may not
+        // exist (deleted/atomic-save window), so canonicalize its parent.
+        let canonical_str = std::fs::canonicalize(parent)
+            .ok()
+            .zip(target.file_name())
+            .map(|(dir, name)| dir.join(name).to_string_lossy().into_owned());
         let me = Arc::clone(&self.inner);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(std::path::PathBuf, bool)>();
         let mut watcher =
@@ -282,11 +316,14 @@ impl FileWatcher {
 
         tokio::spawn(async move {
             while let Some((path, deleted)) = rx.recv().await {
-                if path.to_string_lossy() != target_str {
+                let event_path = path.to_string_lossy();
+                if event_path != target_str && Some(event_path.as_ref()) != canonical_str.as_deref()
+                {
                     continue; // only the exact watched file
                 }
-                let abs = path.to_string_lossy().into_owned();
-                schedule_debounced(&me, abs, deleted);
+                // Report under the path the caller registered, whichever form
+                // the OS used, so downstream relative-path mapping is stable.
+                schedule_debounced(&me, target_str.clone(), deleted);
             }
         });
         Ok(())
@@ -324,6 +361,34 @@ impl std::fmt::Debug for FileWatcher {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn rebase_maps_canonical_event_paths_onto_the_registered_root() {
+        let reg = Path::new("/var/x/wt");
+        let canon = Path::new("/private/var/x/wt");
+        assert_eq!(
+            rebase_onto_registered(Path::new("/private/var/x/wt/src/a.rs"), Some(canon), reg),
+            Path::new("/var/x/wt/src/a.rs")
+        );
+        // Already under the registered root, outside both, or no canonical root: unchanged.
+        assert_eq!(
+            rebase_onto_registered(Path::new("/var/x/wt/a.rs"), Some(canon), reg),
+            Path::new("/var/x/wt/a.rs")
+        );
+        assert_eq!(
+            rebase_onto_registered(Path::new("/elsewhere/a.rs"), Some(canon), reg),
+            Path::new("/elsewhere/a.rs")
+        );
+        assert_eq!(
+            rebase_onto_registered(Path::new("/private/var/x/wt/a.rs"), None, reg),
+            Path::new("/private/var/x/wt/a.rs")
+        );
+        // Identical roots (the common Linux case): no-op.
+        assert_eq!(
+            rebase_onto_registered(Path::new("/w/a.rs"), Some(Path::new("/w")), Path::new("/w")),
+            Path::new("/w/a.rs")
+        );
+    }
 
     /// 1.T1 — Send 5 rapid events for the same path within the debounce
     /// window; assert `on_changed` fires exactly once.

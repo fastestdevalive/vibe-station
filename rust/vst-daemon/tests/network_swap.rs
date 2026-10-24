@@ -136,6 +136,20 @@ async fn connection_opened_before_swap_still_answers_after() {
     // accept task and rebinds wildcard). The already-accepted connection's
     // handler must keep running.
     let mut stream = connect_with_retry(&loopback).await;
+    // Complete one keep-alive exchange BEFORE the swap: a bare TCP connect only
+    // proves the kernel queued it, and under load the accept loop may not have
+    // taken it yet — aborting that loop would then reset a never-accepted
+    // connection (the flaky "Broken pipe"), which is not what this test is about.
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut first = vec![0u8; 4096];
+    let n = stream.read(&mut first).await.unwrap();
+    assert!(
+        String::from_utf8_lossy(&first[..n]).contains("200 OK"),
+        "pre-swap request must be answered before the swap"
+    );
     ctrl.set(true).await.unwrap();
 
     stream

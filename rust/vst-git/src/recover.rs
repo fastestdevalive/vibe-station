@@ -61,7 +61,10 @@ fn recover_json_session(session: &SessionRecord) -> Option<SessionLifecycle> {
 /// blast radius without weakening the sweep's best-effort guarantee.
 pub fn verify_pid_is_turn_process(pid: i32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return true; // no /proc, or pid already gone — inconclusive, proceed
+        // No /proc (macOS/BSD) or pid already gone: ask `ps`. Without this the
+        // boot sweep would `kill -KILL -<pgid>` ANY process that reused a stale
+        // pid from `turn.pids` after a reboot/crash.
+        return verify_pid_via_ps(pid);
     };
     // `pid (comm) state ppid …` — comm can contain spaces/parens, so read
     // between the FIRST '(' and the LAST ')' rather than naive splitting.
@@ -76,6 +79,30 @@ pub fn verify_pid_is_turn_process(pid: i32) -> bool {
     }
     let comm = &stat[open + 1..close];
     KNOWN_TURN_BINARIES.contains(&comm)
+}
+
+/// `ps -o command= -p <pid>` identity check for platforms without `/proc`.
+/// Empty output = pid gone (inconclusive → true, like the `/proc` path). A
+/// failure to run `ps` at all is also inconclusive. Otherwise the executable —
+/// or, for an interpreter-launched script (`/bin/sh …/claude`, `node …/claude`;
+/// macOS reports the interpreter as `comm`), the script — must have a known turn
+/// binary's basename. Fail closed (false) on a mismatch.
+fn verify_pid_via_ps(pid: i32) -> bool {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return true;
+    };
+    let cmd = String::from_utf8_lossy(&out.stdout);
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return true;
+    }
+    cmd.split_whitespace()
+        .take(2)
+        .map(|tok| tok.rsplit('/').next().unwrap_or(tok))
+        .any(|base| KNOWN_TURN_BINARIES.contains(&base))
 }
 
 /// Boot-time orphan sweep (Decision 13): a JSON turn child is spawned in its

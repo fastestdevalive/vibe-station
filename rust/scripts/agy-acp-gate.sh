@@ -2,7 +2,8 @@
 # agy-acp-gate.sh — build the openab agy-acp adapter in isolation + enforce the
 # "walled-garden" guardrails (nothing else from openab may ever be used).
 #
-# Usage: rust/scripts/agy-acp-gate.sh
+# Usage: [AGY_ACP_SKIP_CONTRACT=1] rust/scripts/agy-acp-gate.sh
+#   AGY_ACP_SKIP_CONTRACT=1 skips only step 5 (the live `initialize` round-trip).
 #
 # 1. Builds agy-acp standalone (its own workspace) via --manifest-path and a
 #    --target-dir OUTSIDE the submodule so the submodule working tree stays clean.
@@ -72,6 +73,15 @@ echo "== build agy-acp in isolation =="
 # prints the resolved path on stdout and exits non-zero otherwise).
 BIN="$(bash scripts/build-agy-acp.sh)"
 echo "   built: $BIN"
+
+if [[ "${AGY_ACP_SKIP_CONTRACT:-0}" == "1" ]]; then
+  # agy / agy-acp Rich Chat is temporarily off; the ACP `initialize` round-trip
+  # needs a working agy runtime. The walled-garden checks and the isolated build
+  # above still ran.
+  echo "== contract test: skipped (AGY_ACP_SKIP_CONTRACT=1) =="
+  echo "== agy-acp gate green (contract skipped) =="
+  exit 0
+fi
 
 echo "== contract test: agy-acp initialize round-trip =="
 # Drive the stdio ACP `initialize` handshake and confirm a well-formed response
