@@ -1,14 +1,23 @@
 //! OpenCode CLI plugin — ports `agent-plugins/opencode.ts`.
 //!
 //! System-prompt delivery: `OPENCODE_CONFIG` env (a JSON config whose
-//! `instructions` point at the system-prompt file). Task-prompt delivery:
-//! post-launch paste. Ready signal: `"opencode"` banner. `identical`
+//! `instructions` point at the system-prompt file, and whose `model` key is how
+//! v2 selects a model — v2 removed the top-level `-m/--model` flag). Task-prompt
+//! delivery: post-launch paste. Ready signal: a TUI paint marker (`ctrl+p` on
+//! v2, `opencode` on v1 — see `get_ready_signal`; the bare word `opencode` never
+//! appears in a healthy v2 TUI). `identical`
 //! two-session-identity strategy: implements neither `capture_native_chat_id`
 //! nor `supports_json_to_terminal_resume`.
+//!
+//! Interactive argv is **capability-probed** (`OpencodeCli`), never assumed from
+//! a version number: a flag the installed build does not know makes opencode
+//! print its help and exit 1, killing the pane. See
+//! `.vibekit/reports/2026-10-22-opencode-rich-chat-to-terminal-resume.md`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use serde_json::Value;
@@ -26,7 +35,7 @@ use crate::context::{
     opencode_config_path_for as ctx_opencode_config_path_for, resolved_context_of,
     system_prompt_path_for as ctx_system_prompt_path_for,
 };
-use crate::opencode_config::write_opencode_config;
+use crate::opencode_config::{write_opencode_config, write_opencode_config_blocking};
 use crate::paths::Paths;
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult,
@@ -336,10 +345,7 @@ impl AgentPlugin for OpencodePlugin {
     }
 
     fn get_launch_command(&self, cfg: &LaunchConfig) -> Vec<String> {
-        match &cfg.model {
-            Some(m) => vec!["opencode".to_string(), "-m".to_string(), m.clone()],
-            None => vec!["opencode".to_string()],
-        }
+        opencode_cli().launch_argv(cfg.model.as_deref())
     }
 
     fn get_environment(&self, cfg: &LaunchConfig) -> BTreeMap<String, String> {
@@ -350,7 +356,17 @@ impl AgentPlugin for OpencodePlugin {
         if let Some(parent) = config_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = write_opencode_config_blocking(&config_path, &prompt_file);
+        // The model goes in the config file, not argv: opencode v2 dropped the
+        // top-level `-m` entirely. On v1 the config `model` key is redundant
+        // with the `-m` `get_launch_command` still passes (same value, no
+        // precedence surprise). The config is what `Standalone` relies on. On
+        // `Unknown` (v2, no `--standalone`) the TUI ignores the config — that
+        // loss is the documented degradation of `Unknown`, not a bug here.
+        let _ = write_opencode_config_blocking(
+            &config_path,
+            &[prompt_file.to_string_lossy().into_owned()],
+            cfg.model.as_deref(),
+        );
         BTreeMap::from([
             (
                 "OPENCODE_CONFIG".to_string(),
@@ -361,9 +377,30 @@ impl AgentPlugin for OpencodePlugin {
         ])
     }
 
+    /// Ready sentinel — a string the **drawn TUI** contains, not the binary's
+    /// name.
+    ///
+    /// The long-standing `"opencode"` sentinel does not appear in opencode v2's
+    /// TUI at all (it renders `OpenCode`, capital O); it matched only because a
+    /// failing argv prints the help text, which contains `.opencode/` paths.
+    /// Waiting on it therefore always ran the full 10 s fallback on a healthy
+    /// v2 session. v2's status bar always carries the `ctrl+p commands` hint,
+    /// so that is the paint marker there; v1 keeps the old sentinel.
+    ///
+    /// A sentinel is a *latency* bound only: it can be printed by a CLI that is
+    /// about to die (v2's help text is exactly what an unknown flag produces),
+    /// so callers must confirm the process is still alive afterwards — see
+    /// `spawn_session_from_argv`.
     fn get_ready_signal(&self) -> ReadySignal {
         ReadySignal {
-            sentinel: Some("opencode"),
+            sentinel: Some(match opencode_cli() {
+                OpencodeCli::Legacy => "opencode",
+                // `Unknown` is most realistically a v2 whose probe failed
+                // (unresolvable or hung binary): the same TUI, so the same
+                // marker. Worst case it costs the full fallback, never the
+                // spawn's success.
+                OpencodeCli::Standalone | OpencodeCli::Unknown => "ctrl+p",
+            }),
             fallback_ms: 10_000,
         }
     }
@@ -544,14 +581,7 @@ impl AgentPlugin for OpencodePlugin {
         Box::pin(async move {
             match id {
                 Some(id) if !id.is_empty() => {
-                    let mut argv = vec!["opencode".to_string()];
-                    if let Some(model) = model {
-                        argv.push("-m".to_string());
-                        argv.push(model);
-                    }
-                    argv.push("--session".to_string());
-                    argv.push(id);
-                    Some(argv)
+                    Some(opencode_cli().restore_argv(model.as_deref(), &id))
                 }
                 _ => None,
             }
@@ -698,15 +728,278 @@ fn system_prompt_path_for(paths: &Paths, cfg: &LaunchConfig) -> PathBuf {
     }
 }
 
-/// Synchronous best-effort config write used inside `get_environment` (which is
-/// synchronous). Mirrors the TS `writeOpenCodeConfig` call there.
-fn write_opencode_config_blocking(config_path: &PathBuf, prompt_file: &PathBuf) {
-    let config = serde_json::json!({
-        "instructions": [prompt_file.to_string_lossy()],
-        "permission": { "*": { "*": "allow" } },
+/// Which top-level argv shape the installed `opencode` accepts.
+///
+/// opencode v2 removed the top-level `-m/--model` flag (it survives only on
+/// `opencode run`) and added `--standalone`. Passing `-m` to v2 makes the CLI
+/// print its help and exit 1 — the dead terminal documented in
+/// `.vibekit/reports/2026-10-22-opencode-rich-chat-to-terminal-resume.md`.
+/// `--standalone` is not safe to pass blindly either (a build without it would
+/// reject the flag the same way), so the shape is probed from `--help`, never
+/// assumed from a version number.
+///
+/// The variants name the *capability*, not a version, because the two are what
+/// actually drive argv construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpencodeCli {
+    /// No top-level model flag, `--standalone` present (v2+). The model and
+    /// instructions travel in `OPENCODE_CONFIG`, which the TUI only honours
+    /// together with `--standalone`.
+    Standalone,
+    /// Top-level `-m <model>` present, no `--standalone` (v1).
+    Legacy,
+    /// Probe failed — emit only flags every version understands. Degrades to
+    /// the smallest usable argv: a launch/resume still succeeds, but the model
+    /// override and per-process `instructions`/`permission` are lost (on v2,
+    /// both ride in `OPENCODE_CONFIG`, which the TUI only honours with
+    /// `--standalone` — see `get_environment`).
+    Unknown,
+}
+
+impl OpencodeCli {
+    /// Interactive TUI argv for a fresh launch.
+    fn launch_argv(self, model: Option<&str>) -> Vec<String> {
+        match self {
+            OpencodeCli::Legacy => match model.filter(|m| !m.is_empty()) {
+                Some(m) => vec!["opencode".to_string(), "-m".to_string(), m.to_string()],
+                None => vec!["opencode".to_string()],
+            },
+            // v2 removed the top-level `-m` (it would print `--help` and exit
+            // 1). The model rides in `OPENCODE_CONFIG` — see `get_environment`
+            // — and `--standalone` is what makes the TUI honour that
+            // per-process config instead of the shared background server
+            // (without it v2 also silently drops `instructions`/`permission`).
+            OpencodeCli::Standalone => vec!["opencode".to_string(), "--standalone".to_string()],
+            // Probe failed (broken/unrunnable binary): emit only flags every
+            // version accepts. Launch still works. On v2 there is no argv flag
+            // that can restore the model/instructions/permission overrides —
+            // those live in OPENCODE_CONFIG, which the TUI ignores without
+            // `--standalone` — so they are lost until the next probe.
+            OpencodeCli::Unknown => vec!["opencode".to_string()],
+        }
+    }
+
+    /// Interactive TUI argv that resumes `session_id`.
+    fn restore_argv(self, model: Option<&str>, session_id: &str) -> Vec<String> {
+        let mut argv = self.launch_argv(model);
+        argv.push("--session".to_string());
+        argv.push(session_id.to_string());
+        argv
+    }
+}
+
+/// The capabilities this module cares about, read off `opencode --help`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpencodeHelp {
+    /// Top-level `-m` / `--model` exists (v1).
+    top_level_model: bool,
+    /// `--standalone` exists (v2+).
+    standalone: bool,
+}
+
+impl OpencodeHelp {
+    fn parse(help: &str) -> Self {
+        // Match whole flags, not substrings of the flag table's prose: `-m` and
+        // `--model` must appear as a token, and so must `--standalone`.
+        let tokens: Vec<&str> = help
+            .split(|c: char| c.is_whitespace() || c == ',' || c == '|')
+            .filter(|t| !t.is_empty())
+            .collect();
+        Self {
+            top_level_model: tokens
+                .iter()
+                .any(|t| *t == "-m" || *t == "--model" || t.starts_with("--model=")),
+            standalone: tokens
+                .iter()
+                .any(|t| *t == "--standalone" || t.starts_with("--standalone=")),
+        }
+    }
+
+    fn shape(self) -> OpencodeCli {
+        match (self.standalone, self.top_level_model) {
+            // A build with both: prefer the standalone/config path — the
+            // config `model` key is honoured either way, and this avoids the
+            // flag that was on its way out.
+            (true, _) => OpencodeCli::Standalone,
+            (false, true) => OpencodeCli::Legacy,
+            (false, false) => OpencodeCli::Unknown,
+        }
+    }
+}
+
+/// How long a failed probe (`Unknown`) is remembered before it is retried.
+///
+/// Unlike a successful probe — which is valid for as long as the binary's
+/// identity is unchanged — an `Unknown` is the state we want to re-check (a
+/// half-written upgrade, a transient hang). But re-probing on *every* spawn
+/// turns a hung binary into one blocking probe + one log line per spawn, so it
+/// is cached briefly: long enough to collapse a burst of spawns, short enough
+/// that the machine recovers on its own.
+const UNKNOWN_PROBE_TTL: Duration = Duration::from_secs(30);
+
+/// Cached probe result. `expires` is `Some` only for `Unknown`.
+struct ProbeCache {
+    identity: BinaryIdentity,
+    shape: OpencodeCli,
+    expires: Option<std::time::Instant>,
+}
+
+/// Detect the installed opencode's argv shape.
+///
+/// Cached against the **binary's identity** (resolved path + mtime + size), not
+/// for the process lifetime: `opencode upgrade` is a documented subcommand, and
+/// a daemon that outlives the upgrade must not keep spawning the pre-upgrade
+/// argv (that is exactly the v1→v2 transition that caused the original bug).
+/// A failed probe (`Unknown`) is cached for [`UNKNOWN_PROBE_TTL`] only.
+///
+/// Blocking (it runs the CLI once per identity): callers are the argv builders
+/// (`get_launch_command`, `get_restore_command`, `get_ready_signal`), which are
+/// synchronous plugin methods. A miss costs at most [`PROBE_TIMEOUT`], once.
+pub fn opencode_cli() -> OpencodeCli {
+    static CACHE: OnceLock<Mutex<Option<ProbeCache>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+
+    let Some((program, identity)) = binary_identity() else {
+        // Not resolvable at all: `ensure_binary_on_path` will fail the spawn
+        // with a "not found on PATH" error, so nothing to probe or cache.
+        return OpencodeCli::Unknown;
+    };
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref().filter(|e| e.identity == identity) {
+            // Borrow-checker: copy the fields out before the guard is dropped.
+            let shape = entry.shape;
+            let expired = entry
+                .expires
+                .is_some_and(|expires| std::time::Instant::now() >= expires);
+            if !expired {
+                return shape;
+            }
+        }
+    }
+
+    let shape = match run_opencode_help(&program, PROBE_TIMEOUT) {
+        Some(help) => OpencodeHelp::parse(&help).shape(),
+        None => OpencodeCli::Unknown,
+    };
+    let expires =
+        (shape == OpencodeCli::Unknown).then(|| std::time::Instant::now() + UNKNOWN_PROBE_TTL);
+    if shape == OpencodeCli::Unknown {
+        eprintln!(
+            "[opencode] could not detect the installed CLI's flags (`{} --help` failed or timed \
+             out); launching with the version-agnostic argv — model/instruction overrides may be \
+             ignored until the next probe ({UNKNOWN_PROBE_TTL:?})",
+            program.display()
+        );
+    }
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(ProbeCache {
+            identity,
+            shape,
+            expires,
+        });
+    }
+    shape
+}
+
+/// Overall bound on one `opencode --help` probe (spawn → exit, not per pipe).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Resolved path + mtime + size of the `opencode` binary, used as the cache key
+/// for [`opencode_cli`]. `None` when it cannot be resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BinaryIdentity {
+    path: PathBuf,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+/// Resolve `opencode` on the **same PATH the spawn will use**, and fingerprint
+/// it. Deliberately not `std::env::var("PATH")` (the daemon's own): the child
+/// gets `context::effective_path()` (daemon PATH + the user's interactive-shell
+/// dirs), so resolving against anything else could probe one binary and spawn
+/// another — or miss an install that is only on the shell PATH and degrade
+/// silently to `Unknown`.
+fn binary_identity() -> Option<(PathBuf, BinaryIdentity)> {
+    let path = crate::registry::resolve_binary("opencode", &crate::context::effective_path())?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let identity = BinaryIdentity {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        path: path.clone(),
+    };
+    Some((path, identity))
+}
+
+/// Read a child pipe to EOF on its own thread (so a full pipe can never
+/// deadlock the wait, and a timeout can still fire).
+fn drain_pipe<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = reader.read_to_string(&mut buf);
+        let _ = tx.send(buf);
     });
-    let pretty = serde_json::to_string_pretty(&config).unwrap_or_default();
-    let _ = std::fs::write(config_path, format!("{pretty}\n"));
+    rx
+}
+
+/// Run `<program> --help` and return its combined stdout+stderr, or `None` if it
+/// couldn't be spawned or didn't finish within `timeout` (killed on timeout).
+///
+/// One deadline covers the whole probe — spawn, both pipes, exit — rather than
+/// `timeout` per pipe. The exit status is ignored on purpose: v2's help path
+/// exits 0, but an unknown flag exits 1 *with* the help text, and the flag list
+/// is what we need either way.
+fn run_opencode_help(program: &std::path::Path, timeout: Duration) -> Option<String> {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .arg("--help")
+        // Run the probe under the same PATH the child will be spawned with
+        // (`effective_path()`), not the daemon's inherited PATH: an npm/nvm
+        // install resolves `opencode` through a shim that may behave
+        // differently, and a deliberate launcher path must be kept stable
+        // across the probe and the spawn it feeds.
+        .env("PATH", crate::context::effective_path())
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let out = drain_pipe(child.stdout.take()?);
+    let err = child.stderr.take().map(drain_pipe);
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // Either the deadline passed or the wait itself failed: kill and
+            // report "couldn't probe" rather than hang on a binary that closed
+            // its pipes without exiting.
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+
+    // The child has exited, so both pipes are normally at EOF and these return
+    // immediately. The short timeouts only matter if a grandchild inherited the
+    // pipes and is still holding them open.
+    let mut text = out.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    if let Some(err) = err {
+        if let Ok(stderr) = err.recv_timeout(Duration::from_millis(200)) {
+            text.push_str(&stderr);
+        }
+    }
+    (!text.is_empty()).then_some(text)
 }
 
 /// Ensure a gitignore entry is present (best-effort, mirrors `ensureGitignoreEntry`).
@@ -769,5 +1062,197 @@ mod tests {
     #[test]
     fn default_channel_is_json() {
         assert_eq!(OpencodePlugin.default_channel(), Channel::Json);
+    }
+
+    // --- opencode v1 vs v2 argv shape -------------------------------------
+    //
+    // opencode v2 removed the top-level `-m/--model` flag (it survives only on
+    // `opencode run`); passing it makes the CLI print `--help` and exit 1,
+    // which killed a json→tty toggle outright. See
+    // .vibekit/reports/2026-10-22-opencode-rich-chat-to-terminal-resume.md.
+
+    #[test]
+    fn legacy_argv_uses_top_level_model_flag() {
+        assert_eq!(
+            OpencodeCli::Legacy.launch_argv(Some("opencode/deepseek")),
+            vec!["opencode", "-m", "opencode/deepseek"]
+        );
+        assert_eq!(
+            OpencodeCli::Legacy.restore_argv(Some("opencode/deepseek"), "ses_abc"),
+            vec![
+                "opencode",
+                "-m",
+                "opencode/deepseek",
+                "--session",
+                "ses_abc"
+            ]
+        );
+    }
+
+    #[test]
+    fn standalone_argv_never_passes_model_on_the_command_line() {
+        // The model goes through OPENCODE_CONFIG; `--standalone` is what makes
+        // the TUI honour it.
+        assert_eq!(
+            OpencodeCli::Standalone.launch_argv(Some("opencode/deepseek")),
+            vec!["opencode", "--standalone"]
+        );
+        assert_eq!(
+            OpencodeCli::Standalone.restore_argv(Some("opencode/deepseek"), "ses_abc"),
+            vec!["opencode", "--standalone", "--session", "ses_abc"]
+        );
+    }
+
+    #[test]
+    fn unknown_shape_emits_only_flags_both_versions_accept() {
+        // Probe failed: a resume must still work, at the cost of the model
+        // override (which no argv flag can express on v2 anyway).
+        assert_eq!(
+            OpencodeCli::Unknown.launch_argv(Some("m")),
+            vec!["opencode"]
+        );
+        assert_eq!(
+            OpencodeCli::Unknown.restore_argv(Some("m"), "ses_abc"),
+            vec!["opencode", "--session", "ses_abc"]
+        );
+    }
+
+    #[test]
+    fn detection_returns_a_known_shape() {
+        // `opencode` may not be installed on the test machine — every shape is
+        // a valid outcome; this pins that the probe is total and stable within
+        // one binary identity.
+        assert_eq!(opencode_cli(), opencode_cli());
+    }
+
+    #[test]
+    fn help_parsing_detects_the_two_capabilities() {
+        // Verbatim v2.1.2 `opencode --help` fragments: no top-level model
+        // flag, `--standalone` present.
+        let v2 = "FLAGS\n  --standalone            Run with a private server instead\n  \
+                  --session, -s string    Session ID to continue\n";
+        assert_eq!(
+            OpencodeHelp::parse(v2),
+            OpencodeHelp {
+                top_level_model: false,
+                standalone: true
+            }
+        );
+        assert_eq!(OpencodeHelp::parse(v2).shape(), OpencodeCli::Standalone);
+
+        // A v1-shaped help table: top-level `-m, --model`, no `--standalone`.
+        let v1 = "OPTIONS\n  -m, --model string   model to use\n  -c, --continue\n";
+        assert_eq!(
+            OpencodeHelp::parse(v1),
+            OpencodeHelp {
+                top_level_model: true,
+                standalone: false
+            }
+        );
+        assert_eq!(OpencodeHelp::parse(v1).shape(), OpencodeCli::Legacy);
+
+        // Neither capability (or unreadable help) => the safe fallback, never a
+        // shape that would make the CLI print help and exit.
+        assert_eq!(
+            OpencodeHelp::parse("USAGE\n  opencode <subcommand>\n").shape(),
+            OpencodeCli::Unknown
+        );
+
+        // `--standalone` wins when a build advertises both.
+        assert_eq!(
+            OpencodeHelp::parse("-m, --model string\n--standalone\n").shape(),
+            OpencodeCli::Standalone
+        );
+
+        // Substring lookalikes must not be mistaken for the flags.
+        assert_eq!(
+            OpencodeHelp::parse("--standalone-mode is not a flag; see model docs").shape(),
+            OpencodeCli::Unknown
+        );
+    }
+
+    /// The sentinel is a *paint* marker, not the binary's name: `"opencode"`
+    /// never appears in opencode v2's TUI (it renders `OpenCode`), so on v2 the
+    /// wait always ran the full 10 s fallback. Pinning the pairing here keeps a
+    /// future sentinel edit from silently reverting to a marker that never
+    /// matches.
+    #[test]
+    fn ready_sentinel_is_a_tui_paint_marker_not_the_binary_name() {
+        let sentinel = OpencodePlugin.get_ready_signal().sentinel;
+        match opencode_cli() {
+            OpencodeCli::Legacy => assert_eq!(sentinel, Some("opencode")),
+            OpencodeCli::Standalone | OpencodeCli::Unknown => {
+                assert_eq!(sentinel, Some("ctrl+p"))
+            }
+        }
+        assert!(
+            !sentinel.is_some_and(|s| s.is_empty()),
+            "an empty sentinel would match every pane immediately"
+        );
+    }
+
+    /// One deadline covers the whole probe. A binary that never exits must not
+    /// hold the caller (a spawn path) past it, and must be killed.
+    #[test]
+    fn help_probe_is_bounded_and_kills_a_hung_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("hangs");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let started = std::time::Instant::now();
+        let out = run_opencode_help(&script, Duration::from_millis(300));
+        assert_eq!(out, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "probe must honour its deadline, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A probe that produces no output at all is `Unknown`, never a guess (and
+    /// never a shape that could emit a flag the CLI rejects).
+    #[test]
+    fn help_probe_without_output_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let silent = dir.path().join("silent");
+        std::fs::write(&silent, "#!/bin/sh\nexit 0\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&silent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            run_opencode_help(&silent, Duration::from_secs(2)),
+            None,
+            "nothing to parse => Unknown"
+        );
+    }
+
+    #[test]
+    fn blocking_config_write_carries_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("opencode-config.json");
+        let prompt_path = dir.path().join("system-prompt.md");
+        crate::opencode_config::write_opencode_config_blocking(
+            &config_path,
+            &[prompt_path.to_string_lossy().into_owned()],
+            Some("opencode/deepseek-v4.1-flash-free"),
+        );
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["model"], "opencode/deepseek-v4.1-flash-free");
+        assert_eq!(
+            parsed["instructions"][0],
+            prompt_path.to_string_lossy().as_ref()
+        );
+
+        // No model configured -> no `model` key at all (never an empty string,
+        // which opencode would reject).
+        crate::opencode_config::write_opencode_config_blocking(&config_path, &[], Some(""));
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        assert!(parsed.get("model").is_none());
     }
 }

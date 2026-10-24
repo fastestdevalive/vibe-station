@@ -54,7 +54,7 @@ use vst_agents::json_agent_chat::{
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_agents::native_history_importer::has_native_history_importer;
-use vst_agents::plugin::{CaptureArgs, RestoreArgs};
+use vst_agents::plugin::{CaptureArgs, ReadySignal, RestoreArgs};
 use vst_agents::prompt_builder::{
     build_direct_prompt, build_prompt, BuildDirectPromptInput, BuildPromptInput,
 };
@@ -3009,14 +3009,14 @@ impl SessionRoutes {
                     env.insert(k, v);
                 }
                 ensure_binary_on_path(plugin.as_ref(), &env)?;
-                let fallback_ms = plugin.get_ready_signal().fallback_ms;
+                let ready = plugin.get_ready_signal();
                 self.spawn_session_from_argv(
                     session,
                     cwd,
                     worktree.as_ref().map(|w| w.id.as_str()),
                     argv,
                     env,
-                    fallback_ms,
+                    &ready,
                 )
                 .await?;
 
@@ -3144,6 +3144,18 @@ impl SessionRoutes {
     /// `spawnSessionFromArgv` orchestration (services/spawn.ts) — spawn a
     /// session from an explicit argv with no prompt composition. Ported here
     /// because the resume path needs it and no other crate exposes it.
+    ///
+    /// Waits for the plugin's ready sentinel (bounded by `ready.fallback_ms`)
+    /// instead of sleeping the full fallback unconditionally: both callers
+    /// (`POST /sessions/:id/resume`, `PATCH /sessions/:id/channel`) hold their
+    /// HTTP response open for this, and opencode's fallback alone is 10s.
+    ///
+    /// A pane/PTY that is already gone once the wait ends means the CLI died on
+    /// startup — e.g. an argv the installed version rejects. That is reported as
+    /// an error rather than success: silently returning `Ok` is what let a
+    /// channel flip persist onto a dead terminal (`state=exited`, nothing ever
+    /// drawn). See
+    /// `.vibekit/reports/2026-10-22-opencode-rich-chat-to-terminal-resume.md`.
     async fn spawn_session_from_argv(
         &self,
         session: &SessionRecord,
@@ -3151,7 +3163,7 @@ impl SessionRoutes {
         worktree_id: Option<&str>,
         argv: Vec<String>,
         env: HashMap<String, String>,
-        fallback_ms: u64,
+        ready: &ReadySignal,
     ) -> Result<(), String> {
         if !session.use_tmux {
             let command = argv.first().cloned().unwrap_or_default();
@@ -3175,8 +3187,14 @@ impl SessionRoutes {
             self.direct_ptys
                 .write()
                 .unwrap()
-                .insert(session.id.clone(), handle);
-            tokio::time::sleep(Duration::from_millis(fallback_ms)).await;
+                .insert(session.id.clone(), handle.clone());
+            if let Err(err) = await_ready_pty(&handle, ready, &argv).await {
+                // Nothing usable to leave behind: drop it from the registry (so
+                // the caller doesn't think a stream exists) and reap it.
+                self.direct_ptys.write().unwrap().remove(&session.id);
+                handle.kill();
+                return Err(err);
+            }
             return Ok(());
         }
         if self.tmux.has_session(&session.tmux_name) {
@@ -3187,11 +3205,10 @@ impl SessionRoutes {
                 name: session.tmux_name.clone(),
                 cwd: Some(PathBuf::from(cwd)),
                 env,
-                command: Some(argv),
+                command: Some(argv.clone()),
             })
             .map_err(|e| e.to_string())?;
-        tokio::time::sleep(Duration::from_millis(fallback_ms)).await;
-        Ok(())
+        await_ready_tmux(&self.tmux, &session.tmux_name, ready, &argv).await
     }
 
     /// `POST /sessions/:id/reset` — archive the current agent session and spawn
@@ -4174,14 +4191,14 @@ impl SessionRoutes {
                 env.insert(k, v);
             }
             ensure_binary_on_path(plugin, &env)?;
-            let fallback_ms = plugin.get_ready_signal().fallback_ms;
+            let ready = plugin.get_ready_signal();
             self.spawn_session_from_argv(
                 session,
                 &cwd,
                 worktree.map(|w| w.id.as_str()),
                 argv,
                 env,
-                fallback_ms,
+                &ready,
             )
             .await?;
 
@@ -5471,14 +5488,95 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     Ok(captured_chat_id)
 }
 
+/// Error text for a launch whose process/pane died before it ever became ready.
+///
+/// Deliberately names the argv: the overwhelmingly common cause is a flag the
+/// installed CLI version does not accept (opencode v2 dropped top-level `-m`,
+/// which made the CLI print help and exit 1), and the argv is the only piece of
+/// evidence the user can act on.
+fn immediate_exit_error(argv: &[String]) -> String {
+    let binary = argv.first().map(String::as_str).unwrap_or("the CLI");
+    format!(
+        "agent process exited immediately after launch (argv: {argv:?}) — \
+         check that `{binary} --help` accepts these flags"
+    )
+}
+
+/// How long to keep watching a session after its ready sentinel showed up,
+/// before calling the launch a success.
+///
+/// A sentinel hit is not proof of life: opencode's help text — exactly what an
+/// argv the installed version rejects produces — contains text that can match,
+/// and a process can print its banner (or the help) and still exit a moment
+/// later. The grace window is what turns "printed something promising" into
+/// "still running".
+const READY_GRACE: Duration = Duration::from_millis(300);
+
+/// Wait for a tmux-launched agent to become ready, then confirm the pane is
+/// still alive. `Ok(())` means the pane exists and survived [`READY_GRACE`]
+/// after it last painted the sentinel.
+///
+/// Bounded by `ready.fallback_ms`; a sentinel miss is *not* an error on its
+/// own (the CLI may paint something we don't recognise and still work), only a
+/// pane that is gone is.
+async fn await_ready_tmux(
+    tmux: &Tmux,
+    tmux_name: &str,
+    ready: &ReadySignal,
+    argv: &[String],
+) -> Result<(), String> {
+    let saw_sentinel = match ready.sentinel {
+        Some(sentinel) => wait_for_sentinel(tmux, tmux_name, sentinel, ready.fallback_ms).await,
+        None => {
+            tokio::time::sleep(Duration::from_millis(ready.fallback_ms)).await;
+            false
+        }
+    };
+    if saw_sentinel {
+        tokio::time::sleep(READY_GRACE).await;
+    }
+    if !tmux.has_session(tmux_name) {
+        return Err(immediate_exit_error(argv));
+    }
+    Ok(())
+}
+
+/// Direct-PTY twin of [`await_ready_tmux`]: same wait, same grace, same
+/// requirement that the child is still alive at the end.
+async fn await_ready_pty(
+    handle: &PtyHandle,
+    ready: &ReadySignal,
+    argv: &[String],
+) -> Result<(), String> {
+    let saw_sentinel = match ready.sentinel {
+        Some(sentinel) => {
+            handle
+                .wait_for_output(sentinel, Duration::from_millis(ready.fallback_ms))
+                .await
+        }
+        None => {
+            tokio::time::sleep(Duration::from_millis(ready.fallback_ms)).await;
+            false
+        }
+    };
+    if saw_sentinel {
+        tokio::time::sleep(READY_GRACE).await;
+    }
+    if handle.is_exited() {
+        return Err(immediate_exit_error(argv));
+    }
+    Ok(())
+}
+
 /// Poll a tmux pane for a ready sentinel (bounded; timeout is the caller's
-/// fallback). Mirrors `waitForSentinel`.
-async fn wait_for_sentinel(tmux: &Tmux, tmux_name: &str, sentinel: &str, timeout_ms: u64) {
+/// fallback). Mirrors `waitForSentinel`. Returns `true` when the sentinel was
+/// seen, `false` on timeout or as soon as the pane is gone.
+async fn wait_for_sentinel(tmux: &Tmux, tmux_name: &str, sentinel: &str, timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
     let poll = Duration::from_millis(200);
     while std::time::Instant::now() < deadline {
         if !tmux.has_session(tmux_name) {
-            return;
+            return false;
         }
         if let Ok(output) = tmux.capture_pane(
             tmux_name,
@@ -5488,11 +5586,12 @@ async fn wait_for_sentinel(tmux: &Tmux, tmux_name: &str, sentinel: &str, timeout
             },
         ) {
             if output.contains(sentinel) {
-                return;
+                return true;
             }
         }
         tokio::time::sleep(poll).await;
     }
+    false
 }
 
 enum NameFallback {
@@ -6199,7 +6298,8 @@ fn pick_resume_model(
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_resume_model, shell_command_parts};
+    use super::{pick_resume_model, shell_command_parts, ReadySignal};
+    use vst_proc::tmux::NewSessionOptions;
 
     #[test]
     fn resume_prefers_the_rich_chat_model_override_over_the_mode_model() {
@@ -6232,6 +6332,111 @@ mod tests {
             ]
         );
         assert!(parts.iter().all(|p| p != "-lc"));
+    }
+
+    // --- ready wait + liveness (the json→tty dead-pane class) --------------
+    //
+    // These need a real `tmux`, so they are ignored by default (same convention
+    // as vst-ws/tests/tmux_output.rs) and use their own socket, never a live
+    // user session. Run with: cargo test -p vst-routes -- --ignored
+
+    // One socket per test: they run in parallel and each calls `kill_server()`,
+    // so a shared socket would have one test tearing down the other's pane.
+    const READY_DEAD_SOCK: &str = "vst-routes-ready-dead-sock";
+    const READY_ALIVE_SOCK: &str = "vst-routes-ready-alive-sock";
+
+    fn tmux_available() -> bool {
+        std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// A pane that paints the sentinel and *then* exits (exactly what an argv
+    /// the installed CLI rejects does — opencode v2 prints its help, which
+    /// contains the old `opencode` sentinel, then exits 1) must be reported as
+    /// a launch failure, not as success. Without the post-sentinel grace window
+    /// this is the race the report describes.
+    #[tokio::test]
+    #[ignore = "requires a real tmux binary; run with --ignored"]
+    async fn ready_wait_reports_failure_when_the_pane_dies_after_painting() {
+        if !tmux_available() {
+            eprintln!("tmux not available; skipping");
+            return;
+        }
+        let tmux = vst_proc::tmux::Tmux::with_socket(READY_DEAD_SOCK);
+        tmux.kill_server();
+        let name = "vst-ready-dies";
+        tmux.new_session(&NewSessionOptions {
+            name: name.to_string(),
+            cwd: None,
+            env: Default::default(),
+            command: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf 'ctrl+p commands'; exit 1".to_string(),
+            ]),
+        })
+        .expect("new-session");
+
+        let ready = ReadySignal {
+            sentinel: Some("ctrl+p"),
+            fallback_ms: 5_000,
+        };
+        let err = super::await_ready_tmux(&tmux, name, &ready, &["opencode".to_string()])
+            .await
+            .expect_err("a pane that painted and died is not a successful launch");
+        assert!(err.contains("exited immediately"), "{err}");
+        assert!(
+            err.contains("--help"),
+            "error should point at the argv: {err}"
+        );
+
+        tmux.kill_server();
+    }
+
+    /// The happy path still returns as soon as the sentinel paints (well before
+    /// the fallback), and leaves the pane running.
+    #[tokio::test]
+    #[ignore = "requires a real tmux binary; run with --ignored"]
+    async fn ready_wait_returns_early_and_keeps_a_live_pane() {
+        if !tmux_available() {
+            eprintln!("tmux not available; skipping");
+            return;
+        }
+        let tmux = vst_proc::tmux::Tmux::with_socket(READY_ALIVE_SOCK);
+        tmux.kill_server();
+        let name = "vst-ready-alive";
+        tmux.new_session(&NewSessionOptions {
+            name: name.to_string(),
+            cwd: None,
+            env: Default::default(),
+            command: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf 'ctrl+p commands'; sleep 30".to_string(),
+            ]),
+        })
+        .expect("new-session");
+
+        let ready = ReadySignal {
+            sentinel: Some("ctrl+p"),
+            fallback_ms: 10_000,
+        };
+        let started = std::time::Instant::now();
+        super::await_ready_tmux(&tmux, name, &ready, &["opencode".to_string()])
+            .await
+            .expect("a live pane is a successful launch");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "must return on the sentinel, not the fallback: {:?}",
+            started.elapsed()
+        );
+        assert!(tmux.has_session(name));
+
+        tmux.kill_session(name);
+        tmux.kill_server();
     }
 }
 
