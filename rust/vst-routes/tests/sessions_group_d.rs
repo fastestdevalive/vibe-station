@@ -994,3 +994,161 @@ async fn meta_rebuilds_from_disk_for_existing_session_ok() {
     assert_eq!(meta.channel, Channel::Json);
     assert_eq!(meta.cli, "claude");
 }
+
+// ---------------------------------------------------------------------------
+// json → tmux, end to end (real tmux + a real opencode binary)
+// ---------------------------------------------------------------------------
+//
+// This is the switch the field bug happened in
+// (`.vibekit/reports/2026-10-22-opencode-rich-chat-to-terminal-resume.md`):
+// `PATCH /sessions/:id/channel {channel: tmux}` returned 200 while the pane
+// died, because the argv used a flag opencode v2 no longer has. Unlike the rest
+// of this module — which stops at the validation/status layer — this test drives
+// the real handler down to `spawn_session_from_argv` and then looks at the pane.
+//
+// `#[ignore]`d (needs tmux + an installed opencode, and takes ~2 s), same
+// convention as vst-ws/tests/tmux_output.rs. Run with:
+//   cargo test -p vst-routes --test sessions_group_d -- --ignored
+
+const SWITCH_SOCK: &str = "vst-routes-channel-switch-sock";
+
+fn tmux_available() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn opencode_available() -> bool {
+    std::process::Command::new("opencode")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[tokio::test]
+#[ignore = "spawns a real opencode TUI in tmux; run with --ignored"]
+async fn json_to_tmux_switch_leaves_a_live_painted_pane() {
+    use std::time::Duration;
+
+    use vst_agents::home::with_home;
+    use vst_routes::sessions::{find_session_context, SessionContext};
+    use vst_types::rest::shared::Mode;
+    use vst_types::CliId;
+
+    if !tmux_available() || !opencode_available() {
+        eprintln!("tmux/opencode not available; skipping");
+        return;
+    }
+
+    // A temp home only redirects vst's own paths (modes.json, session data);
+    // the spawned child keeps the real HOME, so opencode stays signed in —
+    // exactly like the daemon.
+    let home = tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".vibe-station")).unwrap();
+    std::fs::write(
+        home.path().join(".vibe-station").join("modes.json"),
+        serde_json::to_string(&vec![Mode {
+            id: "oc-mode".to_string(),
+            name: "OC".to_string(),
+            cli: CliId::Opencode,
+            context: String::new(),
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            model: None,
+            icon: None,
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+
+    // The project path must be a real directory (it is the spawn cwd).
+    let project_dir = tempdir().unwrap();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.absolute_path = project_dir.path().display().to_string();
+    p.is_git = false;
+    let mut s = json_session("s1", "p1");
+    s.mode_id = Some("oc-mode".to_string());
+    // A Rich Chat session WITH a chat id: the switch takes the RESTORE-argv
+    // path — the exact path the field bug was in (the fatal `-m` was added by
+    // `get_restore_command`). opencode ignores an unknown `--session` id and
+    // starts fresh, so this needs no real conversation in the local store.
+    s.agent_chat_id = Some("ses_vst_e2e_channel_switch".to_string());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let tmux = vst_proc::tmux::Tmux::with_socket(SWITCH_SOCK);
+    tmux.kill_server();
+    let r = SessionRoutes {
+        tmux: vst_proc::tmux::Tmux::with_socket(SWITCH_SOCK),
+        ..routes(store)
+    };
+
+    let switch_started = std::time::Instant::now();
+    let res = r
+        .patch_session_channel(
+            "s1",
+            PatchChannelBody {
+                channel: Channel::Tmux,
+                mode_id: None,
+            },
+        )
+        .await
+        .expect("the json→tmux switch must succeed, not 200 onto a dead pane");
+    eprintln!("SWITCH_TOOK={:?}", switch_started.elapsed());
+    assert!(res.ok);
+    assert_eq!(res.channel, Channel::Tmux);
+
+    // Persisted state agrees…
+    let (_p, persisted) = match find_session_context(&r.store, "s1").await.unwrap() {
+        SessionContext::Direct { project, session } => (project, session),
+        other => panic!("expected a direct session, got {other:?}"),
+    };
+    assert_eq!(persisted.channel, Some(Channel::Tmux));
+    assert!(persisted.use_tmux);
+
+    // …and the pane is a DRAWN TUI, not an argv the installed CLI rejected.
+    // (The pre-fix argv printed opencode's help — `OpenCode command line
+    // interface` / `FLAGS` — and exited, so the pane was either that text or
+    // gone entirely.)
+    assert!(
+        r.tmux.has_session(&persisted.tmux_name),
+        "the switch reported success, so the pane must be alive"
+    );
+    let mut painted = String::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    while std::time::Instant::now() < deadline {
+        if let Ok(out) = r.tmux.capture_pane(
+            &persisted.tmux_name,
+            &vst_proc::tmux::CapturePaneOptions {
+                escape: false,
+                lines: Some(50),
+            },
+        ) {
+            painted = out;
+            if painted.contains("ctrl+p") {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    eprintln!("PANE_AFTER={:?}\n{painted}", switch_started.elapsed());
+    assert!(
+        !painted.contains("OpenCode command line interface") && !painted.contains("FLAGS:"),
+        "the pane is opencode's help text — the argv was rejected:\n{painted}"
+    );
+    assert!(
+        painted.contains("ctrl+p"),
+        "pane should show the opencode TUI status bar; got:\n{painted}"
+    );
+    assert!(
+        r.tmux.has_session(&persisted.tmux_name),
+        "pane died after painting — the launch was not ready"
+    );
+
+    tmux.kill_session(&persisted.tmux_name);
+    tmux.kill_server();
+}
