@@ -513,6 +513,10 @@ export interface WorkspaceState {
   revealTextSearch: (contextId: string, text: string) => void;
   clearPendingTextSearch: () => void;
   bumpPreviewFont: (delta: number) => void;
+  /** Reset the global preview font scale to 1. */
+  resetPreviewFont: () => void;
+  /** Reset a worktree's preview font scale to 1. */
+  resetPreviewFontForWorktree: (worktreeId: string) => void;
   /** Bump the preview font scale for a specific worktree's tools pane. */
   bumpPreviewFontForWorktree: (worktreeId: string, delta: number) => void;
   /** Toggle the master-detail split orientation for a specific worktree's tools pane. */
@@ -1769,6 +1773,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             previewFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.previewFontScale + delta) * 100) / 100)),
           })),
+        resetPreviewFont: () => set({ previewFontScale: 1 }),
+        resetPreviewFontForWorktree: (worktreeId) =>
+          set((s) => ({ previewFontScaleByWorktree: { ...s.previewFontScaleByWorktree, [worktreeId]: 1 } })),
         bumpPreviewFontForWorktree: (worktreeId, delta) =>
           set((s) => {
             const cur = s.previewFontScaleByWorktree[worktreeId] ?? s.previewFontScale;

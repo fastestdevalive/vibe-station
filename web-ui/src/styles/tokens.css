@@ -13,8 +13,12 @@
      titles) — ONE size, so those surfaces can't drift apart. Geist Mono is
      ~10% wider per em than Geist, so the Mono interface font gets 1px less to
      keep the same text width (`data-font` is set by useThemeStore.setFont).
-     Captions stay on --font-size-xs / -sm. */
+     Surfaces that are always Sans (chat, its composer) use --fs-body-sans
+     instead, which ignores the interface font. Captions stay on --font-size-xs / -sm. */
   --fs-body: 14px;
+  --fs-body-sans: 14px;
+  /* Monospace text inside chat (code blocks, tool output). ChatPane overrides it with the zoom. */
+  --font-size-code: 13px;
   /* Sidebar section headings ("Projects", "Workspaces", group headers): 1px under body. */
   --fs-section: calc(var(--fs-body) - 1px);
   --fs-micro: 11px;

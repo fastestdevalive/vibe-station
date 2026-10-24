@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Clock } from "lucide-react";
 import type { Attachment } from "@/api/types";
 import type { ApiInstance } from "@/api";
@@ -21,6 +21,18 @@ interface TextMessageProps {
   scheduled?: boolean;
   /** Row key from MessageList; keeps html card UI state across virtualized remounts. */
   rowKey?: string;
+  /** ISO timestamp of the message; clicking the bubble toggles showing it. */
+  ts?: string;
+}
+
+/** "14:32" for today, "Oct 22, 14:32" otherwise (seconds in the tooltip). */
+function formatSentTime(ts: string): { label: string; full: string } | null {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const label = sameDay ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  return { label, full: d.toLocaleString() };
 }
 
 /**
@@ -28,14 +40,26 @@ interface TextMessageProps {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey, ts }: TextMessageProps) {
   const isUser = role === "user";
+  const [showTime, setShowTime] = useState(false);
+  const sent = ts ? formatSentTime(ts) : null;
+  const onBubbleClick = (e: React.MouseEvent) => {
+    if (!sent) return;
+    // Don't toggle when the click was a text selection or hit a link/button.
+    if (window.getSelection()?.toString()) return;
+    // Portal clicks (e.g. the image zoom overlay) bubble through React but are
+    // not DOM descendants of the bubble.
+    if (!e.currentTarget.contains(e.target as Node)) return;
+    if ((e.target as HTMLElement).closest("a, button, summary, input, textarea, img, [role=button]")) return;
+    setShowTime((v) => !v);
+  };
   return (
     <div
       className={`chat-msg chat-msg--${role}${pending ? " chat-msg--pending" : ""}`}
       data-role={role}
     >
-      <div className={`chat-bubble chat-bubble--${role}`}>
+      <div className={`chat-bubble chat-bubble--${role}${sent ? " chat-bubble--clickable" : ""}`} onClick={onBubbleClick}>
         {isUser ? (
           // Phase 7B.10: a sent user message still carries the internal
           // `{/name args}` wire encoding (Decision 2) — never surface it.
@@ -77,6 +101,11 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
           <div className="chat-bubble__scheduled" title="This message was sent via schedule">
             <Clock size={11} aria-hidden />
             Scheduled
+          </div>
+        ) : null}
+        {sent && showTime ? (
+          <div className="chat-bubble__time" title={sent.full}>
+            {sent.label}
           </div>
         ) : null}
       </div>

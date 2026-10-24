@@ -1,4 +1,4 @@
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -57,6 +57,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const previewFontScale = (worktreeId ? previewFontScaleByWorktree[worktreeId] : undefined) ?? previewFontScaleGlobal;
   const bumpPreviewFontForWorktree = useWorkspaceStore((s) => s.bumpPreviewFontForWorktree);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
+  const resetPreviewFont = useWorkspaceStore((s) => s.resetPreviewFont);
+  const resetPreviewFontForWorktree = useWorkspaceStore((s) => s.resetPreviewFontForWorktree);
 
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
@@ -670,8 +672,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     );
   }
 
+  // Rendered markdown is always Sans (`.preview-body` isolates it from the
+  // interface font), so it uses the fixed 14px sans body size; code and other
+  // previews (and markdown shown as a diff) keep the 13px UI base.
+  const previewBaseSize =
+    path?.endsWith(".md") && !(scope === "local" || scope === "branch" || scope === "commit")
+      ? "var(--fs-body-sans)"
+      : "var(--font-size-base)";
   const previewScaleStyle: CSSProperties = {
-    fontSize: `calc(var(--font-size-base) * ${previewFontScale})`,
+    fontSize: `calc(${previewBaseSize} * ${previewFontScale})`,
   };
 
   if (!path) {
@@ -871,6 +880,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       </button>
       <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
         <Plus size={11} />
+      </button>
+      <button
+        type="button"
+        className="preview-font-overlay__btn"
+        aria-label="Reset preview font size"
+        title="Reset font size"
+        disabled={previewFontScale === 1}
+        onClick={() => (worktreeId ? resetPreviewFontForWorktree(worktreeId) : resetPreviewFont())}
+      >
+        <RotateCcw size={11} />
       </button>
     </div>
   );

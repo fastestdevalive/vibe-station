@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { TextMessage } from "./TextMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
 
@@ -77,5 +77,22 @@ describe("TextMessage — HTML rendering (4.T3)", () => {
       <TextMessage role="user" text={"```html\n<h1>Hi</h1>\n```"} />,
     );
     expect(container.querySelector("iframe")).toBeNull();
+  });
+});
+
+describe("TextMessage sent time", () => {
+  it("toggles the sent time when the bubble is clicked", () => {
+    const { container } = render(<TextMessage role="user" text="hi" ts="2026-10-22T14:32:00Z" />);
+    expect(container.querySelector(".chat-bubble__time")).toBeNull();
+    fireEvent.click(container.querySelector(".chat-bubble")!);
+    expect(container.querySelector(".chat-bubble__time")).not.toBeNull();
+    fireEvent.click(container.querySelector(".chat-bubble")!);
+    expect(container.querySelector(".chat-bubble__time")).toBeNull();
+  });
+
+  it("shows nothing without a timestamp", () => {
+    const { container } = render(<TextMessage role="user" text="hi" />);
+    fireEvent.click(container.querySelector(".chat-bubble")!);
+    expect(container.querySelector(".chat-bubble__time")).toBeNull();
   });
 });

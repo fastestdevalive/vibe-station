@@ -32,6 +32,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 const CHAT_FONT_BASE_PX: Record<string, number> = {
   "--font-size-xs": 11,
   "--font-size-sm": 12,
+  "--font-size-code": 13, // monospace text (code blocks, tool output) in chat
   "--font-size-lg": 16,
   "--font-size-xl": 18,
   "--font-size-2xl": 22,
@@ -41,6 +42,8 @@ const CHAT_FONT_BASE_PX: Record<string, number> = {
 /** Chat prose base on phones (≤640px) — the inline vars below override the
  *  tokens.css media query, so the phone value has to be chosen here. */
 const PHONE_CHAT_BASE_PX = 16;
+/** Mirrors `--fs-body-sans` in tokens.css (re-declared scaled on the pane). */
+const CHAT_BODY_SANS_PX = 14;
 
 interface ChatPaneProps {
   api: ApiInstance;
@@ -103,11 +106,14 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
       vars[name] = `${Math.round(base * terminalFontScale)}px`;
     }
-    // Body size comes from --fs-body (tokens.css: 14px Sans / 13px Mono) so
-    // chat matches the sidebar/tree; phones keep their 16px iOS no-zoom floor.
+    // Chat is always Sans, so its body size is the fixed --fs-body-sans token
+    // (tokens.css). Re-declare it here scaled by the zoom so everything reading
+    // it (transcript rows, composer controls) zooms with the prose. Phones keep
+    // their 16px iOS no-zoom floor for the prose base.
+    vars["--fs-body-sans"] = `${Math.round(CHAT_BODY_SANS_PX * terminalFontScale)}px`;
     vars["--font-size-base"] = isPhone
       ? `${Math.round(PHONE_CHAT_BASE_PX * terminalFontScale)}px`
-      : `calc(var(--fs-body) * ${terminalFontScale})`;
+      : "var(--fs-body-sans)";
     return vars as CSSProperties;
   }, [terminalFontScale, isPhone]);
 
