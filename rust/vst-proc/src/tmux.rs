@@ -123,6 +123,20 @@ impl Tmux {
         self.run(&["has-session", "-t", name]).is_ok()
     }
 
+    /// True if the session's pane is still running its command.
+    ///
+    /// Deliberately NOT `has_session`: a user's `~/.tmux.conf` can set
+    /// `remain-on-exit on`, which keeps the *session* alive after its pane's
+    /// command exits (the pane is then "dead"). For readiness/liveness checks
+    /// that would report a crashed CLI as a successful launch.
+    ///
+    /// `false` when the session is gone or the probe fails.
+    pub fn pane_is_alive(&self, name: &str) -> bool {
+        self.run(&["display-message", "-p", "-t", name, "#{pane_dead}"])
+            .map(|out| out.trim() == "0")
+            .unwrap_or(false)
+    }
+
     /// Kill a tmux session by name. Best-effort — does not error if absent.
     pub fn kill_session(&self, name: &str) {
         let _ = self.run(&["kill-session", "-t", name]);

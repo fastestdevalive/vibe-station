@@ -644,22 +644,71 @@ mod opencode_plugin {
         let plugin = create_opencode_plugin();
         let mut session = make_session("s1");
         session.agent_chat_id = Some("ses_abc".into());
-        let result = plugin
+        let argv = plugin
             .get_restore_command(RestoreArgs {
                 session: &session,
                 project: &make_project("p1"),
                 cwd: "/repos/p1",
                 model: None,
             })
-            .await;
+            .await
+            .expect("restore argv");
+
+        // The exact flag set depends on the INSTALLED opencode (v2 dropped the
+        // top-level `-m/--model`; see the report linked from
+        // `opencode::OpencodeCli`), so assert the invariants every shape
+        // shares instead of hardcoding one machine's version. The per-shape
+        // exact argv is pinned by unit tests in `vibestation-opencode`'s
+        // `opencode.rs`, which don't need a live binary.
+        assert_eq!(argv.first().map(String::as_str), Some("opencode"));
         assert_eq!(
-            result,
-            Some(vec![
-                "opencode".into(),
-                "--session".into(),
-                "ses_abc".into()
-            ])
+            &argv[argv.len() - 2..],
+            &["--session".to_string(), "ses_abc".to_string()]
         );
+        // `-m` at top level is fatal on v2, `--standalone` is fatal on v1 —
+        // never both, and never `-m` next to `--standalone`.
+        if argv.iter().any(|a| a == "--standalone") {
+            assert!(
+                !argv.iter().any(|a| a == "-m"),
+                "v2 argv must not carry the removed top-level -m: {argv:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_command_never_combines_standalone_with_the_removed_model_flag() {
+        // Guards the exact regression: with a model configured the argv must
+        // still be spawnable. On v1 that means `-m <model>`; on v2 it means no
+        // `-m` at all (the model travels in OPENCODE_CONFIG); with no probe
+        // result at all it means neither (safe fallback).
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let plugin = create_opencode_plugin();
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some("ses_abc".into());
+        let model = "opencode/deepseek-v4.1-flash-free";
+        let argv = plugin
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/repos/p1",
+                model: Some(model),
+            })
+            .await
+            .expect("restore argv");
+
+        let standalone = argv.iter().any(|a| a == "--standalone");
+        let has_model_flag = argv.iter().any(|a| a == "-m");
+        assert!(
+            !(standalone && has_model_flag),
+            "v2 argv must not carry the removed top-level -m: {argv:?}"
+        );
+        if has_model_flag {
+            assert!(
+                argv.iter().any(|a| a == model),
+                "v1 argv must pass the model: {argv:?}"
+            );
+        }
     }
 
     #[tokio::test]

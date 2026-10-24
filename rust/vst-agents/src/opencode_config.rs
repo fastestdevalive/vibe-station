@@ -11,6 +11,11 @@
 //! file first and adopt/extend it rather than re-deriving from the TS source —
 //! do not create a second, conflicting implementation.** This is a deliberate,
 //! precedented stopgap (same shape as part 03's `DirectPtyRegistry`).
+//!
+//! Both writers below (async, used by the ACP/Rich-Chat turn path; blocking,
+//! used by the synchronous `get_environment`) render through the same
+//! [`render_config`], so the on-disk shape can never drift between the two
+//! channels.
 
 use std::path::Path;
 
@@ -27,18 +32,37 @@ struct OpenCodeConfig<'a> {
     model: Option<&'a str>,
 }
 
-/// Write `{ instructions: [<paths>], permission: {"*":{"*":"allow"}}[, model] }`
-/// to `config_path`. Mirrors `writeOpenCodeConfig`.
+/// Render `{ instructions: [<paths>], permission: {"*":{"*":"allow"}}[, model] }`.
+///
+/// `model` is how opencode **v2** selects a session's model (its top-level
+/// `-m/--model` flag was removed — see
+/// `rust/vst-agents/src/opencode.rs`'s `OpencodeCli`). Passing it also on v1 is
+/// harmless: v1 additionally receives `-m <model>` with the same value.
+fn render_config(instruction_files: &[String], model: Option<&str>) -> String {
+    let config = OpenCodeConfig {
+        instructions: instruction_files,
+        permission: json!({ "*": { "*": "allow" } }),
+        model: model.filter(|m| !m.is_empty()),
+    };
+    let pretty = serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string());
+    format!("{pretty}\n")
+}
+
+/// Write the config for a Rich Chat (ACP) turn. Mirrors `writeOpenCodeConfig`.
 pub async fn write_opencode_config(
     config_path: &Path,
     instruction_files: &[String],
     model: Option<&str>,
 ) {
-    let config = OpenCodeConfig {
-        instructions: instruction_files,
-        permission: json!({ "*": { "*": "allow" } }),
-        model,
-    };
-    let pretty = serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string());
-    let _ = fs::write(config_path, format!("{pretty}\n")).await;
+    let _ = fs::write(config_path, render_config(instruction_files, model)).await;
+}
+
+/// Synchronous twin of [`write_opencode_config`] for `AgentPlugin::get_environment`
+/// (which is a sync fn) — same bytes on disk, no runtime needed.
+pub fn write_opencode_config_blocking(
+    config_path: &Path,
+    instruction_files: &[String],
+    model: Option<&str>,
+) {
+    let _ = std::fs::write(config_path, render_config(instruction_files, model));
 }
