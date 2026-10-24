@@ -673,6 +673,8 @@ export interface TreeEntry {
   name: string;
   path: string;
   type: "file" | "dir";
+  /** Gitignored but listed anyway (ignored dir, entry inside one, or an `alwaysShow` match). Absent = not ignored. */
+  ignored?: boolean;
 }
 
 export interface SearchMatch {

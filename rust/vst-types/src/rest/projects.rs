@@ -109,6 +109,10 @@ pub struct TreeEntry {
     pub name: String,
     pub r#type: TreeEntryType,
     pub path: String,
+    /// Gitignored but listed anyway (ignored directory, entry inside one, or an
+    /// `alwaysShow` match). Absent = not ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignored: Option<bool>,
 }
 
 /// `TreeEntry.type`.
