@@ -7,6 +7,7 @@
 //! the caller supplies the sessions via `build_sessions`.
 
 use vst_store::StoreHandle;
+use vst_types::domain::{DraftEntryPoint, LifecycleState, SessionRecord};
 use vst_types::ProjectRecord;
 
 use crate::branch_validator::{branch_exists_in_repo, validate_branch};
@@ -65,6 +66,9 @@ pub struct CreateWorktreeOpts {
     pub prompt: Option<String>,
     pub name: Option<String>,
     pub build_sessions: BuildSessions,
+    /// Explicit slot (e.g. a promoted draft keeping its place); `None` puts the
+    /// new worktree on top of the project's worktree list.
+    pub sort_order: Option<f64>,
 }
 
 /// Create a git worktree directory + persist its `WorktreeRecord` in the DB.
@@ -125,6 +129,7 @@ pub async fn create_worktree_record(
     .await?;
 
     let sessions = (opts.build_sessions)(&wt_id);
+    let requested_sort_order = opts.sort_order;
 
     let worktree_record = vst_types::WorktreeRecord {
         id: wt_id,
@@ -136,7 +141,7 @@ pub async fn create_worktree_record(
         created_at: now_iso(),
         pinned_at: None,
         hidden_at: None,
-        sort_order: now_ms() as f64,
+        sort_order: 0.0,
         terminal_seq: Some(0),
         agent_seq: Some(0),
         lsp_enabled: None,
@@ -146,9 +151,12 @@ pub async fn create_worktree_record(
 
     // Persist to manifest (structural change — immediate write).
     let record_for_insert = worktree_record.clone();
-    store
+    let updated = store
         .mutate_project(&project_id, move |p| {
-            p.worktrees.push(record_for_insert.clone());
+            let mut rec = record_for_insert.clone();
+            rec.sort_order =
+                requested_sort_order.unwrap_or_else(|| top_worktree_scope_sort_order(p));
+            p.worktrees.push(rec);
             Ok(p.clone())
         })
         .await
@@ -157,7 +165,49 @@ pub async fn create_worktree_record(
             stderr: e.to_string(),
         })?;
 
+    let mut worktree_record = worktree_record;
+    // The insert closure assigned the real slot; carry it on the returned record.
+    if let Some(w) = updated
+        .worktrees
+        .iter()
+        .find(|w| w.id == worktree_record.id)
+    {
+        worktree_record.sort_order = w.sort_order;
+    }
     Ok(worktree_record)
+}
+
+/// True for a record in the sidebar's per-project worktree list: a worktree
+/// is always in scope (see `ProjectRecord::worktrees`); this covers the
+/// `direct_sessions` that appear beside them — worktree-entry drafts. Mirrors
+/// `draftsByProject` in `LeftSidebar.tsx`.
+pub fn in_worktree_list_scope(s: &SessionRecord) -> bool {
+    s.lifecycle.state == LifecycleState::Drafting
+        && s.worktree_id.is_none()
+        && s.draft_config.as_ref().map_or(true, |c| {
+            !matches!(
+                c.entry_point,
+                DraftEntryPoint::Direct | DraftEntryPoint::Tab
+            )
+        })
+}
+
+/// `sort_order` that puts a new item on top of the worktree list: one below the
+/// min over every in-scope item (worktrees + worktree-list drafts), 0.0 when the
+/// list is empty. Must be computed inside the insert closure so it sees the live
+/// project. Negative values are fine: the next drag renumbers the list 0..n.
+pub fn top_worktree_scope_sort_order(p: &ProjectRecord) -> f64 {
+    p.worktrees
+        .iter()
+        .map(|w| w.sort_order)
+        .chain(
+            p.direct_sessions
+                .iter()
+                .filter(|s| in_worktree_list_scope(s))
+                .map(|s| s.sort_order),
+        )
+        .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.min(v))))
+        .map_or(0.0, |m| m - 1.0)
 }
 
 fn now_ms() -> u64 {

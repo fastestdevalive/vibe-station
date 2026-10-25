@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import type { ApiInstance } from "@/api";
+import type { Worktree } from "@/api/types";
 import { createMockApi, type MockApi } from "@/api/mock";
 import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -1279,9 +1280,10 @@ describe("LeftSidebar", () => {
       expect(reorderSessionSpy).toHaveBeenCalledWith("global-d2", expect.any(Number));
     });
 
-    it("dragging a project draft calls api.reorderSession with computed sortOrder", async () => {
+    // No draftConfig → lands in the worktree-list bucket, so it reorders via setWorktreeOrder.
+    it("dragging a project draft (no draftConfig) sends the full order via api.setWorktreeOrder", async () => {
       const localApi = createMockApi();
-      const reorderSessionSpy = vi.spyOn(localApi, "reorderSession");
+      const orderSpy = vi.spyOn(localApi, "setWorktreeOrder");
       render(
         <MemoryRouter>
           <Harness api={localApi}>
@@ -1345,16 +1347,16 @@ describe("LeftSidebar", () => {
         } as unknown as DragEndEvent);
       });
 
-      expect(reorderSessionSpy).toHaveBeenCalledWith("proj-d2", expect.any(Number));
+      expect(orderSpy).toHaveBeenCalledWith("proj-a", ["wt-1", "wt-2", "proj-d2", "proj-d1"]);
     });
 
     // A worktree draft (entryPoint !== "direct") merges into the same project
     // reorder scope as the real worktrees, so dragging it across a non-draft
     // worktree must interpolate its server sortOrder against the worktree
     // neighbours (computeNewSortOrder) and persist via api.reorderSession.
-    it("dragging a worktree draft across non-draft worktrees calls api.reorderSession with the interpolated sortOrder", async () => {
+    it("dragging a worktree draft across non-draft worktrees sends the full order via api.setWorktreeOrder", async () => {
       const localApi = createMockApi();
-      const reorderSessionSpy = vi.spyOn(localApi, "reorderSession");
+      const orderSpy = vi.spyOn(localApi, "setWorktreeOrder");
       render(
         <MemoryRouter>
           <Harness api={localApi}>
@@ -1404,14 +1406,15 @@ describe("LeftSidebar", () => {
         } as unknown as DragEndEvent);
       });
 
-      expect(reorderSessionSpy).toHaveBeenCalledWith("wt-d1", 1.5);
+      expect(orderSpy).toHaveBeenCalledTimes(1);
+      expect(orderSpy).toHaveBeenCalledWith("proj-a", ["wt-1", "wt-d1", "wt-2"]);
     });
 
     // The reverse: dragging a real worktree across a worktree draft dispatches
     // to api.reorderWorktree, interpolating against the draft neighbour.
-    it("dragging a worktree across a worktree draft calls api.reorderWorktree with the interpolated sortOrder", async () => {
+    it("dragging a worktree across a worktree draft sends the full order via api.setWorktreeOrder", async () => {
       const localApi = createMockApi();
-      const reorderWorktreeSpy = vi.spyOn(localApi, "reorderWorktree");
+      const orderSpy = vi.spyOn(localApi, "setWorktreeOrder");
       render(
         <MemoryRouter>
           <Harness api={localApi}>
@@ -1461,7 +1464,99 @@ describe("LeftSidebar", () => {
         } as unknown as DragEndEvent);
       });
 
-      expect(reorderWorktreeSpy).toHaveBeenCalledWith("wt-2", 1.25);
+      expect(orderSpy).toHaveBeenCalledTimes(1);
+      expect(orderSpy).toHaveBeenCalledWith("proj-a", ["wt-1", "wt-2", "wt-d1"]);
+    });
+
+    // Tied (ms-epoch-like) sortOrders used to make midpoint reorder a no-op;
+    // the drop now yields distinct index sortOrders from one setWorktreeOrder call.
+    async function renderWithTiedWorktrees(localApi: ReturnType<typeof createMockApi>) {
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      act(() => {
+        for (const id of ["wt-1", "wt-2"]) {
+          localApi.__test.emit({
+            type: "worktree:updated",
+            worktree: { ...(useServerStore.getState().worktrees.find((w) => w.id === id) as Worktree), sortOrder: 1.79e12 },
+          });
+        }
+      });
+      return capturedDndPairs.filter((p) => p.items.includes("wt-1") && p.items.includes("wt-2")).at(-1)!;
+    }
+
+    it("worktree drop with tied sortOrders writes distinct index sortOrders and one setWorktreeOrder call", async () => {
+      const localApi = createMockApi();
+      const orderSpy = vi.spyOn(localApi, "setWorktreeOrder");
+      const pair = await renderWithTiedWorktrees(localApi);
+      act(() => {
+        pair.onDragEnd({ active: { id: "wt-2" }, over: { id: "wt-1" } } as unknown as DragEndEvent);
+      });
+      expect(orderSpy).toHaveBeenCalledTimes(1);
+      expect(orderSpy).toHaveBeenCalledWith("proj-a", ["wt-2", "wt-1"]);
+      const wts = useServerStore.getState().worktrees;
+      expect(wts.find((w) => w.id === "wt-2")!.sortOrder).toBe(0);
+      expect(wts.find((w) => w.id === "wt-1")!.sortOrder).toBe(1);
+    });
+
+    it("worktree drop rolls back sortOrders when setWorktreeOrder fails", async () => {
+      const localApi = createMockApi();
+      vi.spyOn(localApi, "setWorktreeOrder").mockRejectedValue(new Error("boom"));
+      const pair = await renderWithTiedWorktrees(localApi);
+      act(() => {
+        pair.onDragEnd({ active: { id: "wt-2" }, over: { id: "wt-1" } } as unknown as DragEndEvent);
+      });
+      await waitFor(() => {
+        const wts = useServerStore.getState().worktrees;
+        expect(wts.find((w) => w.id === "wt-1")!.sortOrder).toBe(1.79e12);
+        expect(wts.find((w) => w.id === "wt-2")!.sortOrder).toBe(1.79e12);
+      });
+    });
+
+    it("a drop while the inactive filter hides a row still sends the full order", async () => {
+      const localApi = createMockApi();
+      const orderSpy = vi.spyOn(localApi, "setWorktreeOrder");
+      await renderWithTiedWorktrees(localApi);
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "wt-d1",
+          projectId: "proj-a",
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "wt-d1",
+            worktreeId: null,
+            projectId: "proj-a",
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Worktree Draft 1",
+            sortOrder: 1.79e12 + 1,
+            draftConfig: { entryPoint: "worktree" },
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+      await screen.findByText("Worktree Draft 1");
+      const wt2Sessions = useServerStore.getState().sessions.filter((s) => s.worktreeId === "wt-2");
+      act(() => {
+        useWorkspaceStore.setState({
+          hideInactiveWorktrees: true,
+          sessionStates: Object.fromEntries(wt2Sessions.map((s) => [s.id, "done"])),
+        });
+      });
+      const filtered = capturedDndPairs.filter((p) => p.items.includes("wt-d1")).at(-1)!;
+      expect(filtered.items).not.toContain("wt-2");
+      act(() => {
+        filtered.onDragEnd({ active: { id: "wt-d1" }, over: { id: "wt-1" } } as unknown as DragEndEvent);
+      });
+      expect(orderSpy).toHaveBeenCalledWith("proj-a", ["wt-d1", "wt-1", "wt-2"]);
     });
 
     // At the root level, projects and global drafts share the "projects" reorder

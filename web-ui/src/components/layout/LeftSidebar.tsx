@@ -19,6 +19,7 @@ import {
   SortableContext,
   verticalListSortingStrategy,
   useSortable,
+  arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
@@ -710,10 +711,10 @@ export function LeftSidebar({
   }
 
   /** Reorder over a unified project list that mixes worktrees and worktree
-   *  drafts (`ProjectWorktreeItem`). Fractional sortOrder interpolation is
-   *  shared; the dispatch to `reorderWorktree` vs `reorderSession` is chosen
-   *  by the moved item's kind. */
-  function handleServerReorderMixed(orderedList: ProjectWorktreeItem[], e: DragEndEvent) {
+   *  drafts (`ProjectWorktreeItem`). Sends the project's full new order to
+   *  `setWorktreeOrder`; the server renumbers 0..n (float midpoints tie near
+   *  the ms-epoch sortOrders new worktrees used to get). */
+  function handleServerReorderMixed(projectId: string, orderedList: ProjectWorktreeItem[], e: DragEndEvent) {
     // Mark BEFORE the early return — see handleServerReorder.
     markDrag();
     const { active, over } = e;
@@ -721,32 +722,26 @@ export function LeftSidebar({
     const from = orderedList.findIndex((x) => x.id === String(active.id));
     const to = orderedList.findIndex((x) => x.id === String(over.id));
     if (from === -1 || to === -1) return;
-    const moved = orderedList[from]!;
-    const prevSortOrder = moved.sortOrder;
 
-    const reordered = orderedList.slice();
-    reordered.splice(from, 1);
-    reordered.splice(to, 0, moved);
-    const newIndex = reordered.indexOf(moved);
-    const prevNeighbor = reordered[newIndex - 1];
-    const nextNeighbor = reordered[newIndex + 1];
-    const newSortOrder = computeNewSortOrder(prevNeighbor?.sortOrder, nextNeighbor?.sortOrder);
-
-    const patch = (sortOrder: number | undefined) => {
-      if (moved.kind === "worktree") {
-        useServerStore.getState().applyWorktreeUpdated({ ...(moved.data as Worktree), sortOrder });
+    // The server renumbers the project's whole list 0..n from the ids we send,
+    // so `orderedList` must be the UNFILTERED list (see call site).
+    const next = arrayMove(orderedList, from, to);
+    const patch = (item: ProjectWorktreeItem, sortOrder: number | undefined) => {
+      if (item.kind === "worktree") {
+        useServerStore.getState().applyWorktreeUpdated({ ...item.data, sortOrder });
       } else {
-        useServerStore.getState().applySessionUpdated(moved.id, { sortOrder });
+        useServerStore.getState().applySessionUpdated(item.id, { sortOrder });
       }
     };
+    const prev: { item: ProjectWorktreeItem; sortOrder: number | undefined }[] = [];
+    next.forEach((item, i) => {
+      if (item.sortOrder === i) return;
+      prev.push({ item, sortOrder: item.sortOrder });
+      patch(item, i);
+    });
 
-    patch(newSortOrder);
-    const call =
-      moved.kind === "worktree"
-        ? api.reorderWorktree(moved.id, newSortOrder)
-        : api.reorderSession(moved.id, newSortOrder);
-    void call.catch(() => {
-      patch(prevSortOrder);
+    void api.setWorktreeOrder(projectId, next.map((x) => x.id)).catch(() => {
+      for (const { item, sortOrder } of prev) patch(item, sortOrder);
     });
   }
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
@@ -2606,6 +2601,17 @@ export function LeftSidebar({
                     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
                   });
                   const orderedIds = orderedItems.map((x) => x.id);
+                  // The drag payload must be the project's FULL list (no search /
+                  // inactive filters) — the server renumbers everything from it.
+                  const fullItems: ProjectWorktreeItem[] = [
+                    ...(worktreeMap[p.id] ?? []).map((w) => ({ kind: "worktree" as const, data: w, id: w.id, sortOrder: w.sortOrder })),
+                    ...(draftsByProject[p.id]?.worktree ?? []).map((s) => ({ kind: "draft" as const, data: s, id: s.id, sortOrder: s.sortOrder })),
+                  ].sort((a, b) => {
+                    const ao = a.sortOrder ?? 0;
+                    const bo = b.sortOrder ?? 0;
+                    if (ao !== bo) return ao - bo;
+                    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                  });
                   const orderedWtList = orderedItems
                     .filter((x): x is Extract<ProjectWorktreeItem, { kind: "worktree" }> => x.kind === "worktree")
                     .map((x) => x.data);
@@ -2615,7 +2621,7 @@ export function LeftSidebar({
                       collisionDetection={closestCenter}
                       onDragStart={markDrag}
                       onDragCancel={markDrag}
-                      onDragEnd={(e) => handleServerReorderMixed(orderedItems, e)}
+                      onDragEnd={(e) => handleServerReorderMixed(p.id, fullItems, e)}
                     >
                       <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
                         {orderedItems.map((item) => {

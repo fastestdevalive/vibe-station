@@ -105,7 +105,8 @@ use vst_types::rest::worktrees::{
     FileSearchResult, OpenFileBody, OpenFilesBody as WorktreeOpenFilesBody,
     OpenFilesResult as WorktreeOpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody,
     PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
-    ReorderWorktreeResult, SearchResult, SubmodulesResult, WorktreeDoneResult,
+    ReorderWorktreeResult, SearchResult, SubmodulesResult, WorktreeDoneResult, WorktreeOrderBody,
+    WorktreeOrderResult,
 };
 use vst_types::ws::{ClientMessage, WatchScope};
 use vst_ws::broadcaster::{close_auth_expired, spawn_event_fanout, WsHub};
@@ -689,6 +690,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         )
         .route("/worktrees/:id/rename", patch(handle_worktree_rename))
         .route("/worktrees/:id/reorder", patch(handle_worktree_reorder))
+        .route("/projects/:id/worktree-order", put(handle_worktree_order))
         .route("/worktrees/:id/done", post(handle_worktree_done))
         .route("/worktrees/:id", delete(handle_delete_worktree))
         .route("/worktrees/:id/tree", get(handle_worktree_tree))
@@ -2271,6 +2273,19 @@ async fn handle_worktree_reorder(
     state
         .worktree_routes
         .patch_reorder(&id, body)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+async fn handle_worktree_order(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<WorktreeOrderBody>,
+) -> Result<Json<WorktreeOrderResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .put_worktree_order(&id, body)
         .await
         .map(Json)
         .map_err(worktree_err_to_response)

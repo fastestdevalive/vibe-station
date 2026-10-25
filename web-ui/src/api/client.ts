@@ -59,6 +59,7 @@ import type {
   UploadAttachmentsResponse,
   WSEvent,
   Worktree,
+  WorktreeOrderResult,
 } from "./types";
 import { ApiError } from "./errors";
 
@@ -768,6 +769,17 @@ export function createClientApi() {
         body: JSON.stringify({ sortOrder }),
       });
       return parseJson<{ ok: true; sortOrder: number }>(res);
+    },
+
+    /** Send a project's full worktree-list order (worktrees + worktree drafts); the server renumbers 0..n. */
+    async setWorktreeOrder(projectId: string, ids: string[]): Promise<WorktreeOrderResult> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects/${encodeURIComponent(projectId)}/worktree-order`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      return parseJson<WorktreeOrderResult>(res);
     },
 
     /** Daemon-persisted ordered id list for a given scope (pinned-order-sync). */

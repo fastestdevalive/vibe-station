@@ -61,6 +61,7 @@ import type {
   UploadAttachmentsResponse,
   WSEvent,
   Worktree,
+  WorktreeOrderResult,
 } from "./types";
 import { ApiError } from "./errors";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
@@ -823,6 +824,24 @@ export function createMockApi(seed: MockSeed = {}) {
       wt.sortOrder = sortOrder;
       emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       return { ok: true, sortOrder };
+    },
+
+    async setWorktreeOrder(projectId: string, ids: string[]): Promise<WorktreeOrderResult> {
+      // Mirrors the server: listed ids get 0..n-1; an unknown id rejects with nothing written.
+      const wts = ids.map((id) => worktrees.find((w) => w.id === id && w.projectId === projectId));
+      const drafts = ids.map((id) => sessions.find((x) => x.id === id && x.projectId === projectId && x.state === "drafting"));
+      if (ids.some((_, i) => !wts[i] && !drafts[i])) throw new ApiError("bad request", 400);
+      ids.forEach((id, i) => {
+        const wt = wts[i];
+        if (wt) {
+          wt.sortOrder = i;
+          emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+        } else {
+          drafts[i]!.sortOrder = i;
+          emit({ type: "session:updated", sessionId: id, sortOrder: i });
+        }
+      });
+      return { ok: true };
     },
 
     async getOrderedList(scopeKey: string): Promise<{ scopeKey: string; itemIds: string[]; updatedAt: string | null }> {
