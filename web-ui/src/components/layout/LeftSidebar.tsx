@@ -41,7 +41,7 @@ import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
-import { pickNextDirectAgent, projectTabIds, isSupersededSession, excludeSuperseded } from "@/lib/sessionVisibility";
+import { pickNextDirectAgent, projectTabIds, isSupersededSession } from "@/lib/sessionVisibility";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
@@ -51,6 +51,15 @@ import { RelativeTime } from "@/components/layout/RelativeTime";
 import { sessionActivityAt } from "@/lib/sessionActivity";
 import { useSidebarRowLongPress } from "@/components/layout/useSidebarRowLongPress";
 import { buildWorktreeActivityMap } from "@/lib/sessionActivity";
+import {
+  BulkActionBar,
+  BulkMenu,
+  BulkProgressTray,
+  BulkRowTrail,
+  useBulkWorktrees,
+  useVisibleWorktrees,
+  type BulkItemStatus,
+} from "@/components/bulk-worktrees";
 
 /** Material Design "search" glyph — a more natural glass-to-handle proportion than Lucide's. */
 function MaterialSearchIcon({ size = 16 }: { size?: number }) {
@@ -194,20 +203,6 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   return state; // working, idle, waiting_for_human, done, exited all map directly
 }
 
-function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
-  const agents = excludeSuperseded(sessions).filter((s) => s.type === "agent");
-  if (agents.length === 0) return true;
-  // "Hide done" hides only worktrees the user explicitly marked done — NOT
-  // `exited`. Exited is involuntary (agent crashed, tmux pane died, or the
-  // tmux server was lost on reboot), and after a restart every session lands
-  // in `exited`. Folding it in here hid all previously-active worktrees behind
-  // a filter labelled "done", so keep exited visible.
-  return agents.every((s) => {
-    const st = live[s.id] ?? s.state;
-    return st === "done";
-  });
-}
-
 /** `+N −N` LOC indicator (item 10, Decision 11) — reuses the VCS graph's
  *  existing add/del text-color classes. Renders nothing while the stat is
  *  unknown (still in flight / failed) or genuinely zero-diff. */
@@ -275,6 +270,23 @@ export function LeftSidebar({
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
+  /** Bulk select-mode + job state (global store — the tray outlives routes). */
+  const bulkMode = useBulkWorktrees((s) => s.mode);
+  const bulkSelected = useBulkWorktrees((s) => s.selected);
+  const bulkJob = useBulkWorktrees((s) => s.job);
+  const bulkExit = useBulkWorktrees((s) => s.exit);
+  const bulkToggle = useBulkWorktrees((s) => s.toggle);
+  const bulkSetMany = useBulkWorktrees((s) => s.setMany);
+  /** worktreeId -> item status while a bulk job runs; after it finishes only
+   *  `failed` rows stay marked (until the tray is dismissed or retried). */
+  const bulkStatusById = useMemo(() => {
+    if (!bulkJob) return null;
+    const m = new Map<string, BulkItemStatus>();
+    for (const item of bulkJob.items) {
+      if (!bulkJob.finished || item.status === "failed") m.set(item.id, item.status);
+    }
+    return m.size > 0 ? m : null;
+  }, [bulkJob]);
   /** worktreeId -> newest activity over its non-archived sessions (sidebar row time). */
   const wtActivity = useMemo(() => buildWorktreeActivityMap(sessions), [sessions]);
   /** Non-hidden worktrees, grouped by project — the only ones rendered in the
@@ -1507,7 +1519,7 @@ export function LeftSidebar({
     });
   }, [orderedPinnedItems, trimmedQuery, sessionMatchesQuery, worktreeMatchesQuery, matchText, projectById]);
 
-  const showPinned = !collapsed && (trimmedQuery ? filteredPinnedItems.length > 0 : hasPinned);
+  const showPinned = !collapsed && !bulkMode && (trimmedQuery ? filteredPinnedItems.length > 0 : hasPinned);
 
   const filteredWorkspaces = useMemo(() => {
     if (!trimmedQuery) return orderedWorkspaces;
@@ -1521,6 +1533,18 @@ export function LeftSidebar({
     },
     [trimmedQuery, matchText],
   );
+
+  /** projectId -> the worktree rows this render would show (hide-done +
+   *  search, archived excluded). Hoisted out of the per-project IIFE so the
+   *  project row can offer "Select all" over exactly the visible rows, whether
+   *  or not the project is expanded (bulk-worktrees Phase 2). */
+  const visibleWorktrees = useVisibleWorktrees({
+    projects,
+    hideInactiveWorktrees,
+    trimmedQuery,
+    projectDirectlyMatches,
+    worktreeMatchesQuery,
+  });
 
   const projectHasMatchingChild = useCallback(
     (p: Project) => {
@@ -1564,7 +1588,7 @@ export function LeftSidebar({
       {header}
       <div
         ref={scrollRef}
-        {...rowLongPress.handlers}
+        {...(bulkMode ? {} : rowLongPress.handlers)}
         className={collapsed ? "left-sidebar__scroll" : "left-sidebar__scroll scroll-stable"}
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
@@ -2050,12 +2074,25 @@ export function LeftSidebar({
         {!collapsed ? <div className="sidebar-section-divider" aria-hidden /> : null}
         <div className="sidebar-projects-heading">
           <span className="sidebar-projects-heading__gutter" aria-hidden />
-          {collapsed ? null : (
+          {collapsed ? null : bulkMode ? (
+            <>
+              <span className="sidebar-projects-heading__icon" aria-hidden>
+                <FolderTree size={12} />
+              </span>
+              <span className="sidebar-projects-heading__title bulk-heading__title">
+                Select<span className="bulk-heading__extra"> worktrees</span> to {bulkMode}
+              </span>
+              <button type="button" className="bulk-heading__esc" onClick={() => bulkExit()}>
+                Esc
+              </button>
+            </>
+          ) : (
             <>
               <span className="sidebar-projects-heading__icon" aria-hidden>
                 <FolderTree size={12} />
               </span>
               <span className="sidebar-projects-heading__title">Projects</span>
+              <BulkMenu />
               <button
                 type="button"
                 data-filter-menu-trigger
@@ -2207,6 +2244,9 @@ export function LeftSidebar({
             );
           }
           const p = item.data;
+          const bulkVisibleIds = bulkMode ? (visibleWorktrees[p.id] ?? []).map((w) => w.id) : [];
+          const bulkAllSelected =
+            bulkVisibleIds.length > 0 && bulkVisibleIds.every((id) => bulkSelected.has(id));
           return (
           <SortableRow key={p.id} id={p.id}>
           {({ setNodeRef, style, attributes, listeners }) => (
@@ -2292,46 +2332,64 @@ export function LeftSidebar({
                   {collapsed ? disambiguatedAbbrev(p.name, p.id, visibleProjects) : p.name}
                 </span>
               </div>
-              <button
-                type="button"
-                data-plus-menu-trigger
-                className="icon-btn tree-row__action"
-                aria-label={`New session in ${p.name}`}
-                aria-haspopup="menu"
-                aria-expanded={plusMenu?.project.id === p.id}
-                title={collapsed ? `New session — ${p.name}` : undefined}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  setPlusMenu((prev) =>
-                    prev?.project.id === p.id ? null : { project: p, rect },
-                  );
-                }}
-              >
-                <Plus size={16} />
-              </button>
-              {!collapsed ? (
-                <button
-                  type="button"
-                  data-proj-menu-trigger
-                  className="icon-btn tree-row__action"
-                  aria-label={`Project actions for ${p.name}`}
-                  aria-expanded={projMenu?.project.id === p.id}
-                  aria-haspopup="menu"
-                  title="Project menu"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    setProjMenu((prev) =>
-                      prev?.project.id === p.id ? null : { project: p, rect },
-                    );
-                  }}
-                >
-                  <MoreHorizontal size={16} />
-                </button>
-              ) : null}
+              {bulkMode ? (
+                bulkVisibleIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="bulk-select-all"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      bulkSetMany(bulkVisibleIds, !bulkAllSelected);
+                    }}
+                  >
+                    {bulkAllSelected ? "Clear" : "Select all"}
+                  </button>
+                ) : null
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    data-plus-menu-trigger
+                    className="icon-btn tree-row__action"
+                    aria-label={`New session in ${p.name}`}
+                    aria-haspopup="menu"
+                    aria-expanded={plusMenu?.project.id === p.id}
+                    title={collapsed ? `New session — ${p.name}` : undefined}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setPlusMenu((prev) =>
+                        prev?.project.id === p.id ? null : { project: p, rect },
+                      );
+                    }}
+                  >
+                    <Plus size={16} />
+                  </button>
+                  {!collapsed ? (
+                    <button
+                      type="button"
+                      data-proj-menu-trigger
+                      className="icon-btn tree-row__action"
+                      aria-label={`Project actions for ${p.name}`}
+                      aria-expanded={projMenu?.project.id === p.id}
+                      aria-haspopup="menu"
+                      title="Project menu"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setProjMenu((prev) =>
+                          prev?.project.id === p.id ? null : { project: p, rect },
+                        );
+                      }}
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
             {/* Direct sessions (no worktree) + direct drafts (entryPoint ===
                 "direct") — shown first, above worktrees. Both are Session
@@ -2579,14 +2637,7 @@ export function LeftSidebar({
                 among its non-draft worktree siblings. */}
             {openProj.has(p.id)
               ? (() => {
-                  const wtList = (worktreeMap[p.id] ?? []).filter((w) => {
-                    if (hideInactiveWorktrees) {
-                      const ss = sessionMap[w.id] ?? [];
-                      if (worktreeIsInactive(ss, sessionStates)) return false;
-                    }
-                    if (!trimmedQuery || projectDirectlyMatches(p)) return true;
-                    return worktreeMatchesQuery(w);
-                  });
+                  const wtList = visibleWorktrees[p.id] ?? [];
                   const wtDrafts = (draftsByProject[p.id]?.worktree ?? []).filter((s) => {
                     if (!trimmedQuery || projectDirectlyMatches(p)) return true;
                     return matchText(s.name) || matchText(draftLabel(s.draftPrompt));
@@ -2674,6 +2725,8 @@ export function LeftSidebar({
                           }
                           const w = item.data;
                           const label = worktreeLabel(w);
+                          const bulkSelecting = bulkMode != null;
+                          const bulkStatus = bulkStatusById?.get(w.id);
                           return (
                             <SortableRow key={w.id} id={w.id}>
                               {({ setNodeRef, style, attributes, listeners }) => (
@@ -2686,6 +2739,8 @@ export function LeftSidebar({
                                   <div
                                     className="tree-row tree-row--worktree"
                                     data-active={activeWorktreeId === w.id && location.pathname.startsWith("/worktree/")}
+                                    data-bulk-selected={bulkSelecting && bulkSelected.has(w.id) ? "true" : undefined}
+                                    data-bulk-state={bulkStatus}
                                     style={{ position: "relative" }}
                                     title={collapsed ? `${label} — select worktree` : undefined}
                                     role="button"
@@ -2693,17 +2748,20 @@ export function LeftSidebar({
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter" || e.key === " ") {
                                         e.preventDefault();
-                                        void selectWorktree(p.id, w);
+                                        // Select mode: the row's keyboard route is the
+                                        // checkbox (Decision 7b) — no navigation.
+                                        if (bulkSelecting) bulkToggle(w.id);
+                                        else void selectWorktree(p.id, w);
                                       }
                                     }}
                                     onClickCapture={suppressDoubleClickNavigation}
                                     onDoubleClick={(e) => {
-                                      if (collapsed) return;
+                                      if (collapsed || bulkSelecting) return;
                                       e.preventDefault();
                                       e.stopPropagation();
                                       startInlineRename("worktree", w.id, label, "tree");
                                     }}
-                                    {...listeners}
+                                    {...(bulkSelecting ? {} : listeners)}
                                   >
                                     <Link
                                       to={`/worktree/${w.id}`}
@@ -2711,6 +2769,11 @@ export function LeftSidebar({
                                       draggable={false}
                                       aria-label={`Open worktree ${label}`}
                                       onClick={(e) => {
+                                        if (bulkSelecting) {
+                                          e.preventDefault();
+                                          bulkToggle(w.id);
+                                          return;
+                                        }
                                         if (isModifiedClick(e)) return;
                                         if (isWorktreeActive(w.id)) e.preventDefault();
                                         selectWorktree(p.id, w);
@@ -2760,31 +2823,46 @@ export function LeftSidebar({
                                       )}
                                     </div>
                                     {!collapsed ? (
-                                      <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                                        <DiffStatBadge stat={diffStats[w.id] ?? null} />
-                                        <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
-                                        <button
-                                          type="button"
-                                          data-wt-menu-trigger
-                                          className="icon-btn wt-menu-trigger tree-row__action"
-                                          aria-label={`Worktree actions for ${label}`}
-                                          aria-expanded={wtMenu?.worktree.id === w.id}
-                                          aria-haspopup="menu"
-                                          title="Worktree menu"
-                                          onPointerDown={(e) => e.stopPropagation()}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            const rect = e.currentTarget.getBoundingClientRect();
-                                            setWtMenu((prev) =>
-                                              prev?.worktree.id === w.id
-                                                ? null
-                                                : { projectId: p.id, worktree: w, rect },
-                                            );
-                                          }}
-                                        >
-                                          <MoreHorizontal size={16} />
-                                        </button>
-                                      </div>
+                                      bulkSelecting || bulkStatus ? (
+                                        <BulkRowTrail
+                                          label={label}
+                                          checked={bulkSelecting ? bulkSelected.has(w.id) : null}
+                                          running={
+                                            worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates) ===
+                                            "working"
+                                          }
+                                          diffStat={<DiffStatBadge stat={diffStats[w.id] ?? null} />}
+                                          jobStatus={bulkStatus}
+                                          jobAction={bulkJob?.action}
+                                          onToggle={() => bulkToggle(w.id)}
+                                        />
+                                      ) : (
+                                        <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                          <DiffStatBadge stat={diffStats[w.id] ?? null} />
+                                          <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
+                                          <button
+                                            type="button"
+                                            data-wt-menu-trigger
+                                            className="icon-btn wt-menu-trigger tree-row__action"
+                                            aria-label={`Worktree actions for ${label}`}
+                                            aria-expanded={wtMenu?.worktree.id === w.id}
+                                            aria-haspopup="menu"
+                                            title="Worktree menu"
+                                            onPointerDown={(e) => e.stopPropagation()}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const rect = e.currentTarget.getBoundingClientRect();
+                                              setWtMenu((prev) =>
+                                                prev?.worktree.id === w.id
+                                                  ? null
+                                                  : { projectId: p.id, worktree: w, rect },
+                                              );
+                                            }}
+                                          >
+                                            <MoreHorizontal size={16} />
+                                          </button>
+                                        </div>
+                                      )
                                     ) : null}
                                   </div>
                                   {/* Worktree agents inside this worktree */}
@@ -2970,6 +3048,11 @@ export function LeftSidebar({
         </DndContext>
         )}
       </div>
+      {/* Bulk actions (Decision 2): plain flex children of `.left-sidebar`,
+          between the scroll area and the footer — so the progress tray
+          survives route changes without a portal or absolute positioning. */}
+      <BulkProgressTray api={api} />
+      <BulkActionBar api={api} collapsed={collapsed} />
       {!collapsed ? (
         <div className="left-sidebar__footer">
           <div className="left-sidebar__icon-row">

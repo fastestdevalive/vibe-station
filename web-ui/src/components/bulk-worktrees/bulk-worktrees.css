@@ -1,0 +1,396 @@
+/* Bulk worktree actions — menu, select mode, action bar, confirm dialog,
+ * progress tray. Every value here comes from the design mockups
+ * (`.vibekit/feature-plans/wip/bulk-worktree-actions/design/`), translated
+ * from their inline styles into classes over the real theme tokens. The
+ * checkbox / "Select all" / progress fill use `--accent` (the theme accent,
+ * off-white in the default dark theme); only the confirm + bar Delete buttons
+ * are destructive red. */
+
+:root {
+  /* Filled destructive buttons need light text on the red ground in BOTH
+   * appearances. No existing token expresses that (`--fg-inverse` flips with
+   * the theme: dark text on the off-white accent, so it would be near-black on
+   * red in dark mode), so the feature owns the one value. */
+  --bulk-on-destructive: #ffffff;
+}
+
+/* ── Heading (select mode) ───────────────────────────────────────────────── */
+
+.sidebar-projects-heading__title.bulk-heading__title {
+  container: bulk-heading / inline-size;
+  font-size: var(--fs-meta);
+  color: var(--fg-secondary);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container bulk-heading (max-width: 164px) {
+  .bulk-heading__extra {
+    display: none;
+  }
+}
+
+.bulk-heading__esc {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  padding: var(--space-1) 6px;
+  /* Same height as the 36px `.icon-btn`s it replaces — no heading jump. */
+  min-height: 36px;
+  cursor: pointer;
+}
+
+/* Text-only controls must not pick up the global `button:hover` background. */
+.bulk-heading__esc:hover,
+.bulk-tray__link:hover,
+.bulk-select-all:hover {
+  background: transparent;
+}
+
+.bulk-heading__esc:hover,
+.bulk-tray__link:hover {
+  color: var(--fg-primary);
+}
+
+/* Project-row "Select all" / "Clear" (replaces the + and ⋯ buttons). Sits
+ * above the row's stretch link, same as `.tree-row__action`. */
+.bulk-select-all {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-micro);
+  font-weight: var(--font-weight-normal);
+  padding: 0 var(--space-1);
+  /* Same height as the `.tree-row__action` buttons it replaces. */
+  min-height: var(--row-action-w);
+  cursor: pointer;
+}
+
+/* ── Row trail (select mode / job progress) ──────────────────────────────── */
+
+/* Same box as `.draft-chip` — a quiet, non-interactive badge. */
+.bulk-row__chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 5px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* The row is the size container so the chip can drop out at sidebar widths
+ * the 400px mockups never covered; StatusDot still shows the working spinner. */
+.left-sidebar .tree-row--worktree:has(> .bulk-row__trail) {
+  container: bulk-row / inline-size;
+}
+
+@container bulk-row (max-width: 269px) {
+  .bulk-row__chip {
+    display: none;
+  }
+}
+
+.bulk-row__checkbox {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.bulk-row__checkbox[data-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--fg-inverse);
+}
+
+/* Light theme: --border-strong is ~1.3:1 on the sidebar; use --fg-muted for 3:1+. */
+[data-appearance="light"] .bulk-row__checkbox:not([data-checked="true"]) {
+  border-color: var(--fg-muted);
+}
+
+.bulk-row__checkbox:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 1px;
+}
+
+/* Job status label replaces the relative time for a row on its way out. */
+.bulk-row__status {
+  flex-shrink: 0;
+  padding-right: 2px;
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+/* Select mode has no ⋯ trigger to swap in, so the diffstat must stay visible
+ * (workspace.css fades it on hover to make room for the trigger). */
+.left-sidebar .tree-row:has(.bulk-row__checkbox) .wt-row__diffstat {
+  opacity: 1;
+}
+
+/* Selected rows read like the open row (design `Select.dc.html`). */
+.left-sidebar .tree-row[data-bulk-selected="true"] {
+  background: var(--bg-active);
+}
+
+/* Rows targeted by a running job dim until the WS removal lands. */
+.tree-row[data-bulk-state="queued"],
+.tree-row[data-bulk-state="running"] {
+  opacity: 0.7;
+}
+
+.tree-row[data-bulk-state="failed"] .bulk-row__status {
+  color: var(--destructive-soft);
+}
+
+.tree-row[data-bulk-state="done"] {
+  opacity: 0.45;
+}
+
+/* ── Action bar (bottom of the sidebar) ──────────────────────────────────── */
+
+.bulk-action-bar {
+  container: bulk-bar / inline-size;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-sidebar);
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+.bulk-action-bar__count {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-meta);
+  color: var(--fg-secondary);
+}
+
+.bulk-action-bar .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* No room: drop the count (the primary button already says "Delete N"). */
+@container bulk-bar (max-width: 259px) {
+  .bulk-action-bar__count {
+    display: none;
+  }
+
+  .bulk-action-bar .btn {
+    flex: 1 1 auto;
+    padding-inline: var(--space-2);
+  }
+}
+
+.btn.bulk-action-bar__delete,
+.btn.bulk-btn--destructive {
+  background: var(--destructive);
+  border-color: var(--destructive);
+  color: var(--bulk-on-destructive);
+}
+
+.btn.bulk-action-bar__delete:hover:not(:disabled),
+.btn.bulk-btn--destructive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--destructive) 88%, var(--bg-primary));
+}
+
+/* Feature disabled on the collapsed rail (Decision 9): keep the components
+ * mounted (the tray's actions hook publishes the api/navigate refs) but out of
+ * the icon rail's way. */
+.left-sidebar--collapsed .bulk-action-bar,
+.left-sidebar--collapsed .bulk-tray {
+  display: none;
+}
+
+/* ── Confirm dialog ──────────────────────────────────────────────────────── */
+
+.dialog-card.bulk-confirm-dialog {
+  max-width: 420px;
+}
+
+.bulk-confirm__intro,
+.bulk-confirm__warning {
+  margin: 0;
+  font-size: var(--fs-meta);
+}
+
+.bulk-confirm__intro {
+  color: var(--fg-secondary);
+  line-height: var(--line-height-normal);
+}
+
+.bulk-confirm__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: var(--space-2) 10px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.bulk-confirm__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+  font-weight: var(--font-weight-light);
+}
+
+.bulk-confirm__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-confirm__warning {
+  color: var(--destructive-soft);
+}
+
+/* ── Progress tray ───────────────────────────────────────────────────────── */
+
+.bulk-tray {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.bulk-tray__card {
+  container: bulk-tray / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px var(--space-3);
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.bulk-tray__card--failure {
+  border-color: var(--destructive-muted);
+}
+
+.bulk-tray__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+}
+
+.bulk-tray__text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Narrow: status text keeps its own line; the action links wrap below it. */
+@container bulk-tray (max-width: 249px) {
+  .bulk-tray__verb-extra {
+    display: none;
+  }
+
+  .bulk-tray__row {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+
+  .bulk-tray__text {
+    flex: 1 0 calc(100% - 20px); /* 12px spinner + 8px gap */
+  }
+
+  .bulk-tray__row:not(:has(.bulk-tray__spinner)) .bulk-tray__text {
+    flex-basis: 100%;
+  }
+
+  .bulk-tray__text + .bulk-tray__link {
+    margin-left: auto;
+  }
+}
+
+.bulk-tray__text[data-failure="true"] {
+  color: var(--destructive-soft);
+}
+
+.bulk-tray__detail {
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+}
+
+.bulk-tray__link {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  padding: 0;
+  cursor: pointer;
+}
+
+.bulk-tray__link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bulk-tray__spinner {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--fg-secondary);
+  animation: bulk-tray-spin 1s linear infinite;
+}
+
+@keyframes bulk-tray-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bulk-tray__bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.bulk-tray__fill {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width var(--transition-fast);
+}
