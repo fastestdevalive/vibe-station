@@ -14,7 +14,7 @@
  *
  * Env:
  *   LIVE_URL           running sandbox (default http://localhost:7190)
- *   RELEASE            output folder name under docs/screenshots/release/ (default v0.0.2-beta)
+ *   RELEASE            release tag: selects the shots below and the folder under docs/screenshots/release/ (default v0.0.3-beta)
  *   PLAYWRIGHT_MODULE  module to import Playwright from (default "@playwright/test")
  *   CHROMIUM_PATH      optional explicit chromium / headless-shell executable
  *   ONLY               comma-separated output file names to produce (default: all)
@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RELEASE = process.env.RELEASE ?? "v0.0.2-beta";
+const RELEASE = process.env.RELEASE ?? "v0.0.3-beta";
 const OUT_DIR = join(ROOT, "docs", "screenshots", "release", RELEASE);
 const RAW_DIR = join(tmpdir(), "vst-release-raw");
 const LIVE_URL = process.env.LIVE_URL ?? "http://localhost:7190";
@@ -135,7 +135,7 @@ async function mockRichChat(page, chat) {
   });
 }
 
-async function openApp(browser, { chat }) {
+async function openApp(browser, { chat, path = `/worktree/${WORKTREE}`, patchSessions = false }) {
   const ctx = await browser.newContext({ viewport: { width: VIEW.w, height: VIEW.h }, deviceScaleFactor: RAW_DSF });
   await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), THEME);
   const page = await ctx.newPage();
@@ -148,7 +148,8 @@ async function openApp(browser, { chat }) {
     const res = await route.fetch();
     await route.fulfill({ response: res, json: { ...(await res.json()), themeId: THEME } });
   });
-  await page.goto(`${LIVE_URL}/worktree/${WORKTREE}`);
+  if (patchSessions) await page.route(/\/api\/sessions(\?.*)?$/, decorateSessions);
+  await page.goto(`${LIVE_URL}${path}`);
   await page.waitForSelector('button[aria-label="Hide projects sidebar"]');
   // The seed session is "waiting" (red pane border); that status colour is unrelated to what these shots show.
   await page.addStyleTag({ content: ".agent-pane-slot { border-color: var(--border-default) !important; }" });
@@ -172,10 +173,90 @@ async function box(locator) {
   return b;
 }
 
+
+/** Dashboard shot: make the seed agents look like live Rich Chat sessions (tool activity, recent activity, PR chips). */
+const TOOLS = [
+  { name: "Edit", detail: "authMiddleware.ts" },
+  { name: "Bash", detail: "pnpm" },
+  { name: "Read", detail: "schema.prisma" },
+  { name: "Grep" },
+];
+const PRS = {
+  // main-session id -> PR (prBranch must equal the worktree's branch, see AGENTS.md "Status indicators")
+  "napi-1-m": { state: "open", number: 142, branch: "feat/auth-middleware" },
+  "atls-2-m": { state: "open", number: 57, branch: "refactor/component-library" },
+  "frge-2-m": { state: "merged", number: 31, branch: "docs/api-reference" },
+};
+async function decorateSessions(route) {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch();
+  const sessions = await res.json();
+  let i = 0;
+  const out = sessions.map((s) => {
+    if (s.type !== "agent") return s;
+    const pr = PRS[s.id];
+    const live = s.state === "working" || s.state === "waiting_for_human";
+    const n = live ? i++ : -1;
+    return {
+      ...s,
+      channel: "json",
+      lastActivityAt: new Date(Date.now() - (n < 0 ? 40 : 2 + 4 * n) * 60_000).toISOString(),
+      lastTool: live ? TOOLS[n % TOOLS.length] : null,
+      ...(pr ? { pr: { state: pr.state, number: pr.number, url: `https://github.com/acme/repo/pull/${pr.number}`, checkedAt: new Date().toISOString(), prBranch: pr.branch } } : {}),
+    };
+  });
+  await route.fulfill({ response: res, json: out });
+}
+
 // ── shots ───────────────────────────────────────────────────────────────────
 
 const SHOTS = [
   {
+    release: "v0.0.3-beta",
+    file: "01-bulk-archive.png",
+    title: "sidebar",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, {});
+      const trigger = page.locator('button[aria-label="Bulk actions"]').first();
+      await trigger.waitFor();
+      const head = await box(trigger); // select mode swaps this heading out, so measure it first
+      await trigger.click();
+      await page.getByRole("menuitem", { name: /Archive worktrees/ }).click();
+      const boxes = page.locator('[role="checkbox"][aria-label^="Select "]:not([aria-label^="Select all"])');
+      // Projects start collapsed in the sidebar: expand one so its worktree rows (with checkboxes) show.
+      if ((await boxes.count()) < 3) await page.getByText("northstar-api", { exact: true }).first().click();
+      await boxes.nth(2).waitFor();
+      for (let i = 0; i < Math.min(3, await boxes.count()); i++) await boxes.nth(i).click();
+      const bar = page.locator(".bulk-action-bar").first();
+      await bar.waitFor();
+      await page.waitForTimeout(500);
+      const b = await box(bar);
+      const clip = inView({ x: 0, y: head.y - 14, width: b.x + b.width + 1, height: b.y + b.height + 2 - (head.y - 14) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await ctx.close();
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.3-beta",
+    file: "02-dashboard.png",
+    title: "dashboard",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { path: "/", patchSessions: true });
+      const cards = page.locator(".dashboard-card-shell");
+      await cards.first().waitFor();
+      await page.waitForTimeout(1200);
+      const inner = await box(page.locator(".dashboard-panel__inner").first());
+      const label = await box(page.locator(".dashboard-section__label").first());
+      const last = await box(cards.nth(4)); // four working cards + the first "needs you" one: icon, activity and PR chip, no cut-off card
+      const clip = inView({ x: inner.x - 14, y: label.y - 18, width: inner.width + 28, height: last.y + last.height + 3 - (label.y - 18) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await ctx.close();
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.2-beta",
     file: "01-usage-limits.png",
     title: "usage limits",
     async run(browser) {
@@ -193,6 +274,7 @@ const SHOTS = [
     },
   },
   {
+    release: "v0.0.2-beta",
     file: "02-schedule-send.png",
     title: "composer",
     async run(browser) {
@@ -217,6 +299,7 @@ const SHOTS = [
     },
   },
   {
+    release: "v0.0.2-beta",
     file: "03-html-preview.png",
     title: "chat",
     async run(browser) {
@@ -275,7 +358,7 @@ await mkdir(OUT_DIR, { recursive: true });
 
 try {
   const clips = new Map();
-  for (const s of SHOTS.filter((s) => !only || only.includes(s.file))) {
+  for (const s of SHOTS.filter((s) => s.release === RELEASE && (!only || only.includes(s.file)))) {
     clips.set(s, await s.run(browser));
     console.log(`captured ${s.file} (${Math.round(clips.get(s).width)}x${Math.round(clips.get(s).height)} css px)`);
   }
