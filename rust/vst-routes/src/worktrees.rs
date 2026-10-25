@@ -45,7 +45,9 @@ use vst_git::git::{
 use vst_git::naming::slugify_prompt;
 use vst_git::paths::Paths;
 use vst_git::session_id::{generate_session_id, tmux_name_for_session};
-use vst_git::worktree_service::{create_worktree_record, CreateWorktreeOpts};
+use vst_git::worktree_service::{
+    create_worktree_record, in_worktree_list_scope, CreateWorktreeOpts,
+};
 use vst_git::DirectPtyRegistry;
 use vst_lifecycle::channel::resolve_channel;
 use vst_lifecycle::github::{fetch_prs_for_branches, get_remote_url, resolve_github_remote};
@@ -66,7 +68,7 @@ use vst_types::rest::worktrees::{
     OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrInfo,
     PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
     ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
-    WorktreeDoneResult, WorktreeUsage,
+    WorktreeDoneResult, WorktreeOrderBody, WorktreeOrderResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::file_search::FileSearchIndex;
@@ -362,6 +364,9 @@ impl PtyKill for WorktreePtyHandleKill {
         self.0.kill();
     }
 }
+
+/// `put_worktree_order` change set: (worktree ids, (draft id, new sort order)).
+type OrderChanges = (Vec<String>, Vec<(String, f64)>);
 
 /// Worktree route errors mapped to HTTP status codes.
 #[derive(Debug, thiserror::Error)]
@@ -668,6 +673,7 @@ impl WorktreeRoutes {
                 base_branch,
                 prompt: body.prompt.clone(),
                 name: wt_name.clone(),
+                sort_order: None,
                 build_sessions: Box::new(move |wt_id| {
                     let main_session_id = generate_session_id(wt_id, SessionType::Agent);
                     let main_tmux_name = if use_tmux {
@@ -1149,6 +1155,117 @@ impl WorktreeRoutes {
             ok: true,
             sort_order: value,
         })
+    }
+
+    // --- 6b. PUT /projects/:id/worktree-order ---
+    /// Renumber the project's worktree list (worktrees + worktree-entry drafts)
+    /// 0..n from the client's full order. Listed ids first; in-scope items left
+    /// unlisted follow in their prior relative order. Out-of-scope items are
+    /// never touched.
+    pub async fn put_worktree_order(
+        &self,
+        project_id: &str,
+        body: WorktreeOrderBody,
+    ) -> Result<WorktreeOrderResult, WorktreeRouteError> {
+        let ids = body.ids;
+        // (worktree ids changed, (draft id, new order) changed) — filled in the closure.
+        let changed: Arc<std::sync::Mutex<OrderChanges>> =
+            Arc::new(std::sync::Mutex::new((vec![], vec![])));
+        let changed_in = changed.clone();
+
+        let updated = self
+            .store
+            .mutate_project(project_id, move |p| {
+                let mut seen = std::collections::HashSet::new();
+                for id in &ids {
+                    if !seen.insert(id.as_str()) {
+                        return Err(StoreError::Mutation(format!("Duplicate id '{id}'")));
+                    }
+                    let in_scope = p.worktrees.iter().any(|w| &w.id == id)
+                        || p.direct_sessions
+                            .iter()
+                            .any(|s| &s.id == id && in_worktree_list_scope(s));
+                    if !in_scope {
+                        return Err(StoreError::Mutation(format!(
+                            "Id '{id}' is not in this project's worktree list"
+                        )));
+                    }
+                }
+                // Unlisted in-scope items keep their prior relative order.
+                let mut rest: Vec<(f64, String)> = p
+                    .worktrees
+                    .iter()
+                    .map(|w| (w.sort_order, w.id.clone()))
+                    .chain(
+                        p.direct_sessions
+                            .iter()
+                            .filter(|s| in_worktree_list_scope(s))
+                            .map(|s| (s.sort_order, s.id.clone())),
+                    )
+                    .filter(|(_, id)| !seen.contains(id.as_str()))
+                    .collect();
+                rest.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                let order: Vec<String> = ids
+                    .iter()
+                    .cloned()
+                    .chain(rest.into_iter().map(|(_, id)| id))
+                    .collect();
+
+                let mut c = changed_in.lock().unwrap();
+                for (idx, id) in order.iter().enumerate() {
+                    let v = idx as f64;
+                    if let Some(w) = p.worktrees.iter_mut().find(|w| &w.id == id) {
+                        if w.sort_order != v {
+                            w.sort_order = v;
+                            c.0.push(id.clone());
+                        }
+                    } else if let Some(s) = p.direct_sessions.iter_mut().find(|s| &s.id == id) {
+                        if s.sort_order != v {
+                            s.sort_order = v;
+                            c.1.push((id.clone(), v));
+                        }
+                    }
+                }
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound(_) => {
+                    WorktreeRouteError::NotFound(format!("Project '{project_id}' not found"))
+                }
+                StoreError::Mutation(m) => WorktreeRouteError::Validation(m),
+                other => WorktreeRouteError::Internal(other.to_string()),
+            })?;
+
+        let (wt_ids, drafts) = std::mem::take(&mut *changed.lock().unwrap());
+        for id in wt_ids {
+            if let Some(wt) = updated.worktrees.iter().find(|w| w.id == id) {
+                self.broadcaster.send(ServerEvent::WorktreeUpdated {
+                    worktree: serialize_worktree_json(project_id, wt),
+                });
+            }
+        }
+        for (session_id, sort_order) in drafts {
+            self.broadcaster.send(ServerEvent::SessionUpdated {
+                session_id,
+                pinned_at: None,
+                channel: None,
+                name: None,
+                archived_at: None,
+                sort_order: Some(sort_order),
+                pr: None,
+                superseded_by: None,
+                is_main: None,
+                parent_session_id: None,
+                worktree_id: None,
+                draft_prompt: None,
+                draft_config: None,
+                mode_id: None,
+                mode_icon: None,
+            });
+        }
+
+        Ok(WorktreeOrderResult { ok: true })
     }
 
     // --- 7. POST /worktrees/:id/done ---

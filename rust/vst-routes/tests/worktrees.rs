@@ -33,7 +33,7 @@ use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::shared::Mode;
 use vst_types::rest::worktrees::{
     CreateWorktreeBody, OpenFileBody, OpenFilesBody, PatchWorktreeToggleBody, PrLookupResult,
-    RenameWorktreeBody, ReorderWorktreeBody,
+    RenameWorktreeBody, ReorderWorktreeBody, WorktreeOrderBody,
 };
 use vst_types::{
     Channel, CliId, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
@@ -2104,4 +2104,242 @@ async fn test_open_files_rejects_escaping_path() {
         .await
         .expect("list_open_files should succeed");
     assert!(list.paths.is_empty());
+}
+
+// --- PUT /projects/:id/worktree-order ---
+
+const TIED: f64 = 1_790_000_000_000.0;
+
+fn order_wt(id: &str, sort_order: f64, hidden: bool) -> WorktreeRecord {
+    let mut p = make_sample_project("p", id, Path::new("/tmp"));
+    let mut w = p.worktrees.remove(0);
+    w.sort_order = sort_order;
+    w.sessions.clear();
+    if hidden {
+        w.hidden_at = Some("2026-01-01T00:00:00.000Z".into());
+    }
+    w
+}
+
+fn order_draft(
+    id: &str,
+    sort_order: f64,
+    entry: Option<vst_types::domain::DraftEntryPoint>,
+    state: LifecycleState,
+) -> SessionRecord {
+    let mut s = make_sample_project("p", "w", Path::new("/tmp")).worktrees[0].sessions[0].clone();
+    s.id = id.into();
+    s.worktree_id = None;
+    s.is_main = false;
+    s.sort_order = sort_order;
+    s.lifecycle.state = state;
+    s.draft_config = entry.map(|entry_point| vst_types::domain::DraftConfig {
+        entry_point,
+        mode_id: None,
+        channel: None,
+        channel_explicit: None,
+        use_tmux: None,
+        base_branch: None,
+        branch: None,
+        worktree_choice: None,
+        existing_worktree_id: None,
+        use_worktree: None,
+    });
+    s
+}
+
+async fn order_env() -> (tempfile::TempDir, StoreHandle, WorktreeRoutes) {
+    let (dir, store, routes) = test_env();
+    let mut p = make_sample_project("proj-o", "a", Path::new("/tmp"));
+    p.worktrees = vec![
+        order_wt("a", TIED, false),
+        order_wt("b", TIED, false),
+        order_wt("c", TIED + 0.0001, false),
+        order_wt("h", TIED, true),
+    ];
+    p.direct_sessions = vec![
+        order_draft(
+            "d-wt",
+            TIED,
+            Some(vst_types::domain::DraftEntryPoint::Worktree),
+            LifecycleState::Drafting,
+        ),
+        order_draft("d-none", TIED, None, LifecycleState::Drafting),
+        order_draft(
+            "d-direct",
+            7.0,
+            Some(vst_types::domain::DraftEntryPoint::Direct),
+            LifecycleState::Drafting,
+        ),
+        order_draft(
+            "d-tab",
+            8.0,
+            Some(vst_types::domain::DraftEntryPoint::Tab),
+            LifecycleState::Drafting,
+        ),
+        order_draft("live", 9.0, None, LifecycleState::Working),
+    ];
+    store.add_project(p).await.unwrap();
+    (dir, store, routes)
+}
+
+fn ids(v: &[&str]) -> WorktreeOrderBody {
+    WorktreeOrderBody {
+        ids: v.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn worktree_order_renumbers_from_tied_start_incl_drafts_and_appends_unlisted() {
+    let (_d, store, routes) = order_env().await;
+    let mut rx = routes.broadcaster.subscribe();
+    routes
+        .put_worktree_order("proj-o", ids(&["c", "d-none", "b", "d-wt"]))
+        .await
+        .unwrap();
+    let p = store.get_project("proj-o").await.unwrap();
+    let wt = |id: &str| p.worktrees.iter().find(|w| w.id == id).unwrap().sort_order;
+    let ds = |id: &str| {
+        p.direct_sessions
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .sort_order
+    };
+    assert_eq!(
+        (wt("c"), ds("d-none"), wt("b"), ds("d-wt")),
+        (0.0, 1.0, 2.0, 3.0)
+    );
+    // Unlisted in-scope (a, h) follow in prior order (sortOrder asc, id tiebreak).
+    assert_eq!((wt("a"), wt("h")), (4.0, 5.0));
+    // Out-of-scope drafts / live direct sessions untouched.
+    assert_eq!((ds("d-direct"), ds("d-tab"), ds("live")), (7.0, 8.0, 9.0));
+
+    let mut wt_events = 0;
+    let mut sess_events = 0;
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            ServerEvent::WorktreeUpdated { .. } => wt_events += 1,
+            ServerEvent::SessionUpdated {
+                sort_order: Some(_),
+                ..
+            } => sess_events += 1,
+            _ => {}
+        }
+    }
+    assert_eq!((wt_events, sess_events), (4, 2));
+
+    // Re-sending the same order changes nothing -> no events.
+    routes
+        .put_worktree_order("proj-o", ids(&["c", "d-none", "b", "d-wt", "a", "h"]))
+        .await
+        .unwrap();
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn worktree_order_rejects_bad_ids_and_writes_nothing() {
+    let (_d, store, routes) = order_env().await;
+    let before = store.get_project("proj-o").await.unwrap();
+    for bad in [
+        vec!["a", "nope"],
+        vec!["a", "a"],
+        vec!["a", "d-direct"],
+        vec!["a", "d-tab"],
+        vec!["a", "live"],
+    ] {
+        let err = routes
+            .put_worktree_order("proj-o", ids(&bad))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WorktreeRouteError::Validation(_)), "{bad:?}");
+    }
+    assert_eq!(store.get_project("proj-o").await.unwrap(), before);
+    let err = routes
+        .put_worktree_order("missing", ids(&[]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::NotFound(_)));
+}
+
+#[test]
+fn top_worktree_scope_sort_order_is_min_minus_one_over_scope() {
+    use vst_git::worktree_service::top_worktree_scope_sort_order;
+    let mut p = make_sample_project("p", "a", Path::new("/tmp"));
+    p.worktrees.clear();
+    assert_eq!(top_worktree_scope_sort_order(&p), 0.0);
+    p.worktrees = vec![order_wt("a", 3.0, false)];
+    p.direct_sessions = vec![
+        order_draft("d", -4.0, None, LifecycleState::Drafting),
+        order_draft(
+            "x",
+            -99.0,
+            Some(vst_types::domain::DraftEntryPoint::Direct),
+            LifecycleState::Drafting,
+        ),
+    ];
+    assert_eq!(top_worktree_scope_sort_order(&p), -5.0);
+}
+
+#[tokio::test]
+async fn create_worktree_lands_on_top_of_the_list() {
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    let mut proj = real_git_project(git_repo_dir.path());
+    proj.worktrees = vec![order_wt("old", TIED, false)];
+    store.add_project(proj).await.unwrap();
+
+    let res = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-real-git".into(),
+            mode_id: "test-mode".into(),
+            branch: None,
+            base_branch: Some("main".into()),
+            prompt: Some("task".into()),
+            use_tmux: None,
+            channel: None,
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+    assert_eq!(res.sort_order, TIED - 1.0);
+    let p = store.get_project("proj-real-git").await.unwrap();
+    assert!(p.worktrees.iter().any(|w| w.sort_order == TIED - 1.0));
+}
+
+#[tokio::test]
+async fn create_worktree_record_honours_an_explicit_sort_order() {
+    let (_dir, store, _routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+    let vst_data_dir = tempdir().unwrap();
+    let paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    let mut proj = real_git_project(git_repo_dir.path());
+    proj.worktrees = vec![order_wt("old", 1.0, false)];
+    store.add_project(proj.clone()).await.unwrap();
+
+    let wt = vst_git::worktree_service::create_worktree_record(
+        &store,
+        &paths,
+        vst_git::worktree_service::CreateWorktreeOpts {
+            project: proj,
+            branch: None,
+            base_branch: "main".into(),
+            prompt: Some("task".into()),
+            name: None,
+            sort_order: Some(7.0),
+            build_sessions: Box::new(|_| vec![]),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(wt.sort_order, 7.0, "a promoted draft keeps its slot");
 }

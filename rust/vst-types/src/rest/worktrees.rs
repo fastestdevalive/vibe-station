@@ -74,6 +74,20 @@ pub struct ReorderWorktreeResult {
     pub sort_order: f64,
 }
 
+/// `PUT /projects/:id/worktree-order` request body: the full desired order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeOrderBody {
+    pub ids: Vec<String>,
+}
+
+/// `PUT /projects/:id/worktree-order` success.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeOrderResult {
+    pub ok: bool,
+}
+
 /// `POST /worktrees/:id/done` success.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

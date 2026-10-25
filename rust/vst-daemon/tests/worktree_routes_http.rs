@@ -227,3 +227,58 @@ async fn delete_orphan_worktree_with_running_session_succeeds() {
         "worktree must be gone from the store"
     );
 }
+
+/// `PUT /api/projects/:id/worktree-order`: 200 on a valid order, 400 on a
+/// foreign id, 404 on an unknown project.
+#[tokio::test]
+async fn worktree_order_status_codes() {
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("test.db")).unwrap();
+    store
+        .add_project(ProjectRecord {
+            id: "proj-ord".into(),
+            absolute_path: tmp.path().to_string_lossy().to_string(),
+            prefix: "vs".into(),
+            is_git: true,
+            default_branch: Some("main".into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            hidden: None,
+            direct_sessions: vec![],
+            direct_session_seq: Some(1),
+            worktrees: vec![],
+            next_worktree_num: Some(1),
+            lsp_enabled: None,
+            open_files: vec![],
+        })
+        .await
+        .unwrap();
+    let router = build_app(make_opts(tmp.path(), store));
+
+    let put = |project: &'static str, ids: serde_json::Value| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/projects/{project}/worktree-order"))
+                        .method("PUT")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::json!({ "ids": ids }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(put("proj-ord", serde_json::json!([])).await, StatusCode::OK);
+    assert_eq!(
+        put("proj-ord", serde_json::json!(["ghost"])).await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        put("nope", serde_json::json!([])).await,
+        StatusCode::NOT_FOUND
+    );
+}

@@ -66,6 +66,7 @@ use vst_git::naming::{slugify_prompt, slugify_prompt_with};
 use vst_git::paths::Paths;
 use vst_git::session_id::{generate_session_id, tmux_name_for_session};
 use vst_git::worktree_service::CreateWorktreeOpts;
+use vst_git::worktree_service::{in_worktree_list_scope, top_worktree_scope_sort_order};
 use vst_git::{create_worktree_record, DirectPtyRegistry};
 use vst_lifecycle::channel::{channel_transition, resolve_channel, session_channel};
 use vst_lifecycle::handoff::{read_handoff_file_or_null, run_handoff_turn};
@@ -751,7 +752,7 @@ impl SessionRoutes {
         }
 
         let session_id = generate_session_id(&project_id, session_type);
-        let record = draft_session_record(
+        let mut record = draft_session_record(
             &session_id,
             &project_id,
             &derived_worktree_id,
@@ -777,14 +778,23 @@ impl SessionRoutes {
                 .await
                 .map_err(create_err)?;
         } else {
-            let rec = record.clone();
-            self.store
+            let mut rec = record.clone();
+            let updated = self
+                .store
                 .mutate_project(&project_id, move |p| {
+                    // A worktree-list draft goes on top of that list (computed on
+                    // the live project); direct/tab drafts keep their own slot.
+                    if in_worktree_list_scope(&rec) {
+                        rec.sort_order = top_worktree_scope_sort_order(p);
+                    }
                     p.direct_sessions.push(rec.clone());
                     Ok(p.clone())
                 })
                 .await
                 .map_err(create_err)?;
+            if let Some(saved) = updated.direct_sessions.iter().find(|s| s.id == record.id) {
+                record.sort_order = saved.sort_order;
+            }
         }
 
         let serialized = serialize_session(derived_worktree_id.as_deref(), &project_id, &record);
@@ -2165,6 +2175,8 @@ impl SessionRoutes {
                 base_branch,
                 prompt: Some(trimmed_prompt.to_string()),
                 name: None,
+                // The draft's slot in the sidebar list carries over to the worktree.
+                sort_order: Some(session.sort_order),
                 build_sessions: Box::new(|_| vec![]),
             },
         )

@@ -1698,3 +1698,64 @@ async fn start_draft_agy_explicit_json_rejected() {
         matches!(err, StartError::Validation(m) if m.contains("does not support JSON chat mode"))
     );
 }
+
+#[tokio::test]
+async fn worktree_draft_is_created_on_top_but_direct_draft_keeps_its_own_slot() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut existing = make_session("old-draft", "p1");
+    existing.sort_order = 5.0;
+    existing.lifecycle.state = LifecycleState::Drafting;
+    existing.draft_config = Some(DraftConfig {
+        entry_point: DraftEntryPoint::Worktree,
+        mode_id: None,
+        channel: None,
+        channel_explicit: None,
+        use_tmux: None,
+        base_branch: None,
+        branch: None,
+        worktree_choice: None,
+        existing_worktree_id: None,
+        use_worktree: None,
+    });
+    p.direct_sessions = vec![existing];
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+
+    let create = |entry: &str| {
+        let body = serde_json::json!({
+            "target": "worktree",
+            "type": "agent",
+            "projectId": "p1",
+            "state": "drafting",
+            "draftConfig": { "entryPoint": entry },
+        });
+        let r = &r;
+        async move {
+            match r.create_session(&body).await.unwrap() {
+                SessionOrDraft::Session(s) => s,
+                SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
+            }
+        }
+    };
+
+    let wt_draft = create("worktree").await;
+    assert_eq!(wt_draft.sort_order, 4.0, "worktree draft goes on top");
+    let saved = store.get_project("p1").await.unwrap();
+    assert_eq!(
+        saved
+            .direct_sessions
+            .iter()
+            .find(|s| s.id == wt_draft.id)
+            .unwrap()
+            .sort_order,
+        4.0
+    );
+
+    let direct_draft = create("direct").await;
+    assert!(
+        direct_draft.sort_order > 1_000_000_000.0,
+        "direct drafts keep their own (epoch) slot, got {}",
+        direct_draft.sort_order
+    );
+}

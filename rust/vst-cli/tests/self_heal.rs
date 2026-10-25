@@ -26,10 +26,14 @@ fn vst_exe() -> PathBuf {
 /// have a real `$DISPLAY` set (e.g. for browser automation tooling), but no
 /// real vibe-station install exists here, so `launch_app()` would harmlessly
 /// fail-fast and fall through anyway. Clearing display vars makes the test
-/// not depend on that fact remaining true.
+/// not depend on that fact remaining true. On macOS `has_display()` ignores
+/// `$DISPLAY` and only treats an SSH session as headless, so mark the session
+/// as SSH too — otherwise a dev Mac with vibe-station installed would `open -a`
+/// the real app instead of exercising the headless path.
 fn clear_display_vars() {
     std::env::remove_var("DISPLAY");
     std::env::remove_var("WAYLAND_DISPLAY");
+    std::env::set_var("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22");
 }
 
 /// Kill the daemon `config.json` in `home` points at, if any — test cleanup
@@ -80,6 +84,7 @@ async fn preflight_exempt_dies_fast_without_attempting_self_heal() {
     let output = Command::new(vst_exe())
         .args(["daemon", "status"])
         .env("HOME", tmp.path())
+        .env("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22")
         .env_remove("VST_DAEMON_URL")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -138,6 +143,7 @@ async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
         .arg(&project_dir)
         .arg("--force-create")
         .env("HOME", tmp.path())
+        .env("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22")
         .env_remove("VST_DAEMON_URL")
         .output()
         .expect("vst open should run");

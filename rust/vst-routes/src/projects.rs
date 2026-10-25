@@ -910,7 +910,7 @@ impl ProjectRoutes {
                             created_at: created_at.clone(),
                             pinned_at: None,
                             hidden_at: None,
-                            sort_order: ms_now() as f64,
+                            sort_order: 0.0,
                             terminal_seq: Some(0),
                             agent_seq: Some(1),
                             lsp_enabled: None,
@@ -920,14 +920,27 @@ impl ProjectRoutes {
 
                         // `next_worktree_num` is already correctly bumped by the reservation
                         // mutate above — don't touch it here, just push the finished record.
+                        let mut worktree_record = worktree_record;
                         let wt_rec_clone = worktree_record.clone();
-                        let _ = self
+                        if let Ok(updated) = self
                             .store
                             .mutate_project(&id, move |p| {
-                                p.worktrees.push(wt_rec_clone.clone());
+                                let mut rec = wt_rec_clone.clone();
+                                rec.sort_order =
+                                    vst_git::worktree_service::top_worktree_scope_sort_order(p);
+                                p.worktrees.push(rec);
                                 Ok(p.clone())
                             })
-                            .await;
+                            .await
+                        {
+                            if let Some(w) = updated
+                                .worktrees
+                                .iter()
+                                .find(|w| w.id == worktree_record.id)
+                            {
+                                worktree_record.sort_order = w.sort_order;
+                            }
+                        }
 
                         let api_wt = serialize_worktree(&id, &worktree_record);
                         if let Ok(val) = serde_json::to_value(&api_wt) {

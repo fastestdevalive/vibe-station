@@ -1351,6 +1351,11 @@ export interface DeviceDiskInfo {
   mountPoint: string;
 }
 
+/** `PUT /projects/:id/worktree-order` success. */
+export interface WorktreeOrderResult {
+  ok: true;
+}
+
 export interface WorktreeDiskUsage {
   id: string;
   diskBytes: number;
