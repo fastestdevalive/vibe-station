@@ -989,6 +989,26 @@
   z-index: 2;
 }
 
+/* Project "⋯" menu: hidden until the project row is hovered / focused / its
+   menu is open, to cut visual clutter. Opacity only (the box stays, so the "+"
+   never shifts) and always clickable — see the wt-menu-trigger note below on
+   why clickability must not depend on :hover. No-hover (touch) devices have
+   nothing to hover with, so they always show it. */
+.tree-row--project .proj-menu-trigger {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.tree-row--project:hover .proj-menu-trigger,
+.tree-row--project:focus-within .proj-menu-trigger,
+.tree-row--project .proj-menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .tree-row--project .proj-menu-trigger {
+    opacity: 1;
+  }
+}
+
 .tree-row__project-expand {
   flex-shrink: 0;
   display: inline-flex;

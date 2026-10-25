@@ -2343,6 +2343,27 @@ export function LeftSidebar({
                 ) : null
               ) : (
                 <>
+                  {!collapsed ? (
+                    <button
+                      type="button"
+                      data-proj-menu-trigger
+                      className="icon-btn tree-row__action proj-menu-trigger"
+                      aria-label={`Project actions for ${p.name}`}
+                      aria-expanded={projMenu?.project.id === p.id}
+                      aria-haspopup="menu"
+                      title="Project menu"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setProjMenu((prev) =>
+                          prev?.project.id === p.id ? null : { project: p, rect },
+                        );
+                      }}
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     data-plus-menu-trigger
@@ -2362,27 +2383,6 @@ export function LeftSidebar({
                   >
                     <Plus size={16} />
                   </button>
-                  {!collapsed ? (
-                    <button
-                      type="button"
-                      data-proj-menu-trigger
-                      className="icon-btn tree-row__action"
-                      aria-label={`Project actions for ${p.name}`}
-                      aria-expanded={projMenu?.project.id === p.id}
-                      aria-haspopup="menu"
-                      title="Project menu"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setProjMenu((prev) =>
-                          prev?.project.id === p.id ? null : { project: p, rect },
-                        );
-                      }}
-                    >
-                      <MoreHorizontal size={16} />
-                    </button>
-                  ) : null}
                 </>
               )}
             </div>
