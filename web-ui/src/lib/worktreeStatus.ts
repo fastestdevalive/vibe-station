@@ -53,6 +53,24 @@ export function sessionStatus(state: SessionState): WorktreeRolledUpStatus {
 }
 
 /**
+ * True when a worktree should be hidden by the sidebar's "Hide done" filter:
+ * it has no agent sessions at all, or every agent session is explicitly `done`.
+ *
+ * `exited` deliberately does NOT count as done: it is involuntary (agent
+ * crashed, tmux pane died, tmux server lost on reboot), and after a restart
+ * every session lands there — folding it in hid all previously-active
+ * worktrees behind a filter labelled "done".
+ */
+export function worktreeIsInactive(
+  sessions: Session[],
+  live: Record<string, SessionState>,
+): boolean {
+  const agents = excludeSuperseded(sessions).filter((s) => s.type === "agent");
+  if (agents.length === 0) return true;
+  return agents.every((s) => (live[s.id] ?? s.state) === "done");
+}
+
+/**
  * Single status for a worktree row: working > spawning (not_started) > idle > done > exited > none.
  *
  * Only agent sessions contribute. Terminal sessions don't have user-meaningful
