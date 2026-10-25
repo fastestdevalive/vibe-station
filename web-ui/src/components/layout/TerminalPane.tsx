@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
+import { ApiError } from "@/api/errors";
 import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useIsTouch } from "@/hooks/useIsTouch";
@@ -690,6 +691,10 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
         markSessionAttachPending(activeSessionId);
         void api.openSession(activeSessionId, term.cols, term.rows);
       }
+    } catch (err) {
+      // 404: the daemon already deleted this exited terminal (its tab is going
+      // away via `session:deleted`). Anything else is a real failure.
+      if (!(err instanceof ApiError && err.status === 404)) throw err;
     } finally {
       setResumePending(false);
     }

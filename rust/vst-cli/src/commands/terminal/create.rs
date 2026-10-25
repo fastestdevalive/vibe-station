@@ -74,6 +74,7 @@ pub async fn run_terminal_create(opts: TerminalCreateOptions) -> Result<(), (Str
         name: None,
         source_agent_id,
         skip_auto_turn: None,
+        only_if_none: None,
     };
 
     let result = daemon_post::<SessionOrDraft, _>("/sessions", Some(&body))

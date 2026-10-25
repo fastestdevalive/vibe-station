@@ -49,7 +49,7 @@ use vst_types::events::Broadcaster;
 use crate::env_setup::{install_harness_skill_dirs, patch_shell_configs, setup_vst_environment};
 use crate::lock::{acquire_lock, release_lock};
 use crate::port::{find_free_port, DEFAULT_PORT};
-use crate::server::{build_app, BuildServerOptions};
+use crate::server::{build_state, router_from_state, BuildServerOptions};
 
 /// Options controlling how the daemon boots.
 #[derive(Clone, Copy, Debug, Default)]
@@ -541,7 +541,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let (swap_tx, swap_rx) = tokio::sync::mpsc::channel(4);
     let network = crate::network::NetworkControl::new(initial, swap_tx, config_path.clone());
     let limits = crate::limits_wiring::build_limits_handle(&store, &broadcaster).await;
-    let router = build_app(BuildServerOptions {
+    let state = build_state(BuildServerOptions {
         network,
         port,
         auth_state: Some(auth_state.clone()),
@@ -558,6 +558,11 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         paths: paths.clone(),
         limits: limits.clone(),
     });
+
+    // Delete exited plain terminals: sweep stale ones now, then follow events.
+    let terminal_reaper_handle =
+        vst_routes::terminal_reaper::spawn_exited_terminal_reaper(state.session_routes.clone());
+    let router = router_from_state(state);
 
     // ── Pollers ───────────────────────────────────────────────────────────────
     let lifecycle_poller = Arc::new(
@@ -609,6 +614,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         pr_handle.abort();
         schedule_handle.abort();
         limits_handle.abort();
+        terminal_reaper_handle.abort();
         background_boot_for_shutdown.abort_all().await;
         // Kill cloudflared but preserve `enabled` flag so restore_on_boot
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).

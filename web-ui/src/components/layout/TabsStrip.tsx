@@ -155,13 +155,24 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     isAgent ? s.setActiveSession : s.setActiveTerminalSession,
   );
   const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
+  const closeTerminalDock = useWorkspaceStore((s) => s.closeTerminalDock);
+  /** This context's terminal dock is open. The dock's content stays mounted
+   *  (collapsed) while hidden, so visibility — not mount — is the "open" signal. */
+  const dockVisible = useWorkspaceStore(
+    (s) => (worktreeId ? s.layoutByWorktree[worktreeId]?.terminalDockVisible : false) ?? false,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Context key ("scope:id") this instance already tried to auto-create for.
    *  Keyed by context, not just "did it run": the strip is NOT remounted when
    *  the user switches worktrees (same tree position, new props), so a plain
    *  boolean would let the first empty worktree suppress every later one.
-   *  Closing the last tab keeps the key, so it does not re-trigger. */
+   *  Cleared whenever the dock is hidden, so each open evaluates afresh. */
   const autoCreateAttemptedFor = useRef<string | null>(null);
+  /** Context key this instance has seen at least one terminal in while the dock
+   *  was open. Once set, an empty list means "the last terminal went away"
+   *  (closed, or reaped by the daemon) → the dock closes rather than
+   *  re-creating. Both refs reset whenever the dock is hidden. */
+  const seenTerminalsFor = useRef<string | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -465,16 +476,38 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 
-  // Opening an empty terminal dock creates one shell immediately (no dialog).
-  // Fires at most once per context (worktree/project): the dock is unmounted
-  // while hidden, so "mounted empty" == "opened empty". Closing the last tab
-  // while the dock stays open keeps the attempted-key set, so it does not
-  // re-trigger; switching to another empty worktree does.
+  // Invariant: an OPEN terminal dock always has at least one terminal. The dock
+  // stays mounted while hidden, so everything below is gated on `dockVisible`.
+  //  - Open and empty (just opened, or switched to an empty worktree) → create
+  //    one shell immediately (no dialog). `onlyIfNone` makes concurrent clients
+  //    converge on one shell.
+  //  - Emptied while open (last tab closed, or the daemon reaped the exited
+  //    terminals) → close the dock; opening it again creates a fresh shell.
+  //    Never re-create in place: an instantly-dying shell would loop
+  //    create → exit → reap → create.
+  //  - Hidden → nothing is created, and the per-open refs reset.
+  // `seenTerminalsFor` only flips once a terminal is actually observed, so the
+  // window between a create resolving and its `session:created` landing is not
+  // mistaken for "emptied".
   useEffect(() => {
-    if (isAgent || !worktreeId || !sessionsLoaded || sessions.length > 0) return;
+    if (isAgent || !worktreeId) return;
+    if (!dockVisible) {
+      seenTerminalsFor.current = null;
+      autoCreateAttemptedFor.current = null;
+      return;
+    }
+    if (!sessionsLoaded) return;
 
     const lockKey = `${scope}:${worktreeId}`;
-    if (autoCreateAttemptedFor.current === lockKey) return;
+    if (sessions.length > 0) {
+      seenTerminalsFor.current = lockKey;
+      autoCreateAttemptedFor.current = lockKey;
+      return;
+    }
+    if (seenTerminalsFor.current === lockKey) {
+      closeTerminalDock(worktreeId);
+      return;
+    }
     if (autoCreateInFlight.has(lockKey)) {
       autoCreateAttemptedFor.current = lockKey;
       return;
@@ -483,6 +516,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     autoCreateInFlight.add(lockKey);
 
     let cancelled = false;
+    // Set the moment a create request is actually issued; before that, a cancel
+    // (StrictMode's mount → cleanup → mount, or a context switch) must hand the
+    // work back so the re-run can do it.
+    let issued = false;
     void (async () => {
       try {
         if (isProject) {
@@ -492,11 +529,13 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
               (s) => s.projectId === worktreeId && s.worktreeId === null && s.type === "terminal",
             );
           if (existing || cancelled) return;
+          issued = true;
           await api.createDirectSession({
             target: "direct",
             projectId: worktreeId,
             type: "terminal",
             useTmux: true,
+            onlyIfNone: true,
           });
         } else {
           const all = await api.listSessions(worktreeId);
@@ -508,12 +547,14 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             name = undefined;
           }
           if (cancelled) return;
+          issued = true;
           await api.createSession({
             worktreeId,
             modeId: null,
             type: "terminal",
             name,
             useTmux: true,
+            onlyIfNone: true,
           });
         }
       } catch {
@@ -524,15 +565,23 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         // racing strip would not yet see the new session. Once the create has
         // resolved, a racing strip re-reads the server / store and bails on its
         // own. Holding the key past that point would strand it forever if this
-        // strip unmounts before the session lands.
-        autoCreateInFlight.delete(lockKey);
+        // strip unmounts before the session lands. A run cancelled BEFORE it
+        // issued anything already released the key in its cleanup (and the
+        // re-run may own it now), so it must not delete it again.
+        if (issued || !cancelled) autoCreateInFlight.delete(lockKey);
       }
     })();
 
     return () => {
       cancelled = true;
+      if (!issued) {
+        // Nothing was sent: free the context so the re-run (StrictMode replay,
+        // context switch back) performs the create instead of bailing.
+        autoCreateInFlight.delete(lockKey);
+        if (autoCreateAttemptedFor.current === lockKey) autoCreateAttemptedFor.current = null;
+      }
     };
-  }, [api, isAgent, isProject, scope, sessions.length, sessionsLoaded, worktreeId]);
+  }, [api, closeTerminalDock, dockVisible, isAgent, isProject, scope, sessions.length, sessionsLoaded, worktreeId]);
 
   const ariaLabel = isAgent ? "Agent sessions" : "Terminals";
 

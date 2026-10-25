@@ -847,6 +847,17 @@ export function createMockApi(seed: MockSeed = {}) {
     },
 
     async createSession(body: CreateSessionBody): Promise<Session> {
+      if (body.onlyIfNone && body.type === "terminal") {
+        const live = sessions.find(
+          (s) =>
+            s.worktreeId === body.worktreeId &&
+            s.type === "terminal" &&
+            s.state !== "exited" &&
+            s.state !== "done" &&
+            s.archivedAt == null,
+        );
+        if (live) return structuredClone(live);
+      }
       const wt = worktrees.find((w) => w.id === body.worktreeId);
       const wtSessions = sessions.filter((s) => s.worktreeId === body.worktreeId);
       const nextAgent = wtSessions.filter((s) => s.type === "agent" && !s.isMain).length + 1;
@@ -958,6 +969,18 @@ export function createMockApi(seed: MockSeed = {}) {
     },
 
     async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
+      if (body.onlyIfNone && body.type === "terminal") {
+        const live = sessions.find(
+          (s) =>
+            s.projectId === body.projectId &&
+            s.worktreeId === null &&
+            s.type === "terminal" &&
+            s.state !== "exited" &&
+            s.state !== "done" &&
+            s.archivedAt == null,
+        );
+        if (live) return structuredClone(live);
+      }
       const projSessions = sessions.filter((s) => s.projectId === body.projectId && s.worktreeId === null);
       const nextDirect = projSessions.length + 1;
       const sess: Session = {

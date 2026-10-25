@@ -397,6 +397,13 @@ A PR that changes behaviour without changing the matrix should be sent back.
 - **Testing:** Ctrl+Shift+D opens the dev state simulator, which drives both axes with no daemon.
   Prefer it over injecting SQLite rows — a container restart kills tmux, the lifecycle poller
   then marks every session `exited`, and `exited` is terminal, so injected states never recover.
+- **Exited plain terminals are deleted, agents are not.** `rust/vst-routes/src/terminal_reaper.rs` (started from
+  `run.rs`) deletes a `type == Terminal` session once it is `exited` (boot sweep + `SessionState` events) via the
+  normal `delete_session` path; exited *agents* stay resumable. The poller / `worktree_done` / `recover.rs` remain
+  the only writers of the state. An open terminal dock always has ≥1 terminal: `TabsStrip` (keyed off
+  `terminalDockVisible` — the dock's content stays mounted while hidden) creates one (`onlyIfNone`) when the dock is
+  open and empty, and CLOSES the dock when it empties while open — never re-create in place, or an
+  instantly-dying shell loops create → exit → reap → create. A hidden dock creates nothing.
 
 ---
 

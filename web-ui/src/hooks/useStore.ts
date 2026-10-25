@@ -426,6 +426,8 @@ export interface WorkspaceState {
   setToolPanelTab: (tab: ToolTab) => void;
   /** Toggle the bottom terminal dock. */
   toggleTerminalDock: () => void;
+  /** Hide `key`'s bottom terminal dock (a worktree id, or the direct-session project id); no-op when it is already hidden (idempotent, unlike the toggle). */
+  closeTerminalDock: (key: string) => void;
   /** Flip the agent pane ↔ tool panel split between horizontal and vertical.
    *  Pass the current *effective* orientation so mobile's implicit override is
    *  respected — without it the first press on mobile is a no-op. */
@@ -1029,6 +1031,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : DEFAULT_WORKTREE_LAYOUT;
             const next = patchLayout(s, { terminalDockVisible: !cur.terminalDockVisible });
             if (cur.terminalDockVisible && s.workspacePaneFullscreen === "terminal") {
+              return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
+            }
+            return withTransitionHint("split", next);
+          }),
+        closeTerminalDock: (key) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT;
+            if (!cur.terminalDockVisible) return s;
+            const next: Partial<WorkspaceState> = {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [key]: { ...cur, terminalDockVisible: false },
+              },
+            };
+            // Fullscreen belongs to the ACTIVE context only.
+            if (key === layoutKey(s) && s.workspacePaneFullscreen === "terminal") {
               return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
             }
             return withTransitionHint("split", next);
