@@ -166,6 +166,47 @@ async fn cancel_active_prompt_resolves_with_cancelled_without_killing_connection
     conn.dispose().await;
 }
 
+/// Force-send regression: a caller that cancels a prompt and immediately sends
+/// the next one (without awaiting the first's result) must not hit the agent's
+/// "Session already has an active ACP prompt" rejection while it unwinds.
+#[tokio::test]
+async fn prompt_sent_right_after_cancel_waits_for_the_cancelled_prompt_to_finish() {
+    let conn = make_connection("one_prompt_strict");
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+
+    let first = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("one"))],
+    );
+    // Let the first prompt reach the agent before cancelling it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    conn.cancel_active_prompt();
+    let second = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("two"))],
+    );
+
+    let stop2 = second
+        .result
+        .await
+        .expect("result resolves")
+        .expect("second prompt must not be rejected as concurrent")
+        .stop_reason;
+    assert_eq!(stop2, StopReason::EndTurn);
+    let stop1 = first
+        .result
+        .await
+        .expect("result resolves")
+        .expect("first prompt resolves");
+    assert_eq!(stop1.stop_reason, StopReason::Cancelled);
+    conn.dispose().await;
+}
+
 #[tokio::test]
 async fn dispose_is_idempotent_and_flips_is_alive() {
     let conn = make_connection("normal");

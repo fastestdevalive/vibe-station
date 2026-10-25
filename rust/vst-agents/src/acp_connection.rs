@@ -155,7 +155,16 @@ struct Shared {
     /// `(pid, starttime)` of the agent's descendants, snapshotted at close
     /// while the agent is still alive; killed after `AcpAgent`'s group kill.
     descendants: Mutex<Vec<(u32, u64)>>,
+    /// Held for the whole life of a `session/prompt` request. A caller that
+    /// abandons a cancelled prompt and immediately sends the next one would
+    /// otherwise reach the agent while it is still unwinding the old one, and
+    /// opencode rejects that with "Session already has an active ACP prompt".
+    prompt_gate: tokio::sync::Mutex<()>,
 }
+
+/// Longest a new prompt waits for a cancelled predecessor to finish unwinding
+/// before it is sent anyway (a wedged agent must not block the session).
+const PROMPT_GATE_WAIT: Duration = Duration::from_secs(15);
 
 impl Shared {
     fn new() -> Self {
@@ -169,6 +178,7 @@ impl Shared {
             last_activity: Mutex::new(Instant::now()),
             root_tag: uuid::Uuid::new_v4().to_string(),
             descendants: Mutex::new(Vec::new()),
+            prompt_gate: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -853,6 +863,11 @@ async fn command_loop(
                 let shared2 = Arc::clone(&shared);
                 let updates_tx2 = updates_tx.clone();
                 let spawned = cx.spawn(async move {
+                    // Wait (bounded) for any prior prompt to fully finish —
+                    // see `Shared::prompt_gate`. FIFO, so turns stay ordered.
+                    let _gate = tokio::time::timeout(PROMPT_GATE_WAIT, shared2.prompt_gate.lock())
+                        .await
+                        .ok();
                     let result =
                         do_send_prompt(&cx2, &shared2, &session_id, prompt, timeout_ms).await;
                     // The turn is over — stop routing notifications to its

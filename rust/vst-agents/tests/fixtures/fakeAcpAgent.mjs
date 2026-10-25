@@ -75,6 +75,10 @@
 //     and `_session/steering` answers `outcome: "injected"` only while a prompt is
 //     active (else `promptRequired`), after STEER_DELAY_MS (default 0). Each injected
 //     steer's text is appended, one per line, to STEER_OUT_FILE when set.
+//   FAKE_ACP_MODE=one_prompt_strict — models opencode: a second session/prompt while one
+//     is still active is rejected with "Session already has an active ACP prompt". The
+//     first prompt hangs until session/cancel, then takes CANCEL_UNWIND_MS (default 300)
+//     to unwind before resolving "cancelled"; later prompts resolve end_turn at once.
 import { createInterface } from "node:readline";
 import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -193,6 +197,29 @@ rl.on("line", (line) => {
   }
   if (msg.method === "session/prompt") {
     const sid = msg.params.sessionId;
+    if (mode === "one_prompt_strict") {
+      if (promptActive) {
+        write({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: `Internal error: Session already has an active ACP prompt: ${sid}` } });
+        return;
+      }
+      promptCount += 1;
+      promptActive = true;
+      if (promptCount > 1) {
+        promptActive = false;
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+        return;
+      }
+      const check = setInterval(() => {
+        if (!cancelRequested) return;
+        clearInterval(check);
+        cancelRequested = false;
+        setTimeout(() => {
+          promptActive = false;
+          write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "cancelled" } });
+        }, Number(process.env.CANCEL_UNWIND_MS ?? 300));
+      }, 10);
+      return;
+    }
     if (mode === "steering_strict") {
       promptCount += 1;
       promptActive = true;
