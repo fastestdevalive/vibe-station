@@ -30,9 +30,18 @@ while [ $# -gt 0 ]; do
 done
 
 SRC="$TOP"; TMP_WT=""; SLOT_DIR=""
+IMG=""
 cleanup() {
   [ -n "$SLOT_DIR" ] && rm -rf "$SLOT_DIR"
-  if [ -n "$TMP_WT" ]; then git -C "$TOP" worktree remove --force "$TMP_WT" >/dev/null 2>&1 || rm -rf "$TMP_WT"; fi
+  if [ -n "$TMP_WT" ]; then
+    # Docker creates the volume mount points inside the checkout as root; remove
+    # them from inside a container, or the host can't delete the directory.
+    if [ -n "$IMG" ]; then
+      docker run --rm --user root -v "$TMP_WT":/w "$IMG" rm -rf /w/node_modules /w/web-ui/node_modules /w/desktop/node_modules /w/rust/target >/dev/null 2>&1 || true
+    fi
+    git -C "$TOP" worktree remove --force "$TMP_WT" >/dev/null 2>&1 || rm -rf "$TMP_WT" || true
+    git -C "$TOP" worktree prune >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
@@ -82,10 +91,14 @@ fi
 
 # Per-worktree volumes so parallel worktrees never share a target/ or node_modules;
 # only the cargo download cache + rustup toolchains are shared (cargo locks itself).
+# A linked worktree's .git is a file pointing at the main repo's .git dir (a host path):
+# mount that dir read-only at the same path so git works inside the container.
+GITCOMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 KEY="$(basename "$TOP" | tr -c 'A-Za-z0-9_.-\n' '_')-$(printf '%s' "$TOP" | shasum | cut -c1-6)"
 docker run --rm -t \
   --name "vst-ci-$KEY-$$" \
   -v "$SRC":/work \
+  -v "$GITCOMMON":"$GITCOMMON":ro -e GIT_OPTIONAL_LOCKS=0 \
   -v vst-ci-cargo-registry:/usr/local/cargo/registry \
   -v vst-ci-rustup:/usr/local/rustup \
   -v "vst-ci-target-$KEY":/work/rust/target \
