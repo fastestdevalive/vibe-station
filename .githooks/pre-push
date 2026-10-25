@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# pre-push — run the local CI (scripts/ci-local.sh, in Docker) on every commit about to be
+# pushed. Covers new pushes, PR updates and force-pushes: git hands us the exact commit.
+# Skip: VST_SKIP_CI=1 git push   |   git push --no-verify
+# Enable once per clone (worktrees share it):  git config core.hooksPath .githooks
+set -euo pipefail
+ZERO=0000000000000000000000000000000000000000
+[ -n "${VST_SKIP_CI:-}" ] && { echo "pre-push: CI skipped (VST_SKIP_CI)" >&2; exit 0; }
+
+COMMON="$(git rev-parse --git-common-dir)"
+RELEVANT='^(rust/|web-ui/|desktop/|scripts/|\.github/|\.githooks/|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|Dockerfile\.ci)'
+
+while read -r _lref lsha rref _rsha; do
+  [ "$lsha" = "$ZERO" ] && continue                 # branch deletion
+  case "$rref" in refs/tags/*) continue ;; esac     # tags
+  if [ "$rref" = refs/heads/main ]; then echo "pre-push: push to main — CI check skipped" >&2; continue; fi
+
+  # Skip when nothing CI-relevant changed vs main.
+  base="$(git merge-base origin/main "$lsha" 2>/dev/null || true)"
+  if [ -n "$base" ] && ! git diff --name-only "$base" "$lsha" | grep -Eq "$RELEVANT"; then
+    echo "pre-push: no CI-relevant changes — skipped" >&2; continue
+  fi
+
+  # Already green for this exact commit (e.g. re-push, force-push of the same sha).
+  PASS="$COMMON/vst-ci-pass"; mkdir -p "$PASS"
+  [ -e "$PASS/$lsha" ] && { echo "pre-push: $lsha already passed local CI" >&2; continue; }
+
+  echo "pre-push: running local CI for ${lsha:0:10} (skip: VST_SKIP_CI=1 git push)…" >&2
+  if "$(git rev-parse --show-toplevel)/scripts/ci-local.sh" --rev "$lsha"; then
+    : > "$PASS/$lsha"
+  else
+    echo "pre-push: local CI FAILED — push aborted. Fix it, or skip with VST_SKIP_CI=1 / --no-verify." >&2
+    exit 1
+  fi
+done

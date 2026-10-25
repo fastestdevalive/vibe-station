@@ -1,0 +1,41 @@
+# Local CI image (scripts/ci-local.sh). Linux, mirrors what .github/workflows/rust-ci.yml
+# installs on ubuntu-latest, plus Node/pnpm for the web-ui checks. No COPY: the
+# repo is bind-mounted at run time, so this is built from stdin with no context.
+FROM rust:1-bookworm
+
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends ripgrep git tmux python3 perl curl ca-certificates build-essential pkg-config libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Node 20 (package.json engines) + the pinned pnpm.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/* \
+ && corepack enable \
+ && corepack prepare pnpm@9.0.0 --activate
+
+# rust/rust-toolchain.toml pins the compiler; rustup fetches it on first use into
+# the cached RUSTUP_HOME volume. cargo-deny is installed once, here.
+RUN cargo install cargo-deny --locked
+
+# jq: scripts/check-version-sync.sh (preinstalled on GitHub's ubuntu runner).
+RUN apt-get update -y && apt-get install -y --no-install-recommends jq && rm -rf /var/lib/apt/lists/*
+
+# Bind-mounted checkouts are owned by a different uid; some tests commit.
+RUN git config --global --add safe.directory '*' \
+ && git config --global user.email ci@local && git config --global user.name ci-local
+
+# Run as a normal user, like GitHub's runner: root ignores file permissions, which
+# breaks tests that expect an unwritable directory to be rejected. The dirs that
+# get volume-mounted at run time are pre-created here so the volumes inherit
+# this ownership.
+RUN useradd -m -u 1000 ci \
+ && mkdir -p /work/rust/target /work/node_modules /work/web-ui/node_modules /work/desktop/node_modules /home/ci/.local/share/pnpm \
+ && chown -R ci:ci /work /home/ci /usr/local/cargo /usr/local/rustup
+USER ci
+ENV HOME=/home/ci
+RUN git config --global --add safe.directory '*' \
+ && git config --global user.email ci@local && git config --global user.name ci-local \
+ && corepack prepare pnpm@9.0.0 --activate
+
+WORKDIR /work
