@@ -158,6 +158,7 @@ pub async fn run_agent_create(opts: AgentCreateOptions) -> Result<(), (String, i
         name: None,
         source_agent_id,
         skip_auto_turn: None,
+        only_if_none: None,
     };
 
     let result = daemon_post::<SessionOrDraft, _>("/sessions", Some(&body))

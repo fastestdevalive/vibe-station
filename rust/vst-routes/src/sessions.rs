@@ -101,6 +101,7 @@ use crate::modes::{
     find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
 };
 use crate::settings::load_default_channel_overrides;
+use crate::terminal_reaper::{find_live_terminal, lock_if_guarded};
 use crate::worktrees::{ensure_git_project, GitGateError};
 
 pub use vst_types::rest::sessions::SessionOrDraft;
@@ -949,6 +950,10 @@ impl SessionRoutes {
         channel: Channel,
         is_json: bool,
     ) -> Result<SessionOrDraft, CreateError> {
+        // `onlyIfNone` (terminals only): hold the lock across check → spawn →
+        // persist, then hand back the live terminal if one already exists.
+        let guarded = r#type == SessionType::Terminal && data.only_if_none == Some(true);
+        let _create_guard = lock_if_guarded(guarded).await;
         let project_id = data.project_id.clone().ok_or_else(|| {
             CreateError::Validation("projectId is required for direct sessions".to_string())
         })?;
@@ -956,6 +961,15 @@ impl SessionRoutes {
             self.store.get_project(&project_id).await.ok_or_else(|| {
                 CreateError::NotFound(format!("Project '{project_id}' not found"))
             })?;
+        if guarded {
+            if let Some(existing) = find_live_terminal(&project.direct_sessions) {
+                return Ok(SessionOrDraft::Session(serialize_session(
+                    None,
+                    &project.id,
+                    existing,
+                )));
+            }
+        }
 
         let session_id = generate_session_id(&project_id, r#type);
         let tmux_name = if use_tmux {
@@ -1094,9 +1108,21 @@ impl SessionRoutes {
         let worktree_id = data.worktree_id.clone().ok_or_else(|| {
             CreateError::Validation("worktreeId is required for worktree sessions".to_string())
         })?;
+        // `onlyIfNone` — see `create_direct_session`.
+        let guarded = r#type == SessionType::Terminal && data.only_if_none == Some(true);
+        let _create_guard = lock_if_guarded(guarded).await;
         let (project, worktree) = find_worktree_context(&self.store, &worktree_id)
             .await
             .ok_or_else(|| CreateError::NotFound(format!("Worktree '{worktree_id}' not found")))?;
+        if guarded {
+            if let Some(existing) = find_live_terminal(&worktree.sessions) {
+                return Ok(SessionOrDraft::Session(serialize_session(
+                    Some(&worktree_id),
+                    &project.id,
+                    existing,
+                )));
+            }
+        }
 
         let session_id = generate_session_id(&worktree_id, r#type);
         let tmux_name = if use_tmux {

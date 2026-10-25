@@ -1158,6 +1158,12 @@ export interface CreateSessionBody {
   name?: string;
   /** See `CreateWorktreeBody.skipAutoTurn`. */
   skipAutoTurn?: boolean;
+  /**
+   * Terminals only: return the scope's existing live terminal instead of
+   * creating another (the dock's auto-create sets this so two clients can't
+   * both create one). Absent ≡ false.
+   */
+  onlyIfNone?: boolean;
 }
 
 /** Body for creating a direct session (no worktree). */
@@ -1173,6 +1179,8 @@ export interface CreateDirectSessionBody {
   name?: string;
   /** See `CreateWorktreeBody.skipAutoTurn`. */
   skipAutoTurn?: boolean;
+  /** See `CreateSessionBody.onlyIfNone`. */
+  onlyIfNone?: boolean;
 }
 
 /** Body for adding a new project. */

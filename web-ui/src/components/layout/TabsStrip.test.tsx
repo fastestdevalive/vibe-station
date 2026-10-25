@@ -103,6 +103,13 @@ describe("TabsStrip", () => {
       layoutByWorktree: {
         "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
         "wt-2": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        // Contexts the auto-create tests open empty: the dock's open state is
+        // what gates creation (its content stays mounted while hidden).
+        "wt-empty-a": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        "wt-empty-b": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        "wt-empty-close": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        "wt-empty-ghost": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        "proj-empty": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
       },
     });
   });
@@ -529,11 +536,133 @@ describe("TabsStrip", () => {
         worktreeId: "wt-2",
         type: "terminal",
         useTmux: true,
+        onlyIfNone: true,
       }),
     );
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: /Terminal/i })).toBeInTheDocument();
     });
+  });
+
+  it("3.T1 — project-scope dock auto-create sends onlyIfNone", async () => {
+    const localApi = createMockApi();
+    const createSpy = vi.spyOn(localApi, "createDirectSession");
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-empty" kind="terminal" scope="project" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: "direct",
+          projectId: "proj-empty",
+          type: "terminal",
+          onlyIfNone: true,
+        }),
+      );
+    });
+  });
+
+  it("3.T2 — terminating the last terminal closes the dock without re-creating; reopening it creates one", async () => {
+    const user = userEvent.setup();
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="terminal" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /term-1/i });
+
+    await user.click(screen.getByRole("button", { name: /Terminate term-1/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Terminate$/i }),
+    );
+    await waitFor(() => expect(tab).not.toBeInTheDocument());
+    // The dock closes instead of re-creating in place.
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().layoutByWorktree["wt-1"]?.terminalDockVisible).toBe(false);
+    });
+    // Give the auto-create effect a chance to (wrongly) fire.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("3.T5 — the dock stays mounted while hidden: emptied → closes; reopened → creates; hidden → never creates", async () => {
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    useWorkspaceStore.setState({ activeWorktreeId: "wt-2" });
+    // One mount for the whole test — hiding the dock must NOT unmount the strip.
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-2" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    const tab = await screen.findByRole("tab", { name: /Terminal/i });
+
+    // Last terminal goes away while the dock is open (e.g. reaped by the daemon).
+    for (const t of useServerStore.getState().sessions.filter((x) => x.worktreeId === "wt-2" && x.type === "terminal")) {
+      await api.terminateSession(t.id);
+      useServerStore.getState().applySessionDeleted(t.id);
+    }
+    await waitFor(() => expect(tab).not.toBeInTheDocument());
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().layoutByWorktree["wt-2"]?.terminalDockVisible).toBe(false);
+    });
+    // Hidden + empty: nothing is created in the background.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(createSpy).toHaveBeenCalledTimes(1);
+
+    // The user reopens the dock (same mounted strip): it must not stay empty.
+    act(() => useWorkspaceStore.getState().toggleTerminalDock());
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(2));
+    await screen.findByRole("tab", { name: /Terminal/i });
+    expect(useWorkspaceStore.getState().layoutByWorktree["wt-2"]?.terminalDockVisible).toBe(true);
+  });
+
+  it("3.T8 — open-empty create survives StrictMode's mount/cleanup/mount when the store is already loaded", async () => {
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    useWorkspaceStore.setState({ activeWorktreeId: "wt-2" });
+    // Store already loaded and empty for wt-2 at mount (a warm SPA, not a cold load).
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: true });
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <RawTabsStrip api={api} worktreeId="wt-2" kind="terminal" />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("3.T7 — a hidden dock on an empty worktree creates nothing", async () => {
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    useWorkspaceStore.setState((st) => ({
+      activeWorktreeId: "wt-2",
+      layoutByWorktree: {
+        ...st.layoutByWorktree,
+        "wt-2": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: false },
+      },
+    }));
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-2" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(createSpy).not.toHaveBeenCalled();
   });
 
   it("does not auto-create when terminals already exist", async () => {
@@ -576,7 +705,7 @@ describe("TabsStrip", () => {
     );
   });
 
-  it("does not re-create when the last terminal is closed while the dock stays open", async () => {
+  it("closes the dock (no re-create) when the last terminal is closed while the dock is open", async () => {
     const user = userEvent.setup();
     const createSpy = vi.spyOn(api, "createSession");
     createSpy.mockClear();
@@ -590,8 +719,8 @@ describe("TabsStrip", () => {
     });
     const tab = await screen.findByRole("tab", { name: /Terminal 1/i });
 
-    // Closing the last tab must leave the dock empty — auto-create is a
-    // dock-open behaviour, not an "always keep one terminal alive" rule.
+    // Closing the last tab closes the dock — an open dock never sits empty, and
+    // it is never re-created in place.
     await user.click(screen.getByRole("button", { name: /Terminate Terminal 1/i }));
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", { name: /^Terminate$/i }),
@@ -599,7 +728,11 @@ describe("TabsStrip", () => {
     await waitFor(() => {
       expect(tab).not.toBeInTheDocument();
     });
-    expect(screen.getByText(/No terminals/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        useWorkspaceStore.getState().layoutByWorktree["wt-empty-close"]?.terminalDockVisible,
+      ).toBe(false);
+    });
     expect(createSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -1,0 +1,11 @@
+feature: reap-exited-terminals
+worktree: /Users/gb/.vibe-station/projects/vibe-station/worktrees/vs-280
+master: {prd: skipped, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: "4.2"
+    awaiting_phase: null
+    awaiting_artifact: null

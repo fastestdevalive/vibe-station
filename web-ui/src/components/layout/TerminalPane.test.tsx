@@ -2,6 +2,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
+import { ApiError } from "@/api/errors";
 import type { Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -335,6 +336,24 @@ describe("TerminalPane", () => {
     await user.click(screen.getByRole("button", { name: /Resume/i }));
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith("sess-main");
+    });
+    spy.mockRestore();
+  });
+
+  it("3.T4 — Resume swallows a 404 (the exited terminal was already reaped)", async () => {
+    const user = userEvent.setup();
+    const spy = vi
+      .spyOn(api, "resumeSession")
+      .mockRejectedValue(new ApiError("Session not found", 404));
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "exited" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    await user.click(screen.getByRole("button", { name: /Resume/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main"));
+    // The busy indicator clears (finally ran) and nothing is thrown.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Resume/i })).toBeInTheDocument();
     });
     spy.mockRestore();
   });

@@ -71,6 +71,10 @@ pub struct DirectSessionBody {
     pub name: Option<String>,
     pub source_agent_id: Option<String>,
     pub skip_auto_turn: Option<bool>,
+    /// Terminal-only idempotency guard: when true and the session is a
+    /// terminal, return the scope's existing live terminal instead of creating
+    /// another. Absent ≡ false. Request-only; never persisted.
+    pub only_if_none: Option<bool>,
 }
 
 /// `CreateSessionBody` — either a worktree or a direct session body.
@@ -89,6 +93,10 @@ pub struct CreateSessionBody {
     pub name: Option<String>,
     pub source_agent_id: Option<String>,
     pub skip_auto_turn: Option<bool>,
+    /// Terminal-only idempotency guard: when true and the session is a
+    /// terminal, return the scope's existing live terminal instead of creating
+    /// another. Absent ≡ false. Request-only; never persisted.
+    pub only_if_none: Option<bool>,
 }
 
 /// `CreateSessionBody.target`.

@@ -58,6 +58,31 @@ describe("useLayout", () => {
     expect(layout.terminalDockVisible).toBe(!DEFAULT_WORKTREE_LAYOUT.terminalDockVisible);
   });
 
+  it("closeTerminalDock hides an open dock and is a no-op when already hidden", () => {
+    act(() => useWorkspaceStore.getState().toggleTerminalDock());
+    act(() => useWorkspaceStore.getState().closeTerminalDock(WT_ID));
+    const closed = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
+    expect(closed.terminalDockVisible).toBe(false);
+    // Idempotent: unlike the toggle, a second close must not reopen it.
+    act(() => useWorkspaceStore.getState().closeTerminalDock(WT_ID));
+    const again = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
+    expect(again.terminalDockVisible).toBe(false);
+  });
+
+  it("closeTerminalDock closes the named context's dock, not the active one's", () => {
+    useWorkspaceStore.setState((st) => ({
+      layoutByWorktree: {
+        ...st.layoutByWorktree,
+        [WT_ID]: { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+        other: { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true },
+      },
+    }));
+    act(() => useWorkspaceStore.getState().closeTerminalDock("other"));
+    const layouts = useWorkspaceStore.getState().layoutByWorktree;
+    expect(layouts["other"]?.terminalDockVisible).toBe(false);
+    expect(layouts[WT_ID]?.terminalDockVisible).toBe(true);
+  });
+
   it("exposes canvasToolbarVisible defaulting true, flipped by toggleCanvasToolbar", () => {
     const { result } = renderHook(() => useLayout());
     expect(result.current.canvasToolbarVisible).toBe(true);

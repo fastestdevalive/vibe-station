@@ -583,8 +583,13 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
 
 /// Build the full Axum router.
 pub fn build_app(opts: BuildServerOptions) -> Router {
-    let state = build_state(opts);
+    router_from_state(build_state(opts))
+}
 
+/// Assemble the router around an already-built [`AppState`]. `run.rs` uses this
+/// (via `build_state`) so it can start background services off the state's
+/// routes; tests keep using [`build_app`], which starts none.
+pub fn router_from_state(state: AppState) -> Router {
     // CORS configuration: allow allowed origins, allow headers and methods
     let cors_policy = state.origin_policy.clone();
     let cors = CorsLayer::new()
