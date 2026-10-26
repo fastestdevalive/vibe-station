@@ -74,7 +74,146 @@ export interface HealthResponse {
   ok: boolean;
   version: string;
   port: number;
+  /** Per-boot id (changes on every daemon start). Empty from an old daemon. */
+  bootId: string;
 }
+
+// Mirrors rust/vst-types/src/rest/update.rs — keep in sync
+export type InstallMethod = "curl" | "curl-appimage" | "appimage" | "dmg" | "deb" | "unknown";
+
+export interface UpdateTarget {
+  method: InstallMethod;
+  path: string;
+  version?: string;
+  auto: boolean;
+}
+
+export type UpdateErrorKind = "check" | "install" | "restart";
+
+export type UpdateReason =
+  | "offline"
+  | "github_error"
+  | "rate_limited"
+  | "no_asset"
+  | "missing_checksum"
+  | "missing_signature"
+  | "bad_signature"
+  | "downgrade"
+  | "checksum_mismatch"
+  | "smoke_failed"
+  | "permission_denied"
+  | "disk_full"
+  | "update_in_progress"
+  | "restart_busy"
+  | "tauri_hosted"
+  | "restart_timeout"
+  | "boot_failed"
+  | "cancelled"
+  | "write_failed";
+
+/**
+ * `error` of a non-2xx update/restart route body (mirrors `UpdateApiErrorCode`).
+ * Route-level codes, any `UpdateReason` (422 install failures), and `string`
+ * so a code from a newer daemon still type-checks and falls to a default branch.
+ */
+export type UpdateApiErrorCode =
+  | "mobile_read_only"
+  | "update_in_progress"
+  | "restart_in_progress"
+  | "restart_busy"
+  | "tauri_hosted"
+  | "not_cancellable"
+  | "invalid_version"
+  | UpdateReason
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+  | (string & {});
+
+/** Non-2xx body of the update/restart routes (mirrors `UpdateApiError`). */
+export interface UpdateApiError {
+  error: UpdateApiErrorCode;
+  message?: string;
+  /** `update_in_progress`: who holds the install. */
+  startedBy?: "ui" | "cli";
+  /** `restart_busy`: sessions a restart would interrupt. */
+  impact?: ImpactItem[];
+}
+
+export interface UpdateError {
+  kind: UpdateErrorKind;
+  reason: UpdateReason;
+  message: string;
+  retryAfter?: string;
+}
+
+export type InstallStage = "preflight" | "downloading" | "verifying" | "installing";
+
+export interface InstallProgress {
+  stage: InstallStage;
+  pct: number;
+  startedBy: "ui" | "cli";
+}
+
+export type ImpactKind = "working" | "pty" | "json_turn";
+
+export interface ImpactItem {
+  sessionId: string;
+  name?: string;
+  kind: ImpactKind;
+}
+
+export interface RestartPending {
+  version: string;
+  kind: "daemon" | "app";
+}
+
+export interface RolledBack {
+  failedVersion: string;
+  at: string;
+}
+
+export interface ManualStep {
+  kind: "open_url" | "command" | "text";
+  text: string;
+  url?: string;
+}
+
+export interface InstallResult {
+  version: string;
+  updated: string[];
+  manual: ManualStep[];
+  debPath?: string;
+}
+
+/** The only update shape clients see; always replaced wholesale, never merged. */
+export interface UpdateStatus {
+  /** Running version, no "v" prefix. */
+  current: string;
+  latest?: string;
+  /** Markdown, <= 64 KB. */
+  changelog?: string;
+  releaseUrl?: string;
+  behindCount: number;
+  updateAvailable: boolean;
+  skipped: string[];
+  installMethod: InstallMethod;
+  targets: UpdateTarget[];
+  checkedAt?: string;
+  lastError?: UpdateError;
+  autoCheck: boolean;
+  install?: InstallProgress;
+  restartPending?: RestartPending;
+  rolledBack?: RolledBack;
+  lastResult?: InstallResult;
+  /** e.g. "linux-x86_64" */
+  platform: string;
+  noAsset: boolean;
+}
+
+/** `GET /api/update/check` — flattened `UpdateStatus` plus `canInstall`. */
+export type UpdateCheckResponse = UpdateStatus & {
+  /** false for Mobile-scope tokens. */
+  canInstall: boolean;
+};
 
 export interface Project {
   id: string;
@@ -1239,6 +1378,14 @@ export type WSEvent =
   | {
       /** The daemon's event fan-out dropped events: refetch everything loaded. */
       type: "ws:resync";
+    }
+  | {
+      /** Update snapshot events — each carries the whole `UpdateStatus`. */
+      type: "update:available" | "update:progress" | "update:installed" | "update:changed";
+      status: UpdateStatus;
+    }
+  | {
+      type: "daemon:restarting";
     }
   | {
       type: "pong";

@@ -162,6 +162,17 @@
      tools pane cannot hide them; BottomSheet (300/301) is a separate, deliberately higher layer. */
   --z-popover: 320;
 }
+/* Ink for text on solid --success/--warning fills (update chip). Dark ink passes
+   4.5:1 on every theme's fills except the one dark-green/brown set overridden below;
+   src/styles/updateChipContrast.test.ts guards all themes. */
+:root {
+  --fg-on-success: #0d0d0d;
+  --fg-on-warning: #0d0d0d;
+}
+[data-theme="github-light-default"] {
+  --fg-on-success: #fafafa;
+  --fg-on-warning: #fafafa;
+}
 [data-appearance="light"] {
   /* Dark text on a pale ground: a touch less ink keeps syntax colours readable under the span, the hover link still reads clearly. */
   --comment-row: color-mix(in srgb, var(--comment) 12%, transparent);
@@ -171,9 +182,10 @@
 }
 
 [data-theme="vibestation-dark"] {
-  --accent: #a78bfa;
-  /* Quiet, chat-scoped accent (user bubble border, spinners, throttle badge).
-     Contained here so the global purple --accent stays on primary buttons etc. */
+  --accent: #e5e5e5;
+  /* --accent is neutral in the vibestation themes (near-white here, near-black in
+     light). --chat-accent is the quieter, chat-scoped variant (user bubble
+     border, spinners, throttle badge), so chat chrome stays subtler than buttons. */
   --chat-accent: #8a8a8a;
   --bg-primary: #0d0d0d;
   --bg-secondary: #181818;
@@ -282,7 +294,7 @@
 }
 
 [data-theme="vibestation-light"] {
-  --accent: #7c3aed;
+  --accent: #1a1a1a;
   --chat-accent: #737373;
   --bg-primary: #fafafa;
   --bg-secondary: #f5f5f5;

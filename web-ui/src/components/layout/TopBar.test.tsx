@@ -9,6 +9,7 @@ import { ActionsHost, TopActionsOwner } from "./TopActionsSlot";
 import { TopBar } from "./TopBar";
 import { PaneOutletProvider } from "./paneOutlets";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type CanvasGeometry } from "@/hooks/useStore";
+import { useUpdateStore } from "@/hooks/useUpdateStore";
 import type { Project, Worktree } from "@/api/types";
 
 const W1 = "wt-1";
@@ -345,6 +346,78 @@ describe("TopBar - project workspace", () => {
     );
 
     expect(screen.getByText("Proj A")).toBeInTheDocument();
+  });
+
+  it("renders UpdateChip next to ConnectionStatus when store is actionable", () => {
+    useUpdateStore.setState({
+      status: {
+        current: "1.0.0",
+        latest: "1.2.3",
+        updateAvailable: true,
+        behindCount: 1,
+        skipped: [],
+        installMethod: "curl",
+        targets: [],
+        autoCheck: true,
+        platform: "linux-x86_64",
+        noAsset: false,
+      },
+      canInstall: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            layoutMode="dashboard"
+            projects={projects}
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: /Update available/ })).toBeInTheDocument();
+  });
+
+  it("does not render UpdateChip when layoutMode is login", () => {
+    useUpdateStore.setState({
+      status: {
+        current: "1.0.0",
+        latest: "1.2.3",
+        updateAvailable: true,
+        behindCount: 1,
+        skipped: [],
+        installMethod: "curl",
+        targets: [],
+        autoCheck: true,
+        platform: "linux-x86_64",
+        noAsset: false,
+      },
+      canInstall: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            layoutMode="login"
+            projects={projects}
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Update available/ })).toBeNull();
   });
 });
 

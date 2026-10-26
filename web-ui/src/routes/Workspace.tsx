@@ -33,6 +33,8 @@ import { sessionLabel } from "@/lib/sessionLabel";
 import { projectTabIds } from "@/lib/sessionVisibility";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
 import { DraftComposer } from "@/components/draft/DraftComposer";
+import { UpdateLayer } from "@/components/update/UpdateLayer";
+import { settingsSectionLabelFor } from "@/components/settings/settingsSections";
 
 export function Workspace() {
   const env = useDemoEnv();
@@ -48,15 +50,7 @@ export function Workspace() {
   const isDraft = location.pathname.startsWith("/draft/");
   const draftSessionId = isDraft ? (params.draftSessionId ?? null) : null;
   const settingsSectionId = isSettings ? (location.pathname.split("/")[2] ?? null) : null;
-  const SETTINGS_LABELS: Record<string, string> = {
-    "modes": "Modes",
-    "appearance": "Appearance",
-    "projects": "Projects",
-    "hidden-projects": "Archived projects",
-    "storage": "Storage",
-    "remote-access": "Remote Access",
-  };
-  const settingsSectionLabel = settingsSectionId ? (SETTINGS_LABELS[settingsSectionId] ?? settingsSectionId) : undefined;
+  const settingsSectionLabel = settingsSectionId ? settingsSectionLabelFor(settingsSectionId) : undefined;
   const isDirectSession = location.pathname.startsWith("/session/");
   // Detached-workspace view (agent-interaction-workspaces/04-workspaces Phase 3,
   // Decision 4) — a saved WorkspaceDoc's own route, independent of any worktree.
@@ -1050,6 +1044,7 @@ export function Workspace() {
                   paneHostLayer: worktreePaneHostLayer,
                 })}
       />
+      <UpdateLayer api={api} />
     </div>
     </PaneOutletProvider>
   );

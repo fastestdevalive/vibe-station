@@ -75,7 +75,7 @@ import { createLatestOnly } from "./latestOnly";
 import { createArtifactsClient } from "./artifactsClient";
 import { createCommentsClient, parseReviewJson } from "./commentsClient";
 
-function baseUrl() {
+export function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
   if (raw.trim()) return raw.trim();
   // Tauri shell: __VST_PORT__ is injected by main.rs before page JS runs.

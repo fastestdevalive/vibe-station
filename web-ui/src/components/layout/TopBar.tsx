@@ -4,6 +4,7 @@ import { useLayout } from "@/hooks/useLayout";
 import type { Project } from "@/api/types";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { WorkspaceActions } from "@/components/layout/WorkspaceActions";
+import { UpdateChip } from "@/components/update/UpdateChip";
 import { Logo } from "@/components/shared/Logo";
 import { ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 
@@ -166,6 +167,7 @@ export function TopBar({
   if (variant === "floating") {
     return (
       <div className="top-bar-floating-actions" data-tauri-drag-region="deep">
+        <UpdateChip />
         <ConnectionStatus />
         {layoutMode === "workspace" || layoutMode === "project-workspace" ? (
           <WorkspaceActions
@@ -247,6 +249,7 @@ export function TopBar({
           // the classic per-worktree canvas mode gets.
           <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
         ) : null}
+        <UpdateChip />
         <ConnectionStatus />
         {!isMobile && layoutMode === "dashboard" ? (
           <>
