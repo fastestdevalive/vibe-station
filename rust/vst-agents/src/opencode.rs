@@ -592,6 +592,12 @@ impl AgentPlugin for OpencodePlugin {
         true
     }
 
+    fn native_history_importer(
+        &self,
+    ) -> Option<&'static dyn crate::native_history_importer::NativeHistoryImporter> {
+        Some(crate::opencode_import::opencode_history_importer())
+    }
+
     /// `opencode acp` spawns `opencode serve --stdio` via `setsid()`, which
     /// escapes the process group the transport kills on dispose, so every
     /// disposed connection would otherwise orphan a live server.

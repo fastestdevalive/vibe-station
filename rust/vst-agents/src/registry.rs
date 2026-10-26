@@ -14,6 +14,7 @@ use crate::claude::create_claude_plugin;
 use crate::codex::create_codex_plugin;
 use crate::context::effective_path;
 use crate::cursor::create_cursor_plugin;
+use crate::omp::create_omp_plugin;
 use crate::opencode::create_opencode_plugin;
 use crate::pi::create_pi_plugin;
 use crate::plugin::AgentPlugin;
@@ -61,13 +62,14 @@ pub fn ensure_binary_on_path(
 }
 
 /// All supported CLI ids, in registry order. Mirrors `SUPPORTED_CLIS`.
-pub const SUPPORTED_CLIS: [CliId; 6] = [
+pub const SUPPORTED_CLIS: [CliId; 7] = [
     CliId::Claude,
     CliId::Cursor,
     CliId::Opencode,
     CliId::Agy,
     CliId::Codex,
     CliId::Pi,
+    CliId::Omp,
 ];
 
 /// Resolve a concrete [`AgentPlugin`] for the given CLI identifier.
@@ -82,6 +84,7 @@ pub fn resolve_plugin(cli: CliId) -> Box<dyn AgentPlugin> {
         CliId::Agy => Box::new(create_agy_plugin()),
         CliId::Codex => Box::new(create_codex_plugin()),
         CliId::Pi => Box::new(create_pi_plugin()),
+        CliId::Omp => Box::new(create_omp_plugin()),
     }
 }
 

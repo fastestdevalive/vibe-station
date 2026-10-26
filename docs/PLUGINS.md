@@ -39,6 +39,9 @@ One file per CLI in `rust/vst-agents/src/`:
 | `cursor.rs` | Cursor |
 | `opencode.rs` | OpenCode |
 | `agy.rs` | agy |
+| `codex.rs` | codex |
+| `pi.rs` | pi |
+| `omp.rs` | oh-my-pi |
 
 `registry.rs` holds `SUPPORTED_CLIS` and `resolve_plugin(cli) -> Box<dyn AgentPlugin>`
 — the single place that maps a `CliId` to a concrete plugin.
@@ -62,6 +65,37 @@ message time), native chat-id capture, and ACP (ACP) support for Rich Chat —
 `supports_acp()` marks whether a plugin drives a persistent ACP connection
 for structured, per-turn output instead of a one-shot terminal spawn per
 turn.
+
+## History import
+
+When a session's terminal phase is toggled to Rich Chat, the daemon imports
+the harness's at-rest conversation so previously-typed turns appear in Rich
+Chat (`historyImported: true`); without an importer the toggle falls back to
+`historyImported: false` and the UI warns. This is the preferred behaviour for
+every harness — see the "Agent plugin" section of `AGENTS.md`.
+
+- **Contract** (`rust/vst-agents/src/native_history_importer.rs`): a plugin
+  returns a `NativeHistoryImporter` from `AgentPlugin::native_history_importer()`
+  (default `None`); when present, `import_native_history()` emits normalized
+  events and `current_cursor()` pins the sealed watermark (both default-safe).
+  Existing models to copy: `codex_import.rs` (whole-turn rule), `claude_import.rs`,
+  `opencode_import.rs`, `omp_import.rs`.
+- **Entry-id watermark:** the cursor is the id of the last imported entry, not
+  a line index (files can be rewritten); re-import starts after that id when it
+  is still on the active path, else re-emits the whole path (store dedup is a
+  best-effort backstop only).
+- **Whole-turn rule:** only COMPLETE turns are emitted — the store skips an
+  already-imported `turn_id` wholesale, so an in-flight turn is held back whole
+  rather than losing its tail forever.
+- **Seal on json→tty:** leaving Rich Chat seals the watermark at the current
+  end of the file (before `release()`), so turns the agent itself wrote there
+  (ACP-written entries) are never re-imported.
+- **Tolerant parse + fixture:** the harness store is a vendor surface — its
+  format must be parsed tolerantly (skip non-JSON lines, unknown entry/block
+  types, trailing partial lines) and pinned by a real-file fixture test.
+- **omp specifics** (`omp_import.rs`): active-branch walk from the leaf entry
+  via `parentId`, sealed watermark (`id` of the settled leaf), events in file
+  order per the plan's mapping table.
 
 ## Adding a new CLI
 

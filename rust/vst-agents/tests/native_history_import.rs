@@ -5,15 +5,18 @@
 //! P2.T3/T4/T5 and 1.T3/1.T5 exercise the transcript store's `importTransaction`
 //! (already ported in vst-store) and are out of scope for this crate.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use vst_agents::claude_import::{claude_native_store_path, create_claude_history_importer};
 use vst_agents::codex_import::create_codex_history_importer;
-use vst_agents::native_history_importer::{
-    get_native_history_importer, has_native_history_importer, NativeHistoryImporter,
-    NativeImportRequest,
-};
+use vst_agents::native_history_importer::{NativeHistoryImporter, NativeImportRequest};
 use vst_agents::opencode_import::{create_opencode_history_importer, opencode_native_store_path};
+use vst_agents::plugin::{
+    AgentPlugin, AsyncResult, ComposePromptInput, ComposePromptResult, LaunchConfig,
+    ListModelsResult, PromptDelivery, ReadySignal,
+};
+use vst_types::Channel;
 
 const SESSION_ID: &str = "sess-import-1";
 
@@ -650,21 +653,78 @@ fn codex_adapter_ignores_nonmatching_thread_file() {
 }
 
 // ---------------------------------------------------------------------------
-// Registry — P3 gate
+// Registry — P3 gate (Decision 1: an AgentPlugin method, not a `match cli` arm)
 // ---------------------------------------------------------------------------
+
+/// A minimal plugin that does NOT override `native_history_importer()` — the
+/// blanket default must be `None` so a future harness reports
+/// `historyImported: false` until someone implements its store reader.
+struct MinimalPlugin;
+
+impl AgentPlugin for MinimalPlugin {
+    fn name(&self) -> &str {
+        "minimal"
+    }
+    fn default_model(&self) -> &str {
+        ""
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Tmux
+    }
+    fn list_models(&self) -> AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+}
+
 #[test]
 fn importer_registry_gate() {
-    assert!(has_native_history_importer("claude"));
-    assert!(has_native_history_importer("opencode"));
-    assert!(has_native_history_importer("codex"));
-    assert!(!has_native_history_importer("cursor"));
-    assert!(!has_native_history_importer("agy"));
+    fn resolved_cli(p: &dyn AgentPlugin) -> Option<&'static str> {
+        p.native_history_importer().map(|i| i.cli())
+    }
     assert_eq!(
-        get_native_history_importer("claude").unwrap().cli(),
-        "claude"
+        resolved_cli(&vst_agents::claude::create_claude_plugin()),
+        Some("claude")
     );
-    assert_eq!(get_native_history_importer("codex").unwrap().cli(), "codex");
-    assert!(get_native_history_importer("agy").is_none());
+    assert_eq!(
+        resolved_cli(&vst_agents::opencode::create_opencode_plugin()),
+        Some("opencode")
+    );
+    assert_eq!(
+        resolved_cli(&vst_agents::codex::create_codex_plugin()),
+        Some("codex")
+    );
+    assert_eq!(
+        resolved_cli(&vst_agents::omp::create_omp_plugin()),
+        Some("omp")
+    );
+    assert_eq!(
+        resolved_cli(&vst_agents::cursor::create_cursor_plugin()),
+        None
+    );
+    assert_eq!(resolved_cli(&vst_agents::agy::create_agy_plugin()), None);
+    // Blanket default: a plugin with no store reader reports no importer.
+    assert_eq!(resolved_cli(&MinimalPlugin), None);
 }
 
 #[test]

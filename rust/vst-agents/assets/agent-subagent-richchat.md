@@ -71,8 +71,8 @@ spawned it while running in Rich Chat".
 inherits your mode and channel, so it is the one where you can omit `--mode`
 and `--channel`. `vst worktree create` (Case A) does NOT inherit either — pass
 `--mode=<modeId>` explicitly there; the daemon resolves the effective default
-channel for that mode's CLI (Rich Chat for claude/cursor/opencode, Terminal
-for agy). An explicitly-passed `--channel` on either command is only needed to
+channel for that mode's CLI (Rich Chat for claude/cursor/opencode/codex/omp,
+Terminal for agy/pi). An explicitly-passed `--channel` on either command is only needed to
 *override* that default — not to avoid an incorrect universal default.
 
 **Exception — `agy`-mode sessions:** the daemon's own default for `agy` is

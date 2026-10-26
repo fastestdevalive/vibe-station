@@ -3,7 +3,7 @@
 Status: **fixed in cli-launch-hardening** — both bugs below are resolved; this
 page keeps the investigation, the final design, and the onboarding checklist
 (moved to `docs/PLUGINS.md`).
-Goal: a general solution so onboarding a new CLI terminal (after claude, cursor, opencode, agy, codex, pi)
+Goal: a general solution so onboarding a new CLI terminal (after claude, cursor, opencode, agy, codex, pi, omp)
 doesn't mean rediscovering the same launch/resume bugs.
 
 ## Final design (cli-launch-hardening)
@@ -107,6 +107,41 @@ on disk (`resumable_chat_id`), else `None` → fresh launch → prompt re-sent.
   startup, before any message, so existence alone is not enough). Else return `None`. `capture_chat_id` returns
   `Some` only under the same check. `--session-id` makes the fresh launch reuse the same id, so nothing else changes.
 - Depends on Bug 1 being fixed (the fresh-launch path uses the same spawn).
+
+## omp (oh-my-pi) launch notes
+
+**Where:** `rust/vst-agents/src/omp.rs`.
+
+- **Header-only file:** `omp` writes a session `.jsonl` (title slot + header) at startup, before any message
+  (`session/new` already creates the file). File existence is **not** proof a conversation began — `started_conversation`
+  requires a `message` line with `role:"user"` (mirrors pi's gate, Decision 4).
+- **Write lease / second writer:** a session is write-leased per id by one live process; a second writer appends
+  `session_exit` to the **old** file and moves to a sibling file with a **new** id. `started_conversation` therefore
+  orders by the filename timestamp, not mtime (Decision 6), and the tty→json toggle re-scans rather than trusting the
+  stored id.
+- **`--allow-home`:** `omp` refuses to operate on `$HOME`; the plugin always passes `--allow-home` and skips the
+  `.gitignore` edit when `cwd` is `$HOME`. Store stays under `<cwd>/.vibe-station/omp-sessions/<sessionId>`.
+- **`omp acp` `session/load` ignores `--session-dir`:** `session/new` writes into the pinned store, but load only scans
+  omp's DEFAULT store (verified 18.12.6: `-32603 "ACP session not found"`), so any reconnect — the json→tty→json toggle,
+  a daemon restart — would silently start a fresh conversation. Before each ACP connection the plugin symlinks the
+  session file into `<default store>/vst-links/` (`link_into_default_store`); omp appends through the link, so the private
+  store stays the only copy. A file symlink works, a directory symlink does NOT (probed). With `OMP_PROFILE`/a relocated
+  agent dir the link lands in the wrong place and resume degrades to a fresh `session/new`.
+- **Relocated omp store (known limitation):** `omp_default_sessions_root` knows `$PI_CODING_AGENT_DIR` and
+  `~/.omp/agent/sessions` only. omp also relocates its sessions under `$XDG_DATA_HOME/omp/` and per-profile
+  (`OMP_PROFILE`/`PI_PROFILE`) dirs; there the `vst-links` symlink lands where `session/load` never looks, so a
+  reconnect starts a fresh conversation (the session layer falls back to `session/new`).
+- **Forks minted by `omp acp` (known limitation):** when `omp acp` loads through a `vst-links` symlink, files it later
+  mints itself (`/fork`, a contended second writer) become real files in `vst-links/`. History import follows them
+  (it looks there), but resume/capture scan only the private store and keep the settled id.
+- **Non-file backends:** omp's Redis/SQL session backends produce no `.jsonl`, so there is no id to resume/toggle on
+  — unsupported (out of scope).
+- **`bun` on PATH:** a bun/npm-installed `omp` is a `#!/usr/bin/env bun` script. The doctor `plugin-omp` check covers
+  installing `omp` (`PLUGIN_OMP`: brew / curl / bun); the separate `omp-bun` check (`OMP_BUN`) warns when omp needs
+  bun and it is missing from the daemon PATH. A native omp build (brew/curl) is not checked for bun.
+- **Split terminal phase:** history import reads the ONE conversation whose id is the stored `agent_chat_id`. If a
+  second writer or an in-TUI `/new` moved the terminal phase to a sibling file, only the settled conversation is
+  imported; turns in the earlier file are not (documented limitation, same as resume following the newest file).
 
 ## General solution: make onboarding a checklist, not a discovery
 

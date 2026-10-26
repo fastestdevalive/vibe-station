@@ -73,6 +73,8 @@ pub mod json_agent_stream;
 pub mod native_chat_id;
 pub mod native_history_importer;
 pub mod normalize;
+pub mod omp;
+pub mod omp_import;
 pub mod opencode;
 pub mod opencode_config;
 pub mod opencode_import;
@@ -91,6 +93,7 @@ pub use agy::{create_agy_plugin, parse_agy_stream_line, AgyStreamState};
 pub use claude::{create_claude_plugin, format_skill_directive};
 pub use codex::create_codex_plugin;
 pub use cursor::{create_cursor_plugin, parse_cursor_stream_line};
+pub use omp::create_omp_plugin;
 pub use opencode::{create_opencode_plugin, parse_opencode_stream_line};
 pub use pi::create_pi_plugin;
 pub use plugin::{

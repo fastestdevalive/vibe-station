@@ -19,7 +19,6 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use vst_agents::home::home_dir;
-use vst_agents::native_history_importer::has_native_history_importer;
 use vst_agents::plugin::AgentPlugin;
 use vst_agents::registry::{check_binary, resolve_plugin, SUPPORTED_CLIS};
 use vst_git::paths::Paths;
@@ -40,8 +39,8 @@ pub const MAX_MODES: usize = 20;
 pub const MAX_CONTEXT_LEN: usize = 10_000;
 pub const MAX_MODEL_LEN: usize = 100;
 /// Icon keys the web-ui ships an asset for; an explicit `icon` must be one of these.
-pub const KNOWN_MODE_ICONS: [&str; 7] = [
-    "claude", "agy", "cursor", "opencode", "deepseek", "codex", "pi",
+pub const KNOWN_MODE_ICONS: [&str; 8] = [
+    "claude", "agy", "cursor", "opencode", "deepseek", "codex", "pi", "omp",
 ];
 
 fn validate_icon(icon: &str) -> Result<String, ModeRouteError> {
@@ -415,7 +414,7 @@ impl ModeRoutes {
                 let default_model = plugin.default_model().to_string();
                 let supports_json = plugin.supports_json();
                 let cli_name = cli.as_str();
-                let imports_native_history = has_native_history_importer(cli_name);
+                let imports_native_history = plugin.native_history_importer().is_some();
                 let supports_json_to_terminal_resume = plugin.supports_json_to_terminal_resume();
                 let default_channel = resolve_effective_default_channel(&overrides, cli, &*plugin);
                 // round-3 M1: "overridden" means the EFFECTIVE value differs from

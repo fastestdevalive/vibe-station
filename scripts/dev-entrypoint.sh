@@ -193,6 +193,15 @@ seed_writable_home /seed/codex /home/vst/.codex \
 # to a free-text field. Session history is excluded.
 seed_writable_home /seed/pi-agent /home/vst/.pi/agent "sessions bin"
 
+# omp (oh-my-pi) — agent.db holds provider credentials, models.yml/config.yml the
+# custom providers and defaults. Sessions and the bulk caches are excluded: the
+# sandbox starts with a clean history (kept in the persistent volume below).
+# omp also writes siblings of `agent/` (e.g. ~/.omp/run, session-owner leases), and
+# `seed_writable_home` only chowns its own target — so chown the parent too, or omp
+# dies with EACCES on `mkdir ~/.omp/run`.
+mkdir -p /home/vst/.omp && chown vst:vst /home/vst/.omp
+seed_writable_home /seed/omp-agent /home/vst/.omp/agent "sessions cache terminal-sessions custom-session-files predict blobs logs reports"
+
 # codex and pi keep conversation history under ~/.codex and ~/.pi, which are
 # re-seeded from scratch whenever the container is recreated. Keep the history in
 # the persistent data volume instead, so a sandbox rebuild doesn't turn every
@@ -205,6 +214,7 @@ persist_cli_sessions() {
 }
 persist_cli_sessions /home/vst/.codex/sessions /home/vst/.vibe-station/cli-sessions/codex
 persist_cli_sessions /home/vst/.pi/agent/sessions /home/vst/.vibe-station/cli-sessions/pi
+persist_cli_sessions /home/vst/.omp/agent/sessions /home/vst/.vibe-station/cli-sessions/omp
 
 
 # VST_SEED_MODE selects what gets seeded into this sandbox:

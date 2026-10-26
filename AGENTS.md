@@ -245,15 +245,17 @@ else if (mode.cli === "opencode") { ... }
 | `getEnvironment(cfg)` | yes | Extra env vars for the process |
 | `getReadySignal()` | yes | Sentinel string or fallback timeout |
 | `composeLaunchPrompt(...)` | yes | Build the shell line / post-launch input |
-| `default_channel()` | yes | Default execution channel for this CLI (`json` for claude/cursor/opencode/codex, `tmux` for agy/pi); used when no explicit/inherited channel and no user override resolve otherwise |
-| `supports_json()` | optional (default `false`) | Whether this CLI can run the JSON (Rich Chat) channel. **Temporarily `false` for agy** — terminal-only until the terminal↔ACP conversation id bridge lands (`agy.rs`). When false, the daemon rejects `--channel=json` on session/worktree create and the tty→json toggle with a 4xx, and the web UI hides/disables the Rich Chat affordances |
+| `default_channel()` | yes | Default execution channel for this CLI (`json` for claude/cursor/opencode/codex/omp, `tmux` for agy/pi); used when no explicit/inherited channel and no user override resolve otherwise |
+| `supports_json()` | optional (default `false`) | Whether this CLI can run the JSON (Rich Chat) channel. **Temporarily `false` for agy** — terminal-only until the terminal↔ACP conversation id bridge lands (`agy.rs`); `true` for omp (speaks ACP natively via `omp acp`). When false, the daemon rejects `--channel=json` on session/worktree create and the tty→json toggle with a 4xx, and the web UI hides/disables the Rich Chat affordances |
 | `setupWorkspaceHooks?(path)` | optional | Write hook scripts into the worktree |
 | `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
 | `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |
 | `getRestoreCommand?(args)` | optional | Return resume argv, or null for fresh spawn |
 | `supportsAcp?()` | optional | ACP migration: true once `runTurn` drives a persistent ACP connection (`ctx.getAcpConnection`) instead of a per-turn one-shot spawn |
-| `captureNativeChatId?(args)` | optional | Two-identity model: read the CLI's NATIVE resume id out-of-band, for a plugin whose ACP `session/new` id was empirically proven to diverge from it (`bridged` = agy, `unavailable` = cursor). Deliberately NOT implemented by an `identical`-strategy plugin (claude, opencode) |
+| `captureNativeChatId?(args)` | optional | Two-identity model: read the CLI's NATIVE resume id out-of-band, for a plugin whose ACP `session/new` id was empirically proven to diverge from it (`bridged` = agy, `unavailable` = cursor). Deliberately NOT implemented by an `identical`-strategy plugin (claude, opencode, omp) |
 | `supportsChannelResume?()` | optional | Two-identity model: `false` (cursor only) declares that no bridge exists from this CLI's ACP session to its own resume flag, so a json→tty toggle starting a fresh conversation is expected, not a bug. Unimplemented ≡ `true` |
+| `acpSessionIdIsNative?()` | optional (default `false`) | Two-identity model: `true` (omp) declares the ACP `session/new` id IS the CLI's own resume id (`identical` strategy), so after a tty→json toggle refreshes `agent_chat_id` the daemon may drop a stale stored `acp_session_id` (which would otherwise win on reconnect). Decision 5 — see `rust/vst-agents/src/omp.rs` |
+| `native_history_importer?()` | optional (default `None`) | At-rest history importer for this harness's native store (`None` ⇒ toggle reports `historyImported:false` and the UI warns). Implement once the store is readable — importing terminal history into Rich Chat is preferred for every harness, so a plugin that omits it carries a comment saying why not |
 
 ### The two session identities (ACP)
 
@@ -265,7 +267,7 @@ always the native one; never store an ACP id in it.
 
 Whether the two coincide is a per-CLI fact, not a choice, and each plugin
 declares its answer only by which of the two methods above it implements:
-`identical` (claude, opencode — implement neither), `bridged` (agy —
+`identical` (claude, opencode — implement neither; omp — only `acpSessionIdIsNative`, because its ACP id *is* the native id), `bridged` (agy —
 `captureNativeChatId`), `unavailable` (cursor — plus `supportsChannelResume:
 false`). Per-CLI resolution code lives in
 `daemon/src/agent-plugins/native-chat-id/` (one file per CLI that needs one —
@@ -278,6 +280,7 @@ in full in [`docs/RICH-CHAT-ACP.md`](docs/RICH-CHAT-ACP.md) (§ Two session iden
 - **New CLI support:** if a fourth CLI is ever added, implement *all* required methods and the optional ones that make sense. The TypeScript interface will enforce required methods at compile time.
 - **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `daemon/src/agent-plugins/registry.ts`. Routes are allowed to import it. Services (`daemon/src/services/spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
 - **`CliId` type:** defined in `daemon/src/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.
+- **Importing history is preferred for every harness:** a new plugin either implements `native_history_importer?()` once its store is readable or adds a comment on the plugin explaining why not; defaulting to `None` silently keeps terminal turns invisible after a toggle.
 
 ---
 
@@ -461,7 +464,7 @@ There are two separate docker setups in this repo. They look similar (both boot 
 
 - **`scripts/dev-sandbox.sh up` with no flags seeds the full demo dataset by default** — worktrees/agents are there out of the box. Pass `--seed=file-search` if you specifically want a fast, empty single-project tree instead.
 - **Switching `--seed` mode on an already-seeded volume does NOT cleanly swap datasets — it merges/corrupts them.** The two seed scripts guard themselves independently and asymmetrically, not via a shared "already seeded in mode X" marker: `demo-seed.sh` checks its own `$VST/.seeded` file; `seed-file-search-demo.sh` checks whether `file-search-demo`'s repo dir exists and whether that project is already registered with the daemon. Neither guard knows about the other, so going `file-search` → `demo` on the same worktree-name runs `demo-seed.sh` in full on a volume the daemon already has state for (it `rm -rf`s its own project dirs and overwrites `modes.json`, but doesn't touch the pre-existing `file-search-demo` data or the daemon's already-booted SQLite state — the result is an inconsistent mix, not a clean demo dataset), and going `demo` → `file-search` just registers a 4th project alongside the demo data rather than being a no-op. Use a fresh worktree-name (or `docker volume rm vst-dev-data-<worktree> vst-dev-projects-<worktree>`) whenever you want to actually change an existing sandbox's seed mode.
-- **macOS hosts: host agent binaries are never mounted.** The container is Linux; a Mac's `claude`/`opencode`/`agy` are Mach-O and fail with `ENOEXEC ... posix_spawn`. `claude` is installed in the image (`dev.Dockerfile`); `opencode`/`agy`/`codex`/`cursor-agent` are bind-mounted only on non-Darwin hosts via `docker-compose.dev.hostbins.yml` (layered by `scripts/dev-sandbox.sh`) and show as "not found" on a Mac. Keychain-held Claude logins aren't readable from the container, so on macOS the long-lived `claude setup-token` token (`~/.config/vibe-station/claude-oauth-token`) is REQUIRED; `dev-sandbox.sh` warns loudly (and still starts, with claude signed out) without it. Don't re-add host-binary mounts to `docker-compose.dev.yml`.
+- **macOS hosts: host agent binaries are never mounted.** The container is Linux; a Mac's `claude`/`opencode`/`agy` are Mach-O and fail with `ENOEXEC ... posix_spawn`. `claude` and `omp` are installed in the image (`dev.Dockerfile`; omp's host copy carries a platform-specific native package, and its config is seeded from `~/.omp/agent`); `opencode`/`agy`/`codex`/`cursor-agent` are bind-mounted only on non-Darwin hosts via `docker-compose.dev.hostbins.yml` (layered by `scripts/dev-sandbox.sh`) and show as "not found" on a Mac. Keychain-held Claude logins aren't readable from the container, so on macOS the long-lived `claude setup-token` token (`~/.config/vibe-station/claude-oauth-token`) is REQUIRED; `dev-sandbox.sh` warns loudly (and still starts, with claude signed out) without it. Don't re-add host-binary mounts to `docker-compose.dev.yml`.
 - **Don't add demo-dataset seeding to `docker-compose.screenshots.yml`'s job description** or vice versa — `screenshots` intentionally has no hot reload and real auth so it matches what `take-screenshots.ts` expects; don't "fix" that to make it more dev-friendly.
 
 ---

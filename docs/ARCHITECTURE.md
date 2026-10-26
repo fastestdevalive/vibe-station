@@ -9,8 +9,8 @@
 > concept worth its own page rather than a subsection here.
 
 vibe-station is a **local-first orchestrator** for running multiple AI coding
-agents (Claude Code, Cursor, OpenCode, agy) in parallel on isolated git
-worktrees.
+agents (Claude Code, Cursor, OpenCode, agy, codex, pi, oh-my-pi) in parallel on
+isolated git worktrees.
 
 The core idea: **one stateful daemon** owns everything; every front end —
 desktop app, browser, CLI — is a thin client. State survives daemon restarts
@@ -36,7 +36,7 @@ via tmux (session processes) + SQLite (metadata).
 └───────┼─────────────┼─────────────┼─────────────────┼────────────┘
         ↓             ↓             ↓                 ↓
     tmux server    git CLI     claude / cursor /    local fs +
-                                opencode / agy       language servers
+                                opencode / agy / omp  language servers
         ↑
         │ same REST API
 ┌──────────────────────────────────────────────────────────────────┐
@@ -51,7 +51,7 @@ via tmux (session processes) + SQLite (metadata).
 |---|---|
 | `rust/vst-daemon` | Binary entry point + HTTP/WS server (`axum`). Binds `127.0.0.1:<port>` (default `7421`, auto-picks the next free port). |
 | `rust/vst-routes` | REST + WS route handlers (`GET /health`, worktrees, sessions, modes, settings, auth, fs/preview, tunnels). |
-| `rust/vst-agents` | Agent plugin implementations (`claude.rs`, `cursor.rs`, `opencode.rs`, `agy.rs`), ACP transport, JSON-chat (Rich Chat) driving. See `docs/PLUGINS.md`. |
+| `rust/vst-agents` | Agent plugin implementations (`claude.rs`, `cursor.rs`, `opencode.rs`, `agy.rs`, `codex.rs`, `pi.rs`, `omp.rs`), ACP transport, JSON-chat (Rich Chat) driving. See `docs/PLUGINS.md`. |
 | `rust/vst-git` | Worktree/session path helpers, worktree service, recovery-on-boot logic. |
 | `rust/vst-store` | SQLite-backed state store. |
 | `rust/vst-lifecycle` | 1s lifecycle poller (`session.lifecycle.state` — busy?) and 30s PR poller (`session.pr` — what happened to the branch?); deliberately separate axes, see `docs/STATUS-INDICATORS.md`. |
@@ -77,7 +77,7 @@ Two transports:
 ## Per-worktree runtime
 
 ```
-tmux session → PTY → AI CLI (claude / cursor / opencode / agy) → git worktree
+tmux session → PTY → AI CLI (claude / cursor / opencode / agy / codex / pi / omp) → git worktree
 ```
 
 Each worktree is an isolated `git worktree` checkout on its own branch;

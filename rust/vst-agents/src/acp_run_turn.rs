@@ -315,6 +315,7 @@ fn provider_name(p: NormalizedEventProvider) -> &'static str {
         NormalizedEventProvider::Agy => "agy",
         NormalizedEventProvider::Codex => "codex",
         NormalizedEventProvider::Pi => "pi",
+        NormalizedEventProvider::Omp => "omp",
     }
 }
 

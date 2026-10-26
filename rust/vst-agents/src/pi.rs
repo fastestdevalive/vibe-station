@@ -3,6 +3,8 @@
 //! Delivery: inline (system + task prompts baked into the launch command).
 //! Ready signal: no sentinel, 12s fallback.
 //! Terminal channel only; pi has no ACP or JSON channel.
+//! No history importer: pi is terminal-only, so there is no Rich Chat transcript
+//! to backfill — the terminal pane itself is the history.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

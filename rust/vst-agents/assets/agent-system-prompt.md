@@ -140,7 +140,7 @@ vst agent send <session-id> --file=./instructions.md --wait
 
 ```bash
 vst daemon status
-vst doctor        # checks tmux, git, claude/cursor/opencode on PATH
+vst doctor        # checks tmux, git, every supported agent CLI on PATH
 ```
 
 ---

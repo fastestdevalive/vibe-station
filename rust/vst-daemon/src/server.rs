@@ -3927,6 +3927,7 @@ async fn handle_cli_models(
         Some("agy") => vst_types::CliId::Agy,
         Some("codex") => vst_types::CliId::Codex,
         Some("pi") => vst_types::CliId::Pi,
+        Some("omp") => vst_types::CliId::Omp,
         _ => vst_types::CliId::Claude,
     };
     Ok(Json(state.mode_routes.resolve_cli_models(cli_id).await))

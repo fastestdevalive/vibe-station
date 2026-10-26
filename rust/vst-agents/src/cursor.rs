@@ -4,6 +4,9 @@
 //! Ready signal: no sentinel, 8s fallback. `unavailable` two-session-identity
 //! strategy: implements `capture_native_chat_id` (best-effort) AND
 //! `supports_json_to_terminal_resume() -> false`.
+//!
+//! No history importer: the cursor native store is not yet parsed (deferred
+//! harness work) — see `.vibekit/feature-plans/pending/omp-history-import`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

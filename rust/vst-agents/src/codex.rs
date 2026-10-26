@@ -467,6 +467,12 @@ impl AgentPlugin for CodexPlugin {
         true
     }
 
+    fn native_history_importer(
+        &self,
+    ) -> Option<&'static dyn crate::native_history_importer::NativeHistoryImporter> {
+        Some(crate::codex_import::codex_history_importer())
+    }
+
     fn capture_native_chat_id(
         &self,
         args: CaptureNativeChatIdArgs<'_>,
