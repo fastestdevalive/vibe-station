@@ -110,6 +110,14 @@ if grep -qaF "INSECURE: VST_NO_AUTH=1 is active" "$SRC_CLI"; then
   echo "Error: release binary was built with insecure-no-auth feature!" >&2
   exit 1
 fi
+# These names are compiled in only with vst-daemon's TEST-ONLY `test-seams`
+# feature (replace the pinned release key / shorten the rollback window).
+for marker in VST_TEST_RELEASE_PUBKEYS VST_RESTART_WATCH_WINDOW_MS; do
+  if grep -qaF "$marker" "$SRC_CLI"; then
+    echo "Error: release binary was built with the test-seams feature ($marker)!" >&2
+    exit 1
+  fi
+done
 
 echo ""
 echo "==> Copying vst binary to binaries/..."

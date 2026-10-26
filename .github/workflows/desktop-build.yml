@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: the dependency build gets a read-only token and no secrets.
+permissions:
+  contents: read
+
 # Only one build per ref at a time; cancel in-progress when a new one starts.
 concurrency:
   group: desktop-build-${{ github.ref }}
@@ -29,19 +33,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: "pnpm"
@@ -51,12 +58,13 @@ jobs:
 
       # ── Rust toolchain ────────────────────────────────────────────────────
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch tip)
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "desktop/src-tauri -> target"
 
@@ -79,9 +87,8 @@ jobs:
 
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No GITHUB_TOKEN: without tagName/releaseId tauri-action uploads nothing (needs a live PR run to confirm).
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         with:
           projectPath: desktop
           args: --target ${{ matrix.target }}
@@ -93,7 +100,7 @@ jobs:
       # ── Upload artifacts ──────────────────────────────────────────────────
       - name: Upload macOS .dmg
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vibe-station-${{ matrix.target }}.dmg
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
@@ -101,7 +108,7 @@ jobs:
 
       - name: Upload Linux .AppImage
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vibe-station-${{ matrix.target }}.AppImage
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
@@ -109,7 +116,7 @@ jobs:
 
       - name: Upload Linux .deb
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vibe-station-${{ matrix.target }}.deb
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb

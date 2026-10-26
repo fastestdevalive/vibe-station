@@ -1,0 +1,9 @@
+# Keeps the SHA-pinned third-party actions (release.yml pins every `uses:` to a full
+# commit SHA with a `# vX.Y.Z` comment) current. Review each bump: release.yml holds the
+# signing secrets and the OIDC token. See docs/UPDATE.md.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

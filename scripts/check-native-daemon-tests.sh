@@ -24,3 +24,4 @@ run() { # <package> <test binary> <expected test count>
 run vst-daemon async_startup 1
 run vst-daemon agy_stream_acp_cmd 1
 run vst-cli self_heal 4
+run vst-cli restart_exec 4
