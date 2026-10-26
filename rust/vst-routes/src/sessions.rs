@@ -37,8 +37,9 @@
 //! (07a defines no new `Serialize`/`Deserialize` types).
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,18 +48,26 @@ use vst_agents::context::{
     BuildVstEnvOptions,
 };
 use vst_agents::json_agent_chat::{
-    enqueue_chat_turn, find_json_session_context, read_session_page_before, read_session_since,
-    read_session_tail, read_session_transcript, resolve_json_agent, start_json_create_turn,
-    EnqueueChatTurnOpts, EnqueueDelivery, ResolveJsonAgentError, StartJsonCreateTurnOpts,
+    cli_id_to_provider, enqueue_chat_turn, find_json_session_context, read_session_page_before,
+    read_session_since, read_session_tail, read_session_transcript, resolve_json_agent,
+    start_json_create_turn, EnqueueChatTurnOpts, EnqueueDelivery, ResolveJsonAgentError,
+    StartJsonCreateTurnOpts,
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
-use vst_agents::json_agent_session::JsonAgentSession;
+use vst_agents::json_agent_session::{
+    carry_session_transcript, JsonAgentSession, SessionBreakMarker,
+};
+use vst_agents::paths::Paths as AgentPaths;
 use vst_agents::plugin::{CaptureArgs, ReadySignal, RestoreArgs};
 use vst_agents::prompt_builder::{
     build_direct_prompt, build_prompt, BuildDirectPromptInput, BuildPromptInput,
 };
 use vst_agents::registry::ensure_binary_on_path;
 use vst_agents::session_runtime::{release_session_runtime, ReleaseOpts};
+use vst_agents::transcript_export::{
+    export_scrollback, export_transcript_markdown, transcript_instruction,
+    TRANSCRIPT_EXPORT_FILENAME,
+};
 use vst_agents::{resolve_plugin, AgentPlugin, LaunchConfig, PluginContext};
 use vst_git::direct_pty::PtyKill;
 use vst_git::naming::{slugify_prompt, slugify_prompt_with};
@@ -68,7 +77,7 @@ use vst_git::worktree_service::CreateWorktreeOpts;
 use vst_git::worktree_service::{in_worktree_list_scope, top_worktree_scope_sort_order};
 use vst_git::{create_worktree_record, DirectPtyRegistry};
 use vst_lifecycle::channel::{channel_transition, resolve_channel, session_channel};
-use vst_lifecycle::handoff::{read_handoff_file_or_null, run_handoff_turn};
+use vst_lifecycle::handoff::{read_handoff_file_or_null, run_handoff_turn, HandoffError};
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
 use vst_proc::pty::{spawn_child, PtyHandle, SpawnChildOptions};
 use vst_proc::resolve_use_tmux::resolve_use_tmux;
@@ -82,15 +91,16 @@ use vst_types::rest::sessions::{
     CreateScheduledMessageResponse, CreateSessionBody, CreateTarget, DelinkResult, Delivery,
     DraftTarget, EditQueuedResult, EditScheduledMessageBody, EnqueueChatResult, HandoffResult,
     InputBody, PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody,
-    PatchModelResult, PinResult, RenameSessionResult, ReorderSessionResult, ResetBody, ResetResult,
-    ResubmitBody, SessionOutput, SincePage, StartDraftBody, StartDraftResult, StopTurnResult,
-    TranscriptPage, TurnActionResult,
+    PatchModelResult, PinResult, QueuedPolicy, RenameSessionResult, ReorderSessionResult,
+    ResetBody, ResetResult, ResubmitBody, SessionOutput, SincePage, StartDraftBody,
+    StartDraftResult, StopTurnResult, TranscriptPage, TurnActionResult, WhenBusy,
 };
 use vst_types::rest::shared::{GlobalDraft, Mode, Session};
 use vst_types::{
-    Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, NormalizedEventKind,
-    NormalizedEventProvider, PrStatus, ProjectRecord, SessionLifecycle, SessionNameSource,
-    SessionRecord, SessionType, TranscriptKind, TranscriptRef, WorktreeChoice, WorktreeRecord,
+    Attachment, CarryOver, Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState,
+    NormalizedEventKind, NormalizedEventProvider, PrStatus, ProjectRecord, SessionBreakKind,
+    SessionLifecycle, SessionMeta, SessionNameSource, SessionRecord, SessionType, TranscriptKind,
+    TranscriptRef, WorktreeChoice, WorktreeRecord,
 };
 use vst_ws::connection::SessionStream;
 use vst_ws::handlers::session_open::DirectStreamRegistry;
@@ -344,6 +354,7 @@ pub fn serialize_session(
         archived_at: s.archived_at.clone(),
         sort_order: s.sort_order,
         handoff_summary: s.handoff_summary.clone(),
+        carry_over: s.carry_over,
         parent_session_id: s.parent_session_id.clone(),
         superseded_by: s.superseded_by.clone(),
         pr: s.pr.clone(),
@@ -429,7 +440,143 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-pub const DEFAULT_HANDOFF_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_HANDOFF_TIMEOUT: Duration = vst_lifecycle::handoff::HANDOFF_TIMEOUT;
+
+/// How long stop-first waits for a json queue / terminal state to settle.
+const STOP_FIRST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Outcome of a cancel-aware settle wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettledWait {
+    Settled,
+    TimedOut,
+    Cancelled,
+}
+
+/// A queued turn this reset withdrew into the editing hold (so the release
+/// does not turn it into a struck-through `cancelled` row).
+#[derive(Clone, Debug)]
+struct WithdrawnTurn {
+    turn_id: String,
+    message: String,
+    attachments: Vec<Attachment>,
+}
+
+/// Carried content produced by step 3 of a reset.
+#[derive(Clone, Debug, Default)]
+struct CarryPrepared {
+    handoff_text: Option<String>,
+    handoff_turn_id: Option<String>,
+    transcript_path: Option<PathBuf>,
+}
+
+/// Point-of-no-return phase of an in-flight reset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ResetPhase {
+    #[default]
+    Cancellable,
+    Committed,
+}
+
+/// Per-reset cancellation flag (plan Decision 5).
+#[derive(Debug, Default)]
+pub struct ResetFlag {
+    cancelled: AtomicBool,
+    phase: Mutex<ResetPhase>,
+}
+
+impl ResetFlag {
+    /// The flag the reset's wait loops poll.
+    pub fn cancelled(&self) -> &AtomicBool {
+        &self.cancelled
+    }
+
+    /// Pass the point of no return. `Err(())` when a cancel won the race.
+    pub fn commit(&self) -> Result<(), ()> {
+        let mut phase = self.phase.lock().unwrap();
+        if self.cancelled.load(AtomicOrdering::SeqCst) {
+            return Err(());
+        }
+        *phase = ResetPhase::Committed;
+        Ok(())
+    }
+
+    /// Cancel the reset. `false` once it has committed.
+    pub fn cancel(&self) -> bool {
+        let phase = self.phase.lock().unwrap();
+        if *phase == ResetPhase::Committed {
+            return false;
+        }
+        self.cancelled.store(true, AtomicOrdering::SeqCst);
+        true
+    }
+}
+
+/// In-flight reset flags keyed by session id. Cloning shares the SAME map (the
+/// `Arc`), like `direct_streams` — never re-created per clone, or `cancel_reset`
+/// could not find the flag and `InProgress` would never fire.
+#[derive(Clone, Default)]
+pub struct ResetCancels(Arc<Mutex<HashMap<String, Arc<ResetFlag>>>>);
+
+impl ResetCancels {
+    /// Register a new flag, or `None` when a reset is already in flight.
+    pub fn register(&self, id: &str) -> Option<Arc<ResetFlag>> {
+        let mut map = self.0.lock().unwrap();
+        if map.contains_key(id) {
+            return None;
+        }
+        let flag = Arc::new(ResetFlag::default());
+        map.insert(id.to_string(), flag.clone());
+        Some(flag)
+    }
+
+    /// Drop a finished reset's flag.
+    pub fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+
+    /// Look up the in-flight flag for a session.
+    pub fn get(&self, id: &str) -> Option<Arc<ResetFlag>> {
+        self.0.lock().unwrap().get(id).cloned()
+    }
+}
+
+/// Removes a reset flag on every exit path of `reset_session`.
+struct ResetGuard {
+    cancels: ResetCancels,
+    id: String,
+}
+
+impl Drop for ResetGuard {
+    fn drop(&mut self) {
+        self.cancels.remove(&self.id);
+    }
+}
+
+/// Wait until a JSON agent's queue is fully drained, polling `cancelled`.
+async fn wait_settled(
+    agent: &JsonAgentSession,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> SettledWait {
+    if agent.is_settled() {
+        return SettledWait::Settled;
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if cancelled.load(AtomicOrdering::SeqCst) {
+            return SettledWait::Cancelled;
+        }
+        if agent.is_settled() {
+            return SettledWait::Settled;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return SettledWait::TimedOut;
+        }
+        tokio::time::sleep(Duration::from_millis(50).min(deadline - now)).await;
+    }
+}
 
 /// Runtime handles the route handlers need.
 pub struct SessionRoutes {
@@ -464,6 +611,8 @@ pub struct SessionRoutes {
     pub model_catalog: crate::model_catalog::ModelCatalog,
     /// Bounded timeout for a handoff turn before giving up (default 120s).
     pub handoff_timeout: Duration,
+    /// In-flight reset flags (shared `Arc` across clones — see `ResetCancels`).
+    pub reset_cancels: ResetCancels,
 }
 
 impl std::fmt::Debug for SessionRoutes {
@@ -501,6 +650,9 @@ impl Clone for SessionRoutes {
             attachment_registry: self.attachment_registry.clone(),
             model_catalog: self.model_catalog.clone(),
             handoff_timeout: self.handoff_timeout,
+            // Shared `Arc` — never `Default`, or cancel/in-progress would not
+            // see the flag registered by the request's own clone.
+            reset_cancels: self.reset_cancels.clone(),
         }
     }
 }
@@ -640,7 +792,10 @@ impl SessionRoutes {
                 .await
                 .ok_or_else(|| format!("json session context missing for '{id}'"))?;
             let page = read_session_tail(&json_ctx, &self.json_registry, n, usize::MAX);
-            let output = group_json_output(&page.events);
+            // A carried (reset/switch) session shows ONLY the conversation after
+            // its last session-break marker in `vst agent output` — the old rows
+            // are the previous session's history, not this agent's output.
+            let output = group_json_output(&drop_through_last_break(page.events));
             return Ok(SessionOutput {
                 id: id.to_string(),
                 output,
@@ -1032,6 +1187,7 @@ impl SessionRoutes {
             transcript_ref: transcript_ref_for_direct(project_id.clone(), &session_id, is_json),
             archived_at: None,
             handoff_summary: None,
+            carry_over: None,
             agent_chat_id: None,
             acp_session_id: None,
             model_override: None,
@@ -1213,6 +1369,7 @@ impl SessionRoutes {
             parent_session_id: data.source_agent_id.clone(),
             archived_at: None,
             handoff_summary: None,
+            carry_over: None,
             agent_chat_id: None,
             acp_session_id: None,
             model_override: None,
@@ -1375,6 +1532,7 @@ impl SessionRoutes {
             tokio::spawn(async move {
                 start_json_create_turn(
                     StartJsonCreateTurnOpts {
+                        silent: false,
                         session_id: opts.session.id.clone(),
                         prompt: opts.prompt.clone(),
                         daemon_port: opts.daemon_port,
@@ -2543,6 +2701,7 @@ impl SessionRoutes {
             draft_config: None,
             archived_at: session.archived_at.clone(),
             handoff_summary: session.handoff_summary.clone(),
+            carry_over: session.carry_over,
             parent_session_id: session.parent_session_id.clone(),
             superseded_by: session.superseded_by.clone(),
             pr: session.pr.clone(),
@@ -3254,6 +3413,10 @@ impl SessionRoutes {
     /// switches mode (reset-with-mode-switch). The archive + replacement happen
     /// in the SAME `mutate_project` call so a worktree never has zero live main
     /// sessions in persisted state (Risk #2).
+    ///
+    /// Ordered so a data-loss step can never happen before validation
+    /// (plan Decision 4): validate/move ids up → stop-first → summary/export →
+    /// commit (point of no return) → release → carry rows → archive → spawn.
     pub async fn reset_session(
         &self,
         id: &str,
@@ -3282,6 +3445,28 @@ impl SessionRoutes {
         if session.archived_at.is_some() {
             return Err(ResetError::Archived("Session already archived".to_string()));
         }
+
+        // --- Step 1: validate everything before any teardown -----------------
+        // Carry precedence: `carryOver` wins; else `handoffText` ⇒ summary; else
+        // `handoff: true` ⇒ summary; else nothing.
+        let carry_over = match body.carry_over {
+            Some(c) => c,
+            None => {
+                if body.handoff_text.is_some() || body.handoff.unwrap_or(false) {
+                    CarryOver::Summary
+                } else {
+                    CarryOver::Nothing
+                }
+            }
+        };
+        let when_busy = body.when_busy.unwrap_or(WhenBusy::Stop);
+        let queued = body.queued.unwrap_or(QueuedPolicy::Carry);
+        if carry_over == CarryOver::Nothing && body.handoff_text.is_some() {
+            return Err(ResetError::BadRequest(
+                "carryOver \"none\" cannot be combined with handoffText".to_string(),
+            ));
+        }
+
         // reset-with-mode-switch: resolve + validate the REQUESTED mode (id or
         // name) before any teardown — a typo'd mode must not archive the old
         // session with nothing to replace it.
@@ -3299,7 +3484,7 @@ impl SessionRoutes {
         // archive the old session with no replacement ever spawned — unless the
         // caller supplied a replacement mode (the UI's "pick a new mode" retry),
         // in which case the old mode is never used.
-        let effective_mode_id = match requested_mode_id {
+        let effective_mode_id = match requested_mode_id.clone() {
             Some(m) => m,
             None => {
                 let mode_id = session.mode_id.clone().ok_or_else(|| {
@@ -3312,23 +3497,65 @@ impl SessionRoutes {
             }
         };
 
-        // Direct delivery bypasses handoff; otherwise run the bounded
-        // handoff turn (chat turn on json, paste-then-poll on tmux/pty).
-        let mut handoff_text: Option<String> = body.handoff_text.clone();
-        if handoff_text.is_none() && body.handoff.unwrap_or(false) {
-            let handoff_path = handoff_path_for(&session.id);
-            let instruction = handoff_instruction(&handoff_path);
-            handoff_text = Some(
-                self.run_handoff(&session, &handoff_path, &instruction)
-                    .await
-                    .map_err(|f| ResetError::HandoffFailed(f.message()))?,
-            );
+        // Channel resolution moved up from after the release: an early return
+        // here must never happen once the old runtime is gone.
+        let explicit_channel = body.channel;
+        if explicit_channel == Some(Channel::Pty) {
+            return Err(ResetError::BadRequest(
+                "Reset cannot replace a session with the pty channel; choose a terminal or rich chat channel"
+                    .to_string(),
+            ));
+        }
+        let base_channel: Option<Channel> = explicit_channel.or(session.channel);
+        let wants_json = base_channel == Some(Channel::Json);
+        let json_unsupported = (self.json_unsupported)(&effective_mode_id).is_some();
+        if explicit_channel == Some(Channel::Json) && json_unsupported {
+            return Err(ResetError::JsonUnsupported(
+                "The target mode's CLI does not support Rich Chat (json)".to_string(),
+            ));
+        }
+        let downgrade_to_tmux = wants_json && json_unsupported && explicit_channel.is_none();
+        let is_json_channel = wants_json && !downgrade_to_tmux;
+        let new_channel = if downgrade_to_tmux {
+            Channel::Tmux
+        } else {
+            base_channel.unwrap_or(Channel::Tmux)
+        };
+        let new_use_tmux = if downgrade_to_tmux {
+            true
+        } else if explicit_channel.is_some() {
+            new_channel == Channel::Tmux
+        } else {
+            session.use_tmux
+        };
+        let old_channel = session_channel(session.channel, Some(session.use_tmux));
+        // A plain (non-tmux) terminal has no scrollback to capture.
+        if carry_over == CarryOver::Transcript && old_channel == Channel::Pty {
+            return Err(ResetError::BadRequest(
+                "Transcript export is not available for plain (non-tmux) terminals".to_string(),
+            ));
         }
 
-        // Kill the process/pane BEFORE the archive. (forceCloseSessionStreams
-        // is a cross-part gap — vst-ws owns the connection hub, so the route
-        // crate cannot close open WS streams here.)
-        self.release_session_runtime(&session, false).await;
+        // Break kind (plan Decision 2): `switch` iff the requested mode resolves
+        // to a DIFFERENT mode id than the current one, else `reset`.
+        let break_kind = match &requested_mode_id {
+            Some(m) if session.mode_id.as_deref() != Some(m.as_str()) => SessionBreakKind::Switch,
+            _ => SessionBreakKind::Reset,
+        };
+        let effective_cli = find_mode(&effective_mode_id).map(|m| m.cli);
+        let old_cli = session
+            .mode_id
+            .as_deref()
+            .and_then(find_mode)
+            .map(|m| m.cli);
+        let from_provider = old_cli.map(|c| c.as_str().to_string());
+        let to_provider = effective_cli.map(|c| c.as_str().to_string());
+        let from_mode = session
+            .mode_id
+            .as_deref()
+            .and_then(find_mode)
+            .map(|m| m.name);
+        let to_mode = find_mode(&effective_mode_id).map(|m| m.name);
 
         // Name: keep the old name UNLESS an explicit new prompt was given.
         let new_name = match &body.prompt {
@@ -3342,20 +3569,6 @@ impl SessionRoutes {
             }
             None => session.name.clone().unwrap_or_default(),
         };
-        // Prompt: never the ORIGINAL creation prompt. Handoff summary + explicit
-        // prompt combine when both are given.
-        let new_initial_prompt = {
-            let parts: Vec<String> = [handoff_text.as_deref(), body.prompt.as_deref()]
-                .into_iter()
-                .flatten()
-                .map(str::to_string)
-                .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n\n---\n\n"))
-            }
-        };
 
         let scope_id = worktree
             .as_ref()
@@ -3363,21 +3576,108 @@ impl SessionRoutes {
             .unwrap_or_else(|| project.id.clone());
         let new_id = generate_session_id(&scope_id, SessionType::Agent);
 
-        // reset-with-mode-switch: a session switching INTO a mode whose CLI
-        // can't do JSON can't keep a "json" channel — silently downgrade to a
-        // normal tmux terminal rather than erroring.
-        let wants_json = session.channel == Some(Channel::Json);
-        let downgrade_to_tmux = wants_json && (self.json_unsupported)(&effective_mode_id).is_some();
-        let is_json_channel = wants_json && !downgrade_to_tmux;
-        let new_channel = if downgrade_to_tmux {
-            Channel::Tmux
+        let old_dir = if let Some(wt) = &worktree {
+            AgentPaths::default().session_data_dir(&project.id, &wt.id, &session.id)
         } else {
-            session.channel.unwrap_or(Channel::Tmux)
+            AgentPaths::default().direct_session_data_dir(&project.id, &session.id)
         };
-        let new_use_tmux = if downgrade_to_tmux {
-            true
+        let new_dir = if let Some(wt) = &worktree {
+            AgentPaths::default().session_data_dir(&project.id, &wt.id, &new_id)
         } else {
-            session.use_tmux
+            AgentPaths::default().direct_session_data_dir(&project.id, &new_id)
+        };
+
+        // Register the in-flight flag (second concurrent reset ⇒ InProgress).
+        // The drop guard removes it on every exit path, including errors.
+        let flag = self.reset_cancels.register(&session.id).ok_or_else(|| {
+            ResetError::InProgress("A reset is already in progress for this session".to_string())
+        })?;
+        let cancelled = flag.cancelled();
+        let _reset_guard = ResetGuard {
+            cancels: self.reset_cancels.clone(),
+            id: session.id.clone(),
+        };
+
+        // --- Step 2: stop-first ---------------------------------------------
+        let (mut withdrawn, interrupted) = self
+            .stop_for_reset(&session, old_channel, when_busy, carry_over, cancelled)
+            .await?;
+
+        // --- Step 3: summary / transcript export ----------------------------
+        let prepared = match self
+            .prepare_carry(
+                &session,
+                body,
+                carry_over,
+                interrupted,
+                old_channel,
+                &old_dir,
+                &new_dir,
+                cancelled,
+            )
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
+                    .await;
+                return Err(e);
+            }
+        };
+
+        // --- Step 4: point of no return -------------------------------------
+        if flag.commit().is_err() {
+            self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
+                .await;
+            return Err(ResetError::Cancelled(
+                "The reset was cancelled; the old agent is unchanged.".to_string(),
+            ));
+        }
+
+        // --- Step 5: final sweep + release ----------------------------------
+        if old_channel == Channel::Json {
+            let mut swept = self.sweep_queued_turns(&session.id);
+            withdrawn.append(&mut swept);
+        }
+        self.release_session_runtime(&session, false).await;
+
+        // --- Step 6: carry rows + break marker ------------------------------
+        // The replacement's Rich Chat runtime opens its transcript store in this
+        // dir; with Carry over = Nothing nothing else creates it before then,
+        // and opening a store in a missing dir panics.
+        if is_json_channel {
+            let _ = std::fs::create_dir_all(&new_dir);
+        }
+        let marker_text = match carry_over {
+            CarryOver::Nothing => None,
+            CarryOver::Summary => prepared.handoff_text.clone(),
+            CarryOver::Transcript => prepared
+                .transcript_path
+                .as_ref()
+                .map(|p| transcript_instruction(p)),
+        };
+
+        let mut prompt_parts: Vec<String> = Vec::new();
+        if let Some(t) = &marker_text {
+            prompt_parts.push(t.clone());
+        }
+        if let Some(p) = &body.prompt {
+            prompt_parts.push(p.clone());
+        }
+        let carried_messages: Vec<String> = if queued == QueuedPolicy::Carry {
+            withdrawn.iter().map(|t| t.message.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        // A terminal target cannot take separate queued turns, so its carried
+        // queued text rides on the persisted initial prompt (and opts.prompt).
+        if !is_json_channel {
+            prompt_parts.extend(carried_messages.iter().cloned());
+        }
+        let new_initial_prompt = if prompt_parts.is_empty() {
+            None
+        } else {
+            Some(prompt_parts.join("\n\n---\n\n"))
         };
 
         let mut new_session = SessionRecord {
@@ -3407,6 +3707,7 @@ impl SessionRoutes {
             parent_session_id: session.parent_session_id.clone(),
             archived_at: None,
             handoff_summary: None,
+            carry_over: None,
             superseded_by: None,
             pr: None,
             transcript_ref: if is_json_channel {
@@ -3430,9 +3731,64 @@ impl SessionRoutes {
             last_tool: None,
         };
 
-        // Archive the old row + append the replacement in this SAME
-        // mutateProject call (Risk #2). The archived row's isMain is explicitly
-        // cleared (Bug 3 fix) so `find(isMain)` resolves to the live new row.
+        // Carry the old transcript into the replacement (plan Decision 1): only
+        // for `summary`/`transcript`, and only when BOTH the old and final
+        // channels are Rich Chat (json). Runs BEFORE `mutate_project` so the new
+        // store is fully filled before the replacement record is announced.
+        if carry_over != CarryOver::Nothing && old_channel == Channel::Json && is_json_channel {
+            match effective_cli {
+                Some(cli) => {
+                    let old_id = session.id.clone();
+                    let new_id_c = new_id.clone();
+                    let marker = SessionBreakMarker {
+                        kind: break_kind,
+                        from_provider: from_provider.clone(),
+                        to_provider: to_provider.clone(),
+                        provider: cli_id_to_provider(cli),
+                        summary: marker_text.clone(),
+                        carry_over: Some(carry_over),
+                        from_mode: from_mode.clone(),
+                        to_mode: to_mode.clone(),
+                        ts: now_iso(),
+                    };
+                    let mut skip_turn_ids: Vec<String> =
+                        withdrawn.iter().map(|t| t.turn_id.clone()).collect();
+                    if let Some(h) = &prepared.handoff_turn_id {
+                        skip_turn_ids.push(h.clone());
+                    }
+                    let carry_dir = new_dir.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        carry_session_transcript(
+                            &old_dir,
+                            &old_id,
+                            &carry_dir,
+                            &new_id_c,
+                            marker,
+                            &skip_turn_ids,
+                        )
+                    })
+                    .await
+                    {
+                        eprintln!(
+                            "reset: transcript carry failed for {} -> {}: {e}",
+                            session.id, new_id
+                        );
+                    }
+                }
+                None => eprintln!(
+                    "reset: effective mode '{}' vanished; skipping transcript carry",
+                    effective_mode_id
+                ),
+            }
+        }
+
+        // --- Step 7: archive + replacement in one locked mutation -----------
+        // `handoffSummary` is the summary for `summary`, absent otherwise.
+        let archived_summary = if carry_over == CarryOver::Summary {
+            prepared.handoff_text.clone()
+        } else {
+            None
+        };
         let archived_at = now_iso();
         let old_id = session.id.clone();
         let old_id_c = old_id.clone();
@@ -3441,14 +3797,15 @@ impl SessionRoutes {
         let new_rec = new_session.clone();
         let archived_at_c = archived_at.clone();
         let new_id_c = new_id.clone();
-        let handoff_text_c = handoff_text.clone();
+        let handoff_text_c = archived_summary.clone();
+        let carry_over_c = carry_over;
         let updated_project = self
             .store
             .mutate_project(&project_id, move |p| {
-                // Re-check inside the locked mutation: a handoff can hold this reset
-                // open for up to `handoff_timeout`, so a concurrent reset/terminate
-                // may have archived or removed the row since it was read — never
-                // archive twice or push a second replacement.
+                // Re-check inside the locked mutation: a summary can hold this
+                // reset open for up to `handoff_timeout`, so a concurrent
+                // reset/terminate may have archived or removed the row since it
+                // was read — never archive twice or push a second replacement.
                 // Returns the old row's pin, which moves to the replacement in
                 // this same locked mutation (single pin owner).
                 let archive = |s: &mut SessionRecord| -> Result<Option<String>, StoreError> {
@@ -3457,6 +3814,7 @@ impl SessionRoutes {
                     }
                     s.archived_at = Some(archived_at_c.clone());
                     s.handoff_summary = handoff_text_c.clone();
+                    s.carry_over = Some(carry_over_c);
                     s.is_main = false;
                     s.superseded_by = Some(new_id_c.clone());
                     Ok(s.pinned_at.take())
@@ -3504,6 +3862,11 @@ impl SessionRoutes {
             })
             .await
             .map_err(|e| {
+                // The export above may have created the new session's data dir; a
+                // failed mutation means no replacement record exists, so remove it
+                // (the same AgentPaths the carry used) to avoid leaking an orphaned
+                // store (plan 2.5).
+                let _ = std::fs::remove_dir_all(&new_dir);
                 let msg = e.to_string();
                 if msg.contains("Session already archived") {
                     ResetError::Archived("Session already archived".to_string())
@@ -3550,9 +3913,6 @@ impl SessionRoutes {
         }
 
         let wt_id_for_serialize = worktree.as_ref().map(|w| w.id.clone());
-        // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
-        // (the former cross-part gap noted here is closed — see the field's
-        // doc comment in `vst-types/src/events.rs`).
         // Re-read the pin right before snapshotting: a `pin_session` landing
         // after the locked mutation must not be lost from the announcement.
         let latest_pin = match find_session_context(&self.store, &new_id).await {
@@ -3594,27 +3954,409 @@ impl SessionRoutes {
             mode_icon: None,
         });
 
-        // Spawn the replacement through the SAME channel-aware, guarded helper
-        // session creation uses — never a raw unguarded spawn.
+        // --- Step 8/9: spawn the replacement (detached) ----------------------
         let opts = SpawnChannelOpts {
             project: project.clone(),
             worktree: worktree.clone(),
             session: new_session,
             mode_id: effective_mode_id,
-            prompt: new_initial_prompt,
+            prompt: new_initial_prompt.clone(),
             daemon_port: self.daemon_port,
             skip_auto_turn: false,
         };
         let routes = self.clone();
+        let json_target = is_json_channel;
+        // The carried summary / "read the previous chat" instruction belongs
+        // behind the break card's toggle, so it goes out as a silent first turn
+        // (the agent still receives it). Only when the card actually exists:
+        // the rows were carried (old and new channel both Rich Chat).
+        let silent_marker =
+            (carry_over != CarryOver::Nothing && old_channel == Channel::Json && is_json_channel)
+                .then(|| marker_text.clone())
+                .flatten();
+        let user_prompt = body.prompt.clone();
         tokio::spawn(async move {
-            routes.spawn_new_session_for_channel(opts).await;
+            if json_target {
+                // Step 9: for a json target call `start_json_create_turn`
+                // directly. `spawn_new_session_for_channel` wraps it in its own
+                // `tokio::spawn` and returns at once, so a message enqueued
+                // after it could run first and take the system prompt.
+                let (first_prompt, first_silent) = match &silent_marker {
+                    Some(m) => (Some(m.clone()), true),
+                    None => (opts.prompt.clone(), false),
+                };
+                let prompt = first_prompt.filter(|p| !p.trim().is_empty());
+                if prompt.is_some() || carried_messages.is_empty() {
+                    start_json_create_turn(
+                        StartJsonCreateTurnOpts {
+                            session_id: opts.session.id.clone(),
+                            prompt,
+                            silent: first_silent,
+                            daemon_port: opts.daemon_port,
+                            store: routes.store.clone(),
+                            broadcaster: routes.broadcaster.clone(),
+                        },
+                        &routes.json_registry,
+                    )
+                    .await;
+                }
+                // The user's own prompt follows the silent marker as an
+                // ordinary (visible) turn, FIFO.
+                let mut later: Vec<String> = Vec::new();
+                if silent_marker.is_some() {
+                    later.extend(user_prompt.filter(|p| !p.trim().is_empty()));
+                }
+                // Carried queued messages go FIFO strictly after turn 1.
+                later.extend(carried_messages);
+                for message in later {
+                    let res = enqueue_chat_turn(
+                        EnqueueChatTurnOpts {
+                            session_id: opts.session.id.clone(),
+                            message,
+                            attachments: vec![],
+                            daemon_port: opts.daemon_port,
+                            steer: Some(false),
+                            silent: false,
+                            store: routes.store.clone(),
+                            broadcaster: routes.broadcaster.clone(),
+                        },
+                        &routes.json_registry,
+                    )
+                    .await;
+                    if let Err(e) = res {
+                        eprintln!(
+                            "reset: carrying a queued message to {} failed: {e:?}",
+                            opts.session.id
+                        );
+                    }
+                }
+            } else {
+                routes.spawn_new_session_for_channel(opts).await;
+            }
         });
 
         Ok(ResetResult {
             ok: true,
             archived_session_id: old_id,
             new_session_id: new_id,
+            carry_over,
+            break_kind: (carry_over != CarryOver::Nothing).then_some(break_kind),
         })
+    }
+
+    /// Stop the old agent's running turn (stop-first, plan Decision 4 step 2).
+    ///
+    /// JSON: withdraw every queued turn into the editing hold (whether the
+    /// policy is `carry` or `drop`) and record only the ones THIS reset moved —
+    /// turns the user was already editing stay held and untouched. Then stop
+    /// the active turn and wait (bounded) for the queue to settle; a timeout
+    /// resubmits exactly the recorded turns. `whenBusy=wait` just waits for the
+    /// queue to drain (bounded by the opt-in queue cap) and carries nothing.
+    ///
+    /// Terminal: `whenBusy=wait` polls the stored lifecycle; `summary` on a
+    /// working tmux session sends the plugin's `interrupt_keys` first. Returns
+    /// `(withdrawn turns, whether a running turn was interrupted)`.
+    async fn stop_for_reset(
+        &self,
+        session: &SessionRecord,
+        channel: Channel,
+        when_busy: WhenBusy,
+        carry_over: CarryOver,
+        cancelled: &AtomicBool,
+    ) -> Result<(Vec<WithdrawnTurn>, bool), ResetError> {
+        match channel {
+            Channel::Json => {
+                let Some(agent) = self.json_registry.get(&session.id) else {
+                    return Ok((Vec::new(), false));
+                };
+                match when_busy {
+                    WhenBusy::Wait => {
+                        match wait_settled(&agent, HANDOFF_QUEUE_WAIT, cancelled).await {
+                            SettledWait::Settled => Ok((Vec::new(), false)),
+                            SettledWait::Cancelled => Err(ResetError::Cancelled(
+                                "The reset was cancelled; the old agent is unchanged.".to_string(),
+                            )),
+                            SettledWait::TimedOut => Err(ResetError::BusyTimeout(
+                                "The agent is still busy with its current turn; nothing changed."
+                                    .to_string(),
+                            )),
+                        }
+                    }
+                    WhenBusy::Stop => {
+                        let meta = agent.get_meta();
+                        if meta.active_turn_id.is_none() && agent.is_settled() {
+                            return Ok((Vec::new(), false));
+                        }
+                        let mut withdrawn = Self::withdraw_queued_turns(&agent, &meta);
+                        let had_active = agent.stop_active_turn(None);
+                        match wait_settled(&agent, STOP_FIRST_TIMEOUT, cancelled).await {
+                            SettledWait::Settled => {}
+                            SettledWait::Cancelled => {
+                                Self::restore_withdrawn(&agent, &withdrawn);
+                                return Err(ResetError::Cancelled(
+                                    "The reset was cancelled; the old agent is unchanged."
+                                        .to_string(),
+                                ));
+                            }
+                            SettledWait::TimedOut => {
+                                Self::restore_withdrawn(&agent, &withdrawn);
+                                return Err(ResetError::BusyTimeout(
+                                    "The agent did not stop within 10 seconds; the messages this reset moved were restored."
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        // Sweep once more: turns may have arrived during the wait.
+                        let meta = agent.get_meta();
+                        withdrawn.extend(Self::withdraw_queued_turns(&agent, &meta));
+                        Ok((withdrawn, had_active))
+                    }
+                }
+            }
+            _ => {
+                if when_busy == WhenBusy::Wait {
+                    return match self
+                        .wait_terminal_idle(&session.id, HANDOFF_QUEUE_WAIT, cancelled)
+                        .await
+                    {
+                        SettledWait::Settled => Ok((Vec::new(), false)),
+                        SettledWait::Cancelled => Err(ResetError::Cancelled(
+                            "The reset was cancelled; the old agent is unchanged.".to_string(),
+                        )),
+                        SettledWait::TimedOut => Err(ResetError::BusyTimeout(
+                            "The agent is still busy with its current turn; nothing changed."
+                                .to_string(),
+                        )),
+                    };
+                }
+                // Only a summary needs the old agent to run one more turn; for
+                // `nothing`/`transcript` releasing the runtime is the stop.
+                if carry_over != CarryOver::Summary {
+                    return Ok((Vec::new(), false));
+                }
+                let state = self.stored_lifecycle_state(&session.id).await;
+                if state != Some(LifecycleState::Working) {
+                    return Ok((Vec::new(), false));
+                }
+                // An Escape into an idle Claude Code TUI opens rewind, so keys
+                // are only sent when the stored state says it is working.
+                if session.use_tmux {
+                    if let Some(plugin) = session
+                        .mode_id
+                        .as_deref()
+                        .and_then(find_mode)
+                        .map(|m| resolve_plugin(m.cli))
+                    {
+                        let keys: Vec<String> = plugin
+                            .interrupt_keys()
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect();
+                        let tmux = self.tmux.clone();
+                        let target = session.tmux_name.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            for key in keys {
+                                let _ = tmux.send_keys(&target, &key, false);
+                            }
+                        })
+                        .await;
+                    }
+                }
+                match self
+                    .wait_terminal_idle(&session.id, STOP_FIRST_TIMEOUT, cancelled)
+                    .await
+                {
+                    SettledWait::Settled => Ok((Vec::new(), true)),
+                    SettledWait::Cancelled => Err(ResetError::Cancelled(
+                        "The reset was cancelled; the old agent is unchanged.".to_string(),
+                    )),
+                    SettledWait::TimedOut => Err(ResetError::BusyTimeout(
+                        "The agent did not stop within 10 seconds; nothing changed.".to_string(),
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Withdraw every queued turn not already held, recording the ones moved.
+    fn withdraw_queued_turns(agent: &JsonAgentSession, meta: &SessionMeta) -> Vec<WithdrawnTurn> {
+        let held: HashSet<String> = meta.editing_turn_ids.iter().cloned().collect();
+        let mut out = Vec::new();
+        for turn_id in &meta.queued_turn_ids {
+            if held.contains(turn_id) {
+                continue;
+            }
+            if let Some((message, attachments, _)) = agent.begin_edit_queued_turn(turn_id) {
+                out.push(WithdrawnTurn {
+                    turn_id: turn_id.clone(),
+                    message,
+                    attachments,
+                });
+            }
+        }
+        out
+    }
+
+    /// Re-enqueue the turns this reset withdrew (failure / cancel restore).
+    fn restore_withdrawn(agent: &JsonAgentSession, withdrawn: &[WithdrawnTurn]) {
+        for turn in withdrawn {
+            agent.resubmit_queued_turn(
+                &turn.turn_id,
+                turn.message.clone(),
+                turn.attachments.clone(),
+                false,
+            );
+        }
+    }
+
+    /// Withdraw any turns queued after the stop step so the release does not
+    /// turn them into struck-through `cancelled` rows.
+    fn sweep_queued_turns(&self, session_id: &str) -> Vec<WithdrawnTurn> {
+        let Some(agent) = self.json_registry.get(session_id) else {
+            return Vec::new();
+        };
+        let meta = agent.get_meta();
+        Self::withdraw_queued_turns(&agent, &meta)
+    }
+
+    /// Remove the new data dir and restore the withdrawn turns after a failure.
+    async fn cleanup_failed_reset(
+        &self,
+        session_id: &str,
+        withdrawn: &[WithdrawnTurn],
+        new_dir: &Path,
+    ) {
+        if let Some(agent) = self.json_registry.get(session_id) {
+            Self::restore_withdrawn(&agent, withdrawn);
+        }
+        let _ = tokio::fs::remove_dir_all(new_dir).await;
+    }
+
+    /// Stored lifecycle state of a session (terminal stop-first polling).
+    async fn stored_lifecycle_state(&self, session_id: &str) -> Option<LifecycleState> {
+        match find_session_context(&self.store, session_id).await {
+            Some(SessionContext::Worktree { session, .. })
+            | Some(SessionContext::Direct { session, .. }) => Some(session.lifecycle.state),
+            _ => None,
+        }
+    }
+
+    /// Poll a terminal session's stored lifecycle until it leaves `working`.
+    async fn wait_terminal_idle(
+        &self,
+        session_id: &str,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> SettledWait {
+        if self.stored_lifecycle_state(session_id).await != Some(LifecycleState::Working) {
+            return SettledWait::Settled;
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if cancelled.load(AtomicOrdering::SeqCst) {
+                return SettledWait::Cancelled;
+            }
+            if self.stored_lifecycle_state(session_id).await != Some(LifecycleState::Working) {
+                return SettledWait::Settled;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return SettledWait::TimedOut;
+            }
+            tokio::time::sleep(Duration::from_millis(100).min(deadline - now)).await;
+        }
+    }
+
+    /// Produce the carried content for `summary`/`transcript` (step 3).
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_carry(
+        &self,
+        session: &SessionRecord,
+        body: &ResetBody,
+        carry_over: CarryOver,
+        interrupted: bool,
+        old_channel: Channel,
+        old_dir: &Path,
+        new_dir: &Path,
+        cancelled: &AtomicBool,
+    ) -> Result<CarryPrepared, ResetError> {
+        match carry_over {
+            CarryOver::Nothing => Ok(CarryPrepared::default()),
+            CarryOver::Summary => {
+                // The CLI `--summary-file` path sends both fields: use the text
+                // and run no handoff turn.
+                if let Some(text) = body.handoff_text.clone() {
+                    return Ok(CarryPrepared {
+                        handoff_text: Some(text),
+                        ..Default::default()
+                    });
+                }
+                let handoff_path = handoff_path_for(&session.id);
+                let instruction = handoff_instruction(&handoff_path, interrupted);
+                let (text, turn_id) = self
+                    .run_handoff(session, &handoff_path, &instruction, cancelled)
+                    .await
+                    .map_err(|f| match f {
+                        HandoffFailure::Cancelled => ResetError::Cancelled(f.message()),
+                        other => ResetError::HandoffFailed(other.message()),
+                    })?;
+                Ok(CarryPrepared {
+                    handoff_text: Some(text),
+                    handoff_turn_id: turn_id,
+                    transcript_path: None,
+                })
+            }
+            CarryOver::Transcript => {
+                let out = new_dir.join(TRANSCRIPT_EXPORT_FILENAME);
+                if old_channel == Channel::Json {
+                    let old_id = session.id.clone();
+                    let old_dir = old_dir.to_path_buf();
+                    let out_c = out.clone();
+                    tokio::task::spawn_blocking(move || {
+                        export_transcript_markdown(&old_dir, &old_id, &out_c)
+                    })
+                    .await
+                    .map_err(|e| ResetError::Internal(format!("transcript export failed: {e}")))?
+                    .map_err(|e| ResetError::Internal(format!("transcript export failed: {e}")))?;
+                } else {
+                    let scrollback = self
+                        .tmux
+                        .capture_pane(
+                            &session.tmux_name,
+                            &CapturePaneOptions {
+                                lines: Some(10_000),
+                                escape: false,
+                            },
+                        )
+                        .map_err(|e| {
+                            ResetError::Internal(format!("terminal scrollback export failed: {e}"))
+                        })?;
+                    let out_c = out.clone();
+                    tokio::task::spawn_blocking(move || export_scrollback(&scrollback, &out_c))
+                        .await
+                        .map_err(|e| {
+                            ResetError::Internal(format!("transcript export failed: {e}"))
+                        })?
+                        .map_err(|e| {
+                            ResetError::Internal(format!("transcript export failed: {e}"))
+                        })?;
+                }
+                Ok(CarryPrepared {
+                    transcript_path: Some(out),
+                    ..Default::default()
+                })
+            }
+        }
+    }
+
+    /// `POST /sessions/:id/reset/cancel` — flip the in-flight reset's flag.
+    /// Returns `false` when no reset is running or it already passed its point
+    /// of no return (plan Decision 5).
+    pub fn cancel_reset(&self, id: &str) -> bool {
+        self.reset_cancels
+            .get(id)
+            .map(|flag| flag.cancel())
+            .unwrap_or(false)
     }
 
     /// `POST /sessions/:id/handoff` — write-only: runs the handoff turn but
@@ -3644,36 +4386,47 @@ impl SessionRoutes {
         }
 
         let handoff_path = handoff_path_for(&session.id);
-        let instruction = handoff_instruction(&handoff_path);
+        let instruction = handoff_instruction(&handoff_path, false);
+        let never_cancelled = AtomicBool::new(false);
         let summary = self
-            .run_handoff(session, &handoff_path, &instruction)
+            .run_handoff(session, &handoff_path, &instruction, &never_cancelled)
             .await
-            .ok();
+            .ok()
+            .map(|(s, _turn_id)| s);
         Ok(HandoffResult {
             ok: true,
             handoff_summary: summary,
         })
     }
 
-    /// Run a bounded handoff turn for a session, returning the summary text if written.
+    /// Run a bounded handoff turn for a session, returning the summary text if written
+    /// plus the handoff turn's id for the `json` channel (`None` for terminal/pty).
     ///
     /// For Rich Chat (`Channel::Json`), delivers the handoff instruction as a chat turn
     /// and waits for the session to settle (up to `self.handoff_timeout`).
     /// For terminal sessions (tmux/pty), pastes to tmux or writes to pty and polls for the file.
+    /// `cancelled` aborts either wait promptly (plan Decision 5).
     async fn run_handoff(
         &self,
         session: &SessionRecord,
         path: &Path,
         instruction: &str,
-    ) -> Result<String, HandoffFailure> {
+        cancelled: &AtomicBool,
+    ) -> Result<(String, Option<String>), HandoffFailure> {
         let channel = session_channel(session.channel, Some(session.use_tmux));
         match channel {
-            Channel::Json => self.run_json_handoff_turn(session, path, instruction).await,
-            _ => match run_handoff_turn(&session.tmux_name, channel, path, instruction).await {
+            Channel::Json => {
+                self.run_json_handoff_turn(session, path, instruction, cancelled)
+                    .await
+            }
+            _ => match run_handoff_turn(&session.tmux_name, channel, path, instruction, cancelled)
+                .await
+            {
                 Ok(true) => match read_handoff_file_or_null(path).await {
-                    Ok(Some(text)) if !text.is_empty() => Ok(text),
+                    Ok(Some(text)) if !text.is_empty() => Ok((text, None)),
                     _ => Err(HandoffFailure::NoSummary),
                 },
+                Err(HandoffError::Cancelled) => Err(HandoffFailure::Cancelled),
                 _ => Err(HandoffFailure::NoSummary),
             },
         }
@@ -3684,7 +4437,8 @@ impl SessionRoutes {
         session: &SessionRecord,
         path: &Path,
         instruction: &str,
-    ) -> Result<String, HandoffFailure> {
+        cancelled: &AtomicBool,
+    ) -> Result<(String, Option<String>), HandoffFailure> {
         // An archived session must not get a live runtime spun back up for it
         // (`resolve_json_agent` re-creates released agents).
         if session.archived_at.is_some() {
@@ -3695,6 +4449,7 @@ impl SessionRoutes {
         }
 
         let opts = EnqueueChatTurnOpts {
+            silent: false,
             session_id: session.id.clone(),
             message: instruction.to_string(),
             attachments: vec![],
@@ -3734,12 +4489,21 @@ impl SessionRoutes {
             }
         };
 
-        let started =
-            wait_for_turn_start(phase, HANDOFF_QUEUE_WAIT, Duration::from_millis(250)).await;
+        let started = wait_for_turn_start(
+            phase,
+            HANDOFF_QUEUE_WAIT,
+            Duration::from_millis(250),
+            cancelled,
+        )
+        .await;
 
         if !started {
             cleanup_failed_handoff(&agent, &turn_id, path).await;
-            return Err(HandoffFailure::QueueTimeout);
+            return Err(if cancelled.load(AtomicOrdering::SeqCst) {
+                HandoffFailure::Cancelled
+            } else {
+                HandoffFailure::QueueTimeout
+            });
         }
 
         let summary = wait_for_handoff_file(
@@ -3748,15 +4512,20 @@ impl SessionRoutes {
             HANDOFF_IDLE_GRACE,
             || agent.is_settled(),
             || agent.settled(),
+            cancelled,
         )
         .await;
 
         match summary {
-            Some(s) => Ok(s),
+            Some(s) => Ok((s, Some(turn_id))),
             None => {
-                eprintln!("handoff: {}: no summary written", session.id);
                 cleanup_failed_handoff(&agent, &turn_id, path).await;
-                Err(HandoffFailure::NoSummary)
+                if cancelled.load(AtomicOrdering::SeqCst) {
+                    Err(HandoffFailure::Cancelled)
+                } else {
+                    eprintln!("handoff: {}: no summary written", session.id);
+                    Err(HandoffFailure::NoSummary)
+                }
             }
         }
     }
@@ -3799,6 +4568,7 @@ impl SessionRoutes {
                 .await?;
             enqueue_chat_turn(
                 EnqueueChatTurnOpts {
+                    silent: false,
                     session_id: id.to_string(),
                     message: body.data.clone(),
                     attachments,
@@ -3899,6 +4669,7 @@ impl SessionRoutes {
             .await?;
         let result = enqueue_chat_turn(
             EnqueueChatTurnOpts {
+                silent: false,
                 session_id: id.to_string(),
                 message: body.message.clone(),
                 attachments,
@@ -5732,6 +6503,7 @@ fn draft_session_record(
         draft_config,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         agent_chat_id: None,
         acp_session_id: None,
         model_override: None,
@@ -5829,12 +6601,20 @@ pub enum HandoffTurnPhase {
 ///
 /// `phase` is an injected closure so this is unit-testable without a live agent
 /// (mirrors `wait_for_handoff_file`'s injected `is_settled`/`wait_settled`).
-pub async fn wait_for_turn_start<P>(phase: P, timeout: Duration, poll: Duration) -> bool
+pub async fn wait_for_turn_start<P>(
+    phase: P,
+    timeout: Duration,
+    poll: Duration,
+    cancelled: &AtomicBool,
+) -> bool
 where
     P: Fn() -> HandoffTurnPhase,
 {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
+        if cancelled.load(AtomicOrdering::SeqCst) {
+            return false;
+        }
         if phase() != HandoffTurnPhase::Queued {
             return true;
         }
@@ -5877,6 +6657,7 @@ pub async fn wait_for_handoff_file<S, W, Fut>(
     idle_grace: Duration,
     is_settled: S,
     wait_settled: W,
+    cancelled: &AtomicBool,
 ) -> Option<String>
 where
     S: Fn() -> bool,
@@ -5894,6 +6675,9 @@ where
     let deadline = start + timeout;
     let mut seen_busy = false;
     loop {
+        if cancelled.load(AtomicOrdering::SeqCst) {
+            return None;
+        }
         if path.exists() {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             let _ = tokio::time::timeout(remaining, wait_settled()).await;
@@ -5929,14 +6713,24 @@ fn handoff_path_for(session_id: &str) -> PathBuf {
 
 /// The instruction pasted to the agent, naming the path it must write the
 /// summary to (mirrors `handoffInstruction` in services/handoff.ts).
-fn handoff_instruction(path: &std::path::Path) -> String {
-    format!(
+///
+/// When stop-first interrupted a running turn, one extra sentence asks the old
+/// agent to say what it was doing (plan Decision 3).
+fn handoff_instruction(path: &std::path::Path, interrupted: bool) -> String {
+    let base = format!(
         "Before this session ends, write a concise handoff summary for the next session to `{}`. \
          Include what the user asked for and any facts, names, values or decisions they shared \
          in this conversation (quote exact values verbatim), the current state of the work, \
          the remaining work, and anything else the next session should know. Then reply once done.",
         path.display()
-    )
+    );
+    if interrupted {
+        format!(
+            "{base} Your previous turn was interrupted so the user could restart you; say what you were doing."
+        )
+    } else {
+        base
+    }
 }
 
 fn now_iso() -> String {
@@ -6047,8 +6841,8 @@ pub enum ResumeError {
 }
 
 /// Why a handoff turn did not produce a summary. Channel-neutral: messages
-/// must NOT quote a timeout in seconds, because the tmux/pty path uses a fixed
-/// 30s poll (`vst_lifecycle::handoff::TIMEOUT_MS`), not `handoff_timeout`.
+/// must NOT quote a timeout in seconds; both channels share the 120 s budget
+/// (`vst_lifecycle::handoff::HANDOFF_TIMEOUT`).
 #[derive(Debug)]
 pub enum HandoffFailure {
     /// The handoff instruction could not be queued on the agent.
@@ -6057,21 +6851,27 @@ pub enum HandoffFailure {
     QueueTimeout,
     /// The handoff turn ran but no summary file was written in time.
     NoSummary,
+    /// The user cancelled the in-progress reset before it committed.
+    Cancelled,
 }
 
 impl HandoffFailure {
     pub fn message(&self) -> String {
         match self {
             HandoffFailure::EnqueueFailed => {
-                "Handoff failed: could not send the handoff request to the agent, so the session was NOT reset."
+                "The summary request could not be sent to the agent, so nothing changed."
                     .to_string()
             }
             HandoffFailure::QueueTimeout => {
-                "Handoff failed: the agent is still busy with its current turn, so the session was NOT reset. Stop the running turn or wait for it to finish, then try again."
+                "The agent is still busy with its current turn, so nothing changed. Stop the running turn or wait for it to finish, then try again."
                     .to_string()
             }
             HandoffFailure::NoSummary => {
-                "Handoff failed: the agent did not write a handoff summary in time, so the session was NOT reset. Try again, or reset without handoff."
+                "The agent did not write a summary in time, so nothing changed. Try again, or start fresh with Transcript or Nothing."
+                    .to_string()
+            }
+            HandoffFailure::Cancelled => {
+                "The summary was cancelled, so nothing changed. The old agent is still live."
                     .to_string()
             }
         }
@@ -6087,6 +6887,16 @@ pub enum ResetError {
     NoMode(String),
     ModeNotFound(String),
     HandoffFailed(String),
+    /// 409 — the in-progress reset was cancelled before its point of no return.
+    Cancelled(String),
+    /// 409 — the agent did not stop within the bounded stop-first wait.
+    BusyTimeout(String),
+    /// 409 — another reset is already in flight for this session.
+    InProgress(String),
+    /// 400 — malformed/invalid request input (e.g. `channel: "pty"`).
+    BadRequest(String),
+    /// 400 — the requested `channel: "json"` needs a CLI that can't run Rich Chat.
+    JsonUnsupported(String),
     Internal(String),
 }
 
@@ -6313,6 +7123,26 @@ fn entry_point_str(e: DraftEntryPoint) -> &'static str {
 
 /// Group a JSON transcript's text events by turn, joining consecutive turns
 /// with a blank line. Mirrors the `GET /sessions/:id/output` json branch.
+/// Drop every event at or before the last `session_break` marker, so `vst agent
+/// output` of a carried (reset/switch) session shows only the conversation after
+/// its join point. No break → the full list is returned unchanged.
+fn drop_through_last_break(
+    events: Vec<vst_types::NormalizedEvent>,
+) -> Vec<vst_types::NormalizedEvent> {
+    let last_break_seq = events
+        .iter()
+        .filter(|e| e.kind == NormalizedEventKind::SessionBreak)
+        .filter_map(|e| e.log_seq)
+        .max();
+    match last_break_seq {
+        Some(seq) => events
+            .into_iter()
+            .filter(|e| e.log_seq.map_or(true, |l| l > seq))
+            .collect(),
+        None => events,
+    }
+}
+
 pub fn group_json_output(events: &[vst_types::NormalizedEvent]) -> String {
     let mut turns: Vec<String> = Vec::new();
     let mut current_turn: Option<String> = None;
@@ -6668,6 +7498,7 @@ mod tests {
             draft_config: None,
             archived_at: None,
             handoff_summary: None,
+            carry_over: None,
             parent_session_id: None,
             superseded_by: None,
             pr: None,

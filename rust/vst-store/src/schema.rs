@@ -172,6 +172,7 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(db, "sessions", "lastLine", "TEXT")?;
     add_column_if_missing(db, "sessions", "lastToolName", "TEXT")?;
     add_column_if_missing(db, "sessions", "lastToolDetail", "TEXT")?;
+    add_column_if_missing(db, "sessions", "handoffCarryOver", "TEXT")?;
 
     Ok(())
 }

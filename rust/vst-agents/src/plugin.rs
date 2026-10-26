@@ -535,6 +535,16 @@ pub trait AgentPlugin: Send + Sync {
     fn reap_detached_descendants(&self) -> bool {
         false
     }
+
+    /// tmux key names that interrupt a running turn in a terminal session.
+    ///
+    /// Only the safe `Escape` default ships (plan OQ7): per-CLI overrides are
+    /// deferred until the real TUIs are verified. Callers must only send these
+    /// when the session is actually working (an Escape into an idle Claude Code
+    /// TUI opens rewind).
+    fn interrupt_keys(&self) -> Vec<&'static str> {
+        vec!["Escape"]
+    }
 }
 
 /// Build a [`vst_types::NormalizedEvent`] with the shared stamping fields set,
@@ -589,5 +599,24 @@ mod tests {
             ev.ts
         );
         assert!(ev.ts.ends_with('Z'), "ts must end with Z: {}", ev.ts);
+    }
+
+    #[test]
+    fn interrupt_keys_default_is_escape_for_every_plugin() {
+        for cli in [
+            vst_types::CliId::Claude,
+            vst_types::CliId::Cursor,
+            vst_types::CliId::Opencode,
+            vst_types::CliId::Agy,
+            vst_types::CliId::Codex,
+            vst_types::CliId::Pi,
+        ] {
+            let plugin = crate::resolve_plugin(cli);
+            assert_eq!(
+                plugin.interrupt_keys(),
+                vec!["Escape"],
+                "no per-CLI overrides ship yet (OQ7): {cli:?}"
+            );
+        }
     }
 }

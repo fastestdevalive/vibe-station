@@ -245,6 +245,30 @@ pub enum NormalizedEventKind {
     ModeUpdate,
     CommandsUpdate,
     MessageGenerated,
+    SessionBreak,
+}
+
+/// What kind of session break a `session_break` event represents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBreakKind {
+    Reset,
+    Switch,
+}
+
+/// How much of the previous chat a reset/switch carries into the replacement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CarryOver {
+    /// Fully clear: no transcript copy, no break card. Wire value `"none"`
+    /// (the variant name is `Nothing` for readability in Rust).
+    #[default]
+    #[serde(rename = "none")]
+    Nothing,
+    /// Carry the rows and a summary written by the old agent.
+    Summary,
+    /// Carry the rows and link a Markdown export of the old chat.
+    Transcript,
 }
 
 /// Token / cost usage numbers, normalized across harnesses.
@@ -373,6 +397,15 @@ pub enum ToolStatus {
     Failed,
 }
 
+/// Which catalog a slash command came from. `None` = the CLI's own agent
+/// commands; the client adds its own `"vibe-station"` group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandGroup {
+    Skill,
+    Agent,
+}
+
 /// A slash command / skill catalog entry.
 #[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -381,6 +414,8 @@ pub struct Command {
     pub name: String,
     pub description: String,
     pub argument_hint: Option<String>,
+    /// Set by the daemon (`skill`/`agent`); absent for CLI-native commands.
+    pub group: Option<CommandGroup>,
 }
 
 /// `tool_call`/`tool_call_update.locations` (Gap 3).
@@ -453,6 +488,18 @@ pub struct NormalizedEvent {
     pub subagent_state: Option<LifecycleState>,
     /// True for a silent notice-turn user event.
     pub silent: Option<bool>,
+    /// session_break only: "reset" | "switch".
+    pub break_kind: Option<SessionBreakKind>,
+    /// session_break only: CLI of the session being replaced.
+    pub from_provider: Option<String>,
+    /// session_break only: CLI of the replacement session.
+    pub to_provider: Option<String>,
+    /// session_break only: how much history was carried (`summary`/`transcript`).
+    pub carry_over: Option<CarryOver>,
+    /// session_break only: display name of the mode being replaced.
+    pub from_mode: Option<String>,
+    /// session_break only: display name of the replacement mode.
+    pub to_mode: Option<String>,
 }
 
 impl Default for NormalizedEvent {
@@ -492,6 +539,12 @@ impl Default for NormalizedEvent {
             subagent_name: None,
             subagent_state: None,
             silent: None,
+            break_kind: None,
+            from_provider: None,
+            to_provider: None,
+            carry_over: None,
+            from_mode: None,
+            to_mode: None,
         }
     }
 }
@@ -689,6 +742,11 @@ pub struct SessionRecord {
     pub archived_at: Option<String>,
     /// Handoff summary for a retired session.
     pub handoff_summary: Option<String>,
+    /// What the reset/switch that retired this session carried into its
+    /// replacement. Written in the same locked mutation as `handoff_summary` /
+    /// `superseded_by`; absent on records archived before it was recorded.
+    #[serde(default)]
+    pub carry_over: Option<CarryOver>,
     /// SessionId this session was spawned from.
     pub parent_session_id: Option<String>,
     /// Replacement session's id after a reset.

@@ -59,6 +59,26 @@ impl JsonAgentSession {
         system_prompt: Option<String>,
         fork_from_chat_id: Option<String>,
     ) -> EnqueueResult {
+        self.enqueue_ext(
+            message,
+            attachments,
+            system_prompt,
+            fork_from_chat_id,
+            false,
+        )
+    }
+
+    /// `enqueue` with a `silent` flag: the turn's `user` row is persisted
+    /// silent (hidden from the chat as a human bubble) but the agent still
+    /// receives the message.
+    pub fn enqueue_ext(
+        &self,
+        message: String,
+        attachments: Vec<Attachment>,
+        system_prompt: Option<String>,
+        fork_from_chat_id: Option<String>,
+        silent: bool,
+    ) -> EnqueueResult {
         // Optionally write the system prompt file now (idempotent for later turns).
         if let Some(sp) = system_prompt {
             let _ = std::fs::create_dir_all(&self.0.data_dir);
@@ -81,6 +101,7 @@ impl JsonAgentSession {
                 raw_message: message,
                 attachments,
                 fork_from_chat_id,
+                silent,
             });
             // Only flip to Queued when nothing is running. While a turn is
             // actively streaming (`s.running`), `queue_position` is always
@@ -254,7 +275,10 @@ impl JsonAgentSession {
                         &head.turn_id,
                         &head.raw_message,
                         &[],
-                        EmitUserEventOpts::default(),
+                        EmitUserEventOpts {
+                            silent: head.silent,
+                            ..Default::default()
+                        },
                     );
                     self.emit_meta();
                     prompt_required_tries = 0;

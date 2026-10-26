@@ -1383,3 +1383,161 @@ fn import_transaction_trims_a_whole_file_diff() {
     assert!(diffs[0].new_text.contains("after line 020"));
     assert!(!diffs[0].new_text.contains("before line 001"));
 }
+
+// --- reset-keep-history-switch: append_batch + count_since_last_break ---
+
+fn break_ev(seq_turn: &str) -> NormalizedEvent {
+    serde_json::from_value(serde_json::json!({
+        "id": format!("break-{seq_turn}"),
+        "sessionId": SESSION_ID,
+        "ts": "2026-01-02T00:00:00Z",
+        "provider": "claude",
+        "kind": "session_break",
+        "breakKind": "switch",
+        "fromProvider": "claude",
+        "toProvider": "opencode",
+        "turnId": format!("break-{seq_turn}"),
+    }))
+    .unwrap()
+}
+
+#[test]
+fn append_batch_assigns_monotonic_seq_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut events = vec![
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "q", "turnId": "t1"}),
+        ),
+        ev(
+            NormalizedEventKind::Text,
+            serde_json::json!({"text": "a", "turnId": "t1"}),
+        ),
+    ];
+    let n = store.append_batch(&mut events).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(events[0].log_seq, Some(0));
+    assert_eq!(events[1].log_seq, Some(1));
+    let all = store.read_all();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].log_seq, Some(0));
+    assert_eq!(all[1].log_seq, Some(1));
+
+    // A second batch continues the sequence (monotonic across batches),
+    // including when interleaved with a single `append`.
+    let mut more = vec![
+        ev(
+            NormalizedEventKind::Text,
+            serde_json::json!({"text": "b", "turnId": "t2"}),
+        ),
+        ev(
+            NormalizedEventKind::Result,
+            serde_json::json!({"turnId": "t2"}),
+        ),
+    ];
+    store.append_batch(&mut more).unwrap();
+    assert_eq!(more[0].log_seq, Some(2));
+    assert_eq!(more[1].log_seq, Some(3));
+    assert_eq!(store.count(), 4);
+}
+
+#[test]
+fn append_batch_is_gap_free_and_reopens_contiguously() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    // Pre-persist one row so next_seq = 1.
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "seed", "turnId": "t0"}),
+    ));
+    let mut batch = vec![
+        ev(
+            NormalizedEventKind::User,
+            serde_json::json!({"text": "x", "turnId": "t1"}),
+        ),
+        ev(
+            NormalizedEventKind::Text,
+            serde_json::json!({"text": "y", "turnId": "t1"}),
+        ),
+    ];
+    let n = store.append_batch(&mut batch).unwrap();
+    assert_eq!(n, 2);
+    // The whole batch wrote in one transaction -> no gap between seed (seq 0)
+    // and the batch's first row (seq 1).
+    assert_eq!(batch[0].log_seq, Some(1));
+    assert_eq!(batch[1].log_seq, Some(2));
+    // A following batch continues from the advanced cursor (seq 3).
+    let mut after = vec![ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "z", "turnId": "t2"}),
+    )];
+    store.append_batch(&mut after).unwrap();
+    assert_eq!(after[0].log_seq, Some(3));
+    assert_eq!(store.count(), 4);
+
+    // Reopen: next_seq reseeds from MAX, so the monotonic cursor is durable.
+    drop(store);
+    let reopened = open_transcript_store(dir.path(), SESSION_ID);
+    assert_eq!(reopened.count(), 4);
+    let seqs: Vec<i64> = reopened
+        .read_all()
+        .iter()
+        .map(|e| e.log_seq.unwrap())
+        .collect();
+    assert_eq!(seqs, vec![0, 1, 2, 3]);
+}
+
+#[test]
+fn count_since_last_break_no_break_counts_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    assert_eq!(store.count_since_last_break(), 0);
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "q", "turnId": "t1"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"text": "a", "turnId": "t1"}),
+    ));
+    assert_eq!(store.count_since_last_break(), 2);
+}
+
+#[test]
+fn count_since_last_break_with_middle_break() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    // two rows, break, two rows — only the after-break rows count.
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "q1", "turnId": "t1"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"text": "a1", "turnId": "t1"}),
+    ));
+    store.append(&mut break_ev("mid"));
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "q2", "turnId": "t2"}),
+    ));
+    store.append(&mut ev(
+        NormalizedEventKind::Text,
+        serde_json::json!({"text": "a2", "turnId": "t2"}),
+    ));
+    assert_eq!(store.count(), 5);
+    assert_eq!(store.count_since_last_break(), 2);
+}
+
+#[test]
+fn count_since_last_break_with_break_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    store.append(&mut ev(
+        NormalizedEventKind::User,
+        serde_json::json!({"text": "q", "turnId": "t1"}),
+    ));
+    store.append(&mut break_ev("last"));
+    assert_eq!(store.count_since_last_break(), 0);
+}

@@ -41,7 +41,7 @@ use crate::util::now_iso_8601;
 // (identical variant sets, no From impl in vst-types)
 // ---------------------------------------------------------------------------
 
-fn cli_id_to_provider(id: CliId) -> NormalizedEventProvider {
+pub fn cli_id_to_provider(id: CliId) -> NormalizedEventProvider {
     match id {
         CliId::Claude => NormalizedEventProvider::Claude,
         CliId::Cursor => NormalizedEventProvider::Cursor,
@@ -319,6 +319,8 @@ pub struct EnqueueChatTurnOpts {
     pub daemon_port: u16,
     /// `Some(false)` skips steering and always enqueues FIFO.
     pub steer: Option<bool>,
+    /// Persist the turn's `user` row silent (the agent still gets it).
+    pub silent: bool,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
 }
@@ -347,12 +349,13 @@ pub async fn enqueue_chat_turn(
 
     let message = inject_attachments(&opts.message, &opts.attachments, false);
 
-    let result = if opts.steer == Some(false) {
-        let r = agent.enqueue(
+    let result = if opts.steer == Some(false) || opts.silent {
+        let r = agent.enqueue_ext(
             message,
             opts.attachments,
             system_prompt,
             None, // fork_from_chat_id
+            opts.silent,
         );
         EnqueueChatResult {
             turn_id: r.turn_id,
@@ -392,6 +395,8 @@ pub const READY_REASON: &str = "ready";
 pub struct StartJsonCreateTurnOpts {
     pub session_id: String,
     pub prompt: Option<String>,
+    /// Persist turn 1's `user` row silent (carried summary / instruction).
+    pub silent: bool,
     pub daemon_port: u16,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
@@ -451,6 +456,7 @@ pub async fn start_json_create_turn(
             attachments: vec![],
             daemon_port: opts.daemon_port,
             steer: None,
+            silent: opts.silent,
             store: opts.store.clone(),
             broadcaster: opts.broadcaster.clone(),
         },
@@ -671,6 +677,7 @@ pub async fn deliver_scheduled_message(
             attachments: parse_attachments_json(row.attachments.as_deref()).unwrap_or_default(),
             daemon_port,
             steer: Some(true),
+            silent: false,
             store: store.clone(),
             broadcaster: broadcaster.clone(),
         },

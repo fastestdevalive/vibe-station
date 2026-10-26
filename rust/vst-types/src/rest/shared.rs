@@ -39,6 +39,8 @@ pub struct Session {
     #[serde(with = "crate::serde_ext::compact_f64")]
     pub sort_order: f64,
     pub handoff_summary: Option<String>,
+    /// What the reset/switch that archived this session carried over.
+    pub carry_over: Option<crate::domain::CarryOver>,
     pub parent_session_id: Option<String>,
     pub superseded_by: Option<String>,
     pub pr: Option<PrStatus>,

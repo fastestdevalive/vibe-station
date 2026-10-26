@@ -80,6 +80,7 @@ fn session(id: &str) -> SessionRecord {
         draft_config: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,

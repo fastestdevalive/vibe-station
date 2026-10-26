@@ -35,6 +35,7 @@ fn session(id: &str, project_id: &str, worktree_id: Option<&str>) -> SessionReco
         initial_prompt: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         draft_prompt: None,
         draft_config: None,
         parent_session_id: None,

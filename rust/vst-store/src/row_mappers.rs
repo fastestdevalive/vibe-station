@@ -167,6 +167,7 @@ pub struct SessionRow {
     pub last_line: Option<String>,
     pub last_tool_name: Option<String>,
     pub last_tool_detail: Option<String>,
+    pub handoff_carry_over: Option<String>,
     pub name: Option<String>,
     pub name_source: Option<String>,
     pub tmux_name: String,
@@ -263,6 +264,10 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
         initial_prompt: row.initial_prompt.clone(),
         archived_at: row.archived_at.clone(),
         handoff_summary: row.handoff_summary.clone(),
+        carry_over: row
+            .handoff_carry_over
+            .as_deref()
+            .and_then(|s| serde_json::from_value(serde_json::Value::String(s.to_string())).ok()),
         draft_prompt: row.draft_prompt.clone(),
         draft_config: row
             .draft_config
@@ -303,6 +308,10 @@ pub fn session_to_row(
         last_line: session.last_line.clone(),
         last_tool_name: session.last_tool.as_ref().map(|t| t.name.clone()),
         last_tool_detail: session.last_tool.as_ref().and_then(|t| t.detail.clone()),
+        handoff_carry_over: session
+            .carry_over
+            .and_then(|c| serde_json::to_value(c).ok())
+            .and_then(|v| v.as_str().map(str::to_string)),
         name: session.name.clone(),
         name_source: session.name_source.map(name_source_str).map(str::to_string),
         tmux_name: session.tmux_name.clone(),

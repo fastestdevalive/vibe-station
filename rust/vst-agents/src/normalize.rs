@@ -519,5 +519,6 @@ fn map_available_command(command: &AvailableCommand) -> vst_types::Command {
         name,
         description: command.description.clone(),
         argument_hint,
+        group: None,
     }
 }

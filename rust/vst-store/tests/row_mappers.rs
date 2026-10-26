@@ -52,6 +52,7 @@ fn base_row() -> SessionRow {
         last_line: None,
         last_tool_name: None,
         last_tool_detail: None,
+        handoff_carry_over: None,
     }
 }
 
@@ -95,6 +96,7 @@ fn session_round_trip_every_field() {
         initial_prompt: Some("fix the login bug".into()),
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         draft_prompt: None,
         draft_config: None,
         parent_session_id: None,
@@ -138,6 +140,7 @@ fn session_omits_optionals_when_null() {
         initial_prompt: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         draft_prompt: None,
         draft_config: None,
         parent_session_id: None,
@@ -186,6 +189,7 @@ fn parent_session_id_round_trips_through_spawned_from() {
         initial_prompt: Some("fix the login bug".into()),
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         draft_prompt: None,
         draft_config: None,
         parent_session_id: None,
@@ -294,6 +298,7 @@ fn session_to_row_writes_pr_branch_null_when_absent() {
         initial_prompt: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         draft_prompt: None,
         draft_config: None,
         parent_session_id: None,
