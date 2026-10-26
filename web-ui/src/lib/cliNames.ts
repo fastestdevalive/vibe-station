@@ -3,6 +3,7 @@
 const CLI_DISPLAY_NAMES: Record<string, string> = {
   codex: "Codex",
   pi: "Pi",
+  omp: "oh-my-pi",
 };
 
 export function cliDisplayName(cli: string): string {
