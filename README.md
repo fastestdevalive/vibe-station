@@ -98,7 +98,7 @@ curl -fsSL https://raw.githubusercontent.com/fastestdevalive/vibe-station/main/s
 |---|---|---|
 | Linux (x86_64) | `vst` CLI + desktop app (`.AppImage`; `.deb` from the Releases page) | Built in CI |
 | Linux (aarch64) | `vst` CLI only | Built in CI |
-| macOS (Apple Silicon) | `vst` CLI via the installer; desktop `.dmg` from the Releases page | Built in CI; the installer deliberately skips the `.dmg` so Gatekeeper still checks it |
+| macOS (Apple Silicon) | `vst` CLI via the installer; desktop `.dmg` from the Releases page | Built in CI, Developer-ID signed and notarized when the release secrets are configured; the installer deliberately skips the `.dmg` so Gatekeeper still checks it |
 | macOS (Intel), Windows | — | Not published |
 
 The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re-run to upgrade. Options: `--version <tag>`, `--install-dir <dir>`, `--no-modify-path`.
