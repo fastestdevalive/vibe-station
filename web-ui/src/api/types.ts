@@ -308,7 +308,14 @@ export interface Attachment {
   mime: string;
 }
 
-export type NormalizedEventProvider = "claude" | "cursor" | "opencode" | "codex";
+export type NormalizedEventProvider =
+  | "claude"
+  | "cursor"
+  | "opencode"
+  | "agy"
+  | "codex"
+  | "pi"
+  | "omp";
 
 export type NormalizedEventKind =
   | "session_init"

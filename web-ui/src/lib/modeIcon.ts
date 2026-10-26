@@ -8,8 +8,9 @@ import type { CliId, Session } from "@/api/types";
  */
 export function deriveModeIcon(cli: CliId | "", model?: string | null): string | null {
   if (!cli) return null;
-  if (cli === "opencode") {
-    return model && model.toLowerCase().includes("deepseek") ? "deepseek" : "opencode";
+  // Multi-provider CLIs: a DeepSeek model shows the DeepSeek mark.
+  if (cli === "opencode" || cli === "omp") {
+    return model && model.toLowerCase().includes("deepseek") ? "deepseek" : cli;
   }
   return cli;
 }

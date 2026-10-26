@@ -1612,6 +1612,29 @@ export function createMockApi(seed: MockSeed = {}) {
             action: null,
           },
         },
+        {
+          id: "omp",
+          defaultModel: "",
+          supportsJson: true,
+          importsNativeHistory: true,
+          supportsJsonToTerminalResume: true,
+          detected: false,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: false,
+          defaultChannel: "json",
+          defaultChannelOverridden: false,
+          installHint: {
+            title: null,
+            why: "Optional agent CLI (oh-my-pi). Rich Chat uses its built-in ACP server.",
+            commands: [
+              { os: "macos", command: "brew install can1357/tap/omp" },
+              { os: "linux", command: "curl -fsSL https://omp.sh/install | sh" },
+              { os: "any", command: "bun install -g @oh-my-pi/pi-coding-agent" },
+            ],
+            docsUrl: "https://github.com/can1357/oh-my-pi",
+            action: null,
+          },
+        },
       ];
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
       // override-aware default_channel / default_channel_overridden). A Json
@@ -1651,6 +1674,11 @@ export function createMockApi(seed: MockSeed = {}) {
       if (cli === "pi") {
         return {
           models: ["anthropic/claude-opus-4", "anthropic/claude-sonnet-4", "openai/gpt-5", "google/gemini-3-pro"],
+        };
+      }
+      if (cli === "omp") {
+        return {
+          models: ["deepseek-local/deepseek-v4-flash-0731", "anthropic/claude-opus-4-1", "openai/gpt-5"],
         };
       }
       return { models: ["opencode/big-pickle", "opencode/other"] };
