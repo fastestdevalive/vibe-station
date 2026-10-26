@@ -22,13 +22,13 @@ import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Channel, Session } from "@/api/types";
 import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
-import { compareTabOrder, isProjectTabAgent, pickWorktreeAgent } from "@/lib/sessionVisibility";
+import { compareTabOrder, isProjectTabAgent, listPredecessors, pickWorktreeAgent, resolveSupersededChain } from "@/lib/sessionVisibility";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
-import { useSessionReset } from "@/hooks/useSessionReset";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -206,14 +206,16 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const [newOpen, setNewOpen] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
 
-  // --- Reset (+handoff) with confirmation (Part 03 Phase 3) ---
-  // Mirrors `terminateTarget`'s existing pattern exactly: a "pending destructive
-  // action" target that gates a shared `ConfirmDialog`, only firing the real
-  // API call on confirm, never on the initial click/menu-item selection.
+  // --- Session actions menu (Start fresh / Switch / Previous sessions) ---
+  // Selecting an entry opens the pane-scoped dialog for that session (the
+  // dialog host lives in `AgentPaneSlot`); nothing destructive happens here.
   const [resetMenu, setResetMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
-  const [resetTarget, setResetTarget] = useState<Session | null>(null);
-  const [resetHandoff, setResetHandoff] = useState(false);
-  const { reset, modeDialog } = useSessionReset(api);
+
+  /** Predecessor count for the "Previous sessions" entry (hidden at 0). */
+  const predecessorCount = (sessionId: string): number => {
+    const head = resolveSupersededChain(sessionId, historySessions);
+    return head ? listPredecessors(head, historySessions).length : 0;
+  };
 
   useEffect(() => {
     if (!resetMenu) return undefined;
@@ -928,6 +930,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       </div>
       {isAgent ? (
         <PreviousSessionsMenu
+          api={api}
           sessions={historySessions}
           activeSession={historySessions.find((s) => s.id === activeSessionId) ?? null}
           onOpen={(id) => setActiveSession(id)}
@@ -1025,10 +1028,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   8,
                   Math.min(
                     resetMenu.x,
-                    envWidth - 178,
+                    envWidth - 218,
                   ),
                 ),
-                minWidth: 150,
+                minWidth: 200,
                 zIndex: 4000,
               }}
             >
@@ -1041,12 +1044,13 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 className="menu-pop__item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setResetTarget(resetMenu.session);
-                  setResetHandoff(false);
+                  const target = resetMenu.session;
+                  setActiveSession(target.id);
+                  usePaneDialogs.getState().open(target.id, "fresh");
                   setResetMenu(null);
                 }}
               >
-                Reset
+                Start fresh…
               </button>
               <button
                 type="button"
@@ -1054,35 +1058,38 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 className="menu-pop__item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setResetTarget(resetMenu.session);
-                  setResetHandoff(true);
+                  const target = resetMenu.session;
+                  setActiveSession(target.id);
+                  usePaneDialogs.getState().open(target.id, "switch");
                   setResetMenu(null);
                 }}
               >
-                Reset with handoff
+                Switch provider &amp; mode…
               </button>
+              {predecessorCount(resetMenu.session.id) > 0 ? (
+                <>
+                  <div className="menu-pop__divider" aria-hidden />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-pop__item"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const target = resetMenu.session;
+                      setActiveSession(target.id);
+                      usePaneDialogs.getState().open(target.id, "previous");
+                      setResetMenu(null);
+                    }}
+                  >
+                    Previous sessions
+                    <span className="menu-pop__hint">{predecessorCount(resetMenu.session.id)}</span>
+                  </button>
+                </>
+              ) : null}
             </div>,
             portalRoot,
           )
         : null}
-
-      {/* Mirrors `terminateTarget`'s ConfirmDialog above (Decision 3) — same
-          shared component, reset-specific copy. `resetSession` is only ever
-          called from `onConfirm`, never from the menu-item click above. */}
-      <ConfirmDialog
-        open={!!resetTarget}
-        title={resetHandoff ? "Reset with handoff" : "Reset session"}
-        message="Resetting ends the current chat and starts a fresh session in its place. This can't be undone."
-        confirmLabel="Reset"
-        onCancel={() => setResetTarget(null)}
-        onConfirm={() => {
-          const target = resetTarget;
-          const handoff = resetHandoff;
-          setResetTarget(null);
-          if (target) reset(target, handoff);
-        }}
-      />
-      {modeDialog}
     </div>
   );
 }

@@ -190,7 +190,9 @@ describe("§3 collapse to '/'", () => {
     const input = argInput();
     fireEvent.focus(input);
     await key(input, "Backspace");
-    await waitFor(() => expect(screen.queryAllByRole("option").length).toBe(COMMANDS.length));
+    // The Composer injects the two Vibe Station entries ahead of the catalog
+    // (phase 3.7), so "unfiltered" is the catalog plus those two.
+    await waitFor(() => expect(screen.queryAllByRole("option").length).toBe(COMMANDS.length + 2));
   });
 
   it("caret lands immediately after the inserted '/'", async () => {
@@ -467,5 +469,89 @@ describe("Popover selection materializes a chip", () => {
     });
     await waitFor(() => expect(ref.current?.getText()).toBe("{/code-review}"));
     expect(screen.getByLabelText("Arguments for code-review")).toBeTruthy();
+  });
+});
+
+describe("Slash grouping + Vibe Station entries (phase 3.7)", () => {
+  // Deliberately out of rank order: the stable sort must put Skills before
+  // Agent commands while preserving catalog order inside each group.
+  const GROUPED = [
+    { name: "compact", description: "Agent command", group: "agent" as const },
+    { name: "review-pr", description: "A skill", group: "skill" as const },
+  ];
+
+  it("renders group headers in rank order: Vibe Station, Skills, Agent commands", async () => {
+    const { ref } = renderComposer("/", { commands: GROUPED });
+    await act(async () => ref.current?.focus());
+    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(4));
+    const headers = Array.from(document.querySelectorAll(".chat-skill-popover__group")).map(
+      (el) => el.textContent,
+    );
+    expect(headers).toEqual(["Vibe Station", "Skills", "Agent commands"]);
+  });
+
+  it("ArrowDown moves the highlight in visual order (keyboard index matches render)", async () => {
+    const { ref } = renderComposer("/", { commands: GROUPED });
+    await act(async () => ref.current?.focus());
+    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(4));
+    const options = screen.getAllByRole("option");
+    expect(options.map((o) => o.querySelector(".chat-skill-popover__name")?.textContent)).toEqual([
+      "/start-fresh",
+      "/switch",
+      "/review-pr",
+      "/compact",
+    ]);
+    expect(options[0]!.getAttribute("aria-selected")).toBe("true");
+    await key(editorEl(), "ArrowDown");
+    expect(screen.getAllByRole("option")[1]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("selecting /start-fresh calls onVibeCommand, inserts no chip, sends nothing", async () => {
+    const onVibeCommand = vi.fn();
+    const { ref, onSend } = renderComposer("/sta", { commands: GROUPED, onVibeCommand });
+    await act(async () => ref.current?.focus());
+    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(1));
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole("option"));
+    });
+    await waitFor(() => expect(onVibeCommand).toHaveBeenCalledWith("start-fresh"));
+    expect(ref.current?.getText()).toBe("");
+    expect(screen.queryByLabelText("Arguments for start-fresh")).toBeNull();
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("typed /switch + Enter opens the dialog instead of sending text", async () => {
+    const onVibeCommand = vi.fn();
+    const { ref, onSend } = renderComposer("/switch", { commands: GROUPED, onVibeCommand });
+    await act(async () => ref.current?.focus());
+    // Close the popover so Enter reaches onSubmit (the typed-command path),
+    // not the popover-selection path.
+    await key(editorEl(), "Escape");
+    await key(editorEl(), "Enter");
+    await waitFor(() => expect(onVibeCommand).toHaveBeenCalledWith("switch"));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(ref.current?.getText()).toBe("");
+  });
+
+  it("injects nothing when the catalog is still loading (commands undefined)", () => {
+    render(<Composer api={createMockApi()} sessionId="s-loading" onSend={vi.fn()} initialText="/" />);
+    expect(screen.getByText(/Skills loading/)).toBeTruthy();
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(screen.queryByText("Vibe Station")).toBeNull();
+  });
+});
+
+describe("SkillEditor disabled (live)", () => {
+  it("becomes non-editable when `disabled` flips on after mount, and editable again after", async () => {
+    const api = createMockApi();
+    const props = { api, sessionId: "s-disabled", onSend: vi.fn(() => Promise.resolve()), commands: COMMANDS };
+    const { rerender } = render(<Composer {...props} />);
+    const editable = () => screen.getByRole("textbox", { name: /message/i }).getAttribute("contenteditable");
+    expect(editable()).toBe("true");
+    rerender(<Composer {...props} disabled />);
+    await waitFor(() => expect(editable()).toBe("false"));
+    rerender(<Composer {...props} />);
+    await waitFor(() => expect(editable()).toBe("true"));
   });
 });

@@ -1406,3 +1406,85 @@ describe("groupEvents turnId-only burst (Phase 2 — out-of-band notif turn)", (
     expect((items[1] as { text: string }).text).toBe("autonomous output");
   });
 });
+
+describe("groupEvents + render — session_break card (Phase 3)", () => {
+  function breakEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
+    return {
+      id: "break-s1",
+      sessionId: "s1",
+      ts: "2026-01-02T14:02:00Z",
+      provider: "opencode",
+      kind: "session_break",
+      turnId: "break-s1",
+      breakKind: "reset",
+      ...overrides,
+    };
+  }
+
+  it("3.2 — groupEvents maps session_break to a session_break item between eras", () => {
+    const items = groupEvents([
+      userEvent("t1", "before"),
+      textEvent("a1", "t1", "old reply"),
+      breakEvent(),
+      userEvent("t2", "after"),
+    ]);
+    expect(items.map((i) => i.type)).toEqual(["user", "assistant", "session_break", "user"]);
+    const brk = items.find((i) => i.type === "session_break");
+    expect(brk).toMatchObject({ type: "session_break", kind: "reset", id: "break-s1" });
+  });
+
+  it("3.2 — a switch break carries kind + providers + summary text", () => {
+    const items = groupEvents([
+      breakEvent({ breakKind: "switch", fromProvider: "claude", toProvider: "opencode", text: "handoff summary" }),
+    ]);
+    const brk = items.find((i) => i.type === "session_break");
+    expect(brk).toMatchObject({
+      type: "session_break",
+      kind: "switch",
+      fromProvider: "claude",
+      toProvider: "opencode",
+      text: "handoff summary",
+    });
+  });
+
+  it("the carried summary turn (silent user row) is not a human bubble; the card holds its text", () => {
+    const events: NormalizedEvent[] = [
+      breakEvent({ carryOver: "summary", text: "Goal: finish the tokenizer." }),
+      { id: "u-carried", sessionId: "s1", ts: "", provider: "claude", kind: "user", turnId: "t-carried", silent: true, text: "Goal: finish the tokenizer." },
+      userEvent("t2", "now add tests"),
+    ];
+    const { container } = render(<MessageList events={events} pending={[]} />);
+    // The silent row neither renders as a bubble nor leaks the text outside the card.
+    expect(container.querySelectorAll(".chat-user-bubble, .user-message").length).toBeLessThanOrEqual(1);
+    expect(screen.getAllByText(/now add tests/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Goal: finish the tokenizer/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show summary/ }));
+    expect(screen.getAllByText(/Goal: finish the tokenizer/)).toHaveLength(1);
+  });
+
+  it("3.T1 — MessageList renders the reset break card between messages", () => {
+    const events: NormalizedEvent[] = [
+      userEvent("t1", "before"),
+      textEvent("a1", "t1", "old reply"),
+      breakEvent(),
+      userEvent("t2", "after"),
+    ];
+    const { container } = render(<MessageList events={events} pending={[]} />);
+    const card = container.querySelector(".chat-session-break__card");
+    expect(card).toBeTruthy();
+    expect(card!.textContent).toContain("Agent restarted");
+  });
+
+  it("3.T1 — MessageList renders a switch break card with provider chips", () => {
+    const events: NormalizedEvent[] = [
+      userEvent("t1", "before"),
+      breakEvent({ breakKind: "switch", fromProvider: "claude", toProvider: "opencode" }),
+    ];
+    const { container } = render(<MessageList events={events} pending={[]} />);
+    const el = container.querySelector(".chat-session-break__card--switch");
+    expect(el).toBeTruthy();
+    expect(el!.textContent).toContain("Switched provider");
+    expect(el!.textContent).toContain("claude");
+    expect(el!.textContent).toContain("opencode");
+  });
+});

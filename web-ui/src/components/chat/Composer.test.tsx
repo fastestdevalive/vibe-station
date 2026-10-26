@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -472,29 +473,36 @@ describe("Composer toolbar chips and status label (carried over from the old sta
     return render(<Composer api={api} sessionId="s-chips" onSend={vi.fn()} {...props} />);
   }
 
-  it("shows the mode name as a chip, and 'started as <mode>' (with a tooltip) when the model was overridden", () => {
-    const { rerender } = mount({ modeName: "Reviewer", cli: "claude", model: "opus" });
+  it("uses the mode name as the dropdown title and shows no mode chip", async () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-chips" onSend={vi.fn()} modeName="Reviewer" cli="claude" model="opus" />);
+    // The read-only mode chip is gone — the mode is the dropdown's title row.
+    expect(screen.queryByText("Reviewer")).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Change model/i }));
     expect(screen.getByText("Reviewer")).toBeTruthy();
-    rerender(
-      <Composer api={createMockApi()} sessionId="s-chips" onSend={vi.fn()} modeName="Reviewer" modelOverridden cli="claude" model="opus" />,
-    );
-    const chip = screen.getByText("started as Reviewer");
-    expect(chip.className).toContain("chat-composer__mode-chip--overridden");
-    expect(chip.getAttribute("title")).toBe("Started as: Reviewer");
   });
 
-  it("hides the mode chip when there is no mode name", () => {
-    const { container } = mount({ cli: "claude", model: "opus" });
+  it("shows a dimmed 'started as <mode>' only when the root mode differs", () => {
+    const { container } = mount({ cli: "claude", model: "opus", startedAsMode: "Reviewer" });
+    const chip = screen.getByText("started as Reviewer");
+    expect(chip.className).toContain("chat-composer__mode-chip--started-as");
+    expect(chip.getAttribute("title")).toBe("Started as: Reviewer");
+    expect(container.querySelectorAll(".chat-composer__mode-chip")).toHaveLength(1);
+  });
+
+  it("hides the mode chip when the chat did not start on another mode", () => {
+    const { container } = mount({ cli: "claude", model: "opus", modeName: "Reviewer" });
     expect(container.querySelector(".chat-composer__mode-chip")).toBeNull();
   });
 
-  it("offers the model switcher whenever the CLI supports it — even before meta reports a model — but never for cursor", () => {
+  it("offers the model switcher whenever the CLI is known — cursor shows actions only", () => {
     const { container, unmount } = mount({ cli: "claude" });
     expect(container.querySelector(".chat-model-switch")).toBeTruthy();
     unmount();
     const cursor = mount({ cli: "cursor", model: "auto" });
-    expect(cursor.container.querySelector(".chat-model-switch")).toBeNull();
-    expect(screen.getByText("auto")).toBeTruthy(); // plain chip instead
+    expect(cursor.container.querySelector(".chat-model-switch")).toBeTruthy();
+    // No plain model chip any more; the dropdown carries the label.
+    expect(cursor.container.querySelector(".chat-composer__model-chip")).toBeNull();
   });
 
   it("shows the queued count next to Working…, and the error/queued label when idle", () => {

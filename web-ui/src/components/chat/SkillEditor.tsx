@@ -49,8 +49,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Command } from "@/api/types";
+import type { ComposerCommand } from "@/api/types";
 import { escapeSkillArgs, escapeSkillText, filterCommands, parseSkillSegments } from "@/lib/skillInvocation";
+import { sortCommandsByGroup } from "@/lib/composerCommands";
 import {
   $createSkillChipNode,
   $isSkillChipNode,
@@ -96,9 +97,10 @@ interface SkillEditorProps {
   /** Seed content — the flat brace-token string (already migrated from any
    *  v1 draft by the caller). Read once, at mount. */
   initialText: string;
-  /** Session's slash-command/skill catalog. `undefined` — not yet loaded —
-   *  disables the popover entirely (Requirement 11 parity). */
-  commands?: Command[];
+  /** Session's slash-command/skill catalog plus the Composer's client-only
+   *  `"vibe-station"` entries. `undefined` — not yet loaded — disables the
+   *  popover entirely (Requirement 11 parity). */
+  commands?: ComposerCommand[];
   disabled?: boolean;
   ariaLabel: string;
   placeholder?: string;
@@ -125,6 +127,9 @@ interface SkillEditorProps {
   onEscape?: () => void;
   /** Whether a chip's arg input currently has focus — swaps the hint line. */
   onArgFocusChange?: (focused: boolean) => void;
+  /** A `"vibe-station"` entry was selected (or typed + Enter): open the pane
+   *  dialog instead of inserting a chip / sending text. */
+  onVibeCommand?: (name: string) => void;
 }
 
 const EDITOR_NODES = [SkillChipNode];
@@ -284,6 +289,26 @@ function insertChipForActiveToken(
   );
 }
 
+/** Remove the live `/query` text run ending at the caret (Vibe Station
+ *  selection — the command opens a dialog instead of becoming a chip). */
+function clearActiveSlashToken(editor: LexicalEditor): void {
+  editor.update(
+    () => {
+      const found = $findActiveSlashToken();
+      if (!found) return;
+      const node = $getNodeByKey(found.nodeKey);
+      if (!$isTextNode(node)) return;
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection) || !selection.isCollapsed()) return;
+      const end = selection.anchor.offset;
+      if (end <= found.start) return;
+      node.spliceText(found.start, end - found.start, "");
+      node.select(found.start, found.start);
+    },
+    { onUpdate: () => editor.focus() },
+  );
+}
+
 /** Serialize a (possibly partial-node) selection to the raw brace-token wire
  *  fragment, for the private clipboard type (spec §6). Text-node boundaries
  *  are sliced to the selection's own offsets; any other selected node type
@@ -410,7 +435,7 @@ function SkillEditorPlugin({
   selectActivePopoverItem: () => void;
   closePopover: () => void;
   setActiveIndex: (updater: (i: number) => number) => void;
-  popoverItemsRef: React.MutableRefObject<Command[]>;
+  popoverItemsRef: React.MutableRefObject<ComposerCommand[]>;
   suppressedTokenRef: React.MutableRefObject<{ nodeKey: NodeKey; start: number } | null>;
   pasteSuppressRef: React.MutableRefObject<boolean>;
 }) {
@@ -650,6 +675,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     onCtrlEnter,
     onEscape,
     onArgFocusChange,
+    onVibeCommand,
   },
   ref,
 ) {
@@ -675,7 +701,11 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
 
   const popoverOpenRef = useRef(popoverOpen);
   popoverOpenRef.current = popoverOpen;
-  const popoverItems = commands ? filterCommands(commands, popoverQuery) : [];
+  // Stable-sort by group rank (vibe-station, skill, agent) so the keyboard
+  // index (`activeIndex`) always matches the rendered/visual order.
+  const popoverItems = commands
+    ? sortCommandsByGroup(filterCommands(commands, popoverQuery))
+    : [];
   const popoverItemsRef = useRef(popoverItems);
   popoverItemsRef.current = popoverItems;
   const activeIndexRef = useRef(activeIndex);
@@ -692,9 +722,18 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
   }, []);
 
   const selectCommand = useCallback(
-    (cmd: Command) => {
+    (cmd: ComposerCommand) => {
       const editor = editorRef.current;
       if (!editor) return;
+      // Client-injected Vibe Station entries open a pane dialog: clear the
+      // typed `/query`, never insert a chip, never send text.
+      if (cmd.group === "vibe-station") {
+        clearActiveSlashToken(editor);
+        suppressedTokenRef.current = null;
+        closePopover();
+        onVibeCommand?.(cmd.name);
+        return;
+      }
       insertChipForActiveToken(editor, cmd.name, (nodeKey) => {
         const el = inputRefs.get(nodeKey);
         if (!el) return;
@@ -704,7 +743,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
       suppressedTokenRef.current = null;
       closePopover();
     },
-    [closePopover, inputRefs],
+    [closePopover, inputRefs, onVibeCommand],
   );
 
   const selectActivePopoverItem = useCallback(() => {
@@ -832,6 +871,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
               ErrorBoundary={LexicalErrorBoundary}
             />
             <HistoryPlugin />
+            <EditableSync disabled={!!disabled} />
             <OnChangePlugin
               // Deliberately NOT `ignoreSelectionChange`: the popover must
               // react to pure caret movement too — arrowing (or clicking) out
@@ -898,6 +938,17 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
 /** Stashes the `LexicalEditor` instance from context into a plain ref so
  *  imperative callers (`getText`/`clear`/`focus`) and the OnChange handler
  *  above can reach it outside React's render cycle. */
+/** `initialConfig.editable` is read once per editorKey, so a `disabled` that
+ *  flips later (e.g. while a summary is being written) must be pushed into the
+ *  live editor, or the composer stays typeable under a disabled Send button. */
+function EditableSync({ disabled }: { disabled: boolean }) {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => {
+    editor.setEditable(!disabled);
+  }, [editor, disabled]);
+  return null;
+}
+
 function EditorRefCapture({ editorRef }: { editorRef: React.MutableRefObject<LexicalEditor | null> }) {
   const [editor] = useLexicalComposerContext();
   editorRef.current = editor;

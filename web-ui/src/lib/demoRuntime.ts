@@ -9,6 +9,7 @@ import { useModesStore, __resetForDemo as resetModes } from "@/store/modesStore"
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { useThemeStore, DEFAULT_FONT } from "@/hooks/useThemeStore";
 import { useResetProgress } from "@/hooks/useResetProgress";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { useLimitsStore, __resetLimitsBootForTests as resetLimits } from "@/hooks/useLimits";
 import { useBulkWorktrees } from "@/components/bulk-worktrees/useBulkWorktrees";
 import { __resetForDemo as resetBulkRunner } from "@/components/bulk-worktrees/useBulkWorktreeActions";
@@ -32,6 +33,7 @@ export const APP_STORES = [
   useThemeStore,
   useMarkdownStyleStore,
   useResetProgress,
+  usePaneDialogs,
   useLimitsStore,
   useBulkWorktrees,
 ] as const;

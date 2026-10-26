@@ -7,6 +7,8 @@ import { createMockApi } from "@/api/mock";
 import type { NormalizedEvent, Session, SessionMeta } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useResetProgress } from "@/hooks/useResetProgress";
+import { useModesStore } from "@/store/modesStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { ChatPane } from "./ChatPane";
 
@@ -666,5 +668,68 @@ describe("ChatPane empty state with predecessors (3.T5)", () => {
     await user.click(linkBtn);
 
     expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-prev");
+  });
+});
+
+describe("ChatPane in-progress reset bar (2.T5)", () => {
+  it("disables the composer and shows the cancellable summary bar", async () => {
+    const api = createMockApi();
+    const cancelSpy = vi.spyOn(api, "cancelReset");
+    useResetProgress.setState({ active: {} });
+    render(<ChatPane api={api} session={jsonSession("js1")} visible />);
+    await screen.findByRole("button", { name: "Attach files" });
+
+    act(() => useResetProgress.getState().start("js1", "summary"));
+
+    expect(screen.getByText("Writing the summary… up to 2 min")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Attach files" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(cancelSpy).toHaveBeenCalledWith("js1");
+
+    act(() => useResetProgress.getState().finish("js1"));
+    expect(screen.queryByText("Writing the summary… up to 2 min")).toBeNull();
+  });
+
+  it("shows the waiting label for whenBusy=wait", async () => {
+    const api = createMockApi();
+    useResetProgress.setState({ active: {} });
+    render(<ChatPane api={api} session={jsonSession("js1")} visible />);
+    await screen.findByRole("button", { name: "Attach files" });
+    act(() => useResetProgress.getState().start("js1", "waiting"));
+    expect(screen.getByText("Waiting for the current turn…")).toBeTruthy();
+    act(() => useResetProgress.getState().finish("js1"));
+  });
+});
+
+describe("ChatPane 'started as' mode chip (2.T3)", () => {
+  function seedModes() {
+    useModesStore.setState({
+      loaded: true,
+      modes: new Map([
+        ["mode-1", { id: "mode-1", name: "Bugfix", cli: "claude", context: "", icon: "claude" }],
+        ["mode-2", { id: "mode-2", name: "Plan", cli: "cursor", context: "", icon: "cursor" }],
+      ] as never),
+    });
+  }
+
+  it("shows the root mode when the chat's oldest predecessor ran a different mode", async () => {
+    seedModes();
+    const root: Session = { ...jsonSession("js-root"), modeId: "mode-2", supersededBy: "js-mid", archivedAt: "2026-01-01T00:00:00Z" };
+    const mid: Session = { ...jsonSession("js-mid"), modeId: "mode-1", supersededBy: "js1", archivedAt: "2026-01-02T00:00:00Z" };
+    const current: Session = { ...jsonSession("js1"), modeId: "mode-1" };
+    useServerStore.setState({ sessions: [root, mid, current] });
+    render(<ChatPane api={createMockApi()} session={current} visible />);
+    expect(await screen.findByText("started as Plan")).toBeTruthy();
+  });
+
+  it("does not show it when the root mode equals the current mode", async () => {
+    seedModes();
+    const root: Session = { ...jsonSession("js-root"), modeId: "mode-1", supersededBy: "js1", archivedAt: "2026-01-01T00:00:00Z" };
+    const current: Session = { ...jsonSession("js1"), modeId: "mode-1" };
+    useServerStore.setState({ sessions: [root, current] });
+    render(<ChatPane api={createMockApi()} session={current} visible />);
+    await screen.findByRole("button", { name: "Attach files" });
+    expect(screen.queryByText(/started as/)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer, defaultRangeExtractor, type Virtualizer } from "@tanstack/react-virtual";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command, FileScope, NormalizedEvent } from "@/api/types";
+import type { Attachment, CarryOver, Command, FileScope, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
@@ -11,6 +11,7 @@ import { ErrorCard } from "./ErrorCard";
 import { WorkingDots } from "./WorkingDots";
 import { RowUiStateProvider } from "./rowUiState";
 import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
+import { SessionBreakCard } from "./SessionBreakCard";
 
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean; ts?: string }
@@ -39,7 +40,19 @@ type RenderItem =
   | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
   | { type: "error"; id: string; text: string }
   | { type: "status"; id: string; text: string }
-  | { type: "system_event"; id: string; text: string; agentName?: string };
+  | { type: "system_event"; id: string; text: string; agentName?: string }
+  | {
+      type: "session_break";
+      id: string;
+      kind: "reset" | "switch";
+      carryOver?: CarryOver;
+      fromMode?: string;
+      toMode?: string;
+      fromProvider?: string;
+      toProvider?: string;
+      text?: string;
+      ts?: string;
+    };
 
 /**
  * Consecutive `tool` items (no text/user message, and no turn boundary,
@@ -398,6 +411,24 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         });
         break;
       }
+      case "session_break": {
+        // A hard era boundary: the carried rows before it and the new
+        // conversation after it never merge, so close any open group.
+        closeOpenThinking(ev.turnId, ev.ts);
+        items.push({
+          type: "session_break",
+          id: ev.id,
+          kind: ev.breakKind ?? "reset",
+          carryOver: ev.carryOver,
+          fromMode: ev.fromMode,
+          toMode: ev.toMode,
+          fromProvider: ev.fromProvider,
+          toProvider: ev.toProvider,
+          text: ev.text,
+          ts: ev.ts,
+        });
+        break;
+      }
       default:
         // session_init / usage / result — not rendered as bubbles, but a
         // `result` event marks the turn as over, so close any open group.
@@ -518,6 +549,8 @@ interface MessageListProps {
   commands?: Command[];
   /** turnIds that came from scheduled sends — those user bubbles get a clock badge. */
   scheduledTurnIds?: string[];
+  /** Opens the Previous sessions dialog (break-card "Previous sessions" link). */
+  onOpenPrevious?: () => void;
 }
 
 export function MessageList({
@@ -541,6 +574,7 @@ export function MessageList({
   cwd,
   commands,
   scheduledTurnIds,
+  onOpenPrevious,
 }: MessageListProps) {
   const scheduledTurnIdSet = useMemo(
     () => (scheduledTurnIds ? new Set(scheduledTurnIds) : null),
@@ -1104,6 +1138,20 @@ export function MessageList({
             {item.agentName ? <span className="chat-system-event__chip">{item.agentName}</span> : null}
             {item.text}
           </div>
+        );
+      case "session_break":
+        return (
+          <SessionBreakCard
+            kind={item.kind}
+            carryOver={item.carryOver}
+            fromMode={item.fromMode}
+            toMode={item.toMode}
+            fromProvider={item.fromProvider}
+            toProvider={item.toProvider}
+            text={item.text}
+            ts={item.ts}
+            onOpenPrevious={onOpenPrevious}
+          />
         );
       default:
         return null;

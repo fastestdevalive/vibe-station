@@ -1,15 +1,16 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback } from "react";
 import type { ApiInstance } from "@/api";
 import { ApiError } from "@/api/errors";
-import type { Session } from "@/api/types";
-import { ResetModeDialog } from "@/components/dialogs/ResetModeDialog";
+import { usePaneDialogs, type ResetRunOptions } from "./usePaneDialogs";
 import { useResetProgress } from "./useResetProgress";
 
-type ResetApi = Pick<ApiInstance, "resetSession" | "listModes">;
+export type { ResetRunOptions } from "./usePaneDialogs";
 
-// Module-level so TabsStrip and WorkspaceCanvas (each with its own hook instance)
-// can't fire two resets for the same session; a second request would run its own
-// handoff turn and then fail with "already archived".
+type ResetApi = Pick<ApiInstance, "resetSession">;
+
+// Module-level so every PaneDialogHost (one per mounted agent pane) can't fire
+// two resets for the same session; a second request would run its own handoff
+// turn and then fail with "already archived".
 const inFlightResets = new Set<string>();
 
 /** Demo hard-reset (see `lib/demoRuntime.ts`). */
@@ -19,7 +20,7 @@ export function __resetForDemo(): void {
 
 /** The daemon's `{ "error": "…" }` text when the body is JSON, else the raw message. */
 export function resetErrorText(err: unknown): string {
-  if (!(err instanceof Error)) return "Failed to reset session.";
+  if (!(err instanceof Error)) return "Failed to start a fresh session.";
   try {
     const body = JSON.parse(err.message) as { error?: unknown };
     if (typeof body.error === "string") return body.error;
@@ -33,52 +34,97 @@ function needsReplacementMode(err: unknown): boolean {
   return err instanceof ApiError && (err.code === "mode_not_found" || err.code === "no_mode");
 }
 
-interface ModePrompt {
-  sessionId: string;
-  handoff: boolean;
-  reason: string;
+/** Errors that keep the current agent alive and offer the fallback notice (OQ2). */
+function isFallbackError(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    (err.code === "reset_cancelled" || err.code === "handoff_failed" || err.code === "busy_timeout")
+  );
+}
+
+/** User-facing fallback copy — never says "reset" or "handoff" (decision I). */
+function fallbackNoticeText(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.code === "reset_cancelled") return "Cancelled. The current agent is still running.";
+    if (err.code === "busy_timeout") {
+      return "The agent didn't stop in time. Nothing changed — the current agent is still running.";
+    }
+    if (err.code === "handoff_failed") {
+      return "The summary wasn't written. Nothing changed — the current agent is still running.";
+    }
+  }
+  return resetErrorText(err);
 }
 
 /**
- * Shared reset flow for every surface that offers Reset / Reset with handoff.
- * Surfaces errors (no toast mechanism exists — see the terminate catch in
- * TabsStrip) and, when the session's mode is gone, asks for a replacement mode
- * and retries instead of dead-ending.
+ * Shared start-fresh / switch flow. Every pane-scoped dialog host owns one
+ * instance; the module-level in-flight set dedupes across panes.
+ *
+ * `run(sessionId, opts)` sends the new `carryOver` / `whenBusy` / `queued` body.
+ * The mode-retry prompt and the fallback notice are written into
+ * `usePaneDialogs` (not local `useState`) so they survive a host unmount.
  */
 export function useSessionReset(
   api: ResetApi,
   onDone?: () => void,
-): { reset: (session: Session, handoff: boolean) => void; modeDialog: ReactNode } {
-  const [prompt, setPrompt] = useState<ModePrompt | null>(null);
-
+): {
+  run: (sessionId: string, opts?: ResetRunOptions) => void;
+} {
   const run = useCallback(
-    (sessionId: string, handoff: boolean, modeId?: string) => {
-      if (inFlightResets.has(sessionId)) {
-        // A reset is already running for this session; if the user closed its
-        // progress overlay, bring it back instead of silently swallowing the click.
-        const progress = useResetProgress.getState();
-        if (progress.active[sessionId] === "dismissed") progress.start(sessionId);
-        return;
-      }
+    (sessionId: string, opts: ResetRunOptions = {}) => {
+      if (inFlightResets.has(sessionId)) return;
       inFlightResets.add(sessionId);
-      // A handoff holds the request open while the old agent writes its summary
-      // (10-90s): show progress in that agent's own pane (ResetProgressOverlay).
-      if (handoff) useResetProgress.getState().start(sessionId);
+
+      const dialogs = usePaneDialogs.getState();
+      // Starting a reset from this pane's dialog closes it.
+      dialogs.close(sessionId);
+      dialogs.clearModePrompt(sessionId);
+      dialogs.clearNotice(sessionId);
+
+      // Wire precedence: explicit carryOver wins; legacy `handoff`/`handoffText`
+      // mean Summary; otherwise Nothing.
+      const carryOver = opts.carryOver ?? (opts.handoff || opts.handoffText !== undefined ? "summary" : "none");
+      const whenBusy = opts.whenBusy ?? "stop";
+      // Decision 9: the cancellable bar shows for a summary wait and for any
+      // explicit "wait for the current turn".
+      if (carryOver === "summary") useResetProgress.getState().start(sessionId, "summary");
+      else if (whenBusy === "wait") useResetProgress.getState().start(sessionId, "waiting");
+
+      const body = {
+        carryOver,
+        ...(opts.modeId ? { modeId: opts.modeId } : {}),
+        ...(opts.channel ? { channel: opts.channel } : {}),
+        ...(whenBusy !== "stop" ? { whenBusy } : {}),
+        ...(opts.queued ? { queued: opts.queued } : {}),
+        ...(opts.handoffText !== undefined ? { handoffText: opts.handoffText } : {}),
+      };
+
       void api
-        .resetSession(sessionId, { handoff, ...(modeId ? { modeId } : {}) })
+        .resetSession(sessionId, body)
         .then(() => onDone?.())
         .catch((err: unknown) => {
           if (needsReplacementMode(err)) {
-            setPrompt({ sessionId, handoff, reason: resetErrorText(err) });
+            usePaneDialogs.getState().setModePrompt({
+              sessionId,
+              reason: resetErrorText(err),
+              options: { ...opts, carryOver },
+            });
+            return;
+          }
+          if (isFallbackError(err)) {
+            usePaneDialogs.getState().setNotice({
+              sessionId,
+              text: fallbackNoticeText(err),
+              options: { ...opts, carryOver },
+            });
             return;
           }
           window.alert(resetErrorText(err));
           onDone?.();
         })
         .finally(() => {
-          // On success, error, or handoff failure (409 handoff_failed), clear
-          // the in-flight lock and finish the progress tracker so the
-          // overlay and chip always clear.
+          // On success, error, or a cancelled/failed summary, release the lock
+          // and finish the in-progress bar so it always clears.
           inFlightResets.delete(sessionId);
           useResetProgress.getState().finish(sessionId);
         });
@@ -86,19 +132,5 @@ export function useSessionReset(
     [api, onDone],
   );
 
-  const modeDialog = (
-    <ResetModeDialog
-      open={prompt !== null}
-      api={api}
-      reason={prompt?.reason ?? ""}
-      onCancel={() => setPrompt(null)}
-      onConfirm={(modeId) => {
-        const p = prompt;
-        setPrompt(null);
-        if (p) run(p.sessionId, p.handoff, modeId);
-      }}
-    />
-  );
-
-  return { reset: (session, handoff) => run(session.id, handoff), modeDialog };
+  return { run };
 }

@@ -10,7 +10,7 @@ import {
   type Spread,
 } from "lexical";
 import { createContext, useContext } from "react";
-import type { Command } from "@/api/types";
+import type { ComposerCommand } from "@/api/types";
 import { SkillInvocationRow } from "@/components/chat/SkillInvocationRow";
 
 /**
@@ -29,7 +29,7 @@ export type SerializedSkillChipNode = Spread<
  *  caret-adjacency plugin to move focus INTO a chip from outside it), and
  *  the Ctrl/Cmd+Enter escape hatch to the mount site's send/save action. */
 export interface SkillChipContextValue {
-  commands: Command[];
+  commands: ComposerCommand[];
   inputRefs: Map<NodeKey, HTMLInputElement>;
   onCtrlEnter: () => void;
 }

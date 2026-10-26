@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "./mock";
-import type { Project } from "./types";
+import type { NormalizedEvent, Project, Session } from "./types";
 
 describe("mock api contract", () => {
   it("listProjects returns Project[] with required fields", async () => {
@@ -213,6 +213,13 @@ describe("mock api contract", () => {
     expect(created).toHaveBeenCalledWith(expect.objectContaining({ type: "session:created", sessionId: res.newSessionId }));
     offUpdated();
     offCreated();
+  });
+
+  it("resetSession records the carry mode on the archived session", async () => {
+    const api = createMockApi();
+    await api.resetSession("sess-main", { carryOver: "transcript" });
+    const sessions = await api.listSessions("wt-1");
+    expect(sessions.find((s) => s.id === "sess-main")?.carryOver).toBe("transcript");
   });
 
   it("resetSession carries the pin to the replacement, in daemon event order", async () => {
@@ -547,5 +554,137 @@ describe("mock api contract", () => {
       expect(ev.modeIcon).toBeUndefined();
       off();
     });
+  });
+});
+
+describe("mock reset carry modes / cancel (2.T6)", () => {
+  function jsonSession(id: string, modeId: string) {
+    return {
+      id,
+      worktreeId: "wt-1",
+      projectId: "proj-a",
+      modeId,
+      type: "agent",
+      isMain: false,
+      state: "idle",
+      lifecycleState: "idle",
+      tmuxName: id,
+      channel: "json",
+      createdAt: new Date(0).toISOString(),
+    } as Session;
+  }
+
+  async function replay(api: ReturnType<typeof createMockApi>, sessionId: string) {
+    const events: NormalizedEvent[] = [];
+    const off = api.on("chat:replay", (ev) => {
+      if (ev.type === "chat:replay" && ev.sessionId === sessionId) events.push(...ev.events);
+    });
+    await api.openChat(sessionId);
+    off();
+    return events;
+  }
+
+  it("carryOver none copies nothing and appends no session_break", async () => {
+    const api = createMockApi();
+    api.__test.addSession(jsonSession("sess-none", "mode-1"));
+    api.__test.pushChatEvent("sess-none", {
+      id: "u1",
+      sessionId: "sess-none",
+      ts: "",
+      provider: "claude",
+      kind: "user",
+      text: "hi",
+      turnId: "t1",
+    });
+    const res = await api.resetSession("sess-none", { carryOver: "none" });
+    expect(res.carryOver).toBe("none");
+    expect(res.breakKind).toBeUndefined();
+    const events = await replay(api, res.newSessionId);
+    expect(events).toHaveLength(0);
+  });
+
+  it("summary carries rows plus a break marker with mode names and summary text", async () => {
+    const api = createMockApi();
+    api.__test.addSession(jsonSession("sess-sum", "mode-1"));
+    api.__test.pushChatEvent("sess-sum", {
+      id: "u1",
+      sessionId: "sess-sum",
+      ts: "",
+      provider: "claude",
+      kind: "user",
+      text: "hi",
+      turnId: "t1",
+    });
+    const res = await api.resetSession("sess-sum", { carryOver: "summary" });
+    expect(res.carryOver).toBe("summary");
+    expect(res.breakKind).toBe("reset");
+    const events = await replay(api, res.newSessionId);
+    const brk = events.find((e) => e.kind === "session_break");
+    expect(brk).toBeTruthy();
+    expect(brk!.carryOver).toBe("summary");
+    expect(brk!.fromMode).toBe("Bugfix");
+    expect(brk!.toMode).toBe("Bugfix");
+    expect(brk!.text).toBeTruthy();
+    expect(events.some((e) => e.kind === "user" && e.text === "hi")).toBe(true);
+  });
+
+  it("same-CLI different mode is a switch (breakKind + from/to mode names)", async () => {
+    const api = createMockApi();
+    api.__test.seedModes([
+      { id: "mode-1", name: "Bugfix", cli: "claude", context: "" },
+      { id: "mode-3", name: "Reviewer", cli: "claude", context: "" },
+    ]);
+    api.__test.addSession(jsonSession("sess-sw", "mode-1"));
+    api.__test.pushChatEvent("sess-sw", {
+      id: "u1",
+      sessionId: "sess-sw",
+      ts: "",
+      provider: "claude",
+      kind: "user",
+      text: "hi",
+      turnId: "t1",
+    });
+    const res = await api.resetSession("sess-sw", { carryOver: "summary", modeId: "mode-3" });
+    expect(res.breakKind).toBe("switch");
+    const events = await replay(api, res.newSessionId);
+    const brk = events.find((e) => e.kind === "session_break")!;
+    expect(brk.breakKind).toBe("switch");
+    expect(brk.fromMode).toBe("Bugfix");
+    expect(brk.toMode).toBe("Reviewer");
+  });
+
+  it("transcript carries an instruction text and no summary on the archived row", async () => {
+    const api = createMockApi();
+    api.__test.addSession(jsonSession("sess-tr", "mode-1"));
+    api.__test.pushChatEvent("sess-tr", {
+      id: "u1",
+      sessionId: "sess-tr",
+      ts: "",
+      provider: "claude",
+      kind: "user",
+      text: "hi",
+      turnId: "t1",
+    });
+    const res = await api.resetSession("sess-tr", { carryOver: "transcript" });
+    const events = await replay(api, res.newSessionId);
+    const brk = events.find((e) => e.kind === "session_break")!;
+    expect(brk.carryOver).toBe("transcript");
+    expect(brk.text).toContain("previous-chat.md");
+  });
+
+  it("cancel during the summary wait rejects with reset_cancelled and leaves the session live", async () => {
+    const api = createMockApi();
+    api.__test.addSession(jsonSession("sess-cancel", "mode-1"));
+    const pending = api.resetSession("sess-cancel", { carryOver: "summary" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await api.cancelReset("sess-cancel")).toEqual({ ok: true, cancelled: true });
+    await expect(pending).rejects.toMatchObject({ code: "reset_cancelled" });
+    const sessions = await api.listSessions("wt-1");
+    expect(sessions.find((s) => s.id === "sess-cancel")?.archivedAt).toBeFalsy();
+  });
+
+  it("cancelReset returns false when nothing is in flight", async () => {
+    const api = createMockApi();
+    expect(await api.cancelReset("sess-main")).toEqual({ ok: true, cancelled: false });
   });
 });

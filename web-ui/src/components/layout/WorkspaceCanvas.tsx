@@ -31,9 +31,10 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
+import { listPredecessors, resolveSupersededChain } from "@/lib/sessionVisibility";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
-import { useSessionReset } from "@/hooks/useSessionReset";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 const ZERO_INSET = { width: 0, height: 0 };
@@ -239,9 +240,11 @@ export function WorkspaceCanvas({
    *  be seeded into any "expanded" set first. */
   const [collapsedPickerProjects, setCollapsedPickerProjects] = useState<Set<string>>(new Set());
   const [tileMenu, setTileMenu] = useState<{ tileId: string; x: number; y: number } | null>(null);
-  const [resetTarget, setResetTarget] = useState<Session | null>(null);
-  const [resetHandoff, setResetHandoff] = useState(false);
-  const { reset, modeDialog } = useSessionReset(api);
+  /** Predecessor count for the "Previous sessions" entry (hidden at 0). */
+  const predecessorCount = (sessionId: string): number => {
+    const head = resolveSupersededChain(sessionId, allSessions);
+    return head ? listPredecessors(head, allSessions).length : 0;
+  };
   const [terminateTarget, setTerminateTarget] = useState<{ tileId: string; session: Session } | null>(null);
   const [savePromptOpen, setSavePromptOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
@@ -1576,9 +1579,9 @@ export function WorkspaceCanvas({
                 top: tileMenu.y + 6,
                 left: Math.max(
                   8,
-                  Math.min(tileMenu.x, envWidth - 178),
+                  Math.min(tileMenu.x, envWidth - 218),
                 ),
-                minWidth: 150,
+                minWidth: 200,
                 zIndex: 4000,
               }}
             >
@@ -1588,12 +1591,12 @@ export function WorkspaceCanvas({
                 className="menu-pop__item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setResetTarget(tileMenuSession);
-                  setResetHandoff(false);
+                  useWorkspaceStore.getState().setActiveSession(tileMenuSession.id);
+                  usePaneDialogs.getState().open(tileMenuSession.id, "fresh");
                   setTileMenu(null);
                 }}
               >
-                Reset
+                Start fresh…
               </button>
               <button
                 type="button"
@@ -1601,13 +1604,29 @@ export function WorkspaceCanvas({
                 className="menu-pop__item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setResetTarget(tileMenuSession);
-                  setResetHandoff(true);
+                  useWorkspaceStore.getState().setActiveSession(tileMenuSession.id);
+                  usePaneDialogs.getState().open(tileMenuSession.id, "switch");
                   setTileMenu(null);
                 }}
               >
-                Reset with handoff
+                Switch provider &amp; mode…
               </button>
+              {predecessorCount(tileMenuSession.id) > 0 ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useWorkspaceStore.getState().setActiveSession(tileMenuSession.id);
+                    usePaneDialogs.getState().open(tileMenuSession.id, "previous");
+                    setTileMenu(null);
+                  }}
+                >
+                  Previous sessions
+                  <span className="menu-pop__hint">{predecessorCount(tileMenuSession.id)}</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 role="menuitem"
@@ -1624,20 +1643,6 @@ export function WorkspaceCanvas({
             portalRoot,
           )
         : null}
-      <ConfirmDialog
-        open={!!resetTarget}
-        title={resetHandoff ? "Reset with handoff" : "Reset session"}
-        message="Resetting ends the current chat and starts a fresh session in its place. This can't be undone."
-        confirmLabel="Reset"
-        onCancel={() => setResetTarget(null)}
-        onConfirm={() => {
-          const target = resetTarget;
-          const handoff = resetHandoff;
-          setResetTarget(null);
-          if (target) reset(target, handoff);
-        }}
-      />
-      {modeDialog}
       {/* Mirrors the agent tab bar's "×" close — same confirm copy, same
           `terminateSession` call. Also drops the tile from THIS canvas (the tab
           bar has no canvas to reconcile) so a terminated session doesn't

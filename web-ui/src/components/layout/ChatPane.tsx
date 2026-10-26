@@ -15,8 +15,12 @@ import { Composer } from "@/components/chat/Composer";
 import { ScheduleSendPopover } from "@/components/chat/ScheduleSendPopover";
 import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
+import { useResetProgress } from "@/hooks/useResetProgress";
+import { useModesStore, iconForMode } from "@/store/modesStore";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
-import { ResetProgressChip } from "./ResetProgressChip";
+import { ResetPendingBar } from "./ResetPendingBar";
+import type { ModelAction } from "@/components/chat/ModelSwitch";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
@@ -373,6 +377,58 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     return session ? listPredecessors(session.id, serverSessions) : [];
   }, [session, serverSessions]);
 
+  const modesById = useModesStore((s) => s.modes);
+  const modeNameFor = useCallback(
+    (modeId: string | null | undefined): string | undefined =>
+      modeId ? modesById.get(modeId)?.name : undefined,
+    [modesById],
+  );
+
+  // "started as <mode>": the chat's ROOT mode (the oldest predecessor in the
+  // superseded chain — `listPredecessors` is newest-first, so its last entry is
+  // the root) differs from the mode this session runs. A model-only override is
+  // deliberately NOT shown (the old `modelOverridden` chip is gone).
+  const startedAsMode = useMemo(() => {
+    const root = predecessors[predecessors.length - 1];
+    if (!root || !session) return undefined;
+    if (root.modeId === session.modeId) return undefined;
+    return modeNameFor(root.modeId);
+  }, [predecessors, session, modeNameFor]);
+
+  // The composer dropdown's action rows (Decision B). "Previous sessions" is
+  // hidden when the chain has none; its hint is the predecessor count.
+  const modelActions = useMemo<ModelAction[]>(() => {
+    if (!session) return [];
+    const open = (kind: "fresh" | "switch" | "previous") => () =>
+      usePaneDialogs.getState().open(session.id, kind);
+    return [
+      { key: "fresh", label: "Start fresh…", onSelect: open("fresh") },
+      { key: "switch", label: "Switch provider & mode…", onSelect: open("switch") },
+      ...(predecessors.length > 0
+        ? [
+            {
+              key: "previous",
+              label: "Previous sessions",
+              hint: String(predecessors.length),
+              dividerBefore: true,
+              onSelect: open("previous"),
+            },
+          ]
+        : []),
+    ];
+  }, [session, predecessors.length]);
+
+  // Publish this pane's busy shape for the FreshDialog busy block (Decision 8).
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    usePaneDialogs.getState().setBusy(sessionId, { busy: turnActive, queued: trayRows.length });
+    return () => usePaneDialogs.getState().clearBusy(sessionId);
+  }, [sessionId, turnActive, trayRows.length]);
+
+  // A held-open reset (summary wait / explicit wait) disables the composer and
+  // shows the cancellable bar (Decision 9).
+  const resetPending = useResetProgress((s) => (sessionId ? s.active[sessionId] : undefined));
+
   // Keep the pane mounted even when hidden (Decision 14) — the terminal beside it
   // must never remount. `hidden` also stops the offscreen list from scrolling.
   if (!enabled) {
@@ -440,6 +496,11 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               {...(meta?.cwd ? { cwd: meta.cwd } : {})}
               commands={meta?.commands}
               scheduledTurnIds={meta?.scheduledTurnIds}
+              onOpenPrevious={
+                predecessors.length > 0
+                  ? () => useWorkspaceStore.getState().setActiveSession(predecessors[0]!.id)
+                  : undefined
+              }
             />
           )}
         </div>
@@ -554,7 +615,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 </button>
               </div>
             ) : null}
-            <ResetProgressChip sessionId={sessionId} />
+            <ResetPendingBar api={api} sessionId={sessionId} />
             <TodoStrip events={events} liveState={liveState} />
             <Composer
             key={`${sessionId}:${composerKey}`}
@@ -564,7 +625,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             model={meta?.model ?? meta?.usage?.model}
             cli={meta?.cli}
             modeName={meta?.modeName}
-            {...(meta?.modelOverridden ? { modelOverridden: true } : {})}
+            modeIconKey={iconForMode(session?.modeId ?? null)}
+            actions={modelActions}
+            onVibeCommand={(name) =>
+              usePaneDialogs.getState().open(sessionId, name === "switch" ? "switch" : "fresh")
+            }
+            {...(startedAsMode ? { startedAsMode } : {})}
+            {...(resetPending ? { disabled: true } : {})}
             usage={meta?.usage}
             onScheduleSend={async (message, ids, fireAt) => {
               await api.scheduleMessage(sessionId, message, fireAt, ids);

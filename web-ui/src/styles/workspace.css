@@ -5564,6 +5564,124 @@ textarea.input {
   word-break: break-word;
 }
 
+/* Previous sessions menu — one card per superseded predecessor. Overrides the
+   shared `.menu-pop button` block styles for the nested controls. */
+.prev-session {
+  padding: var(--space-2) var(--space-3);
+}
+.prev-session + .prev-session {
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+.prev-session__top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.prev-session__chip {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs, 11px);
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: var(--radius-xs, 3px);
+  color: var(--fg-secondary);
+  background: var(--bg-hover);
+  border: var(--border-width) solid var(--border-default);
+  white-space: nowrap;
+}
+.prev-session__open {
+  display: inline-block;
+  width: auto;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--fg-primary);
+}
+.prev-session__open:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.prev-session__viewing {
+  flex: none;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-muted);
+}
+.prev-session__when {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.prev-session__summary-area {
+  margin-top: var(--space-2);
+}
+.prev-session__summary-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.prev-session__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  padding: 0;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-secondary);
+}
+.prev-session__toggle:hover {
+  background: transparent;
+  color: var(--fg-primary);
+}
+.prev-session__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  margin-left: auto;
+  padding: 0;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-secondary);
+}
+.prev-session__copy:hover {
+  background: transparent;
+  color: var(--fg-primary);
+}
+.prev-session__summary {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm, 5px);
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs, 11.5px);
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.prev-session__carry {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-muted);
+}
+.prev-session__carry[data-carry="summary"],
+.prev-session__carry[data-carry="transcript"] {
+  color: var(--fg);
+}
+.prev-session__empty {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs, 11px);
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
 /* Quick open (file search) — ao-142–style */
 .quick-open-overlay {
   position: fixed;
@@ -9206,4 +9324,22 @@ body[data-tauri-os="macos"] .sidebar-header {
 .tree-row--ignored:not([data-git-status]) .tree-row__label,
 .tree-row--ignored:not([data-git-status]) .tree-row__kind-icon {
   opacity: 0.55;
+}
+
+/* Tab/tile session-action menu: a divider + a right-aligned count hint
+   ("Previous sessions  2"). */
+.menu-pop__divider {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-subtle);
+}
+.menu-pop__hint {
+  margin-left: auto;
+  padding-left: var(--space-2);
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+.menu-pop__item {
+  display: flex;
+  align-items: center;
 }

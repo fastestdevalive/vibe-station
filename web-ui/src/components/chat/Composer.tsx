@@ -5,10 +5,11 @@ import type { Attachment, Command, UsageInfo } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
 import { loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
 import { apiErrorText } from "@/lib/apiErrorText";
+import { vibeCommandFromText, withVibeStationCommands } from "@/lib/composerCommands";
 import { migrateV1Draft } from "@/lib/skillInvocation";
 import { ContextMeter } from "./ContextMeter";
 import { ComposerHint, ComposerShell, type HintItem } from "./ComposerShell";
-import { ModelSwitch } from "./ModelSwitch";
+import { ModelSwitch, type ModelAction } from "./ModelSwitch";
 import { ScheduleSendPopover } from "./ScheduleSendPopover";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "./SkillEditor";
 
@@ -40,8 +41,12 @@ interface ComposerProps {
   textareaRef?: React.RefObject<SkillEditorHandle | null>;
   /** Session's slash-command/skill catalog (`session:meta.commands`).
    *  `undefined` means the catalog hasn't loaded yet — `/` renders as plain
-   *  text, no popover, no row (Requirement 11). */
+   *  text, no popover, no row (Requirement 11). When loaded, the two
+   *  client-injected Vibe Station entries are added ahead of it. */
   commands?: Command[];
+  /** A client-injected Vibe Station entry (`/start-fresh`, `/switch`) was
+   *  picked — open the pane dialog instead of sending text. */
+  onVibeCommand?: (name: string) => void;
   /** Whether to grab keyboard focus (and show the IME) on mount. Defaults to
    *  `true` for the standalone/first-run case; the hosting pane passes
    *  `false` in canvas mode or on a touch device, so focus is never yanked
@@ -51,11 +56,15 @@ interface ComposerProps {
   model?: string;
   /** CLI id for the model dropdown (required to enable ModelSwitch). */
   cli?: string;
-  /** Mode name shown as a secondary chip in the toolbar. */
+  /** Mode name — shown as the dropdown's title row. */
   modeName?: string;
-  /** The user switched the model away from the mode's default — the chip reads
-   *  "started as <mode>" so it doesn't claim the mode's model is in use. */
-  modelOverridden?: boolean;
+  /** Icon key for the dropdown's "(mode default)" row. */
+  modeIconKey?: string | null;
+  /** Extra dropdown rows below the models (Start fresh… / Switch… / Previous sessions). */
+  actions?: ModelAction[];
+  /** The chat's ROOT mode differs from this session's mode — show a dimmed
+   *  "started as <mode>" beside the dropdown (not for a model-only change). */
+  startedAsMode?: string;
   /** Overrides the idle "Ready" label (e.g. "⚠ Error" after a failed turn). */
   statusLabel?: string;
   /** Turns waiting in the queue — shown next to "Working…" while busy. */
@@ -82,17 +91,25 @@ export function Composer({
   initialAttachments,
   textareaRef,
   commands,
+  onVibeCommand,
   focusOnMount = true,
   model,
   cli,
   modeName,
-  modelOverridden,
+  modeIconKey,
+  actions,
+  startedAsMode,
   usage,
   statusLabel,
   queuedCount = 0,
   onScheduleSend,
 }: ComposerProps) {
   const commandNames = (commands ?? []).map((c) => c.name);
+  // Injected ONLY once the catalog has loaded: `undefined` must keep the
+  // no-popover "skills loading" state (requirement 11), and the injected names
+  // stay out of `commandNames` so a typed `/start-fresh` is never migrated
+  // into a skill chip.
+  const editorCommands = commands === undefined ? undefined : withVibeStationCommands(commands);
 
   // Salvaged text (from a failed queued-turn edit) wins over any stored
   // draft; otherwise seed from the persisted draft for this session,
@@ -168,6 +185,19 @@ export function Composer({
   async function handleSend(queue: boolean) {
     if (!canSend) return;
     const message = internalEditorRef.current?.getText().trim() ?? text.trim();
+    // A typed `/start-fresh` or `/switch` opens the pane dialog and sends
+    // nothing (the popover path is handled by SkillEditor's selectCommand).
+    if (editorCommands !== undefined && onVibeCommand) {
+      const vibe = vibeCommandFromText(message);
+      if (vibe) {
+        internalEditorRef.current?.clear();
+        setText("");
+        setHasContent(false);
+        draft.clear();
+        onVibeCommand(vibe);
+        return;
+      }
+    }
     const ids = readyAttachments.map((a) => a.id);
     setSending(true);
     try {
@@ -241,19 +271,25 @@ export function Composer({
       attachDisabled={disabled}
       toolbarStart={
         <>
-          {cli && cli !== "cursor" ? (
-            <ModelSwitch api={api} sessionId={sessionId} cli={cli} model={model} />
+          {cli ? (
+            <ModelSwitch
+              api={api}
+              sessionId={sessionId}
+              cli={cli}
+              model={model}
+              {...(modeName ? { title: modeName } : {})}
+              {...(modeIconKey ? { modeIconKey } : {})}
+              {...(actions ? { actions } : {})}
+              hideModels={cli === "cursor"}
+            />
           ) : model ? (
             <span className="chat-composer__model-chip" title={model}>
               {model}
             </span>
           ) : null}
-          {modeName ? (
-            <span
-              className={`chat-composer__mode-chip${modelOverridden ? " chat-composer__mode-chip--overridden" : ""}`}
-              title={modelOverridden ? `Started as: ${modeName}` : modeName}
-            >
-              {modelOverridden ? `started as ${modeName}` : modeName}
+          {startedAsMode ? (
+            <span className="chat-composer__mode-chip chat-composer__mode-chip--started-as" title={`Started as: ${startedAsMode}`}>
+              started as {startedAsMode}
             </span>
           ) : null}
         </>
@@ -342,7 +378,7 @@ export function Composer({
         ref={setEditorRef}
         editorKey={sessionId}
         initialText={text}
-        commands={commands}
+        commands={editorCommands}
         disabled={disabled}
         topRight={
           <>
@@ -372,6 +408,7 @@ export function Composer({
         onSubmit={() => void handleSend(false)}
         onCtrlEnter={() => void handleSend(true)}
         onArgFocusChange={setArgFocused}
+        {...(onVibeCommand ? { onVibeCommand } : {})}
       />
     </ComposerShell>
   );

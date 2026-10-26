@@ -186,6 +186,9 @@ export interface Session {
   archivedAt?: string | null;
   /** Handoff summary written during a `reset --handoff`. Only ever set on an archived row. */
   handoffSummary?: string | null;
+  /** What the reset/switch that archived this session carried into its replacement.
+   *  Only set on an archived row; absent on rows archived before it was recorded. */
+  carryOver?: CarryOver | null;
   /** SessionId this session was spawned from, or null (agent-interaction-
    *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
   parentSessionId?: string | null;
@@ -330,7 +333,26 @@ export type NormalizedEventKind =
   | "status"
   | "mode_update"
   | "commands_update"
-  | "message_generated";
+  | "message_generated"
+  | "session_break";
+
+export type SessionBreakKind = "reset" | "switch";
+
+/** How much of the previous chat a reset/switch carries (mirror of `CarryOver`). */
+export type CarryOver = "none" | "summary" | "transcript";
+
+/** How a reset treats a running turn. */
+export type WhenBusy = "stop" | "wait";
+
+/** What a reset does with messages queued behind the running turn. */
+export type QueuedPolicy = "carry" | "drop";
+
+/** Response from POST /sessions/:id/reset/cancel. */
+export interface CancelResetResult {
+  ok: true;
+  /** False when no reset is in flight or it already passed its point of no return. */
+  cancelled: boolean;
+}
 
 /** Normalized non-text (or text-in-a-mixed-array) content block (mirror of daemon `NormalizedContentBlock`). */
 export interface NormalizedContentBlock {
@@ -418,14 +440,43 @@ export interface NormalizedEvent {
   subagentState?: string;
   /** True when this is a daemon-synthesized notice turn (subagent-ux-v2) — UI must not render as a human bubble. */
   silent?: boolean;
+  /** `session_break` only — "reset" | "switch". */
+  breakKind?: SessionBreakKind;
+  /** `session_break` only — CLI of the session being replaced. */
+  fromProvider?: string;
+  /** `session_break` only — CLI of the replacement session. */
+  toProvider?: string;
+  /** `session_break` only — how much history was carried (`summary`/`transcript`). */
+  carryOver?: CarryOver;
+  /** `session_break` only — display name of the mode being replaced. */
+  fromMode?: string;
+  /** `session_break` only — display name of the replacement mode. */
+  toMode?: string;
 }
+
+/** Which catalog a slash command came from (mirror of `CommandGroup`). */
+export type CommandGroup = "skill" | "agent";
 
 /** A slash command/skill catalog entry (`commands_update`, session meta). */
 export interface Command {
   name: string;
   description: string;
   argumentHint?: string;
+  /** Set by the daemon (`skill`/`agent`); absent for CLI-native commands. */
+  group?: CommandGroup;
 }
+
+/**
+ * Client-side extension of `Command`: the Composer injects two
+ * `"vibe-station"` entries (`/start-fresh`, `/switch`) that never come from
+ * the daemon and never get sent as text (plan Decision 10 / requirement 11).
+ *
+ * `Omit<Command, "group">` (not `Command & …`) because an intersection would
+ * narrow `group` back to `CommandGroup` instead of widening it.
+ */
+export type ComposerCommand = Omit<Command, "group"> & {
+  group?: CommandGroup | "vibe-station";
+};
 
 export type TurnState = "idle" | "queued" | "thinking" | "responding" | "tool" | "error";
 
