@@ -434,6 +434,55 @@ When to use each:
 - **Sessions are co-tenants** — only terminate sessions or worktrees that your integration created. There is no server-side ownership field; record the worktree id returned by `vst worktree create` at spawn time and operate only on that id. Never call `vst worktree rm` on worktrees owned by the developer's interactive session.
 - **Set a meaningful `prompt`** when spawning sessions. The clearer the task description, the better the agent's output.
 - **Poll `state`, don't spin.** Check `vst agent info` every 5–10 s rather than hammering repeatedly.
+- **Never run `vst agent start-fresh` / `clear` / `switch` on your own initiative** — they replace a running agent's conversation (see §17). To use another model or mode for part of a task, spawn a new agent (`vst agent create`).
+
+---
+
+## 17. Start fresh or switch an agent
+
+**USER-REQUEST ONLY. Do not run `start-fresh`, `clear` or `switch` unless the user explicitly
+asked for exactly that.** They replace a running agent's conversation, and the
+other agent does not keep your context. They are NOT how you delegate, split up,
+or change models for a task:
+
+- "Plan with Opus, implement with Sonnet", "get a review from another model",
+  "do this part in mode X" → spawn a NEW agent: `vst agent create ... --mode=<mode>`
+  (§5 and §6). Never `switch`.
+- Your context is getting long or stale → say so to the user and let them decide.
+  Never `start-fresh` yourself or a sibling on a hunch.
+- `switch` is an EXCEPTIONAL, almost-never case: only when the user explicitly asks
+  to change the provider/mode of THIS existing chat (e.g. "switch this agent to
+  opencode"). Mentioning another model or mode in a plan, or wanting a different
+  one for a step, is NOT such a request. When unsure, do not run it; ask the user.
+
+When the user did ask: history is never deleted. The old session is archived and
+listed by `vst agent previous <id>`.
+
+```bash
+# Start fresh (same mode)
+vst agent start-fresh <id>                          # empty memory, chat cleared
+vst agent clear <id>                                # alias: start-fresh with nothing carried (like /clear)
+vst agent start-fresh <id> --carry=summary          # old agent writes a summary first (up to 2 min)
+vst agent start-fresh <id> --carry=transcript       # instant; the new agent reads the old chat
+
+# Switch provider & mode
+vst agent switch <id> --mode=<mode> --carry=summary
+vst agent switch <id> --mode=<mode> --carry=transcript --channel=tmux
+
+# Earlier sessions of this chat (mode, how it ended, time, what was carried, summary)
+vst agent previous <id>
+```
+
+`<mode>` is a mode id or name from `vst mode ls`. A switch always carries
+something; for a clean agent on another mode use `vst agent create`.
+
+### Rules
+- The command returns the NEW session id. Use it from then on; the old id is archived.
+- A running turn is stopped first (`--when-busy=wait` lets it finish; that can take minutes).
+- Never run any of these on yourself or another agent unless the user asked. For `--carry=summary` on your own
+  session, write the summary to a file and pass `--summary-file=<path>`.
+- A subagent you restart stays linked to you (same parent, same tab).
+- If `--carry=summary` fails, nothing has changed; retry with `--carry=transcript`.
 
 ---
 

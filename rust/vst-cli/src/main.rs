@@ -149,12 +149,50 @@ async fn main() {
                         die(&err, Some(code));
                     }
                 }
-                AgentCommand::Reset { args } => {
-                    let opts = match commands::agent::reset::parse_session_reset_options(&args) {
+                AgentCommand::StartFresh { args } => {
+                    let opts = match commands::agent::start_fresh::parse_session_start_fresh_options(
+                        &args,
+                    ) {
                         Ok(o) => o,
                         Err(err) => die(&err, Some(1)),
                     };
-                    if let Err((err, code)) = commands::agent::reset::run_session_reset(opts).await
+                    if let Err((err, code)) =
+                        commands::agent::start_fresh::run_session_start_fresh(opts).await
+                    {
+                        die(&err, Some(code));
+                    }
+                }
+                AgentCommand::Clear { args } => {
+                    let opts =
+                        match commands::agent::start_fresh::parse_session_clear_options(&args) {
+                            Ok(o) => o,
+                            Err(err) => die(&err, Some(1)),
+                        };
+                    if let Err((err, code)) =
+                        commands::agent::start_fresh::run_session_start_fresh(opts).await
+                    {
+                        die(&err, Some(code));
+                    }
+                }
+                AgentCommand::Switch { args } => {
+                    let opts = match commands::agent::switch::parse_session_switch_options(&args) {
+                        Ok(o) => o,
+                        Err(err) => die(&err, Some(1)),
+                    };
+                    if let Err((err, code)) =
+                        commands::agent::switch::run_session_switch(opts).await
+                    {
+                        die(&err, Some(code));
+                    }
+                }
+                AgentCommand::Previous { args } => {
+                    let opts =
+                        match commands::agent::previous::parse_session_previous_options(&args) {
+                            Ok(o) => o,
+                            Err(err) => die(&err, Some(1)),
+                        };
+                    if let Err((err, code)) =
+                        commands::agent::previous::run_session_previous(opts).await
                     {
                         die(&err, Some(code));
                     }

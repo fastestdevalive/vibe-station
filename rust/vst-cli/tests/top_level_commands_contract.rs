@@ -262,6 +262,7 @@ fn session(id: &str, worktree: &str, is_main: bool, state: LifecycleState) -> Se
         archived_at: None,
         sort_order: 1.0,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,
@@ -734,5 +735,49 @@ async fn test_summary_fetches_worktrees_and_sessions() {
         assert_eq!(data.len(), 1);
     } else {
         panic!("expected sessions Ok");
+    }
+}
+
+// ─── agent subcommand registration (3.T3) ─────────────────────────────────────
+
+#[test]
+fn test_agent_subcommands_are_registered() {
+    use vst_cli::program::{parse_args, AgentCommand, Command};
+
+    #[allow(clippy::type_complexity)]
+    let cases: [(&[&str], fn(&AgentCommand) -> bool); 5] = [
+        (&["vst", "agent", "clear", "s-1"], |c| {
+            matches!(c, AgentCommand::Clear { .. })
+        }),
+        (&["vst", "agent", "start-fresh", "s-1"], |c| {
+            matches!(c, AgentCommand::StartFresh { .. })
+        }),
+        (&["vst", "agent", "switch", "s-1", "--mode=m"], |c| {
+            matches!(c, AgentCommand::Switch { .. })
+        }),
+        (&["vst", "agent", "previous", "s-1"], |c| {
+            matches!(c, AgentCommand::Previous { .. })
+        }),
+        (&["vst", "agent", "handoff", "s-1"], |c| {
+            matches!(c, AgentCommand::Handoff { .. })
+        }),
+    ];
+    for (args, check) in cases {
+        match parse_args(args.iter().copied()) {
+            Command::Agent(cmd) => assert!(check(&cmd), "wrong variant for {args:?}"),
+            other => panic!("expected Agent command for {args:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_agent_reset_is_removed() {
+    use vst_cli::program::{parse_args, AgentCommand, Command};
+
+    match parse_args(["vst", "agent", "reset", "s-1"].iter().copied()) {
+        Command::Agent(AgentCommand::Unknown(args)) => {
+            assert_eq!(args, vec!["reset".to_string(), "s-1".to_string()]);
+        }
+        other => panic!("`agent reset` must be unknown, got {other:?}"),
     }
 }
