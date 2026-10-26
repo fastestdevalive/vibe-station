@@ -1,5 +1,3 @@
-import type { Command } from "@/api/types";
-
 /**
  * skill-invocation-in-chat REPLAN Phase 7B.2 — tokenizer, serializer, and
  * escaper for the flat inline-chip grammar (D2/D3):
@@ -145,7 +143,7 @@ export function serializeSkillSegments(segments: SkillSegment[]): string {
 }
 
 /** Substring, case-insensitive filter over the catalog. */
-export function filterCommands(commands: Command[], query: string): Command[] {
+export function filterCommands<T extends { name: string }>(commands: T[], query: string): T[] {
   const q = query.trim().toLowerCase();
   if (!q) return commands;
   return commands.filter((c) => c.name.toLowerCase().includes(q));

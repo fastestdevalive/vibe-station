@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Minus, Plus } from "lucide-react";
 import { FontResetButton } from "./FontResetButton";
 import type { ApiInstance } from "@/api";
@@ -6,12 +7,13 @@ import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
-import { ResetProgressOverlay } from "./ResetProgressOverlay";
-import { ResetProgressChip } from "./ResetProgressChip";
+import { PaneDialogHost } from "./PaneDialogHost";
+import { ResetPendingBar } from "./ResetPendingBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 
 interface AgentPaneSlotProps {
   api: ApiInstance;
@@ -77,6 +79,17 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
   // `.state` for the same reason — match it.
   const isTerminal = !isJson && !!session;
   const terminalLive = isTerminal && session!.state !== "exited" && session!.state !== "done";
+
+  // Terminal busy for the pane's dialog busy block. Same live resolution as the
+  // sidebar/TerminalPane (`sessionStates[id] ?? session.state` — AGENTS.md);
+  // ChatPane writes the Rich Chat side (turn active + queued count) itself.
+  const liveState =
+    useWorkspaceStore((s) => (sessionId ? s.sessionStates[sessionId] : undefined)) ?? session?.state;
+  useEffect(() => {
+    if (!sessionId || !isTerminal) return undefined;
+    usePaneDialogs.getState().setBusy(sessionId, { busy: liveState === "working", queued: 0 });
+    return () => usePaneDialogs.getState().clearBusy(sessionId);
+  }, [sessionId, isTerminal, liveState]);
   // The font-size buttons and terminal→Rich Chat toggle for exited sessions.
   // When the session exits, these are handed to `TerminalPane`, which renders
   // them in-flow BELOW its "Session exited / Resume" banner.
@@ -146,7 +159,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
               </div>
             </div>
             <div className="agent-pane-header__controls">
-              <ResetProgressChip sessionId={sessionId} />
+              <ResetPendingBar api={api} sessionId={sessionId} />
               <div className="terminal-font-overlay__btns">
                 <button
                   type="button"
@@ -174,7 +187,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
       <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} focusOnMount={!canvasMode} />
       {/* Last sibling, conditionally rendered inside: never shifts the (permanently
           mounted) TerminalPane/ChatPane tree positions above. */}
-      <ResetProgressOverlay sessionId={sessionId} />
+      <PaneDialogHost api={api} sessionId={sessionId} session={session} />
     </div>
   );
 }

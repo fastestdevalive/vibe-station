@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
@@ -55,6 +55,9 @@ vi.mock("./TerminalAttachmentUpload", () => ({
 
 // Import AFTER the mocks are registered (vi.mock is hoisted, but keep it explicit).
 import { AgentPaneSlot } from "./AgentPaneSlot";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
+import { useResetProgress } from "@/hooks/useResetProgress";
+import userEvent from "@testing-library/user-event";
 
 const api = {} as unknown as ApiInstance;
 
@@ -281,5 +284,78 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     );
     expect(getByTestId("terminal").dataset.focus).toBe("false");
     expect(getByTestId("chatpane").dataset.focus).toBe("false");
+  });
+
+  // --- Pane-scoped dialog host (Decision 8) ---
+  it("opens the dialog inside .agent-pane-slot without remounting TerminalPane", () => {
+    usePaneDialogs.getState()._reset();
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />,
+    );
+    expect(terminalMounts).toBe(1);
+    expect(container.querySelector(".pane-dialog-host")).toBeNull();
+
+    act(() => usePaneDialogs.getState().open("tty1", "fresh"));
+
+    expect(terminalMounts).toBe(1);
+    expect(terminalUnmounts).toBe(0);
+    const host = container.querySelector(".pane-dialog-host");
+    expect(host).not.toBeNull();
+    expect(host!.closest(".agent-pane-slot")).toBe(container.querySelector(".agent-pane-slot"));
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("closing the dialog leaves TerminalPane mounted", () => {
+    usePaneDialogs.getState()._reset();
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />,
+    );
+    act(() => usePaneDialogs.getState().open("tty1", "switch"));
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    act(() => usePaneDialogs.getState().close("tty1"));
+    expect(container.querySelector(".pane-dialog-host")).toBeNull();
+    expect(terminalMounts).toBe(1);
+    expect(terminalUnmounts).toBe(0);
+  });
+
+  it("shows the summary Cancel bar in the terminal header overlay and calls cancelReset", async () => {
+    useResetProgress.setState({ active: {} });
+    const cancelReset = vi.fn().mockResolvedValue({ ok: true, cancelled: true });
+    const localApi = { cancelReset } as unknown as ApiInstance;
+    useResetProgress.getState().start("tty1", "summary");
+    const { container } = render(
+      <AgentPaneSlot api={localApi} sessionId="tty1" session={session("tty1", "tmux")} />,
+    );
+    expect(container.querySelector(".agent-pane-header .reset-pending-bar")).not.toBeNull();
+    expect(screen.getByText("Writing the summary… up to 2 min")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(cancelReset).toHaveBeenCalledWith("tty1");
+    useResetProgress.setState({ active: {} });
+  });
+
+  it("shows the waiting bar for whenBusy=wait", () => {
+    useResetProgress.setState({ active: {} });
+    useResetProgress.getState().start("tty1", "waiting");
+    render(<AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />);
+    expect(screen.getByText("Waiting for the current turn…")).toBeTruthy();
+    useResetProgress.setState({ active: {} });
+  });
+
+  it("opens the Previous sessions dialog for a chain with predecessors", async () => {
+    usePaneDialogs.getState()._reset();
+    const { useServerStore } = await import("@/hooks/useServerStore");
+    const head = session("tty1", "tmux");
+    const pred: Session = {
+      ...session("tty0", "tmux"),
+      archivedAt: "2026-01-01T00:00:00Z",
+      supersededBy: "tty1",
+      handoffSummary: "Goal: ship it.",
+    };
+    useServerStore.setState({ sessions: [pred, head] });
+    render(<AgentPaneSlot api={api} sessionId="tty1" session={head} />);
+    act(() => usePaneDialogs.getState().open("tty1", "previous"));
+    expect(await screen.findByRole("dialog", { name: "Previous sessions" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Show summary/ })).toBeTruthy();
+    expect(terminalMounts).toBe(1);
   });
 });

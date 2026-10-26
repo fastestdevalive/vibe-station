@@ -5,6 +5,8 @@ import type {
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
+  CarryOver,
+  CancelResetResult,
   CliId,
   CommitLogEntry,
   GutterResult,
@@ -39,9 +41,11 @@ import type {
   NetworkAccess,
   Project,
   ProjectBranchesResponse,
+  QueuedPolicy,
   SendChatResponse,
   SearchResult,
   Session,
+  SessionBreakKind,
   SessionMeta,
   Settings,
   SkillsResponse,
@@ -57,6 +61,7 @@ import type {
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
+  WhenBusy,
   WSEvent,
   Worktree,
   WorktreeOrderResult,
@@ -924,15 +929,49 @@ export function createClientApi() {
     /** Archive the current session and spawn a fresh one in its place. */
     async resetSession(
       id: string,
-      body?: { handoff?: boolean; prompt?: string; modeId?: string },
-    ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
+      body?: {
+        handoff?: boolean;
+        prompt?: string;
+        handoffText?: string;
+        modeId?: string;
+        channel?: "json" | "tmux";
+        carryOver?: CarryOver;
+        whenBusy?: WhenBusy;
+        queued?: QueuedPolicy;
+      },
+    ): Promise<{
+      ok: true;
+      archivedSessionId: string;
+      newSessionId: string;
+      carryOver: CarryOver;
+      breakKind?: SessionBreakKind;
+    }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body ?? {}),
       });
-      return parseJson<{ ok: true; archivedSessionId: string; newSessionId: string }>(res);
+      return parseJson<{
+        ok: true;
+        archivedSessionId: string;
+        newSessionId: string;
+        carryOver: CarryOver;
+        breakKind?: SessionBreakKind;
+      }>(res);
+    },
+
+    /**
+     * Cancel an in-flight reset/switch (Decision 5). `cancelled: false` means
+     * there was nothing to cancel OR the reset already passed its point of no
+     * return — in that case the reset completes normally.
+     */
+    async cancelReset(id: string): Promise<CancelResetResult> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset/cancel`, {
+        method: "POST",
+      });
+      return parseJson<CancelResetResult>(res);
     },
 
     /** Run a standalone handoff turn without archiving/respawning the session. */

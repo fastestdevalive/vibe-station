@@ -13,6 +13,7 @@ import { useServerSync, __resetForDemo } from "@/hooks/useServerSync";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useModesStore } from "@/store/modesStore";
+import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import type { Session } from "@/api/types";
 
 /**
@@ -1007,7 +1008,7 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(500);
       });
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1064,12 +1065,12 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(0);
       });
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
 
       firePointer("pointerup", tab, { clientX: 50, clientY: 20 });
       fireEvent.click(tab);
 
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1096,7 +1097,7 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(500);
       });
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
 
       // The browser's own long-press detector fires its native `contextmenu`
       // a short moment later — well within the guard window.
@@ -1105,18 +1106,19 @@ describe("TabsStrip", () => {
       });
       fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
 
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  // ─── Reset (+handoff) + archived styling (Part 03 Phase 3) ──────────────
+  // ─── Session actions menu (Start fresh / Switch / Previous sessions) ────
 
-  it("3.T1 — clicking Reset opens the ConfirmDialog and only calls resetSession after confirming", async () => {
+  it("2.T7 — 'Start fresh…' opens the pane dialog state and never calls resetSession from the menu", async () => {
     const localApi = createMockApi();
     const resetSpy = vi.spyOn(localApi, "resetSession");
     const user = userEvent.setup();
+    usePaneDialogs.getState()._reset();
     render(
       <MemoryRouter>
         <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
@@ -1125,24 +1127,16 @@ describe("TabsStrip", () => {
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
 
-    const resetItem = await screen.findByRole("menuitem", { name: /^Reset$/i });
-    // Selecting the menu item stages the target but must NOT call the API yet.
-    await user.click(resetItem);
+    const freshItem = await screen.findByRole("menuitem", { name: /^Start fresh/ });
+    await user.click(freshItem);
     expect(resetSpy).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    const confirmBtn = screen.getByRole("button", { name: "Reset" });
-    await user.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(resetSpy).toHaveBeenCalledWith("sess-agent2", { handoff: false });
-    });
+    expect(usePaneDialogs.getState().dialogs["sess-agent2"]).toBe("fresh");
   });
 
-  it("3.T1b — 'Reset with handoff' passes handoff: true", async () => {
+  it("2.T7 — 'Switch provider & mode…' opens the switch dialog kind", async () => {
     const localApi = createMockApi();
-    const resetSpy = vi.spyOn(localApi, "resetSession");
     const user = userEvent.setup();
+    usePaneDialogs.getState()._reset();
     render(
       <MemoryRouter>
         <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
@@ -1150,22 +1144,13 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
-
-    const resetItem = await screen.findByRole("menuitem", { name: /reset with handoff/i });
-    await user.click(resetItem);
-    expect(resetSpy).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "Reset" }));
-
-    await waitFor(() => {
-      expect(resetSpy).toHaveBeenCalledWith("sess-agent2", { handoff: true });
-    });
+    const switchItem = await screen.findByRole("menuitem", { name: /Switch provider & mode/ });
+    await user.click(switchItem);
+    expect(usePaneDialogs.getState().dialogs["sess-agent2"]).toBe("switch");
   });
 
-  it("3.T2 — cancelling the ConfirmDialog never calls resetSession", async () => {
+  it("2.T7 — the menu hides 'Previous sessions' when the chain has no predecessors", async () => {
     const localApi = createMockApi();
-    const resetSpy = vi.spyOn(localApi, "resetSession");
-    const user = userEvent.setup();
     render(
       <MemoryRouter>
         <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
@@ -1173,10 +1158,8 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
-    await user.click(await screen.findByRole("menuitem", { name: /^Reset$/i }));
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(resetSpy).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await screen.findByRole("menuitem", { name: /^Start fresh/ });
+    expect(screen.queryByRole("menuitem", { name: /Previous sessions/ })).toBeNull();
   });
 
   it("3.T3 — after a real reset, the old tab disappears entirely and the new tab appears live, no manual refresh needed", async () => {
@@ -1245,7 +1228,7 @@ describe("TabsStrip", () => {
     expect(menu).toBeInTheDocument();
 
     // It lists the superseded session
-    const oldItem = screen.getByRole("menuitem", { name: /agent-2/i });
+    const oldItem = within(menu).getByRole("button", { name: /agent-2/i });
     expect(oldItem).toBeInTheDocument();
 
     // Picking it sets activeSessionId to the old id
@@ -1889,7 +1872,7 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
-    const item = await screen.findByRole("menuitem", { name: /^Reset$/i });
+    const item = await screen.findByRole("menuitem", { name: /^Start fresh/ });
     expect(portalRoot.contains(item)).toBe(true);
     portalRoot.remove();
   });
@@ -1913,10 +1896,10 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(0);
       });
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
       // A click on the real document (outside the env root) is ignored.
       fireEvent.click(document.body);
-      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
       // A click inside the env root (outside the menu) closes it.
       fireEvent.click(host);
       expect(screen.queryByRole("menuitem", { name: /^Reset$/i })).toBeNull();

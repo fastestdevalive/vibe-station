@@ -1,0 +1,401 @@
+/* Pane-scoped dialogs: Start fresh / Switch provider & mode (FreshDialog), the
+   Previous sessions dialog and the fallback notice, plus the ResetPendingBar.
+   All of them live inside `.agent-pane-slot` (position: relative), so the
+   overlay covers only that agent's pane and TerminalPane never remounts
+   (AGENTS.md § Terminal). Values mirror the FreshDialog design frame. */
+
+.pane-dialog-host {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-4);
+  box-sizing: border-box;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg-primary, #0f0f0f) 78%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+/* ── FreshDialog card ─────────────────────────────────────────────────────── */
+
+.fresh-dialog {
+  width: 456px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+}
+
+.fresh-dialog__header {
+  padding: var(--space-4);
+  border-bottom: var(--border-width, 1px) solid var(--border-default);
+}
+.fresh-dialog__title {
+  margin: 0;
+  font-size: var(--font-size-base);
+  line-height: 18px;
+  font-weight: 600;
+}
+.fresh-dialog__subtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--fg-muted);
+}
+
+.fresh-dialog__body {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.fresh-dialog__label {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.fresh-dialog__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fresh-dialog__error {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+/* Option lists (modes, carry over): one grouped container, hairline dividers,
+   selection = --bg-active fill + a filled radio (the radio carries the state —
+   the fill alone is below 3:1). No per-row outlines, like the sidebar and the
+   model dropdown. */
+.fresh-dialog__list {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.fresh-dialog__list > * + * {
+  border-top: var(--border-width, 1px) solid var(--border-subtle);
+}
+
+.fresh-dialog__radio {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+}
+.fresh-dialog__mode--on .fresh-dialog__radio,
+.fresh-dialog__opt--on .fresh-dialog__radio {
+  border-color: var(--fg-primary);
+  background: radial-gradient(circle, var(--fg-primary) 0 38%, transparent 42%);
+}
+
+/* Mode row. */
+.fresh-dialog__mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.fresh-dialog__mode:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.fresh-dialog__mode--on,
+.fresh-dialog__mode--on:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+.fresh-dialog__mode--on .fresh-dialog__mode-name {
+  font-weight: var(--font-weight-medium);
+}
+.fresh-dialog__mode:focus-visible,
+.fresh-dialog__opt:has(input:focus-visible) {
+  outline: 2px solid var(--border-strong);
+  outline-offset: -2px;
+}
+.fresh-dialog__mode-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fresh-dialog__mode-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chips: borderless pills. */
+.fresh-dialog__chip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 500;
+}
+.fresh-dialog__chip--current {
+  background: var(--bg-active);
+  color: var(--fg-secondary);
+}
+.fresh-dialog__chip--warn {
+  background: var(--status-warning-bg);
+  color: var(--fg-warning);
+}
+
+/* Carry-over option row. */
+.fresh-dialog__opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  background: transparent;
+  cursor: pointer;
+}
+.fresh-dialog__opt:hover:not(.fresh-dialog__opt--disabled) {
+  background: var(--bg-hover);
+}
+.fresh-dialog__opt--on,
+.fresh-dialog__opt--on:hover {
+  background: var(--bg-active);
+}
+.fresh-dialog__opt--disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The native radio stays (keyboard + a11y) but is drawn as the shared ring. */
+.fresh-dialog__opt input {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  margin: 2px 0 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+}
+.fresh-dialog__opt input:checked {
+  border-color: var(--fg-primary);
+  background: radial-gradient(circle, var(--fg-primary) 0 38%, transparent 42%);
+}
+.fresh-dialog__opt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fresh-dialog__opt-name {
+  font-weight: 500;
+}
+.fresh-dialog__opt-sub {
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  line-height: 14px;
+}
+
+/* Busy block. */
+.fresh-dialog__busy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px var(--space-3);
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.fresh-dialog__busy-title {
+  font-weight: 500;
+}
+.fresh-dialog__busy-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+/* Terminal / Rich Chat segmented control. */
+.fresh-dialog__seg {
+  display: inline-flex;
+  align-self: flex-start;
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.fresh-dialog__seg-btn {
+  padding: 6px 14px;
+  border: none;
+  border-right: var(--border-width, 1px) solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.fresh-dialog__seg-btn:last-child {
+  border-right: none;
+}
+.fresh-dialog__seg-btn:hover {
+  background: var(--bg-elevated);
+}
+.fresh-dialog__seg-btn--on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-card));
+  color: var(--fg-primary);
+}
+
+.fresh-dialog__footer {
+  padding: var(--space-4);
+  border-top: var(--border-width, 1px) solid var(--border-default);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.fresh-dialog__hint {
+  color: var(--fg-muted);
+}
+.fresh-dialog__spacer {
+  flex: 1;
+}
+.fresh-dialog__btn {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: var(--border-width, 1px) solid var(--border-default);
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  line-height: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.fresh-dialog__btn:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+}
+.fresh-dialog__btn--primary {
+  background: var(--fg-primary);
+  border-color: var(--fg-primary);
+  color: var(--bg-primary, #0d0d0d);
+}
+.fresh-dialog__btn--primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.fresh-dialog__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Previous sessions / fallback-notice card (shares the pane dialog chrome) ─ */
+
+.pane-dialog-card {
+  width: 460px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+}
+.pane-dialog-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-1);
+}
+.pane-dialog-card__header h2 {
+  margin: 0;
+  font-size: var(--font-size-base);
+  line-height: 18px;
+  font-weight: 600;
+}
+.pane-dialog-card__header .icon-btn {
+  margin-left: auto;
+}
+.pane-dialog-card__body {
+  padding: var(--space-1) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.pane-dialog-card__footer {
+  padding: 10px var(--space-4);
+  border-top: var(--border-width, 1px) solid var(--border-subtle, var(--border-default));
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ── In-progress bar (Decision 9) ─────────────────────────────────────────── */
+
+.reset-pending-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+  background: var(--bg-elevated);
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+.reset-pending-bar__label {
+  white-space: nowrap;
+}
+.reset-pending-bar__cancel {
+  margin-left: var(--space-1);
+  padding: 0 6px;
+  border: var(--border-width, 1px) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.reset-pending-bar__cancel:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+}
+.chat-pane__composer > .reset-pending-bar {
+  margin: 0 0 var(--space-1, 4px) var(--space-2, 8px);
+}
+.agent-pane-header .reset-pending-bar {
+  align-self: center;
+}

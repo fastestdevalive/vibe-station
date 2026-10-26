@@ -11,65 +11,8 @@
   transition: border-color 0.2s ease;
   container-type: inline-size;
   position: relative;
-  /* Own stacking context so the reset overlay's z-index is confined to this pane. */
+  /* Own stacking context so the pane-scoped dialog overlay's z-index is confined to this pane. */
   isolation: isolate;
-}
-
-/* Per-agent "Reset with handoff" progress — covers only this pane. */
-.reset-progress-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--bg-primary, #0f0f0f) 78%, transparent);
-  backdrop-filter: blur(2px);
-}
-.reset-progress-overlay__card {
-  max-width: 360px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: flex-start;
-  background: var(--bg-secondary, #181818);
-  border: 1px solid var(--border-default, #333);
-  border-radius: 8px;
-}
-.reset-progress-overlay__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
-.reset-progress-overlay__text {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-}
-
-/* Subtle cue that a "Reset with handoff" is still running after the user
-   closed its overlay. Reopens the overlay on click. */
-.reset-progress-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  align-self: flex-start;
-  padding: 2px 8px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-  background: var(--bg-secondary, #181818);
-  border: 1px solid var(--border-default, #333);
-  border-radius: 999px;
-  cursor: pointer;
-  opacity: 0.85;
-}
-.reset-progress-chip:hover {
-  opacity: 1;
-}
-.chat-pane__composer > .reset-progress-chip {
-  margin: 0 0 var(--space-1, 4px) var(--space-2, 8px);
 }
 
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
@@ -1154,6 +1097,146 @@
   white-space: nowrap;
 }
 
+/* ── Session-break card (reset / switch divider) ────────────────────────────
+   Rendered as a MessageList row that separates two chat eras. `reset` is
+   neutral; `switch` carries provider chips from → to and an accent-tinted
+   border (design Main frame). The "Show handoff summary" toggle appears only
+   when the row carries a summary (`text`). */
+
+.chat-session-break {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) 0;
+}
+.chat-session-break__rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border-default);
+}
+.chat-session-break__card {
+  /* Both card kinds share one fixed width (Decision D). */
+  width: min(380px, 70%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+.chat-session-break__card--switch {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-default));
+}
+.chat-session-break__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--fg-primary);
+  line-height: 18px;
+}
+.chat-session-break__ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--fg-secondary);
+}
+.chat-session-break__time {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.chat-session-break__providers {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.chat-session-break__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-default);
+  background: color-mix(in srgb, var(--fg-muted) 10%, transparent);
+  font: 400 11px/1 var(--font-mono);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+/* Mode pills in a `carryOver` switch card (`<fromMode> → <toMode>`). */
+.chat-session-break__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-card);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--fg-primary);
+  white-space: nowrap;
+}
+.chat-session-break__card--switch .chat-session-break__pill:last-child {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-default));
+}
+.chat-session-break__arrow {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--fg-muted);
+}
+.chat-session-break__sub {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  line-height: 16px;
+}
+.chat-session-break__actions {
+  display: flex;
+  gap: 14px;
+}
+.chat-session-break__toggle {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+  text-decoration: underline;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-session-break__toggle:hover {
+  color: var(--fg-primary);
+}
+.chat-session-break__summary {
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
 /* ── "Load earlier" affordance at the top of the loaded window (R2.2/R2.5) ──── */
 
 .chat-load-earlier {
@@ -1660,18 +1743,46 @@
   bottom: calc(100% + var(--space-1));
   left: 0;
   z-index: 20;
-  min-width: 180px;
-  max-height: 260px;
+  min-width: 240px;
+  max-height: 320px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   padding: var(--space-1);
-  border: var(--border-width) solid var(--border-subtle);
+  border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.28));
 }
+.chat-model-switch__title {
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-1)) var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-model-switch__note {
+  padding: var(--space-1) var(--space-3) 2px;
+  font-size: var(--font-size-xs);
+  line-height: 14px;
+  color: var(--fg-muted);
+}
+.chat-model-switch__note--error {
+  color: var(--destructive-soft);
+}
+.chat-model-switch__divider {
+  height: 1px;
+  margin: var(--space-1) calc(-1 * var(--space-1));
+  background: var(--border-subtle);
+}
 .chat-model-switch__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   text-align: left;
   background: none;
   border: none;
@@ -1682,6 +1793,16 @@
   font-size: var(--fs-body-sans);
   white-space: nowrap;
 }
+.chat-model-switch__option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-model-switch__hint {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-weight: 400;
+}
 .chat-model-switch__option:hover,
 .chat-model-switch__option:focus-visible {
   background: var(--bg-elevated);
@@ -1691,14 +1812,6 @@
   color: var(--fg-primary);
   font-weight: var(--font-weight-medium, 600);
   background: var(--bg-active);
-}
-.chat-model-switch__note {
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-.chat-model-switch__note--error {
-  color: var(--destructive-soft);
 }
 .chat-model-switch__error {
   font-size: var(--font-size-xs);
@@ -2139,10 +2252,9 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
 }
-.chat-composer__mode-chip--overridden {
-  /* "started as <mode>" — slightly dimmer to distinguish from the un-overridden label */
+.chat-composer__mode-chip--started-as {
+  /* "started as <mode>" — dimmed so it reads as history, not the live mode. */
   opacity: 0.7;
-  font-style: italic;
 }
 .chat-composer__mode-chip {
   font-size: var(--fs-body-sans);
@@ -2308,7 +2420,7 @@
   left: 0;
   right: 0;
   bottom: calc(100% + 4px);
-  max-height: 240px;
+  max-height: 320px;
   overflow-y: auto;
   background: var(--bg-card);
   border: var(--border-width) solid var(--border-default);
@@ -2317,6 +2429,17 @@
   /* Sits above the composer chrome. */
   z-index: 60;
   padding: var(--space-1);
+}
+/* Group header — inserted only where the group changes (Vibe Station,
+   Skills, Agent commands). Values from ScreenSlash.dc.html's `.grp`. */
+.chat-skill-popover__group {
+  padding: 8px 12px 4px;
+  font-size: var(--font-size-xs);
+  line-height: 14px;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
 }
 .chat-skill-popover__option {
   display: flex;

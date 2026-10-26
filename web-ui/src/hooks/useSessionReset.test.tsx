@@ -2,87 +2,73 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/errors";
-import type { Mode, Session } from "@/api/types";
+import type { Session } from "@/api/types";
+import { usePaneDialogs } from "./usePaneDialogs";
 import { useResetProgress } from "./useResetProgress";
-import { resetErrorText, useSessionReset } from "./useSessionReset";
+import { resetErrorText, useSessionReset, __resetForDemo } from "./useSessionReset";
 
 const session = { id: "s1" } as Session;
-const modes = [
-  { id: "m1", name: "Alpha", cli: "claude", context: "" },
-  { id: "m2", name: "Beta", cli: "cursor", context: "" },
-] as Mode[];
-const modeErr = () =>
-  new ApiError(JSON.stringify({ error: "Mode 'gone' not found", code: "mode_not_found" }), 400, "mode_not_found");
 
-function Harness({ api, onDone }: { api: Parameters<typeof useSessionReset>[0]; onDone?: () => void }) {
-  const { reset, modeDialog } = useSessionReset(api, onDone);
+function Harness({
+  api,
+  opts,
+  onDone,
+}: {
+  api: Parameters<typeof useSessionReset>[0];
+  opts?: Parameters<ReturnType<typeof useSessionReset>["run"]>[1];
+  onDone?: () => void;
+}) {
+  const { run } = useSessionReset(api, onDone);
   return (
-    <>
-      <button type="button" onClick={() => reset(session, true)}>
-        go
-      </button>
-      {modeDialog}
-    </>
+    <button type="button" onClick={() => run(session.id, opts)}>
+      go
+    </button>
   );
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
   useResetProgress.setState({ active: {} });
+  usePaneDialogs.getState()._reset();
+  __resetForDemo();
 });
 
 describe("useSessionReset", () => {
-  it("resets directly when the daemon accepts", async () => {
-    const resetSession = vi.fn().mockResolvedValue({ ok: true });
-    const onDone = vi.fn();
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} onDone={onDone} />);
-    await userEvent.click(screen.getByText("go"));
-    await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(resetSession).toHaveBeenCalledWith("s1", { handoff: true });
-  });
-
-  it("marks the session as resetting while a handoff is pending, then clears it", async () => {
+  it("sends the new carryOver body (summary) and marks the summary wait", async () => {
     let finish: (v: unknown) => void = () => {};
     const resetSession = vi.fn().mockReturnValue(new Promise((r) => (finish = r)));
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    const onDone = vi.fn();
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "summary" }} onDone={onDone} />);
     await userEvent.click(screen.getByText("go"));
-    expect(useResetProgress.getState().active.s1).toBe("shown");
+    expect(resetSession).toHaveBeenCalledWith("s1", { carryOver: "summary" });
+    expect(useResetProgress.getState().active.s1).toBe("summary");
     finish({ ok: true });
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
     await waitFor(() => expect(useResetProgress.getState().active.s1).toBeUndefined());
   });
 
-  it("does not mark a plain (non-handoff) reset as resetting", async () => {
+  it("does not show the bar for a Nothing (none) start", async () => {
     const resetSession = vi.fn().mockResolvedValue({ ok: true });
-    function Plain() {
-      const { reset } = useSessionReset({ resetSession, listModes: vi.fn() } as never);
-      return (
-        <button type="button" onClick={() => reset(session, false)}>
-          plain
-        </button>
-      );
-    }
-    render(<Plain />);
-    await userEvent.click(screen.getByText("plain"));
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "none" }} />);
+    await userEvent.click(screen.getByText("go"));
     expect(useResetProgress.getState().active.s1).toBeUndefined();
+    expect(resetSession).toHaveBeenCalledWith("s1", { carryOver: "none" });
   });
 
-  it("re-shows the progress overlay when Reset is clicked again after the user closed it", async () => {
+  it("shows the waiting bar for whenBusy=wait", async () => {
     let finish: (v: unknown) => void = () => {};
     const resetSession = vi.fn().mockReturnValue(new Promise((r) => (finish = r)));
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "none", whenBusy: "wait" }} />);
     await userEvent.click(screen.getByText("go"));
-    useResetProgress.getState().dismiss("s1");
-    expect(useResetProgress.getState().active.s1).toBe("dismissed");
-    await userEvent.click(screen.getByText("go"));
-    expect(useResetProgress.getState().active.s1).toBe("shown");
-    expect(resetSession).toHaveBeenCalledTimes(1);
+    expect(useResetProgress.getState().active.s1).toBe("waiting");
+    expect(resetSession).toHaveBeenCalledWith("s1", { carryOver: "none", whenBusy: "wait" });
     finish({ ok: true });
   });
 
   it("ignores a second reset for the same session while one is in flight", async () => {
     let finish: (v: unknown) => void = () => {};
     const resetSession = vi.fn().mockReturnValue(new Promise((r) => (finish = r)));
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "summary" }} />);
     const btn = screen.getByText("go");
     await userEvent.click(btn);
     await userEvent.click(btn, { pointerEventsCheck: 0 });
@@ -90,16 +76,67 @@ describe("useSessionReset", () => {
     finish({ ok: true });
   });
 
-  it("asks for a replacement mode on mode_not_found and retries with it", async () => {
-    const resetSession = vi.fn().mockRejectedValueOnce(modeErr()).mockResolvedValueOnce({ ok: true });
-    const listModes = vi.fn().mockResolvedValue(modes);
-    render(<Harness api={{ resetSession, listModes } as never} />);
+  it("stores the mode-retry prompt in usePaneDialogs and retries with the picked mode", async () => {
+    const resetSession = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError(JSON.stringify({ error: "Mode 'gone' not found", code: "mode_not_found" }), 400, "mode_not_found"),
+      )
+      .mockResolvedValueOnce({ ok: true });
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "summary" }} />);
     await userEvent.click(screen.getByText("go"));
-    expect(await screen.findByText(/Mode 'gone' not found/)).toBeTruthy();
-    await userEvent.selectOptions(await screen.findByLabelText("Mode"), "m2");
-    await userEvent.click(screen.getByText("Reset with this mode"));
+    await waitFor(() => expect(usePaneDialogs.getState().modePrompts.s1).toBeTruthy());
+    const prompt = usePaneDialogs.getState().modePrompts.s1!;
+    expect(prompt.reason).toContain("Mode 'gone' not found");
+    expect(prompt.options.carryOver).toBe("summary");
+
+    usePaneDialogs.getState().clearModePrompt("s1");
+    // Retry is just run() with the picked mode (what PaneDialogHost does).
+    function Retry() {
+      const { run } = useSessionReset({ resetSession } as never);
+      return (
+        <button type="button" onClick={() => run("s1", { ...prompt.options, modeId: "m2" })}>
+          retry
+        </button>
+      );
+    }
+    render(<Retry />);
+    await userEvent.click(screen.getByText("retry"));
     await waitFor(() => expect(resetSession).toHaveBeenCalledTimes(2));
-    expect(resetSession).toHaveBeenLastCalledWith("s1", { handoff: true, modeId: "m2" });
+    expect(resetSession).toHaveBeenLastCalledWith("s1", { carryOver: "summary", modeId: "m2" });
+  });
+
+  it("stores the fallback notice for reset_cancelled (survives a host unmount)", async () => {
+    const resetSession = vi
+      .fn()
+      .mockRejectedValue(new ApiError(JSON.stringify({ error: "Cancelled", code: "reset_cancelled" }), 409, "reset_cancelled"));
+    const onDone = vi.fn();
+    const { unmount } = render(
+      <Harness api={{ resetSession } as never} opts={{ carryOver: "summary" }} onDone={onDone} />,
+    );
+    await userEvent.click(screen.getByText("go"));
+    await waitFor(() => expect(usePaneDialogs.getState().notices.s1).toBeTruthy());
+    expect(usePaneDialogs.getState().notices.s1!.text).not.toMatch(/reset|handoff/i);
+    unmount();
+    // The notice lives in the store, not in the unmounted host's state.
+    expect(usePaneDialogs.getState().notices.s1).toBeTruthy();
+    expect(useResetProgress.getState().active.s1).toBeUndefined();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("runs the fallback with transcript", async () => {
+    const resetSession = vi.fn().mockResolvedValue({ ok: true });
+    function Fallback() {
+      const { run } = useSessionReset({ resetSession } as never);
+      return (
+        <button type="button" onClick={() => run("s1", { carryOver: "transcript" })}>
+          fallback
+        </button>
+      );
+    }
+    render(<Fallback />);
+    await userEvent.click(screen.getByText("fallback"));
+    await waitFor(() => expect(resetSession).toHaveBeenCalledWith("s1", { carryOver: "transcript" }));
   });
 
   it("alerts the daemon's error text for any other failure", async () => {
@@ -107,55 +144,40 @@ describe("useSessionReset", () => {
     const resetSession = vi
       .fn()
       .mockRejectedValue(new ApiError(JSON.stringify({ error: "Session already archived" }), 400));
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "none" }} />);
     await userEvent.click(screen.getByText("go"));
     await waitFor(() => expect(alert).toHaveBeenCalledWith("Session already archived"));
+    expect(usePaneDialogs.getState().notices.s1).toBeUndefined();
   });
 
-  it("alerts the handoff_failed message, clears the progress overlay and does not open the mode dialog", async () => {
-    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
-    const resetSession = vi.fn().mockRejectedValue(
-      new ApiError(
-        JSON.stringify({ error: "Handoff failed: the agent did not write a handoff summary in time", code: "handoff_failed" }),
-        409,
-        "handoff_failed",
-      ),
-    );
-    const onDone = vi.fn();
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} onDone={onDone} />);
-    await userEvent.click(screen.getByText("go"));
-    await waitFor(() =>
-      expect(alert).toHaveBeenCalledWith("Handoff failed: the agent did not write a handoff summary in time"),
-    );
-    expect(useResetProgress.getState().active.s1).toBeUndefined();
-    expect(screen.queryByText("Reset with this mode")).toBeNull();
-    expect(onDone).toHaveBeenCalled();
-  });
-
-  it("accepts a second reset for the same session after handoff_failed releases in-flight lock", async () => {
+  it("accepts a second reset after a failure releases the in-flight lock", async () => {
     vi.spyOn(window, "alert").mockImplementation(() => {});
     const resetSession = vi
       .fn()
-      .mockRejectedValueOnce(
-        new ApiError(
-          JSON.stringify({ error: "Handoff failed: timeout", code: "handoff_failed" }),
-          409,
-          "handoff_failed",
-        ),
-      )
+      .mockRejectedValueOnce(new ApiError(JSON.stringify({ error: "boom" }), 400))
       .mockResolvedValueOnce({ ok: true });
-    render(<Harness api={{ resetSession, listModes: vi.fn() } as never} />);
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "none" }} />);
     const btn = screen.getByText("go");
     await userEvent.click(btn);
     await waitFor(() => expect(resetSession).toHaveBeenCalledTimes(1));
     await userEvent.click(btn);
     await waitFor(() => expect(resetSession).toHaveBeenCalledTimes(2));
   });
+
+  it("closes the pane dialog and clears stale prompts when a run starts", async () => {
+    const resetSession = vi.fn().mockResolvedValue({ ok: true });
+    usePaneDialogs.getState().open("s1", "fresh");
+    usePaneDialogs.getState().setModePrompt({ sessionId: "s1", reason: "x", options: {} });
+    render(<Harness api={{ resetSession } as never} opts={{ carryOver: "none" }} />);
+    await userEvent.click(screen.getByText("go"));
+    expect(usePaneDialogs.getState().dialogs.s1).toBeUndefined();
+    expect(usePaneDialogs.getState().modePrompts.s1).toBeUndefined();
+  });
 });
 
 describe("resetErrorText", () => {
   it("falls back to the raw message for non-JSON bodies", () => {
     expect(resetErrorText(new Error("boom"))).toBe("boom");
-    expect(resetErrorText("x")).toBe("Failed to reset session.");
+    expect(resetErrorText("x")).toBe("Failed to start a fresh session.");
   });
 });

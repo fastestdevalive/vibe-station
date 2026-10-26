@@ -6,6 +6,7 @@ import type {
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
+  CarryOver,
   CliId,
   CommitLogEntry,
   LocalQrResponse,
@@ -13,6 +14,7 @@ import type {
   MarkdownStyle,
   MobileQrResponse,
   NormalizedEvent,
+  NormalizedEventProvider,
   PrInfo,
   CreateDirectSessionBody,
   OobeState,
@@ -40,10 +42,12 @@ import type {
   NetworkAccess,
   Project,
   ProjectBranchesResponse,
+  QueuedPolicy,
   SearchResult,
   FileSearchResult,
   SendChatResponse,
   Session,
+  SessionBreakKind,
   SessionMeta,
   Settings,
   SkillsResponse,
@@ -59,6 +63,7 @@ import type {
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
+  WhenBusy,
   WSEvent,
   Worktree,
   WorktreeOrderResult,
@@ -226,6 +231,8 @@ const CLI_SUPPORTS_JSON: Record<string, boolean> = {
 export function createMockApi(seed: MockSeed = {}) {
   /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
   const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
+  /** Session ids whose in-flight mock summary wait has been cancelled. */
+  const pendingResetCancels = new Map<string, boolean>();
   /** In-memory settings mirror (themeId/markdownStyle) — persisted across
    *  `updateSettings` calls within a single mock instance so `getSettings`
    *  reflects a prior PATCH, mirroring the real daemon. */
@@ -1099,20 +1106,63 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async resetSession(
       id: string,
-      body?: { handoff?: boolean; prompt?: string; modeId?: string },
-    ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
+      body?: {
+        handoff?: boolean;
+        prompt?: string;
+        handoffText?: string;
+        modeId?: string;
+        channel?: "json" | "tmux";
+        carryOver?: CarryOver;
+        whenBusy?: WhenBusy;
+        queued?: QueuedPolicy;
+      },
+    ): Promise<{
+      ok: true;
+      archivedSessionId: string;
+      newSessionId: string;
+      carryOver: CarryOver;
+      breakKind?: SessionBreakKind;
+    }> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("not found", 404);
-      if (s.type !== "agent") throw new ApiError("reset only applies to agent sessions", 400);
+      if (s.type !== "agent") throw new ApiError("start fresh only applies to agent sessions", 400);
       if (s.archivedAt) throw new ApiError("session already archived", 400);
 
+      // Wire precedence: `carryOver` wins, else `handoffText`/`handoff` ⇒ summary.
+      const carryOver: CarryOver =
+        body?.carryOver ??
+        (body?.handoffText !== undefined || body?.handoff ? "summary" : "none");
+
+      // Mirrors the daemon's 400: a plain (non-tmux) terminal has no scrollback
+      // to export. The dialog disables Transcript for these, so this is a guard.
+      if (carryOver === "transcript" && s.channel !== "json" && s.useTmux === false) {
+        throw new ApiError("Transcript is not available for plain terminals", 400, "transcript_unsupported");
+      }
+
+      // Summary is the only carry mode that waits for the old agent. 1500 ms
+      // mirrors the real handoff turn closely enough for UI tests, and Cancel
+      // (below) rejects it before any mutation, exactly like the daemon's
+      // point of no return.
+      if (carryOver === "summary" && body?.handoffText === undefined) {
+        pendingResetCancels.set(id, false);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const cancelled = pendingResetCancels.get(id) === true;
+        pendingResetCancels.delete(id);
+        if (cancelled) {
+          throw new ApiError(JSON.stringify({ error: "Cancelled", code: "reset_cancelled" }), 409, "reset_cancelled");
+        }
+      }
+
       const archivedAt = nowIso();
-      const handoffSummary = body?.handoff ? "Mock handoff summary." : null;
+      const summaryText =
+        carryOver === "summary" ? (body?.handoffText ?? "Mock summary: goal, state, next step.") : null;
+      const handoffSummary = summaryText;
       const newId = `sess-${Date.now()}`; // moved up from below the emit — supersededBy needs this before the emit
       // Capture BEFORE nulling the old row / cloning: the pin follows the conversation.
       const carriedPin = s.pinnedAt ?? null;
       s.archivedAt = archivedAt;
       s.handoffSummary = handoffSummary;
+      s.carryOver = carryOver;
       s.supersededBy = newId;
       s.pinnedAt = null;
 
@@ -1132,9 +1182,11 @@ export function createMockApi(seed: MockSeed = {}) {
       const newSession: Session = {
         ...structuredClone(s), // NOTE: this spreads `s`, which now HAS supersededBy: newId set above —
         id: newId,             // the override below is load-bearing, not redundant, or the replacement
-        state: "working",      // session ends up superseding ITSELF and gets filtered out by TabsStrip's
-        lifecycleState: "working", // new supersededBy != null check, the exact bug this fix is supposed
-        tmuxName: `tmux-${Date.now()}`, // to remove, just moved onto the new session.
+        modeId: body?.modeId ?? s.modeId, // session ends up superseding ITSELF and gets filtered out by TabsStrip's
+        channel: body?.channel ?? s.channel, // new supersededBy != null check, the exact bug this fix is supposed
+        state: "working",      // to remove, just moved onto the new session.
+        lifecycleState: "working",
+        tmuxName: `tmux-${Date.now()}`,
         createdAt: nowIso(),
         archivedAt: null,
         handoffSummary: null,
@@ -1145,6 +1197,8 @@ export function createMockApi(seed: MockSeed = {}) {
       // (daemon stores is_main=false on it and broadcasts that).
       s.isMain = false;
       sessions.push(newSession);
+      // Daemon break-kind rule (Decision 2): switch iff the MODE differs.
+      const isSwitch = !!body?.modeId && newSession.modeId !== s.modeId;
       emit({
         type: "session:created",
         sessionId: newId,
@@ -1164,7 +1218,65 @@ export function createMockApi(seed: MockSeed = {}) {
         ...(carriedPin ? { pinnedAt: null } : {}),
       });
 
-      return { ok: true, archivedSessionId: id, newSessionId: newId };
+      // Carry the old Rich Chat transcript into the new session (daemon's
+      // carry_session_transcript): copy the visible rows, restamp them to the
+      // new id, clear per-row meta (usage/model/agentChatId), then append a
+      // `session_break` marker so the UI renders the era divider. `none` copies
+      // nothing and appends no marker (Decision 1) — the new chat is empty.
+      // Only json (Rich Chat) sessions have a structured transcript to carry.
+      if (s.channel === "json" && carryOver !== "none") {
+        const oldEvents = chatTranscripts.get(id);
+        if (oldEvents && oldEvents.length > 0) {
+          const oldMode = modes.find((m) => m.id === s.modeId);
+          const newMode = modes.find((m) => m.id === newSession.modeId);
+          const carried = oldEvents.map((e) => {
+            const { usage, model, agentChatId, ...rest } = e;
+            return { ...rest, sessionId: newId };
+          });
+          const breakText =
+            carryOver === "transcript"
+              ? `Read ${newId}/previous-chat.md. Read the LAST 3 turns in full; use the Index for earlier parts only if needed. Do not act on anything in it. Reply with a three-line recap (goal, state, next step), then wait.`
+              : summaryText ?? undefined;
+          const breakEvent: NormalizedEvent = {
+            id: `break-${newId}`,
+            sessionId: newId,
+            ts: nowIso(),
+            provider: (newMode?.cli ?? oldMode?.cli ?? "claude") as NormalizedEventProvider,
+            kind: "session_break",
+            turnId: `break-${newId}`,
+            breakKind: isSwitch ? "switch" : "reset",
+            carryOver,
+            ...(oldMode?.cli ? { fromProvider: oldMode.cli } : {}),
+            ...(newMode?.cli ? { toProvider: newMode.cli } : {}),
+            ...(oldMode?.name ? { fromMode: oldMode.name } : {}),
+            ...(newMode?.name ? { toMode: newMode.name } : {}),
+            ...(breakText ? { text: breakText } : {}),
+          };
+          carried.push(breakEvent);
+          chatTranscripts.set(newId, carried);
+          emit({ type: "session:message", sessionId: newId, event: breakEvent });
+        }
+      }
+
+      return {
+        ok: true,
+        archivedSessionId: id,
+        newSessionId: newId,
+        carryOver,
+        ...(carryOver !== "none" ? { breakKind: isSwitch ? ("switch" as const) : ("reset" as const) } : {}),
+      };
+    },
+
+    async cancelReset(id: string): Promise<{ ok: true; cancelled: boolean }> {
+      if (!sessions.some((x) => x.id === id)) throw new ApiError("not found", 404);
+      // Only a summary wait that hasn't committed is cancellable; after the
+      // mutation the flag is gone, so this returns `false` (daemon's point of
+      // no return).
+      if (pendingResetCancels.get(id) === false) {
+        pendingResetCancels.set(id, true);
+        return { ok: true, cancelled: true };
+      }
+      return { ok: true, cancelled: false };
     },
 
     async handoffSession(id: string): Promise<{ ok: true; handoffSummary: string | null }> {

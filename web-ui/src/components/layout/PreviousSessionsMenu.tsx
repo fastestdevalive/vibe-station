@@ -1,28 +1,25 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { History } from "lucide-react";
+import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { resolveSupersededChain, listPredecessors } from "@/lib/sessionVisibility";
-import { sessionLabel } from "@/lib/sessionLabel";
 import { useEventTargets, usePortalRoot, useViewportWidth } from "@/context/DemoEnv";
-
-function formatArchivedTime(v: string): string {
-  const d = /^\d+$/.test(v) ? new Date(Number(v)) : new Date(v);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
+import { PreviousSessionsList } from "./PreviousSessionsList";
 
 export interface PreviousSessionsMenuProps {
+  api: ApiInstance;
   activeSession: Session | null;
   sessions: Session[];
   onOpen: (id: string) => void;
 }
 
-export function PreviousSessionsMenu({
-  activeSession,
-  sessions,
-  onOpen,
-}: PreviousSessionsMenuProps) {
+/**
+ * "Previous sessions" icon + popover for a superseded agent chain. The row
+ * body is the shared `PreviousSessionsList` (also used by the pane dialog).
+ * Hidden entirely when the chain has no predecessors.
+ */
+export function PreviousSessionsMenu({ api, activeSession, sessions, onOpen }: PreviousSessionsMenuProps) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -50,14 +47,11 @@ export function PreviousSessionsMenu({
     };
   }, [open, doc]);
 
+  const headId = activeSession ? resolveSupersededChain(activeSession.id, sessions) : null;
+  const preds = headId ? listPredecessors(headId, sessions) : [];
+
   if (!activeSession) return null;
-
-  const headId = resolveSupersededChain(activeSession.id, sessions);
-  const preds = listPredecessors(headId, sessions);
-
   if (preds.length === 0) return null;
-
-  const isViewingPredecessor = preds.some((p) => p.id === activeSession.id);
 
   function handleTriggerClick() {
     if (open) {
@@ -89,58 +83,26 @@ export function PreviousSessionsMenu({
       {open && menuPos
         ? createPortal(
             <div
-              className="menu-pop"
+              className="menu-pop prev-sessions"
               data-previous-sessions-panel
               role="menu"
               aria-label="Previous sessions"
               style={{
                 position: "fixed",
                 top: menuPos.y + 6,
-                left: Math.max(8, Math.min(menuPos.x, envWidth - 190)),
-                minWidth: 180,
+                left: Math.max(8, Math.min(menuPos.x, envWidth - 270)),
+                minWidth: 250,
                 zIndex: 4000,
               }}
             >
               <div className="menu-pop__title">Previous sessions</div>
-
-              {isViewingPredecessor ? (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-pop__item"
-                  onClick={() => {
-                    setOpen(false);
-                    onOpen(headId);
-                  }}
-                >
-                  Back to current
-                </button>
-              ) : null}
-
-              {preds.map((s) => {
-                const isViewing = s.id === activeSession.id;
-                const label = sessionLabel(s);
-                const formattedTime = s.archivedAt ? formatArchivedTime(s.archivedAt) : "";
-                const timeStr = formattedTime ? ` (${formattedTime})` : "";
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    role="menuitem"
-                    className="menu-pop__item"
-                    onClick={() => {
-                      setOpen(false);
-                      onOpen(s.id);
-                    }}
-                  >
-                    <span>
-                      {label}
-                      {timeStr}
-                    </span>
-                    {isViewing ? <span style={{ marginLeft: "auto", opacity: 0.6 }}>Viewing</span> : null}
-                  </button>
-                );
-              })}
+              <PreviousSessionsList
+                api={api}
+                activeSession={activeSession}
+                sessions={sessions}
+                onOpen={onOpen}
+                onNavigate={() => setOpen(false)}
+              />
             </div>,
             portalRoot,
           )
