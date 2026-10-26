@@ -43,6 +43,26 @@ pub fn try_lock_exclusive(file: &File) -> std::io::Result<bool> {
     }
 }
 
+/// [`try_lock_exclusive`] up to `attempts` times (at least one), sleeping
+/// `interval` between tries (blocking). `Ok(false)` = still held after the last
+/// try. Callers name their `attempts` x `interval` policy and say why.
+pub fn try_lock_with_retry(
+    file: &File,
+    attempts: u32,
+    interval: std::time::Duration,
+) -> std::io::Result<bool> {
+    let attempts = attempts.max(1);
+    for i in 0..attempts {
+        if try_lock_exclusive(file)? {
+            return Ok(true);
+        }
+        if i + 1 < attempts {
+            std::thread::sleep(interval);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +114,28 @@ mod tests {
             false
         });
         assert!(acquired, "lock not released within 2s of dropping f1");
+    }
+
+    #[test]
+    fn retry_gives_up_while_held_and_succeeds_once_released() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("retry.lock");
+        let open = || {
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .expect("open")
+        };
+        let held = open();
+        assert!(try_lock_exclusive(&held).unwrap());
+        let other = open();
+        assert!(!try_lock_with_retry(&other, 3, Duration::from_millis(1)).unwrap());
+        // `attempts = 0` still tries once.
+        assert!(!try_lock_with_retry(&other, 0, Duration::ZERO).unwrap());
+        drop(held);
+        assert!(try_lock_with_retry(&other, 3, Duration::from_millis(1)).unwrap());
     }
 }

@@ -140,6 +140,7 @@ pub struct BuildServerOptions {
     pub version: String,
     pub paths: Paths,
     pub limits: LimitsHandle,
+    pub update: Arc<crate::update::UpdateService>,
 }
 
 /// A poller hint fired by `POST /api/worktrees/:id/focus` (one closure per
@@ -166,6 +167,7 @@ pub struct AppState {
     pub started_at: Instant,
     pub version: String,
     pub paths: Paths,
+    pub update: Arc<crate::update::UpdateService>,
     pub ws_hub: Arc<WsHub>,
     pub code_store: OneTimeCodeStore,
     /// Artifacts owner (`vst-artifacts`); `run.rs` starts it and installs it as
@@ -326,6 +328,7 @@ impl NotifyDeps for ProductionNotifyDeps {
 
 #[cfg(test)]
 mod notify_listener_tests;
+mod spa_cache;
 mod tasks_route;
 
 fn spawn_subagent_notify_listener(
@@ -478,7 +481,12 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         ])
     };
 
-    let health_routes = HealthRoutes::new(opts.version.clone(), opts.port as i64, opts.started_at);
+    let health_routes = HealthRoutes::new(
+        opts.version.clone(),
+        opts.port as i64,
+        opts.started_at,
+        opts.update.boot_id().to_string(),
+    );
     let open_routes = OpenRoutes::new(opts.store.clone(), opts.broadcaster.clone());
     let mut project_routes = ProjectRoutes::new(
         opts.store.clone(),
@@ -705,6 +713,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         started_at: opts.started_at,
         version: opts.version,
         paths: opts.paths,
+        update: opts.update,
         ws_hub,
         code_store,
         artifacts,
@@ -1099,7 +1108,10 @@ pub fn router_from_state(state: AppState) -> Router {
         // Artifacts (thin handlers in artifact_routes.rs)
         .merge(crate::artifact_routes::routes())
         // Review comments (thin handlers in review_routes.rs)
-        .merge(crate::review_routes::routes());
+        .merge(crate::review_routes::routes())
+        // `/api/health` alias for the web UI's restart poll (auth-exempt).
+        .route("/health", get(handle_health))
+        .merge(crate::update::routes::router());
 
     Router::new()
         // Utility & protocol routes stay at root (not under /api)
@@ -1932,8 +1944,9 @@ async fn handle_socket(
 // Route Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-async fn handle_health(State(state): State<AppState>) -> Json<vst_types::rest::health::Health> {
-    Json(state.health_routes.health())
+async fn handle_health(State(state): State<AppState>) -> impl IntoResponse {
+    let health = Json(state.health_routes.health());
+    ([(header::CACHE_CONTROL, "no-store")], health)
 }
 
 /// `POST /api/daemon/stop` — authenticated like every other `/api` route (no
@@ -5202,14 +5215,13 @@ fn serve_embedded_asset(path: &str) -> Response {
         let mime = mime_guess::from_path(std::path::Path::new(path))
             .first_or_octet_stream()
             .to_string();
-        return ([(header::CONTENT_TYPE, mime)], file.data.into_owned()).into_response();
+        return spa_cache::file_response(path, mime, file.data.into_owned());
+    }
+    if spa_cache::is_hashed_asset(path) {
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
     if let Some(index) = WebUiAssets::get("index.html") {
-        return (
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            index.data.into_owned(),
-        )
-            .into_response();
+        return spa_cache::index_response(index.data.into_owned());
     }
     (StatusCode::NOT_FOUND, "Not found").into_response()
 }
@@ -5259,19 +5271,19 @@ async fn handle_fallback_inner(State(state): State<AppState>, req: Request) -> R
                 let mime = mime_guess::from_path(&canonical)
                     .first_or_octet_stream()
                     .to_string();
-                return ([(header::CONTENT_TYPE, mime)], bytes).into_response();
+                return spa_cache::file_response(&decoded, mime, bytes);
             }
         }
+    }
+
+    if spa_cache::is_hashed_asset(&decoded) {
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
     let index = dist.join("index.html");
     if index.is_file() {
         if let Ok(content) = tokio::fs::read_to_string(&index).await {
-            return (
-                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                content,
-            )
-                .into_response();
+            return spa_cache::index_response(content);
         }
     }
 

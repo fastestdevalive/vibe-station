@@ -48,6 +48,7 @@ fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
             vst_types::events::Broadcaster::new(16),
             "test".to_string(),
         ),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 
@@ -154,8 +155,53 @@ async fn legitimate_file_within_dist_is_still_served() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("public, max-age=31536000, immutable")
+    );
     let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&body), "inside-content");
+}
+
+#[tokio::test]
+async fn missing_asset_returns_404_not_index_html() {
+    let fx = DistFixture::new();
+    let router = build_app(make_opts(fx.tmp.path(), fx.dist.clone()));
+
+    let resp = router
+        .oneshot(remote_get("/assets/missing.js"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains("<html>index</html>"));
+}
+
+#[tokio::test]
+async fn index_fallback_has_no_cache_header() {
+    let fx = DistFixture::new();
+    let router = build_app(make_opts(fx.tmp.path(), fx.dist.clone()));
+
+    let resp = router.oneshot(remote_get("/")).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-cache")
+    );
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("<html>index</html>"));
 }

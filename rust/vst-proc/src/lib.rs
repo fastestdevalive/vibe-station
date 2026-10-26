@@ -21,6 +21,7 @@ pub mod daemonize;
 pub mod error;
 pub mod flock;
 pub mod path_lookup;
+pub mod posix;
 pub mod pty;
 pub mod raw_fd_write;
 pub mod resolve_use_tmux;
@@ -32,7 +33,8 @@ pub mod tmux;
 pub use child_stdio::{classify_child_stdio_error, StdioErrorClass};
 pub use daemonize::spawn_detached;
 pub use error::{ProcError, TmuxError};
-pub use flock::try_lock_exclusive;
+pub use flock::{try_lock_exclusive, try_lock_with_retry};
+pub use posix::{effective_uid, free_bytes, kill_pid, pid_alive};
 pub use pty::{
     spawn_child, spawn_tmux, NativePtyBackend, PtyBackend, PtyHandle, SpawnChildOptions,
     TmuxSpawnOptions,

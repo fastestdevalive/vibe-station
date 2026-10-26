@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{LifecycleState, PrStatus};
 use crate::limits::LimitsSnapshot;
 use crate::rest::settings::MarkdownStyle;
+use crate::rest::update::UpdateStatus;
 
 /// A broadcastable daemon event. This is the *internal* event the daemon
 /// fans out; `vst-ws` maps it to `crate::ws::ServerMessage` for the wire.
@@ -260,6 +261,23 @@ pub enum ServerEvent {
     TerminalDeliveryUpdated {
         delivery: crate::review::TerminalDelivery,
     },
+    /// A newer release was found (fires only when the actionable version
+    /// differs from the previous one).
+    #[serde(rename = "update:available", rename_all = "camelCase")]
+    UpdateAvailable { status: UpdateStatus },
+    /// Install progress changed.
+    #[serde(rename = "update:progress", rename_all = "camelCase")]
+    UpdateProgress { status: UpdateStatus },
+    /// An install completed (fires once per install).
+    #[serde(rename = "update:installed", rename_all = "camelCase")]
+    UpdateInstalled { status: UpdateStatus },
+    /// Any other update-snapshot change (skip, check result, autoCheck,
+    /// rollback), propagated across tabs.
+    #[serde(rename = "update:changed", rename_all = "camelCase")]
+    UpdateChanged { status: UpdateStatus },
+    /// The daemon is about to restart.
+    #[serde(rename = "daemon:restarting")]
+    DaemonRestarting,
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

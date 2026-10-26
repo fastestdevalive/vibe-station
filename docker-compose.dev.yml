@@ -104,6 +104,12 @@ services:
       # feature can pick it up. The `:-` default makes it optional — unset on
       # host → empty string in container → env_generic_token() returns None.
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      # No background update checks against the real GitHub releases API from
+      # a throwaway sandbox. Manual checks (Settings button,
+      # `vst update`) still work; set VST_UPDATE_CHECK=1 on the host to opt in,
+      # or point VST_UPDATE_API_BASE at a fake releases server.
+      VST_UPDATE_CHECK: "${VST_UPDATE_CHECK:-0}"
+      VST_UPDATE_API_BASE: "${VST_UPDATE_API_BASE:-}"
       # Point cloudflared at Vite (port 5173) so mobile gets the full SPA
       # through the tunnel. Vite proxies /mobile-auth and /api/* back to the
       # daemon. Unset in production (daemon serves SPA directly on its own port).

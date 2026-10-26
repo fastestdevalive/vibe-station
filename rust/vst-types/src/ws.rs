@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{Channel, LifecycleState, NormalizedEvent, PrStatus, SessionMeta};
 use crate::limits::LimitsSnapshot;
 use crate::rest::settings::MarkdownStyle;
+use crate::rest::update::UpdateStatus;
 
 /// Client-to-server message. Tagged on `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -271,6 +272,16 @@ pub enum ServerMessage {
     OobeStateUpdated { completed: bool },
     #[serde(rename = "limits:updated", rename_all = "camelCase")]
     LimitsUpdated { limits: LimitsSnapshot },
+    #[serde(rename = "update:available", rename_all = "camelCase")]
+    UpdateAvailable { status: UpdateStatus },
+    #[serde(rename = "update:progress", rename_all = "camelCase")]
+    UpdateProgress { status: UpdateStatus },
+    #[serde(rename = "update:installed", rename_all = "camelCase")]
+    UpdateInstalled { status: UpdateStatus },
+    #[serde(rename = "update:changed", rename_all = "camelCase")]
+    UpdateChanged { status: UpdateStatus },
+    #[serde(rename = "daemon:restarting")]
+    DaemonRestarting,
     #[serde(rename = "chat:replay", rename_all = "camelCase")]
     ChatReplay {
         session_id: String,

@@ -40,6 +40,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
         tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
+        update: vst_daemon::update::UpdateService::for_tests(paths.vst_home()),
         paths,
         limits: vst_harness_limits::LimitsHandle::inert(
             vst_types::events::Broadcaster::new(16),

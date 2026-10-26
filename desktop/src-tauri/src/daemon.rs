@@ -93,6 +93,7 @@ pub fn spawn_daemon(app_handle: &tauri::AppHandle, vst_bin: &Path) -> Result<Dae
         .sidecar("vst")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
         .args(["daemon", "run"])
+        .env("VST_HOSTED_BY", "tauri")
         .env("VST_CLI_BIN", vst_bin_str);
 
     // NOTE: web-ui/dist is compiled into the `vst` binary via the `embed-ui`

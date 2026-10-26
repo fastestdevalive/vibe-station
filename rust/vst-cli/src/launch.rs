@@ -245,6 +245,10 @@ const STRIPPED_ENV_VARS: &[&str] = &[
     "VST_WORKTREE",
     "VST_DATA_DIR",
     "VST_DAEMON_URL",
+    "VST_RESTART_NONCE",
+    "VST_RESTART_PORT",
+    "VST_HOSTED_BY",
+    "VST_CLOUDFLARED_BIN",
 ];
 
 fn stripped_env() -> HashMap<String, String> {

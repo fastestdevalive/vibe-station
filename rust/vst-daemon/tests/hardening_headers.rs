@@ -54,6 +54,7 @@ fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
             vst_types::events::Broadcaster::new(16),
             "test".to_string(),
         ),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 

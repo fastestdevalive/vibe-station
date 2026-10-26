@@ -399,6 +399,11 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
         ServerEvent::TerminalDeliveryUpdated { delivery } => {
             ServerMessage::TerminalDeliveryUpdated { delivery }
         }
+        ServerEvent::UpdateAvailable { status } => ServerMessage::UpdateAvailable { status },
+        ServerEvent::UpdateProgress { status } => ServerMessage::UpdateProgress { status },
+        ServerEvent::UpdateInstalled { status } => ServerMessage::UpdateInstalled { status },
+        ServerEvent::UpdateChanged { status } => ServerMessage::UpdateChanged { status },
+        ServerEvent::DaemonRestarting => ServerMessage::DaemonRestarting,
     }
 }
 

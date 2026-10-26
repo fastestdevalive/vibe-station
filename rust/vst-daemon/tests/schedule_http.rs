@@ -140,6 +140,7 @@ async fn schedule_errors_are_error_and_code_and_get_returns_the_snapshot() {
         tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
+        update: vst_daemon::update::UpdateService::for_tests(tmp.path()),
         paths: Paths::with_home(tmp.path().to_path_buf()),
         limits: vst_harness_limits::LimitsHandle::inert(Broadcaster::new(16), "test".to_string()),
     });

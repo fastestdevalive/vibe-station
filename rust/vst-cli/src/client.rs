@@ -152,6 +152,70 @@ pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
     }
 }
 
+/// Result of a non-fatal route probe (see `probe_route`).
+#[derive(Debug)]
+pub enum RouteProbe {
+    /// The route answered with a JSON body (any status except an old-daemon 404).
+    Json { status: u16, body: Value },
+    /// Daemon is up but doesn't know the route: 404, or a 2xx that isn't JSON
+    /// (the SPA fallback serves `index.html` with 200).
+    OldDaemon,
+    /// Transport failure (refused, timeout, ...).
+    Unreachable,
+}
+
+/// Raw request that never `die()`s: classifies the outcome instead. The path
+/// goes through `api_path`, like every other CLI request.
+pub async fn probe_route(
+    base: &str,
+    token: Option<&str>,
+    method: Method,
+    path: &str,
+    body: Option<&Value>,
+) -> RouteProbe {
+    let mut req = reqwest::Client::new()
+        .request(method, format!("{base}{}", api_path(path)))
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(tok) = token {
+        req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+    }
+    if let Some(b) = body {
+        req = req.json(b);
+    }
+    let Ok(resp) = req.send().await else {
+        return RouteProbe::Unreachable;
+    };
+    let status = resp.status().as_u16();
+    if status == 404 {
+        return RouteProbe::OldDaemon;
+    }
+    let is_json = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"));
+    if (200..300).contains(&status) && !is_json {
+        return RouteProbe::OldDaemon;
+    }
+    let text = resp.text().await.unwrap_or_default();
+    let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+    RouteProbe::Json { status, body }
+}
+
+/// `GET {base}/health` (root route, no auth) parsed leniently.
+pub async fn fetch_health(base: &str) -> Result<vst_types::rest::health::Health, String> {
+    let resp = reqwest::Client::new()
+        .get(format!("{base}{}", api_path("/health")))
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("health returned {}", resp.status()));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
 pub async fn daemon_request<T: DeserializeOwned, B: Serialize>(
     method: Method,
     path: &str,
@@ -199,7 +263,46 @@ pub async fn daemon_delete<T: DeserializeOwned>(path: &str) -> anyhow::Result<Da
 
 #[cfg(test)]
 mod tests {
-    use super::api_path;
+    use super::{api_path, probe_route, RouteProbe};
+    use axum::{http::header, routing::get, Router};
+    use reqwest::Method;
+
+    async fn serve(app: Router) -> String {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn probe_route_classifies_outcomes() {
+        let app = Router::new()
+            .route(
+                "/api/html",
+                get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<html/>") }),
+            )
+            .route(
+                "/api/json",
+                get(|| async { ([(header::CONTENT_TYPE, "application/json")], "{\"a\":1}") }),
+            );
+        let base = serve(app).await;
+        assert!(matches!(
+            probe_route(&base, None, Method::GET, "/missing", None).await,
+            RouteProbe::OldDaemon
+        ));
+        assert!(matches!(
+            probe_route(&base, None, Method::GET, "/html", None).await,
+            RouteProbe::OldDaemon
+        ));
+        match probe_route(&base, None, Method::GET, "/json", None).await {
+            RouteProbe::Json { status: 200, body } => assert_eq!(body["a"], 1),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(matches!(
+            probe_route("http://127.0.0.1:1", None, Method::GET, "/json", None).await,
+            RouteProbe::Unreachable
+        ));
+    }
 
     #[test]
     fn prefixes_rest_paths_with_api() {

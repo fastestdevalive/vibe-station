@@ -1,0 +1,25 @@
+{
+  "type": "update:changed",
+  "status": {
+    "current": "1.0.0",
+    "latest": "1.2.3",
+    "changelog": "## Changes\n- thing one",
+    "releaseUrl": "https://github.com/fastestdevalive/vibe-station/releases/tag/v1.2.3",
+    "behindCount": 1,
+    "updateAvailable": true,
+    "skipped": [],
+    "installMethod": "curl",
+    "targets": [
+      {
+        "method": "curl",
+        "path": "/home/u/.local/bin/vst",
+        "version": "1.0.0",
+        "auto": true
+      }
+    ],
+    "checkedAt": "2026-10-07T00:00:00.000Z",
+    "autoCheck": true,
+    "platform": "linux-x86_64",
+    "noAsset": false
+  }
+}

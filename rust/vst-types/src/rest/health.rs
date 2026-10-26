@@ -11,4 +11,7 @@ pub struct Health {
     pub port: i64,
     /// integer seconds
     pub uptime: i64,
+    /// Per-boot id; old-daemon replies that omit it still parse via `default`.
+    #[serde(default)]
+    pub boot_id: String,
 }

@@ -25,14 +25,48 @@ pub const BROWSER_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 pub const BROWSER_MAX_AGE_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// A browser session tracked in auth state before/while it has WS connections.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Persisted across a restart and read by the NEXT binary version (and by an older
+/// one after a rollback): new fields need `#[serde(default)]`; never rename.
+/// Identity fields (`token_id`, `scope`, `issued_at`) stay required on purpose:
+/// a half-parsed session must be dropped, not defaulted into a valid one.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BrowserSession {
     pub token_id: String,
     pub scope: String,
     pub issued_at: i64,
+    #[serde(default)]
     pub expires_at: Option<i64>,
+    #[serde(default)]
     pub epoch: i64,
+    #[serde(default)]
     pub device_name: Option<String>,
+}
+
+/// Payload preserved across a graceful daemon restart to keep browser sessions valid.
+///
+/// Persisted across a restart and read by the NEXT binary version (and by an older
+/// one after a rollback): new fields need `#[serde(default)]`; never rename.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct HandoffAuth {
+    pub daemon_token: String,
+    #[serde(default)]
+    pub browser_epoch: i64,
+    #[serde(default)]
+    pub revoked_token_ids: Vec<String>,
+    #[serde(default)]
+    pub sessions: Vec<BrowserSession>,
+}
+
+impl std::fmt::Debug for HandoffAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandoffAuth")
+            .field("daemon_token", &"<redacted>")
+            .field("browser_epoch", &self.browser_epoch)
+            .field("revoked_token_ids", &self.revoked_token_ids)
+            .field("sessions", &self.sessions)
+            .finish()
+    }
 }
 
 /// In-memory mutable auth state.
@@ -56,6 +90,33 @@ impl AuthState {
                 browser_epoch,
                 revoked_token_ids: HashSet::new(),
                 minted_browser_sessions: HashMap::new(),
+            })),
+        }
+    }
+
+    pub fn export_handoff(&self) -> HandoffAuth {
+        let active = self.get_active_browser_sessions();
+        let guard = self.inner.read().unwrap();
+        HandoffAuth {
+            daemon_token: guard.daemon_token.clone(),
+            browser_epoch: guard.browser_epoch,
+            revoked_token_ids: guard.revoked_token_ids.iter().cloned().collect(),
+            sessions: active,
+        }
+    }
+
+    pub fn from_handoff(h: HandoffAuth) -> Self {
+        let mut sessions_map = HashMap::new();
+        for s in h.sessions {
+            sessions_map.insert(s.token_id.clone(), s);
+        }
+        let revoked: HashSet<String> = h.revoked_token_ids.into_iter().collect();
+        Self {
+            inner: Arc::new(RwLock::new(AuthStateInner {
+                daemon_token: h.daemon_token,
+                browser_epoch: h.browser_epoch,
+                revoked_token_ids: revoked,
+                minted_browser_sessions: sessions_map,
             })),
         }
     }
@@ -598,5 +659,63 @@ impl AuthRoutes {
             ok: true,
             browser_epoch: new_epoch,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_handoff_export_and_import() {
+        let auth_state = AuthState::new("test-token-123", 42);
+        auth_state.record_browser_session(BrowserSession {
+            token_id: "tok-1".to_string(),
+            scope: "browser".to_string(),
+            issued_at: 1000,
+            expires_at: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64
+                    + 100_000,
+            ),
+            epoch: 42,
+            device_name: Some("device-a".to_string()),
+        });
+        auth_state.revoke_token_id("revoked-1");
+
+        let token_before = mint_token(TokenScope::Browser, &auth_state, None);
+        let parsed_token = match verify_token(&token_before, &auth_state) {
+            VerifyResult::Ok { payload } => payload,
+            _ => panic!("token should be valid"),
+        };
+        assert_eq!(parsed_token.epoch, Some(42));
+
+        let handoff = auth_state.export_handoff();
+        assert_eq!(handoff.browser_epoch, 42);
+        assert_eq!(handoff.daemon_token, "test-token-123");
+        assert!(handoff.revoked_token_ids.contains(&"revoked-1".to_string()));
+        assert_eq!(handoff.sessions.len(), 1);
+        assert_eq!(handoff.sessions[0].token_id, "tok-1");
+
+        // Redacted debug representation
+        let debug_str = format!("{:?}", handoff);
+        assert!(debug_str.contains("<redacted>"));
+        assert!(!debug_str.contains("test-token-123"));
+
+        let restored = AuthState::from_handoff(handoff);
+        assert_eq!(restored.daemon_token(), "test-token-123");
+        assert_eq!(restored.browser_epoch(), 42);
+        assert!(restored.is_revoked("revoked-1"));
+
+        // Token minted before handoff is still valid against restored AuthState
+        let parsed_restored = match verify_token(&token_before, &restored) {
+            VerifyResult::Ok { payload } => payload,
+            _ => panic!("token should still be valid after handoff"),
+        };
+        assert_eq!(parsed_restored.iat, parsed_token.iat);
+        assert_eq!(parsed_restored.epoch, parsed_token.epoch);
     }
 }

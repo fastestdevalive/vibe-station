@@ -31,8 +31,15 @@ insecure-no-auth = ["vst-daemon/insecure-no-auth"]
 
 [dev-dependencies]
 vst-testkit = { workspace = true }
+# TEST ONLY: see vst-daemon's `test-seams` feature.
+vst-daemon = { workspace = true, features = ["test-seams"] }
 axum = { workspace = true }
 tempfile = "3"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+ring = "0.17"
+base64 = "0.22"
+vst-routes = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 
 [lints]

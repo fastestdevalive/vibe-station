@@ -111,6 +111,36 @@ impl StoreHandle {
         self.0.conn.lock().unwrap()
     }
 
+    /// Snapshot the database to `dest` using SQLite's `VACUUM INTO`.
+    /// Removes any existing file at `dest` first and ensures parent directories exist (mode 0700).
+    /// Executes synchronously inside `tokio::task::spawn_blocking` to observe Gotcha #4.
+    pub async fn snapshot_to(&self, dest: &Path) -> StoreResult<()> {
+        let dest_path = dest.to_path_buf();
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        if dest_path.exists() {
+            let _ = std::fs::remove_file(&dest_path);
+        }
+
+        let inner = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = inner.conn.lock().unwrap();
+            let dest_str = dest_path.to_str().ok_or_else(|| {
+                StoreError::Mutation("destination path is not valid utf-8".to_string())
+            })?;
+            conn.execute("VACUUM INTO ?1", [dest_str])?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(format!("spawn_blocking failed: {e}")))?
+    }
+
     /// Acquire the per-project async lock for `id`.
     async fn project_lock(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         let arc = {
