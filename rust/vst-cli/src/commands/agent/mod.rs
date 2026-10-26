@@ -1,14 +1,17 @@
 pub mod attach;
+pub mod carry;
 pub mod create;
 pub mod handoff;
 pub mod info;
 pub mod ls;
 pub mod output;
+pub mod previous;
 pub mod rename;
-pub mod reset;
 pub mod restore;
 pub mod send;
+pub mod start_fresh;
 pub mod stop;
+pub mod switch;
 pub mod terminate;
 pub mod transcript;
 

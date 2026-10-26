@@ -172,3 +172,4 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 - Run `vst worktree rm`, `vst agent terminate`, or `vst terminal terminate` on sessions you did not create.
 - Ignore test failures and commit anyway.
 - After `vst worktree create`, do NOT run `vst agent create` for the same worktree — the main session already exists.
+- Run `vst agent start-fresh`, `vst agent clear` or `vst agent switch` (on yourself or anyone) unless the user explicitly asked for exactly that. They are not for delegating or using another model: "plan with Opus, implement with Sonnet" means spawn a new agent with `vst agent create --mode=...`, never `switch`.

@@ -62,19 +62,55 @@ pub enum WorktreeCommand {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentCommand {
-    Create { args: Vec<String> },
-    Ls { args: Vec<String> },
-    Info { args: Vec<String> },
-    Terminate { args: Vec<String> },
-    Attach { args: Vec<String> },
-    Restore { args: Vec<String> },
-    Output { args: Vec<String> },
-    Transcript { args: Vec<String> },
-    Reset { args: Vec<String> },
-    Handoff { args: Vec<String> },
-    Rename { args: Vec<String> },
-    Send { args: Vec<String> },
-    Stop { args: Vec<String> },
+    Create {
+        args: Vec<String>,
+    },
+    Ls {
+        args: Vec<String>,
+    },
+    Info {
+        args: Vec<String>,
+    },
+    Terminate {
+        args: Vec<String>,
+    },
+    Attach {
+        args: Vec<String>,
+    },
+    Restore {
+        args: Vec<String>,
+    },
+    Output {
+        args: Vec<String>,
+    },
+    Transcript {
+        args: Vec<String>,
+    },
+    StartFresh {
+        args: Vec<String>,
+    },
+    /// Alias: `start-fresh --carry=none` (acts like `/clear`).
+    Clear {
+        args: Vec<String>,
+    },
+    Switch {
+        args: Vec<String>,
+    },
+    Previous {
+        args: Vec<String>,
+    },
+    Handoff {
+        args: Vec<String>,
+    },
+    Rename {
+        args: Vec<String>,
+    },
+    Send {
+        args: Vec<String>,
+    },
+    Stop {
+        args: Vec<String>,
+    },
     Unknown(Vec<String>),
 }
 
@@ -215,7 +251,10 @@ where
                 Some("restore") => Command::Agent(AgentCommand::Restore { args: rest }),
                 Some("output") => Command::Agent(AgentCommand::Output { args: rest }),
                 Some("transcript") => Command::Agent(AgentCommand::Transcript { args: rest }),
-                Some("reset") => Command::Agent(AgentCommand::Reset { args: rest }),
+                Some("start-fresh") => Command::Agent(AgentCommand::StartFresh { args: rest }),
+                Some("clear") => Command::Agent(AgentCommand::Clear { args: rest }),
+                Some("switch") => Command::Agent(AgentCommand::Switch { args: rest }),
+                Some("previous") => Command::Agent(AgentCommand::Previous { args: rest }),
                 Some("handoff") => Command::Agent(AgentCommand::Handoff { args: rest }),
                 Some("rename") => Command::Agent(AgentCommand::Rename { args: rest }),
                 Some("send") => Command::Agent(AgentCommand::Send { args: rest }),
