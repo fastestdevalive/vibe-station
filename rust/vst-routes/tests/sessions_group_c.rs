@@ -19,19 +19,34 @@
 //! - fork's turn-not-found + success paths (need a real agent + transcript)
 //! - the model-200 path (needs a live agent)
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tempfile::tempdir;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
+use vst_agents::json_agent_session::{
+    read_transcript_from_data_dir, JsonAgentSession, JsonAgentSessionOptions,
+};
+use vst_agents::paths::Paths as AgentPaths;
+use vst_agents::plugin::{
+    AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
+    PromptDelivery, ReadySignal, TurnContext, TurnInput,
+};
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
-use vst_routes::sessions::{ChatRouteError, SessionRoutes};
+use vst_routes::sessions::{ChatRouteError, ResetError, SessionRoutes};
+use vst_store::transcript::open_transcript_store;
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
-use vst_types::rest::sessions::{ChatBody, InputBody, PatchModelBody, ResubmitBody};
+use vst_types::rest::sessions::{
+    ChatBody, InputBody, PatchModelBody, QueuedPolicy, ResetBody, ResubmitBody,
+};
 use vst_types::{
-    Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionNameSource, SessionRecord,
-    SessionType,
+    CarryOver, Channel, LifecycleState, NormalizedEvent, NormalizedEventKind,
+    NormalizedEventProvider, ProjectRecord, Role, SessionLifecycle, SessionNameSource,
+    SessionRecord, SessionType,
 };
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
@@ -71,6 +86,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         draft_config: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,
@@ -128,6 +144,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
         handoff_timeout: std::time::Duration::from_secs(120),
+        reset_cancels: Default::default(),
     }
 }
 
@@ -678,4 +695,532 @@ async fn chat_json_returns_202_turn_id() {
         .await
         .unwrap();
     assert!(!res.turn_id.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — ordered reset: stop-first, carry modes, queued carry/drop
+// ---------------------------------------------------------------------------
+
+/// Plugin whose `run_turn` only ends when the turn is cancelled; records that
+/// the cancel actually reached it.
+struct WaitPlugin {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl AgentPlugin for WaitPlugin {
+    fn name(&self) -> &str {
+        "wait-mock"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        _input: TurnInput,
+        _ctx: TurnContext,
+        cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let flag = self.cancelled.clone();
+        tokio::spawn(async move {
+            cancel.cancelled().await;
+            flag.store(true, Ordering::SeqCst);
+            drop(tx);
+        });
+        rx
+    }
+}
+
+/// Plugin whose `run_turn` BLOCKS before returning its stream, so the drain
+/// loop never reaches its cancel `select!`. This is the "agent ignores cancel"
+/// shape: the reset's bounded wait must time out (`BusyTimeout`). The gate
+/// releases it after the test so the runtime can shut down.
+struct BlockingTurnPlugin {
+    gate: Arc<Mutex<Option<std::sync::mpsc::Receiver<()>>>>,
+}
+
+impl AgentPlugin for BlockingTurnPlugin {
+    fn name(&self) -> &str {
+        "blocking-mock"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        _input: TurnInput,
+        _ctx: TurnContext,
+        _cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        // Block the FIRST turn only; later turns return a closed stream at once.
+        if let Some(gate) = self.gate.lock().unwrap().take() {
+            let _ = gate.recv();
+        }
+        let (_tx, rx) = mpsc::unbounded_channel();
+        rx
+    }
+}
+
+/// Plugin that finishes every turn almost immediately, counting completions.
+struct FastPlugin {
+    turns: Arc<AtomicUsize>,
+}
+
+impl AgentPlugin for FastPlugin {
+    fn name(&self) -> &str {
+        "fast-mock"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        _input: TurnInput,
+        _ctx: TurnContext,
+        _cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let turns = self.turns.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            let mut ev = NormalizedEvent::default();
+            ev.kind = NormalizedEventKind::Result;
+            let _ = tx.send(ev);
+            turns.fetch_add(1, Ordering::SeqCst);
+        });
+        rx
+    }
+}
+
+/// Seed the old session's transcript with one user turn so `transcript` carry
+/// has something to copy.
+fn seed_old_transcript(project_id: &str, session_id: &str) {
+    let dir = AgentPaths::default().direct_session_data_dir(project_id, session_id);
+    let mut s = open_transcript_store(&dir, session_id);
+    let mut e = NormalizedEvent::default();
+    e.id = "seed-user".into();
+    e.session_id = session_id.into();
+    e.ts = "2026-01-01T00:00:00Z".into();
+    e.provider = NormalizedEventProvider::Claude;
+    e.kind = NormalizedEventKind::User;
+    e.role = Some(Role::User);
+    e.text = Some("hello".into());
+    e.turn_id = Some("t1".into());
+    s.append(&mut e);
+    s.close();
+}
+
+fn old_agent(
+    store: &StoreHandle,
+    plugin: Arc<dyn AgentPlugin>,
+    session_id: &str,
+) -> Arc<JsonAgentSession> {
+    Arc::new(JsonAgentSession::new(JsonAgentSessionOptions {
+        project: make_project("p1"),
+        worktree: None,
+        session: json_session(session_id, "p1"),
+        plugin,
+        daemon_port: 0,
+        cli: NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: Some("my-mode".into()),
+        mode_name: Some("My Mode".into()),
+        store_handle: store.clone(),
+        broadcaster: Broadcaster(tokio::sync::broadcast::channel(64).0),
+    }))
+}
+
+fn new_agent(
+    store: &StoreHandle,
+    plugin: Arc<dyn AgentPlugin>,
+    session_id: &str,
+) -> Arc<JsonAgentSession> {
+    Arc::new(JsonAgentSession::new(JsonAgentSessionOptions {
+        project: make_project("p1"),
+        worktree: None,
+        session: json_session(session_id, "p1"),
+        plugin,
+        daemon_port: 0,
+        cli: NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: Some("my-mode".into()),
+        mode_name: Some("My Mode".into()),
+        store_handle: store.clone(),
+        broadcaster: Broadcaster(tokio::sync::broadcast::channel(64).0),
+    }))
+}
+
+/// Start one running turn, then queue two more. Returns the queued turn ids.
+async fn seed_busy_agent(agent: &JsonAgentSession) -> (String, String) {
+    agent.enqueue("active turn".into(), vec![], None, None);
+    for _ in 0..200 {
+        if agent.get_meta().active_turn_id.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        agent.get_meta().active_turn_id.is_some(),
+        "active turn must start"
+    );
+    let a = agent
+        .enqueue("queued one".into(), vec![], None, None)
+        .turn_id;
+    let b = agent
+        .enqueue("queued two".into(), vec![], None, None)
+        .turn_id;
+    (a, b)
+}
+
+fn user_texts(project_id: &str, session_id: &str) -> Vec<String> {
+    let dir = AgentPaths::default().direct_session_data_dir(project_id, session_id);
+    read_transcript_from_data_dir(&dir, session_id)
+        .into_iter()
+        .filter(|e| e.kind == NormalizedEventKind::User)
+        .filter_map(|e| e.text)
+        .collect()
+}
+
+async fn wait_for_turns(agent: &JsonAgentSession, turns: &AtomicUsize, want: usize) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while turns.load(Ordering::SeqCst) < want && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(turns.load(Ordering::SeqCst), want, "all turns must run");
+    // Let the drain loop finish its final persist before reading.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), agent.settled()).await;
+}
+
+/// (a) + (d): stop-first cancels the running turn, withdraws the queued turns
+/// (so they do not become struck-through carried rows), and the fresh queued
+/// messages are enqueued once, in order, after the instruction turn.
+#[tokio::test]
+async fn reset_stop_first_withdraws_queued_and_carries_them_once() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+    seed_old_transcript("p1", "s1");
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let old = old_agent(
+        &store,
+        Arc::new(WaitPlugin {
+            cancelled: cancelled.clone(),
+        }),
+        "s1",
+    );
+    let (a_id, b_id) = seed_busy_agent(&old).await;
+
+    let r = routes(store.clone());
+    r.json_registry.set("s1".to_string(), old.clone());
+
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..Default::default()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.carry_over, CarryOver::Transcript);
+    assert!(
+        cancelled.load(Ordering::SeqCst),
+        "stop-first cancelled the turn"
+    );
+    assert!(
+        r.json_registry.get("s1").is_none(),
+        "the old runtime was released"
+    );
+
+    // Register a fast agent for the replacement BEFORE the detached spawn task
+    // runs (current-thread runtime: no await between the reset returning and
+    // this registration), so the carried messages are enqueued on it.
+    let turns = Arc::new(AtomicUsize::new(0));
+    let fresh = new_agent(
+        &store,
+        Arc::new(FastPlugin {
+            turns: turns.clone(),
+        }),
+        &res.new_session_id,
+    );
+    r.json_registry
+        .set(res.new_session_id.clone(), fresh.clone());
+    wait_for_turns(&fresh, &turns, 3).await;
+
+    let texts = user_texts("p1", &res.new_session_id);
+    let idx_instruction = texts
+        .iter()
+        .position(|t| t.contains("previous-chat.md"))
+        .expect("instruction turn");
+    let idx_a = texts
+        .iter()
+        .position(|t| t == "queued one")
+        .expect("queued one");
+    let idx_b = texts
+        .iter()
+        .position(|t| t == "queued two")
+        .expect("queued two");
+    assert!(
+        idx_instruction < idx_a && idx_a < idx_b,
+        "instruction then queued one then queued two, got {texts:?}"
+    );
+
+    // Withdrawn ids are absent from the carried rows (no struck-through
+    // duplicates); each queued message appears exactly once, uncancelled.
+    let dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let events = read_transcript_from_data_dir(&dir, &res.new_session_id);
+    assert!(
+        events.iter().all(|e| e.cancelled != Some(true)),
+        "no cancelled rows carried"
+    );
+    for id in [&a_id, &b_id] {
+        assert!(
+            events
+                .iter()
+                .all(|e| e.turn_id.as_deref() != Some(id.as_str())),
+            "withdrawn turn {id} must not be carried"
+        );
+    }
+    assert_eq!(texts.iter().filter(|t| *t == "queued one").count(), 1);
+    assert_eq!(texts.iter().filter(|t| *t == "queued two").count(), 1);
+
+    // The instruction reached the agent but is a SILENT row (it lives behind
+    // the break card's toggle); the user's queued messages stay visible.
+    let rows: Vec<_> = read_transcript_from_data_dir(&dir, &res.new_session_id)
+        .into_iter()
+        .filter(|e| e.kind == NormalizedEventKind::User)
+        .collect();
+    let instr = rows
+        .iter()
+        .find(|e| {
+            e.text
+                .as_deref()
+                .is_some_and(|t| t.contains("previous-chat.md"))
+        })
+        .expect("instruction row");
+    assert_eq!(instr.silent, Some(true));
+    assert!(rows
+        .iter()
+        .filter(|e| matches!(e.text.as_deref(), Some("queued one" | "queued two")))
+        .all(|e| e.silent != Some(true)));
+}
+
+/// (b) + (e, failure): an agent that ignores cancellation makes the reset fail
+/// with `BusyTimeout`; only the ids THIS reset moved are resubmitted, and a
+/// turn the user was already editing stays held. `queued=drop` still restores
+/// the withdrawn turns on failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reset_busy_timeout_restores_only_moved_turns_and_keeps_pre_held() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+    seed_old_transcript("p1", "s1");
+
+    let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+    let old = old_agent(
+        &store,
+        Arc::new(BlockingTurnPlugin {
+            gate: Arc::new(Mutex::new(Some(gate_rx))),
+        }),
+        "s1",
+    );
+    let (a_id, b_id) = seed_busy_agent(&old).await;
+    // A turn the user was already editing before the reset.
+    let held_id = old
+        .enqueue("held message".into(), vec![], None, None)
+        .turn_id;
+    assert!(old.begin_edit_queued_turn(&held_id).is_some());
+
+    let r = routes(store.clone());
+    r.json_registry.set("s1".to_string(), old.clone());
+
+    let body = ResetBody {
+        queued: Some(QueuedPolicy::Drop),
+        ..Default::default()
+    };
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    // Release the blocked turn before asserting / shutting the runtime down.
+    let _ = gate_tx.send(());
+    assert!(
+        matches!(err, ResetError::BusyTimeout(_)),
+        "expected BusyTimeout, got {err:?}"
+    );
+
+    let meta = old.get_meta();
+    assert_eq!(
+        meta.editing_turn_ids,
+        vec![held_id],
+        "only the pre-held turn stays held"
+    );
+    assert!(
+        meta.queued_turn_ids.contains(&a_id) && meta.queued_turn_ids.contains(&b_id),
+        "the ids this reset moved were resubmitted: {:?}",
+        meta.queued_turn_ids
+    );
+    let project = store.get_project("p1").await.unwrap();
+    let s1 = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert!(s1.archived_at.is_none(), "the old session stays live");
+    assert!(
+        r.reset_cancels.get("s1").is_none(),
+        "the reset flag is removed on failure"
+    );
+}
+
+/// (e, success): `queued=drop` withdraws the queued turns but never enqueues
+/// them on the replacement.
+#[tokio::test]
+async fn reset_queued_drop_success_does_not_enqueue() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+    seed_old_transcript("p1", "s1");
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let old = old_agent(
+        &store,
+        Arc::new(WaitPlugin {
+            cancelled: cancelled.clone(),
+        }),
+        "s1",
+    );
+    seed_busy_agent(&old).await;
+
+    let r = routes(store.clone());
+    r.json_registry.set("s1".to_string(), old);
+
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        queued: Some(QueuedPolicy::Drop),
+        ..Default::default()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert!(cancelled.load(Ordering::SeqCst));
+
+    let turns = Arc::new(AtomicUsize::new(0));
+    let fresh = new_agent(
+        &store,
+        Arc::new(FastPlugin {
+            turns: turns.clone(),
+        }),
+        &res.new_session_id,
+    );
+    r.json_registry
+        .set(res.new_session_id.clone(), fresh.clone());
+    wait_for_turns(&fresh, &turns, 1).await;
+
+    let texts = user_texts("p1", &res.new_session_id);
+    assert!(
+        texts.iter().any(|t| t.contains("previous-chat.md")),
+        "instruction turn ran: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == "queued one" || t == "queued two"),
+        "dropped queued messages must not be enqueued: {texts:?}"
+    );
 }

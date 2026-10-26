@@ -735,6 +735,7 @@ impl WorktreeRoutes {
                         draft_config: None,
                         archived_at: None,
                         handoff_summary: None,
+                        carry_over: None,
                         parent_session_id: source_agent_id.clone(),
                         superseded_by: None,
                         pr: None,
@@ -788,6 +789,7 @@ impl WorktreeRoutes {
                 tokio::spawn(async move {
                     start_json_create_turn(
                         StartJsonCreateTurnOpts {
+                            silent: false,
                             session_id: main_sid,
                             prompt: prompt_val,
                             daemon_port: routes.daemon_port,

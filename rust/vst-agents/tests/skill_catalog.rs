@@ -110,6 +110,7 @@ fn merge_catalogs_acp_wins_description_on_collision() {
         name: "code-review".into(),
         description: "acp desc".into(),
         argument_hint: None,
+        group: None,
     }];
     let merged = merge_catalogs(&acp, std::slice::from_ref(&dir_entry));
     assert_eq!(merged.len(), 1);
@@ -132,6 +133,7 @@ fn merge_catalogs_empty_acp_preserves_dir() {
         name: "x".into(),
         description: "".into(),
         argument_hint: None,
+        group: None,
     }];
     let merged = merge_catalogs(&acp, std::slice::from_ref(&dir_entry));
     assert_eq!(merged[0].description.as_deref(), Some("dir desc"));
@@ -144,6 +146,7 @@ fn merge_catalogs_acp_only_name_has_no_path() {
         name: "native".into(),
         description: "native cmd".into(),
         argument_hint: None,
+        group: None,
     }];
     let merged = merge_catalogs(&acp, &[]);
     assert_eq!(merged.len(), 1);

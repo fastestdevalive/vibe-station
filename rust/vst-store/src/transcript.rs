@@ -94,6 +94,7 @@ fn kind_str(kind: NormalizedEventKind) -> &'static str {
         NormalizedEventKind::ModeUpdate => "mode_update",
         NormalizedEventKind::CommandsUpdate => "commands_update",
         NormalizedEventKind::MessageGenerated => "message_generated",
+        NormalizedEventKind::SessionBreak => "session_break",
     }
 }
 
@@ -492,6 +493,74 @@ impl TranscriptStore {
                 |r| r.get(0),
             )
             .unwrap_or(0)
+    }
+
+    /// Append a batch of events in a single transaction, assigning each a
+    /// monotonic `log_seq`. Modelled on `import_transaction`'s insert loop.
+    /// `events` is taken as `&mut [NormalizedEvent]` so each event's `log_seq`
+    /// is written back. On any failure the whole batch rolls back and
+    /// `next_seq` is untouched.
+    pub fn append_batch(&mut self, events: &mut [NormalizedEvent]) -> rusqlite::Result<usize> {
+        let mut local_next = self.next_seq;
+        let result = (|| -> rusqlite::Result<()> {
+            let txn = self.conn.transaction()?;
+            {
+                let mut stmt = txn.prepare(
+                    "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )?;
+                for ev in events.iter_mut() {
+                    ev.log_seq = Some(local_next);
+                    let payload = serde_json::to_string(&*ev).unwrap_or_default();
+                    stmt.execute(params![
+                        self.session_id,
+                        local_next,
+                        ev.ts,
+                        kind_str(ev.kind),
+                        ev.turn_id,
+                        payload
+                    ])?;
+                    local_next += 1;
+                }
+            }
+            txn.commit()
+        })();
+        match result {
+            Ok(()) => {
+                self.next_seq = local_next;
+                Ok(events.len())
+            }
+            Err(e) => {
+                // Rolled back: rows + next_seq untouched.
+                tracing::warn!(
+                    "[transcript] append_batch rollback for session={}: {e}",
+                    self.session_id
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Number of live rows after the last `session_break` row, or the whole
+    /// count when there is no break row. Used to decide whether carried rows
+    /// (which precede a break) have already run a first turn.
+    pub fn count_since_last_break(&self) -> i64 {
+        let res: rusqlite::Result<i64> = (|| {
+            // Last seq of a live session_break row, if any.
+            let last_break: Option<i64> = self.conn.query_row(
+                "SELECT MAX(seq) FROM message WHERE session_id = ?1 AND kind = 'session_break' AND superseded = 0",
+                [&self.session_id],
+                |r| r.get(0),
+            )?;
+            match last_break {
+                Some(b) => self.conn.query_row(
+                    "SELECT COUNT(*) FROM message WHERE session_id = ?1 AND superseded = 0 AND seq > ?2",
+                    params![self.session_id, b],
+                    |r| r.get(0),
+                ),
+                None => Ok(self.count()),
+            }
+        })();
+        res.unwrap_or(0)
     }
 
     /// Mark every row at/after `seq` superseded; return the distinct `turnId`s

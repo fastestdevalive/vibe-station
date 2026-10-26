@@ -434,13 +434,17 @@ mod claude_hooks {
         let content =
             std::fs::read_to_string(dir.path().join(".claude").join("commands").join("vst.md"))
                 .unwrap();
-        assert!(content.contains("vst session reset $VST_SESSION"));
-        assert!(content.contains("vst session reset $VST_SESSION --handoff-file <path>"));
-        assert!(content.contains("Do NOT pass `--handoff`"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION --carry=transcript"));
+        assert!(content.contains("vst agent switch $VST_SESSION --mode \"<mode>\""));
+        assert!(content.contains("--summary-file <path>"));
+        assert!(
+            !content.contains("vst session"),
+            "templates must use `vst agent …`"
+        );
         assert!(!content.contains(".vibe-station/HANDOFF.md"));
-        assert!(content.contains("vst session reset $VST_SESSION --mode \"<name>\""));
-        assert!(content.contains("vst session handoff $VST_SESSION"));
-        assert!(content.contains("vst session rename $VST_SESSION \"<name>\""));
+        assert!(content.contains("vst agent handoff $VST_SESSION"));
+        assert!(content.contains("vst agent rename $VST_SESSION \"<name>\""));
         assert!(content.contains("vst worktree rename $VST_WORKTREE \"<name>\""));
         assert!(content.contains("$VST_WORKTREE"));
         assert!(content.contains("isn't part of a worktree"));
@@ -566,13 +570,17 @@ mod cursor_hooks {
         let content =
             std::fs::read_to_string(dir.path().join(".cursor").join("commands").join("vst.md"))
                 .unwrap();
-        assert!(content.contains("vst session reset $VST_SESSION"));
-        assert!(content.contains("vst session reset $VST_SESSION --handoff-file <path>"));
-        assert!(content.contains("Do NOT pass `--handoff`"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION --carry=transcript"));
+        assert!(content.contains("vst agent switch $VST_SESSION --mode \"<mode>\""));
+        assert!(content.contains("--summary-file <path>"));
+        assert!(
+            !content.contains("vst session"),
+            "templates must use `vst agent …`"
+        );
         assert!(!content.contains(".vibe-station/HANDOFF.md"));
-        assert!(content.contains("vst session reset $VST_SESSION --mode \"<name>\""));
-        assert!(content.contains("vst session handoff $VST_SESSION"));
-        assert!(content.contains("vst session rename $VST_SESSION \"<name>\""));
+        assert!(content.contains("vst agent handoff $VST_SESSION"));
+        assert!(content.contains("vst agent rename $VST_SESSION \"<name>\""));
         assert!(content.contains("vst worktree rename $VST_WORKTREE \"<name>\""));
         assert!(content.contains("isn't part of a worktree"));
         assert!(!content.contains("$ARGUMENTS"));
@@ -802,13 +810,17 @@ mod opencode_hooks {
             std::fs::read_to_string(dir.path().join(".opencode").join("commands").join("vst.md"))
                 .unwrap();
         assert!(content.contains("$ARGUMENTS"));
-        assert!(content.contains("vst session reset $VST_SESSION"));
-        assert!(content.contains("vst session reset $VST_SESSION --handoff-file <path>"));
-        assert!(content.contains("Do NOT pass `--handoff`"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION"));
+        assert!(content.contains("vst agent start-fresh $VST_SESSION --carry=transcript"));
+        assert!(content.contains("vst agent switch $VST_SESSION --mode \"<mode>\""));
+        assert!(content.contains("--summary-file <path>"));
+        assert!(
+            !content.contains("vst session"),
+            "templates must use `vst agent …`"
+        );
         assert!(!content.contains(".vibe-station/HANDOFF.md"));
-        assert!(content.contains("vst session reset $VST_SESSION --mode \"<name>\""));
-        assert!(content.contains("vst session handoff $VST_SESSION"));
-        assert!(content.contains("vst session rename $VST_SESSION \"<name>\""));
+        assert!(content.contains("vst agent handoff $VST_SESSION"));
+        assert!(content.contains("vst agent rename $VST_SESSION \"<name>\""));
         assert!(content.contains("vst worktree rename $VST_WORKTREE \"<name>\""));
         assert!(content.contains("isn't part of a worktree"));
     }

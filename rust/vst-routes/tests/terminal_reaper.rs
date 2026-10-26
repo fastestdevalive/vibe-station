@@ -59,6 +59,7 @@ fn session(id: &str, project_id: &str, ty: SessionType, state: LifecycleState) -
         draft_config: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,
@@ -120,6 +121,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
         handoff_timeout: Duration::from_secs(120),
+        reset_cancels: Default::default(),
     }
 }
 

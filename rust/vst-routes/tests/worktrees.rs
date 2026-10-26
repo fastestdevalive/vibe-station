@@ -114,6 +114,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         draft_config: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,

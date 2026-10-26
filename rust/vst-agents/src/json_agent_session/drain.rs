@@ -80,7 +80,10 @@ impl JsonAgentSession {
                     &turn.turn_id,
                     &turn.raw_message,
                     &turn.attachments,
-                    EmitUserEventOpts::default(),
+                    EmitUserEventOpts {
+                        silent: turn.silent,
+                        ..Default::default()
+                    },
                 );
                 self.run_one_turn(turn).await;
             }
@@ -457,6 +460,7 @@ impl JsonAgentSession {
             },
             raw_message: notice_text,
             attachments: vec![],
+            silent: true,
             fork_from_chat_id: None,
         };
 

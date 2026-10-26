@@ -31,9 +31,9 @@ use vst_store::transcript::{
     TranscriptPage, TranscriptStore,
 };
 use vst_types::{
-    Attachment, Broadcaster, Command, LifecycleState, NormalizedEvent, NormalizedEventKind,
-    NormalizedEventProvider, ProjectRecord, ServerEvent, SessionLifecycle, SessionMeta,
-    SessionRecord, TurnState, UsageInfo, WorktreeRecord,
+    Attachment, Broadcaster, CarryOver, Command, LifecycleState, NormalizedEvent,
+    NormalizedEventKind, NormalizedEventProvider, ProjectRecord, ServerEvent, SessionBreakKind,
+    SessionLifecycle, SessionMeta, SessionRecord, TurnState, UsageInfo, WorktreeRecord,
 };
 
 use crate::acp_connection::AcpConnection;
@@ -64,6 +64,10 @@ pub struct QueuedTurn {
     pub attachments: Vec<Attachment>,
     /// Edit-a-sent-message fork source (R3.2).
     pub fork_from_chat_id: Option<String>,
+    /// The turn's `user` row is persisted `silent` (not rendered as a human
+    /// bubble) while the agent still receives `raw_message` — used for the
+    /// carried summary / transcript instruction behind the break card.
+    pub silent: bool,
 }
 
 /// A turn withdrawn into the editing hold.
@@ -332,7 +336,7 @@ impl JsonAgentSession {
 
         // Seed display model from requested model, then from transcript tail.
         let meta_tail = store.last_meta();
-        let first_turn_done = store.count() > 0;
+        let first_turn_done = store.count_since_last_break() > 0;
 
         let mut model = opts.model.clone();
         if let Some(m) = &meta_tail.model {
@@ -1129,6 +1133,120 @@ pub fn read_meta_from_data_dir(data_dir: &Path, session_id: &str) -> TranscriptM
     )
 }
 
+/// Marker event appended to a replacement session's transcript at a reset/switch
+/// join point (see the reset-keep-history-switch plan).
+#[derive(Clone, Debug)]
+pub struct SessionBreakMarker {
+    pub kind: SessionBreakKind,
+    pub from_provider: Option<String>,
+    pub to_provider: Option<String>,
+    /// CLI of the replacement session (the marker's `provider`).
+    pub provider: NormalizedEventProvider,
+    /// The handoff summary passed to the new agent (absent when no handoff).
+    pub summary: Option<String>,
+    /// How much history was carried (`summary`/`transcript`; absent for `none`,
+    /// which appends no marker at all).
+    pub carry_over: Option<CarryOver>,
+    /// Display name of the mode being replaced.
+    pub from_mode: Option<String>,
+    /// Display name of the replacement mode.
+    pub to_mode: Option<String>,
+    /// ISO8601 timestamp.
+    pub ts: String,
+}
+
+/// Kinds carried across a reset/switch (plan Decision 1).
+fn carried_kind(kind: NormalizedEventKind) -> bool {
+    matches!(
+        kind,
+        NormalizedEventKind::User
+            | NormalizedEventKind::Thinking
+            | NormalizedEventKind::Text
+            | NormalizedEventKind::ToolUse
+            | NormalizedEventKind::ToolResult
+            | NormalizedEventKind::Result
+            | NormalizedEventKind::Error
+            | NormalizedEventKind::Status
+            | NormalizedEventKind::MessageGenerated
+            | NormalizedEventKind::SessionBreak
+    )
+}
+
+/// Copy a session's transcript rows across sessions (reset / switch keep-history).
+///
+/// Reads `old_dir`'s store and writes the carried rows plus a session-break
+/// marker into `new_dir`'s store under `new_id`. Best-effort — returns 0 early
+/// when the old dir holds neither a transcript DB nor a legacy `messages.jsonl`
+/// (mirroring `with_disk_store`). Dropped kinds per plan Decision 1; carried
+/// rows keep their `turn_id` but get `session_id` rewritten to `new_id` and
+/// their `usage`/`model`/`agent_chat_id`/`log_seq` cleared. Rows of any turn in
+/// `skip_turn_ids` (the handoff/instruction turn plus every turn THIS reset
+/// withdrew into the editing hold) are dropped — the release turns those holds
+/// into `cancelled` rows that would otherwise render struck-through. The marker
+/// is appended last with `id = turn_id = "break-<new_id>"` and `text = summary`
+/// (or the transcript instruction). Returns the number of rows written.
+pub fn carry_session_transcript(
+    old_dir: &Path,
+    old_id: &str,
+    new_dir: &Path,
+    new_id: &str,
+    marker: SessionBreakMarker,
+    skip_turn_ids: &[String],
+) -> usize {
+    let has_db = transcript_db_path(old_dir).exists();
+    let has_legacy = old_dir.join("messages.jsonl").exists();
+    if !has_db && !has_legacy {
+        return 0;
+    }
+
+    let old = open_transcript_store(old_dir, old_id);
+    let rows = old.read_all();
+    old.close();
+
+    let mut new = open_transcript_store(new_dir, new_id);
+
+    let mut carried: Vec<NormalizedEvent> = Vec::new();
+    for mut ev in rows {
+        if ev
+            .turn_id
+            .as_deref()
+            .is_some_and(|t| skip_turn_ids.iter().any(|s| s == t))
+        {
+            continue;
+        }
+        if !carried_kind(ev.kind) {
+            continue;
+        }
+        ev.session_id = new_id.to_string();
+        ev.usage = None;
+        ev.model = None;
+        ev.agent_chat_id = None;
+        ev.log_seq = None;
+        carried.push(ev);
+    }
+
+    let marker_ev = NormalizedEvent {
+        id: format!("break-{new_id}"),
+        session_id: new_id.to_string(),
+        ts: marker.ts,
+        provider: marker.provider,
+        kind: NormalizedEventKind::SessionBreak,
+        role: None,
+        text: marker.summary,
+        turn_id: Some(format!("break-{new_id}")),
+        break_kind: Some(marker.kind),
+        from_provider: marker.from_provider,
+        to_provider: marker.to_provider,
+        carry_over: marker.carry_over,
+        from_mode: marker.from_mode,
+        to_mode: marker.to_mode,
+        ..Default::default()
+    };
+    carried.push(marker_ev);
+
+    new.append_batch(&mut carried).unwrap_or(0)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1259,6 +1377,7 @@ mod tests {
             draft_config: None,
             archived_at: None,
             handoff_summary: None,
+            carry_over: None,
             parent_session_id: None,
             superseded_by: None,
             pr: None,
@@ -1337,6 +1456,7 @@ mod tests {
                 raw_message: "existing".into(),
                 attachments: vec![],
                 fork_from_chat_id: None,
+                silent: false,
             });
         }
 

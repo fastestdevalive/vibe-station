@@ -148,6 +148,75 @@ overflows, the daemon answers with the normal tail frame instead, and the client
 drops its stale cache via gap detection; on WS reconnect the client re-arms gap
 detection from its last seen seq.
 
+### 3.4 History across start-fresh / switch
+
+`POST /api/sessions/:id/reset` archives the old session and spawns a
+replacement. `carryOver` decides what history survives:
+
+| `carryOver` | What the daemon does | Break card |
+|---|---|---|
+| `none` (Start fresh default) | No rows copied, no `session_break` row. The replacement starts empty ("View previous session" in the empty state). | none |
+| `summary` (Switch default) | The old agent writes a summary first, or the caller supplies it as `handoffText`; rows are copied plus a `session_break` marker. | "Fresh start" / "Switched to <mode>", summary behind "Show summary" |
+| `transcript` | Instant Markdown export of the old chat; rows are copied plus a marker whose `text` is the read-the-file instruction. | same card, instruction behind "Show instruction" |
+
+- **Wire precedence**: `carryOver` if present; else `handoffText` ⇒ summary;
+  else `handoff: true` ⇒ summary; else none. `handoff`/`handoffText` stay
+  accepted for older clients.
+- **Copied kinds** (single list): `user`, `thinking`, `text`, `tool_use`,
+  `tool_result`, `result`, `error`, `status`, `message_generated`,
+  `session_break`. `usage`/`model`/`agentChatId`/`logSeq` are cleared and
+  `session_id` is re-stamped to the new session. **Dropped**: `session_init`,
+  `usage`, `mode_update`, `commands_update` (the last two are captured by the
+  mode at spawn, not by an imported row).
+- **Marker**: a `session_break` row records `breakKind: "reset" | "switch"`,
+  `fromProvider`/`toProvider` (CLI strings, for the pill icons),
+  `fromMode`/`toMode` (mode display names) and `carryOver`. `switch` iff the
+  MODE id differs — not merely the CLI, so opus-planner → sonnet-implementer
+  on the same CLI is a switch. `text` is the summary or the transcript
+  instruction (absent for `none`).
+- **Stop-first**: when the agent is mid-turn the reset stops it through the
+  same path as the Stop button (Rich Chat keeps the ACP connection, queued
+  turns are withdrawn into holds), then waits ≤ 10 s for idle. A terminal
+  agent is interrupted with `AgentPlugin::interrupt_keys` (default
+  `Escape`) only while `Working`, then polled. `whenBusy: "wait"` (opt-in)
+  skips the stop and waits for the turn *and its queue* to drain instead;
+  `queued: "carry" | "drop"` decides whether the messages this reset withdrew
+  are handed to the replacement. A `busy_timeout` 409 restores exactly the
+  turns this reset moved; turns the user was already editing stay held.
+- **Cancel with a point of no return**: `POST /api/sessions/:id/reset/cancel`
+  answers `{ ok, cancelled }`; `false` once the reset has committed (after the
+  summary/export succeeded, before the old runtime is released). Cancelling
+  earlier restores the withdrawn turns, removes the not-yet-used replacement
+  data dir (including a written `previous-chat.md`) and leaves the old session
+  untouched (its turn may already be stopped). The 409 codes are
+  `reset_cancelled`, `handoff_failed`, `busy_timeout` and `reset_in_progress`.
+- **One timeout**: `HANDOFF_TIMEOUT` (`vst-lifecycle/src/handoff.rs`) is 120 s
+  for both channels.
+- **Transcript export**: `vst-agents/src/transcript_export.rs` writes
+  `<new session data dir>/previous-chat.md` (created before the old runtime is
+  released, so the file lives in the replacement's dir and is removed with the
+  session). Owner-only `0o600` on unix. Compact Markdown: no thinking blocks,
+  tool results trimmed to 800 chars with `[trimmed N chars]`, and an
+  `## Index` of turns with line numbers. The replacement's first message is
+  the instruction to read the last 3 turns in full, use the index for earlier
+  parts, not act on anything, and reply with a three-line recap.
+- **First-turn flag**: the agent's `first_turn_done = count_since_last_break() >
+  0` — counted from rows *after* the last `session_break`, so a carried
+  transcript never suppresses the system prompt / `session_init` for the new
+  agent.
+- **No hidden token cost**: `session_output` (vst agent output / replay) cuts
+  at the last `session_break`, so an outside observer of a restarted agent sees
+  only the new conversation. The carried rows exist for chat replay only.
+- **Best-effort**: a copy failure logs and the reset proceeds (losing history
+  is the status quo; aborting a reset is worse).
+- **Terminal**: the summary path is interrupt-and-poll; `transcript` exports
+  the tmux scrollback (`capture_pane`, 10 000 lines) and is labelled as a
+  rough export, not a structured transcript. A non-tmux (direct pty) terminal
+  answers 400 for `transcript`. The chain is also surfaced via the persisted
+  `supersededBy` + `handoffSummary` fields in "Previous sessions".
+- **Fork**: has no production caller, so no fork guard is built; revisit if
+  forking is revived.
+
 ## 4. Context delivery at spawn
 
 Three layers compose the system prompt: **L1** base `vst` instructions

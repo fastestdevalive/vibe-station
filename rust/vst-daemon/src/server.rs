@@ -52,9 +52,9 @@ use vst_routes::open::{OpenRouteError, OpenRoutes};
 use vst_routes::ordered_lists::OrderedListsRoutes;
 use vst_routes::projects::{ProjectRouteError, ProjectRoutes};
 use vst_routes::sessions::{
-    ChannelError, ChatRouteError, CreateError, DeleteError, DoneError, DraftError,
-    HandoffRouteError, MutateError, ResetError, ResumeError, SessionRoutes, StartError,
-    TranscriptError, TranscriptQuery, TranscriptResponse,
+    find_session_context, ChannelError, ChatRouteError, CreateError, DeleteError, DoneError,
+    DraftError, HandoffRouteError, MutateError, ResetError, ResumeError, SessionContext,
+    SessionRoutes, StartError, TranscriptError, TranscriptQuery, TranscriptResponse,
 };
 use vst_routes::settings::{SettingsRouteError, SettingsRoutes};
 use vst_routes::skills::SkillsRoutes;
@@ -86,11 +86,11 @@ use vst_types::rest::projects::{
     OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult, TreeEntry,
 };
 use vst_types::rest::sessions::{
-    ChatBody, CreateScheduledMessageBody, DelinkResult, EditQueuedResult, EditScheduledMessageBody,
-    EnqueueChatResult, HandoffResult, InputBody, PatchChannelBody, PatchChannelResult,
-    PatchDraftBody, PatchModelBody, PatchModelResult, PinBody, PinResult, RenameSessionBody,
-    RenameSessionResult, ReorderSessionBody, ReorderSessionResult, ResetBody, ResubmitBody,
-    SessionListItem, SessionOrDraft, SessionOutput, StartDraftBody, StartDraftResult,
+    CancelResetResult, ChatBody, CreateScheduledMessageBody, DelinkResult, EditQueuedResult,
+    EditScheduledMessageBody, EnqueueChatResult, HandoffResult, InputBody, PatchChannelBody,
+    PatchChannelResult, PatchDraftBody, PatchModelBody, PatchModelResult, PinBody, PinResult,
+    RenameSessionBody, RenameSessionResult, ReorderSessionBody, ReorderSessionResult, ResetBody,
+    ResubmitBody, SessionListItem, SessionOrDraft, SessionOutput, StartDraftBody, StartDraftResult,
     StopTurnResult, TurnActionResult,
 };
 use vst_types::rest::settings::{PatchSettingsBody, PatchSettingsResult, Settings};
@@ -453,6 +453,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         attachment_registry: attachment_registry.clone(),
         model_catalog: model_catalog.clone(),
         handoff_timeout: vst_routes::sessions::DEFAULT_HANDOFF_TIMEOUT,
+        reset_cancels: Default::default(),
     };
 
     let attachment_routes =
@@ -773,6 +774,7 @@ pub fn router_from_state(state: AppState) -> Router {
         .route("/sessions/:id/done", post(handle_done_session))
         .route("/sessions/:id/resume", post(handle_resume_session))
         .route("/sessions/:id/reset", post(handle_reset_session))
+        .route("/sessions/:id/reset/cancel", post(handle_cancel_reset))
         .route("/sessions/:id/handoff", post(handle_handoff_session))
         .route("/sessions/:id/send", post(handle_send_session))
         .route("/sessions/:id/chat", post(handle_chat_session))
@@ -3312,41 +3314,92 @@ async fn handle_resume_session(
 async fn handle_reset_session(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-    Json(body): Json<ResetBody>,
+    Json(raw): Json<serde_json::Value>,
 ) -> Result<Json<vst_types::rest::sessions::ResetResult>, (StatusCode, Json<serde_json::Value>)> {
-    state
-        .session_routes
-        .reset_session(&id, &body)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            ResetError::NotFound(m) => (
+    // Parse by hand so an unknown enum value (e.g. `carryOver: "bogus"`) is a
+    // 400 like every other route, not axum's typed-extractor 422.
+    let body: ResetBody = serde_json::from_value(raw).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("Validation error: {e}") })),
+        )
+    })?;
+    // Run the body in its own task and await the JoinHandle (plan Decision 7):
+    // stop-first can kill the caller's own `vst` CLI (self-restart), and a
+    // dropped HTTP connection must not abort a reset mid-way.
+    let routes = state.session_routes.clone();
+    let join = tokio::spawn(async move { routes.reset_session(&id, &body).await });
+    let result = match join.await {
+        Ok(result) => result,
+        Err(e) => Err(ResetError::Internal(format!("reset task failed: {e}"))),
+    };
+    result.map(Json).map_err(|e| match e {
+        ResetError::NotFound(m) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": m })),
+        ),
+        ResetError::NotAgent(m) | ResetError::Archived(m) | ResetError::BadRequest(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m })),
+        ),
+        // Machine-readable `code` so the UI can offer a replacement mode
+        // (retry with `modeId`) instead of just showing the error.
+        ResetError::NoMode(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m, "code": "no_mode" })),
+        ),
+        ResetError::ModeNotFound(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m, "code": "mode_not_found" })),
+        ),
+        ResetError::JsonUnsupported(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m, "code": "json_unsupported" })),
+        ),
+        ResetError::HandoffFailed(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "handoff_failed" })),
+        ),
+        ResetError::Cancelled(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "reset_cancelled" })),
+        ),
+        ResetError::BusyTimeout(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "busy_timeout" })),
+        ),
+        ResetError::InProgress(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "reset_in_progress" })),
+        ),
+        ResetError::Internal(m) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": m })),
+        ),
+    })
+}
+
+/// `POST /sessions/:id/reset/cancel` — cancel an in-flight reset (plan
+/// Decision 5). `cancelled: false` when none is running or it already passed
+/// its point of no return.
+async fn handle_cancel_reset(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<CancelResetResult>, (StatusCode, Json<serde_json::Value>)> {
+    match find_session_context(&state.store, &id).await {
+        Some(SessionContext::Worktree { .. }) | Some(SessionContext::Direct { .. }) => {}
+        _ => {
+            return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": m })),
-            ),
-            ResetError::NotAgent(m) | ResetError::Archived(m) => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": m })),
-            ),
-            // Machine-readable `code` so the UI can offer a replacement mode
-            // (retry with `modeId`) instead of just showing the error.
-            ResetError::NoMode(m) => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": m, "code": "no_mode" })),
-            ),
-            ResetError::ModeNotFound(m) => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": m, "code": "mode_not_found" })),
-            ),
-            ResetError::HandoffFailed(m) => (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": m, "code": "handoff_failed" })),
-            ),
-            ResetError::Internal(m) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": m })),
-            ),
-        })
+                Json(serde_json::json!({ "error": format!("Session '{id}' not found") })),
+            ));
+        }
+    }
+    let cancelled = state.session_routes.cancel_reset(&id);
+    Ok(Json(CancelResetResult {
+        ok: true,
+        cancelled,
+    }))
 }
 
 async fn handle_handoff_session(

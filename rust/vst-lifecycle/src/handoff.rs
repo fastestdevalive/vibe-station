@@ -8,6 +8,7 @@
 //! - Polls for file existence after delivery.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -20,26 +21,38 @@ pub enum HandoffError {
     Io(#[from] std::io::Error),
     #[error("handoff timed out")]
     Timeout,
+    #[error("handoff cancelled")]
+    Cancelled,
 }
 
 pub type HandoffResult<T> = Result<T, HandoffError>;
 
 const POLL_INTERVAL_MS: u64 = 100;
-const TIMEOUT_MS: u64 = 30_000;
+/// Shared handoff budget for both channels (chat and terminal): 120 s.
+/// `vst-routes`' `DEFAULT_HANDOFF_TIMEOUT` aliases this constant.
+pub const HANDOFF_TIMEOUT: Duration = Duration::from_secs(120);
 /// Pause between the bracketed paste and the submitting Enter so the TUI has
 /// finished ingesting the paste before it sees the keypress.
 const SUBMIT_DELAY_MS: u64 = 150;
 
 /// Attempt to deliver a handoff instruction to a session.
 /// Returns `false` for json-channel sessions (not applicable).
+///
+/// `cancelled` is polled while waiting for the acknowledgement file; flipping
+/// it returns [`HandoffError::Cancelled`] promptly instead of burning the
+/// whole timeout.
 pub async fn run_handoff_turn(
     tmux_name: &str,
     channel: Channel,
     instruction_path: &Path,
     instruction: &str,
+    cancelled: &AtomicBool,
 ) -> HandoffResult<bool> {
     if channel == Channel::Json {
         return Ok(false);
+    }
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(HandoffError::Cancelled);
     }
 
     // Delete stale file first.
@@ -76,8 +89,11 @@ pub async fn run_handoff_turn(
     }
 
     // Poll for file existence (pty-channel acknowledgment pattern).
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(TIMEOUT_MS);
+    let deadline = tokio::time::Instant::now() + HANDOFF_TIMEOUT;
     loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(HandoffError::Cancelled);
+        }
         if instruction_path.exists() {
             return Ok(true);
         }

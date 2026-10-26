@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
-use vst_types::{Attachment, Command};
+use vst_types::{Attachment, Command, CommandGroup};
 
 use crate::skill_tokens::{parse_skill_segments, SkillSegment};
 
@@ -183,6 +183,14 @@ pub fn merge_with_skill_catalog(
             name: entry.name,
             description: entry.description.unwrap_or_default(),
             argument_hint: entry.argument_hint,
+            // A directory-scanned entry has a `path`; everything else came
+            // from the CLI's own `commands_update` catalog. The popover groups
+            // by this (plan Decision 10).
+            group: Some(if entry.path.is_some() {
+                CommandGroup::Skill
+            } else {
+                CommandGroup::Agent
+            }),
         })
         .collect::<Vec<_>>();
     if filtered.is_empty() && acp_commands.is_none() {

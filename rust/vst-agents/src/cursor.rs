@@ -276,27 +276,27 @@ right after this instruction (that trailing text, if any, follows below).
 Read whatever follows and map it to exactly one `vst` CLI command below,
 then run it as a shell command. Do not improvise flags beyond these:
 
-- Nothing after `/vst`, or just `reset` -> `vst session reset $VST_SESSION`
-- `reset --handoff` -> see "Important — `reset --handoff` writes its own file" below
-- `reset` followed by other text -> `vst session reset $VST_SESSION --prompt "<that text>"`
-- `reset --handoff` followed by other text -> see "Important — `reset --handoff` writes its own file" below (final command includes both `--handoff-file <path>` and `--prompt "<that text>"`)
-- `reset --mode <name>` -> `vst session reset $VST_SESSION --mode "<name>"` (switches mode/CLI on reset — combine with other reset flags, e.g. `--mode "<name>" --prompt "<that text>"`)
-- `handoff` -> `vst session handoff $VST_SESSION`
-- `rename <name>` -> `vst session rename $VST_SESSION "<name>"`
+- Nothing after `/vst`, or just `start-fresh` -> `vst agent start-fresh $VST_SESSION`
+- `start-fresh --carry summary` -> see "Important — a summary on yourself writes its own file" below
+- `start-fresh --carry transcript` -> `vst agent start-fresh $VST_SESSION --carry=transcript`
+- `start-fresh` followed by other text -> `vst agent start-fresh $VST_SESSION --prompt "<that text>"`
+- `switch <mode>` -> `vst agent switch $VST_SESSION --mode "<mode>" --carry=summary` (see the summary note below)
+- `switch <mode> --carry transcript` -> `vst agent switch $VST_SESSION --mode "<mode>" --carry=transcript`
+- `handoff` -> `vst agent handoff $VST_SESSION`
+- `rename <name>` -> `vst agent rename $VST_SESSION "<name>"`
 - `rename --worktree <name>` -> `vst worktree rename $VST_WORKTREE "<name>"`
 
-Important — `reset --handoff` writes its own file:
-Do NOT pass `--handoff` to the `vst session reset` command. This command is
-running from inside the very session being reset, so the daemon has no way
-to paste an instruction back into your own pane and wait for a reply — you
-are blocked on this shell command, so you'd never see it. Instead: BEFORE
-running `vst session reset`, write a concise handoff summary of the current
-state, remaining work, and anything the next session should know to any file
-of your own choosing, using a normal file-write tool call (not a shell
-command). Then run `vst session reset $VST_SESSION --handoff-file <path>`
-(with `--prompt "<that text>"` too if other text followed `--handoff`, but
-never `--handoff` itself) — the CLI reads that file locally and sends its
-contents as the handoff summary.
+Important — a summary on yourself writes its own file:
+Do NOT ask the daemon for a summary (`--carry=summary` without a file) on the
+session you are running inside: you are blocked on this shell command, so the
+daemon could never paste the summary instruction into your pane and wait for a
+reply. Instead: BEFORE running the command, write a concise summary of the
+current state, remaining work, and anything the next session should know to any
+file of your own choosing, using a normal file-write tool call (not a shell
+command). Then run `vst agent start-fresh $VST_SESSION --carry=summary
+--summary-file <path>` (or `vst agent switch $VST_SESSION --mode "<mode>"
+--carry=summary --summary-file <path>`). `--carry=transcript` needs no file: the
+daemon exports the chat itself.
 
 Important — `--worktree` requires a worktree session:
 `$VST_WORKTREE` is only set when this session belongs to a worktree; direct
@@ -305,13 +305,12 @@ command, check whether `$VST_WORKTREE` is actually set and non-empty. If it
 is NOT set, do not run the command — instead tell the user: "This session
 isn't part of a worktree, so there's no worktree to rename."
 
-Important — `reset` ends this session:
-Any `reset` variant tears down the CURRENT session process as part of
-running the command — this turn effectively never completes from the
-user's point of view. Before running a `reset` command, tell the user
-something like "Resetting this session now — you'll see a fresh session
-appear." Then run the command as your last action. Do not continue the
-conversation afterward as if nothing happened.
+Important — `start-fresh` and `switch` end this session:
+Any `start-fresh` or `switch` tears down the CURRENT session process as part of
+running the command — this turn effectively never completes from the user's
+point of view. Before running one, tell the user something like "Starting a
+fresh session now — you'll see it appear." Then run the command as your last
+action. Do not continue the conversation afterward as if nothing happened.
 
 `handoff` and `rename` do not end the session — after running those, report
 the CLI's output back to the user normally.

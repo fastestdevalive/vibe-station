@@ -18,20 +18,25 @@
 //! - a `tmux`-channel `handoff`/`reset --handoff` turn (would paste to tmux and
 //!   poll up to the bounded timeout)
 
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::tempdir;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
+use vst_agents::json_agent_session::read_transcript_from_data_dir;
+use vst_agents::paths::Paths as AgentPaths;
+use vst_agents::transcript_export::transcript_instruction;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
 use vst_routes::modes::json_unsupported_cli;
 use vst_routes::sessions::{
     find_session_context, repair_superseded_pins, wait_for_handoff_file, wait_for_turn_start,
-    DoneError, DoneResult, HandoffRouteError, HandoffTurnPhase, ResetError, ResumeError,
+    DoneError, DoneResult, HandoffRouteError, HandoffTurnPhase, ResetError, ResetFlag, ResumeError,
     SessionContext, SessionRoutes, StartError,
 };
 use vst_routes::settings::load_default_channel_overrides;
+use vst_store::transcript::open_transcript_store;
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::ordered_lists::PINNED_ALL;
@@ -39,8 +44,9 @@ use vst_types::rest::sessions::{
     HandoffResult, ResetBody, ResetResult, SessionOrDraft, StartDraftBody, StartDraftResult,
 };
 use vst_types::{
-    Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, ProjectRecord, SessionLifecycle,
-    SessionNameSource, SessionRecord, SessionType, WorktreeRecord,
+    CarryOver, Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, NormalizedEvent,
+    NormalizedEventKind, ProjectRecord, SessionBreakKind, SessionLifecycle, SessionNameSource,
+    SessionRecord, SessionType, WorktreeRecord,
 };
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
@@ -80,6 +86,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         draft_config: None,
         archived_at: None,
         handoff_summary: None,
+        carry_over: None,
         parent_session_id: None,
         superseded_by: None,
         pr: None,
@@ -150,6 +157,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
         handoff_timeout: Duration::from_secs(120),
+        reset_cancels: Default::default(),
     }
 }
 
@@ -173,6 +181,8 @@ fn reset_body() -> ResetBody {
         prompt: None,
         handoff_text: None,
         mode_id: None,
+        channel: None,
+        ..Default::default()
     }
 }
 
@@ -559,6 +569,8 @@ async fn reset_persists_handoff_summary_on_archived_row() {
         prompt: None,
         handoff_text: Some("direct summary".into()),
         mode_id: None,
+        channel: None,
+        ..Default::default()
     };
     let res = r.reset_session("s1", &body).await.unwrap();
 
@@ -569,6 +581,11 @@ async fn reset_persists_handoff_summary_on_archived_row() {
         .find(|s| s.id == "s1")
         .unwrap();
     assert_eq!(old.handoff_summary.as_deref(), Some("direct summary"));
+    // The carry mode is persisted in the same mutation and round-trips the store.
+    assert_eq!(old.carry_over, Some(CarryOver::Summary));
+    let wire =
+        serde_json::to_value(vst_routes::sessions::serialize_session(None, "p1", old)).unwrap();
+    assert_eq!(wire["carryOver"], "summary");
     let new = project
         .direct_sessions
         .iter()
@@ -576,6 +593,43 @@ async fn reset_persists_handoff_summary_on_archived_row() {
         .unwrap();
     // Direct-delivery handoff text also becomes the new session's initial prompt.
     assert_eq!(new.initial_prompt.as_deref(), Some("direct summary"));
+    assert_eq!(
+        new.carry_over, None,
+        "the live replacement records no carry mode"
+    );
+}
+
+#[tokio::test]
+async fn reset_persists_nothing_carry_mode_on_archived_row() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Nothing),
+        ..Default::default()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    // The replacement's Rich Chat runtime opens its transcript store here; with
+    // nothing carried, nothing else would have created the directory.
+    let new_dir =
+        vst_agents::paths::Paths::default().direct_session_data_dir("p1", &res.new_session_id);
+    assert!(new_dir.is_dir(), "replacement data dir must exist");
+
+    let project = store.get_project("p1").await.unwrap();
+    let old = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == "s1")
+        .unwrap();
+    assert_eq!(old.carry_over, Some(CarryOver::Nothing));
+    assert_eq!(old.handoff_summary, None);
+    let wire =
+        serde_json::to_value(vst_routes::sessions::serialize_session(None, "p1", old)).unwrap();
+    assert_eq!(wire["carryOver"], "none");
 }
 
 #[tokio::test]
@@ -633,8 +687,8 @@ async fn reset_json_handoff_enqueue_failure_fails_reset() {
     match err {
         ResetError::HandoffFailed(m) => {
             assert!(
-                m.contains("could not send"),
-                "expected 'could not send' in error message: {m}"
+                m.contains("could not be sent"),
+                "expected 'could not be sent' in error message: {m}"
             );
         }
         other => panic!("expected ResetError::HandoffFailed, got {:?}", other),
@@ -653,6 +707,9 @@ async fn reset_json_handoff_enqueue_failure_fails_reset() {
 
 const POLL_SLACK: Duration = Duration::from_secs(3);
 
+/// Never-set flag for the non-cancel handoff-wait tests.
+static NEVER_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[tokio::test]
 async fn wait_for_handoff_file_returns_content_once_written_and_turn_settles() {
     let d = tempdir().unwrap();
@@ -668,6 +725,7 @@ async fn wait_for_handoff_file_returns_content_once_written_and_turn_settles() {
         Duration::from_secs(1),
         || false,
         || async {},
+        &NEVER_CANCELLED,
     )
     .await;
     assert_eq!(out.as_deref(), Some("the summary"));
@@ -687,6 +745,7 @@ async fn wait_for_handoff_file_gives_up_as_soon_as_the_turn_ends_without_a_file(
         Duration::from_secs(30),
         is_settled,
         || async {},
+        &NEVER_CANCELLED,
     )
     .await;
     assert_eq!(out, None);
@@ -706,6 +765,7 @@ async fn wait_for_handoff_file_times_out_when_turn_never_settles() {
         Duration::from_secs(30),
         || false,
         || async {},
+        &NEVER_CANCELLED,
     )
     .await;
     assert_eq!(out, None);
@@ -722,6 +782,7 @@ async fn wait_for_handoff_file_treats_an_empty_file_as_no_summary() {
         Duration::from_secs(1),
         || true,
         || async {},
+        &NEVER_CANCELLED,
     )
     .await;
     assert_eq!(out, None);
@@ -737,7 +798,13 @@ async fn wait_for_turn_start_returns_true_when_phase_flips_to_running() {
             HandoffTurnPhase::Running
         }
     };
-    let ok = wait_for_turn_start(phase, Duration::from_secs(2), Duration::from_millis(20)).await;
+    let ok = wait_for_turn_start(
+        phase,
+        Duration::from_secs(2),
+        Duration::from_millis(20),
+        &NEVER_CANCELLED,
+    )
+    .await;
     assert!(ok);
 }
 
@@ -747,6 +814,7 @@ async fn wait_for_turn_start_returns_true_immediately_on_gone() {
         || HandoffTurnPhase::Gone,
         Duration::from_secs(2),
         Duration::from_millis(20),
+        &NEVER_CANCELLED,
     )
     .await;
     assert!(ok);
@@ -759,6 +827,7 @@ async fn wait_for_turn_start_returns_false_when_staying_queued_past_timeout() {
         || HandoffTurnPhase::Queued,
         Duration::from_millis(200),
         Duration::from_millis(20),
+        &NEVER_CANCELLED,
     )
     .await;
     assert!(!ok);
@@ -779,6 +848,8 @@ async fn reset_rejects_unknown_requested_mode_before_teardown() {
         prompt: None,
         handoff_text: None,
         mode_id: Some("does-not-exist".into()),
+        channel: None,
+        ..Default::default()
     };
     let err = r.reset_session("s1", &body).await.unwrap_err();
     assert!(matches!(err, ResetError::ModeNotFound(_)));
@@ -1758,4 +1829,738 @@ async fn worktree_draft_is_created_on_top_but_direct_draft_keeps_its_own_slot() 
         "direct drafts keep their own (epoch) slot, got {}",
         direct_draft.sort_order
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — reset route wiring: transcript carry, break kind, channel handling
+// ---------------------------------------------------------------------------
+
+/// Kind → snake_case tag for the seeded events' `id`.
+fn phase2_kind_tag(kind: NormalizedEventKind) -> &'static str {
+    match kind {
+        NormalizedEventKind::User => "user",
+        NormalizedEventKind::Thinking => "thinking",
+        NormalizedEventKind::Text => "text",
+        NormalizedEventKind::ToolUse => "tool_use",
+        NormalizedEventKind::ToolResult => "tool_result",
+        NormalizedEventKind::Result => "result",
+        NormalizedEventKind::ModeUpdate => "mode_update",
+        _ => "other",
+    }
+}
+
+/// Build a bare `NormalizedEvent` for seeding an old store (no role/text unless
+/// the caller sets them; only `kind`/`session_id` matter for the carry).
+fn phase2_ev(
+    kind: NormalizedEventKind,
+    session_id: &str,
+    turn_id: &str,
+    text: &str,
+) -> NormalizedEvent {
+    let mut e: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": format!("{}-{}", phase2_kind_tag(kind), turn_id),
+        "sessionId": session_id,
+        "ts": "2026-01-01T00:00:00Z",
+        "provider": "claude",
+        "kind": serde_json::to_value(kind).unwrap(),
+        "turnId": turn_id,
+    }))
+    .unwrap();
+    if !text.is_empty() {
+        e.text = Some(text.to_string());
+    }
+    e
+}
+
+/// Seed a direct session's transcript store with a mix of carried kinds plus a
+/// dropped `mode_update`, rooted under the active home guard via `AgentPaths`
+/// (the same override-aware Paths the route's carry uses).
+fn phase2_seed_old_store(project_id: &str, session_id: &str) {
+    let dir = AgentPaths::default().direct_session_data_dir(project_id, session_id);
+    let mut s = open_transcript_store(&dir, session_id);
+    for (kind, turn, text) in [
+        (NormalizedEventKind::User, "t1", "hello"),
+        (NormalizedEventKind::Thinking, "t1", "thinking"),
+        (NormalizedEventKind::Text, "t1", "carried reply"),
+        (NormalizedEventKind::ToolUse, "t1", ""),
+        (NormalizedEventKind::ToolResult, "t1", ""),
+        (NormalizedEventKind::Result, "t1", "done"),
+        // A dropped kind: mode_update must NOT be carried (plan Decision 1).
+        (NormalizedEventKind::ModeUpdate, "t1", ""),
+    ] {
+        s.append(&mut phase2_ev(kind, session_id, turn, text));
+    }
+    s.close();
+}
+
+/// A claude json-mode direct session in project `p1` (ready for a json→json
+/// reset that carries its history).
+async fn seeded_claude_json_session(store: &StoreHandle) {
+    let mut p = make_project("p1");
+    let mut old = json_session("s1", "p1");
+    old.mode_id = Some("claude-mode".into());
+    p.direct_sessions.push(old);
+    add_project(store, p).await;
+    phase2_seed_old_store("p1", "s1");
+}
+
+#[tokio::test]
+async fn reset_json_to_json_carries_rows_and_appends_reset_marker() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.carry_over, CarryOver::Transcript);
+    assert_eq!(res.break_kind, Some(SessionBreakKind::Reset));
+
+    let project = store.get_project("p1").await.unwrap();
+    let new_rec = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new_rec.channel, Some(Channel::Json));
+    assert_eq!(new_rec.use_tmux, false);
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let kinds: Vec<NormalizedEventKind> = carried.iter().map(|e| e.kind).collect();
+    for k in [
+        NormalizedEventKind::User,
+        NormalizedEventKind::Thinking,
+        NormalizedEventKind::Text,
+        NormalizedEventKind::ToolUse,
+        NormalizedEventKind::ToolResult,
+        NormalizedEventKind::Result,
+    ] {
+        assert!(kinds.contains(&k), "kind {k:?} must be carried");
+    }
+    assert!(
+        !kinds.contains(&NormalizedEventKind::ModeUpdate),
+        "mode_update must be dropped"
+    );
+
+    // Marker is last, a plain `reset` (no mode change), same claude provider.
+    let last = carried.last().unwrap();
+    assert_eq!(last.kind, NormalizedEventKind::SessionBreak);
+    assert_eq!(last.break_kind, Some(SessionBreakKind::Reset));
+    assert_eq!(last.carry_over, Some(CarryOver::Transcript));
+    assert_eq!(last.from_provider.as_deref(), Some("claude"));
+    assert_eq!(last.to_provider.as_deref(), Some("claude"));
+    assert_eq!(last.from_mode.as_deref(), Some("Claude Mode"));
+    assert_eq!(last.to_mode.as_deref(), Some("Claude Mode"));
+    assert!(
+        last.text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("previous-chat.md"),
+        "transcript marker text names the export path"
+    );
+}
+
+#[tokio::test]
+async fn reset_cross_cli_mode_reports_switch_and_providers() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        mode_id: Some("cursor-mode".into()),
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let last = carried.last().unwrap();
+    assert_eq!(last.break_kind, Some(SessionBreakKind::Switch));
+    assert_eq!(last.carry_over, Some(CarryOver::Transcript));
+    assert_eq!(last.from_mode.as_deref(), Some("Claude Mode"));
+    assert_eq!(last.to_mode.as_deref(), Some("Cursor Mode"));
+    // Target CLI differs from the old session's CLI (claude → cursor).
+    assert_eq!(last.from_provider.as_deref(), Some("claude"));
+    assert_eq!(last.to_provider.as_deref(), Some("cursor"));
+}
+
+#[tokio::test]
+async fn reset_tmux_old_session_writes_no_transcript() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = make_session("s1", "p1"); // tmux by default
+    old.mode_id = Some("claude-mode".into());
+    p.direct_sessions.push(old);
+    add_project(&store, p).await;
+    phase2_seed_old_store("p1", "s1"); // seed anyway, to prove no copy happens
+
+    let r = routes(store.clone());
+    let res = r.reset_session("s1", &reset_body()).await.unwrap();
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    assert!(
+        !new_dir.exists(),
+        "a tmux reset must not create/copy a transcript store"
+    );
+}
+
+#[tokio::test]
+async fn reset_explicit_json_on_agy_mode_rejected_400() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = json_session("s1", "p1");
+    old.mode_id = Some("claude-mode".into());
+    p.direct_sessions.push(old);
+    add_project(&store, p).await;
+
+    let r = routes_with_real_json_gate(store.clone());
+    let body = ResetBody {
+        mode_id: Some("agy-mode".into()),
+        channel: Some(Channel::Json),
+        ..reset_body()
+    };
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    assert!(
+        matches!(err, ResetError::JsonUnsupported(_)),
+        "expected JsonUnsupported, got {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn reset_channel_pty_rejected_400() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = json_session("s1", "p1");
+    old.mode_id = Some("claude-mode".into());
+    p.direct_sessions.push(old);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        channel: Some(Channel::Pty),
+        ..reset_body()
+    };
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    assert!(
+        matches!(err, ResetError::BadRequest(_)),
+        "expected BadRequest for pty, got {:?}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn reset_tmux_to_json_sets_transcript_ref_and_carries_nothing() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = make_session("s1", "p1"); // tmux
+    old.mode_id = Some("claude-mode".into());
+    p.direct_sessions.push(old);
+    add_project(&store, p).await;
+    phase2_seed_old_store("p1", "s1"); // present, but old is tmux → nothing carried
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        channel: Some(Channel::Json),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    let project = store.get_project("p1").await.unwrap();
+    let new_rec = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new_rec.channel, Some(Channel::Json));
+    assert_eq!(new_rec.use_tmux, false);
+    assert!(
+        new_rec.transcript_ref.is_some(),
+        "json session needs a transcript_ref"
+    );
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    assert!(
+        carried.is_empty(),
+        "a tmux→json reset must carry nothing (old is terminal)"
+    );
+}
+
+#[tokio::test]
+async fn reset_json_to_tmux_sets_use_tmux_and_carries_nothing() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        channel: Some(Channel::Tmux),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    let project = store.get_project("p1").await.unwrap();
+    let new_rec = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new_rec.channel, Some(Channel::Tmux));
+    assert_eq!(new_rec.use_tmux, true);
+    assert!(new_rec.transcript_ref.is_none());
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    assert!(
+        carried.is_empty(),
+        "a json→tmux reset must carry nothing (final is terminal)"
+    );
+}
+
+#[tokio::test]
+async fn session_output_excludes_carried_rows_of_reset_agent() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    let new_id = res.new_session_id;
+
+    // Simulate the new conversation: append a fresh Text turn to the new store
+    // (as if the new agent replied after the carried history + marker).
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &new_id);
+    let mut s = open_transcript_store(&new_dir, &new_id);
+    let mut new_text = phase2_ev(NormalizedEventKind::Text, &new_id, "new-turn", "");
+    new_text.text = Some("post-reset reply".into());
+    s.append(&mut new_text);
+    s.close();
+
+    let out = r.session_output(&new_id, Some("100")).await.unwrap();
+    assert!(
+        out.output.contains("post-reset reply"),
+        "new text must appear in output: {}",
+        out.output
+    );
+    assert!(
+        !out.output.contains("carried reply"),
+        "carried rows must be cut at the last session_break: {}",
+        out.output
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — carry modes, ordered reset, cancel flag (1.T1-T3, 1.T5)
+// ---------------------------------------------------------------------------
+
+/// A claude json-mode direct session `s1` in project `p1` with the given mode.
+async fn seeded_json_session_with_mode(store: &StoreHandle, mode_id: &str) {
+    let mut p = make_project("p1");
+    let mut old = json_session("s1", "p1");
+    old.mode_id = Some(mode_id.into());
+    p.direct_sessions.push(old);
+    add_project(store, p).await;
+    phase2_seed_old_store("p1", "s1");
+}
+
+#[tokio::test]
+async fn reset_carry_none_clears_the_chat() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Nothing),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.carry_over, CarryOver::Nothing);
+    assert_eq!(res.break_kind, None);
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    assert!(carried.is_empty(), "nothing may be carried");
+    assert!(
+        !carried
+            .iter()
+            .any(|e| e.kind == NormalizedEventKind::SessionBreak),
+        "no break marker for `none`"
+    );
+}
+
+#[tokio::test]
+async fn reset_summary_with_handoff_text_carries_rows_and_summary_marker() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Summary),
+        handoff_text: Some("the summary".into()),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.carry_over, CarryOver::Summary);
+    assert_eq!(res.break_kind, Some(SessionBreakKind::Reset));
+
+    let project = store.get_project("p1").await.unwrap();
+    let new_rec = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new_rec.initial_prompt.as_deref(), Some("the summary"));
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let kinds: Vec<NormalizedEventKind> = carried.iter().map(|e| e.kind).collect();
+    assert!(kinds.contains(&NormalizedEventKind::User));
+    assert!(kinds.contains(&NormalizedEventKind::Text));
+    let last = carried.last().unwrap();
+    assert_eq!(last.kind, NormalizedEventKind::SessionBreak);
+    assert_eq!(last.carry_over, Some(CarryOver::Summary));
+    assert_eq!(last.text.as_deref(), Some("the summary"));
+    assert_eq!(last.from_mode.as_deref(), Some("Claude Mode"));
+    assert_eq!(last.to_mode.as_deref(), Some("Claude Mode"));
+}
+
+#[tokio::test]
+async fn reset_same_cli_mode_switch_reports_switch_and_mode_names() {
+    let (_home, _guard) = home_with_modes(&[
+        ("opus-planner", "Opus Planner", "claude"),
+        ("sonnet-implementer", "Sonnet Implementer", "claude"),
+    ]);
+    let (_d, store) = store();
+    seeded_json_session_with_mode(&store, "opus-planner").await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Summary),
+        handoff_text: Some("carried".into()),
+        mode_id: Some("sonnet-implementer".into()),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.break_kind, Some(SessionBreakKind::Switch));
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let last = carried.last().unwrap();
+    assert_eq!(last.break_kind, Some(SessionBreakKind::Switch));
+    assert_eq!(last.from_mode.as_deref(), Some("Opus Planner"));
+    assert_eq!(last.to_mode.as_deref(), Some("Sonnet Implementer"));
+    // Same CLI on both sides — the provider pills stay claude → claude.
+    assert_eq!(last.from_provider.as_deref(), Some("claude"));
+    assert_eq!(last.to_provider.as_deref(), Some("claude"));
+}
+
+#[tokio::test]
+async fn reset_requesting_current_mode_reports_reset() {
+    let (_home, _guard) = home_with_modes(&[("opus-planner", "Opus Planner", "claude")]);
+    let (_d, store) = store();
+    seeded_json_session_with_mode(&store, "opus-planner").await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Summary),
+        handoff_text: Some("carried".into()),
+        mode_id: Some("opus-planner".into()),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    assert_eq!(res.break_kind, Some(SessionBreakKind::Reset));
+}
+
+#[tokio::test]
+async fn reset_carry_none_with_handoff_text_is_400() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Nothing),
+        handoff_text: Some("nope".into()),
+        ..reset_body()
+    };
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    assert!(
+        matches!(err, ResetError::BadRequest(_)),
+        "expected BadRequest, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn reset_transcript_exports_owner_only_markdown_and_instruction() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let export = new_dir.join("previous-chat.md");
+    assert!(export.exists(), "transcript export must exist");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&export).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "owner-only permissions");
+    }
+    let content = std::fs::read_to_string(&export).unwrap();
+    assert!(content.contains("## Turn 1 — User"));
+
+    let project = store.get_project("p1").await.unwrap();
+    let new_rec = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(
+        new_rec.initial_prompt.as_deref(),
+        Some(transcript_instruction(&export).as_str()),
+        "initial_prompt is the read-the-file instruction"
+    );
+
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let last = carried.last().unwrap();
+    assert_eq!(last.carry_over, Some(CarryOver::Transcript));
+    assert!(
+        last.text
+            .as_deref()
+            .unwrap_or_default()
+            .contains(export.to_string_lossy().as_ref()),
+        "marker text names the export path"
+    );
+}
+
+#[tokio::test]
+async fn reset_transcript_on_plain_pty_terminal_is_400() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = make_session("s1", "p1");
+    old.use_tmux = false;
+    old.channel = Some(Channel::Pty);
+    old.mode_id = Some("my-mode".into());
+    p.direct_sessions.push(old);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let err = r.reset_session("s1", &body).await.unwrap_err();
+    assert!(
+        matches!(err, ResetError::BadRequest(_)),
+        "expected BadRequest, got {err:?}"
+    );
+    let project = store.get_project("p1").await.unwrap();
+    assert!(project.direct_sessions[0].archived_at.is_none());
+}
+
+#[tokio::test]
+async fn reset_summary_with_handoff_text_runs_no_handoff_turn() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Summary),
+        handoff_text: Some("prewritten summary".into()),
+        ..reset_body()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+
+    let new_dir = AgentPaths::default().direct_session_data_dir("p1", &res.new_session_id);
+    let carried = read_transcript_from_data_dir(&new_dir, &res.new_session_id);
+    let user_rows: Vec<&NormalizedEvent> = carried
+        .iter()
+        .filter(|e| e.kind == NormalizedEventKind::User)
+        .collect();
+    assert_eq!(user_rows.len(), 1, "only the seeded user turn is carried");
+    assert!(
+        !carried.iter().any(|e| e
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Before this session ends")),
+        "no handoff instruction turn when handoffText is supplied"
+    );
+}
+
+#[tokio::test]
+async fn reset_cancelled_after_export_leaves_no_new_dir() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    seeded_claude_json_session(&store).await;
+    // Make the export take long enough that the cancel lands before commit.
+    let old_dir = AgentPaths::default().direct_session_data_dir("p1", "s1");
+    let mut s = open_transcript_store(&old_dir, "s1");
+    for i in 0..20_000 {
+        let mut e = phase2_ev(
+            NormalizedEventKind::Text,
+            "s1",
+            &format!("bulk-{i}"),
+            "bulk row",
+        );
+        s.append(&mut e);
+    }
+    s.close();
+
+    let r = routes(store.clone());
+    let r2 = r.clone();
+    let body = ResetBody {
+        carry_over: Some(CarryOver::Transcript),
+        ..reset_body()
+    };
+    let handle = tokio::spawn(async move { r2.reset_session("s1", &body).await });
+
+    let mut cancelled = false;
+    for _ in 0..50_000 {
+        if r.reset_cancels.get("s1").is_some() {
+            cancelled = r.cancel_reset("s1");
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(cancelled, "the in-flight reset was found and cancelled");
+
+    let res = handle.await.unwrap();
+    assert!(
+        matches!(res, Err(ResetError::Cancelled(_))),
+        "expected Cancelled, got {res:?}"
+    );
+
+    let sessions_root = AgentPaths::default().project_dir("p1").join("sessions");
+    let mut ids: Vec<String> = std::fs::read_dir(&sessions_root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["s1".to_string()],
+        "the new session data dir must be removed on cancel"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cancel-aware waits + ResetFlag (1.T5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn wait_for_handoff_file_returns_promptly_when_cancelled() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("h.md");
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let c = cancelled.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        c.store(true, AtomicOrdering::SeqCst);
+    });
+    let started = std::time::Instant::now();
+    let out = wait_for_handoff_file(
+        &path,
+        Duration::from_secs(60),
+        Duration::from_secs(30),
+        || false,
+        || async {},
+        &cancelled,
+    )
+    .await;
+    assert_eq!(out, None);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "must not burn the 60s timeout"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_turn_start_returns_promptly_when_cancelled() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let c = cancelled.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        c.store(true, AtomicOrdering::SeqCst);
+    });
+    let started = std::time::Instant::now();
+    let ok = wait_for_turn_start(
+        || HandoffTurnPhase::Queued,
+        Duration::from_secs(60),
+        Duration::from_millis(20),
+        &cancelled,
+    )
+    .await;
+    assert!(!ok);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "must not burn the 60s timeout"
+    );
+}
+
+#[test]
+fn reset_flag_cancel_before_commit_errors_and_cancel_after_commit_is_false() {
+    let flag = ResetFlag::default();
+    assert!(flag.cancel());
+    assert!(flag.commit().is_err(), "cancelled wins the race");
+
+    let committed = ResetFlag::default();
+    assert!(committed.commit().is_ok());
+    assert!(
+        !committed.cancel(),
+        "no cancel after the point of no return"
+    );
+}
+
+#[tokio::test]
+async fn reset_flag_clone_shares_cancel_map_and_second_reset_is_in_progress() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let a = routes(store.clone());
+    let b = a.clone();
+    let flag = a.reset_cancels.register("s1").expect("first register");
+    assert!(
+        b.cancel_reset("s1"),
+        "a clone shares the same Arc<Mutex<...>>"
+    );
+    assert!(flag.cancelled().load(AtomicOrdering::SeqCst));
+
+    let err = b.reset_session("s1", &reset_body()).await.unwrap_err();
+    assert!(
+        matches!(err, ResetError::InProgress(_)),
+        "a second concurrent reset must be InProgress, got {err:?}"
+    );
+
+    // Once the flag is gone, the reset proceeds.
+    a.reset_cancels.remove("s1");
+    let res = b.reset_session("s1", &reset_body()).await.unwrap();
+    assert!(res.ok);
 }

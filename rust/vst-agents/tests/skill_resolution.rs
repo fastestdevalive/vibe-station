@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use vst_agents::skill_resolution::{
     inject_attachments, merge_with_skill_catalog, reset_skill_catalog_for_tests,
-    resolve_skill_invocations, MergedSkillEntry,
+    resolve_skill_invocations, set_skill_paths, with_skill_catalog_test_guard, MergedSkillEntry,
 };
-use vst_types::Attachment;
+use vst_types::{Attachment, Command, CommandGroup};
 
 fn entry(name: &str, path: Option<&str>) -> MergedSkillEntry {
     MergedSkillEntry {
@@ -107,4 +107,41 @@ fn inject_attachments_header_only_when_empty() {
         "\n\n[Attached files:]\n/data/f.txt"
     );
     assert_eq!(inject_attachments("hello", &[], false), "hello");
+}
+
+/// Phase 3.7 (Decision 10): the wire `group` is set from the entry's origin —
+/// a directory-scanned skill (`path` present) is `skill`, everything from the
+/// CLI's own `commands_update` catalog is `agent`. The client adds its own
+/// `"vibe-station"` group on top.
+#[tokio::test]
+async fn merge_sets_group_from_path_presence() {
+    let _guard = with_skill_catalog_test_guard();
+    reset_skill_catalog_for_tests();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("code-review")).expect("mkdir");
+    std::fs::write(
+        dir.path().join("code-review/SKILL.md"),
+        "---\nname: code-review\ndescription: Review\n---\nbody",
+    )
+    .expect("write skill");
+    set_skill_paths(&[dir.path().display().to_string()]).await;
+
+    let acp = vec![Command {
+        name: "compact".to_string(),
+        description: "Compact".to_string(),
+        argument_hint: None,
+        group: None,
+    }];
+    let merged = merge_with_skill_catalog(Some(&acp), true).expect("merged catalog");
+    let find = |name: &str| {
+        merged
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("missing {name} in {merged:?}"))
+    };
+    assert_eq!(find("code-review").group, Some(CommandGroup::Skill));
+    assert_eq!(find("compact").group, Some(CommandGroup::Agent));
+
+    reset_skill_catalog_for_tests();
 }

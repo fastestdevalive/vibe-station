@@ -3,7 +3,12 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::domain::{Attachment, Channel, DraftConfig, NormalizedEvent, SessionType};
+use crate::domain::{
+    Attachment, Channel, DraftConfig, NormalizedEvent, SessionBreakKind, SessionType,
+};
+
+/// Re-exported here because it appears in `ResetBody`/`ResetResult`.
+pub use crate::domain::CarryOver;
 
 use super::shared::{GlobalDraft, Session};
 
@@ -209,24 +214,68 @@ pub struct ReorderSessionResult {
     pub sort_order: f64,
 }
 
+/// How a reset treats a running turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhenBusy {
+    /// Stop the running turn first (default).
+    #[default]
+    Stop,
+    /// Let the running turn (and its queue) finish first.
+    Wait,
+}
+
+/// What a reset does with messages queued behind the running turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueuedPolicy {
+    /// Hand them to the replacement agent (default).
+    #[default]
+    Carry,
+    /// Discard them.
+    Drop,
+}
+
 /// `POST /sessions/:id/reset` request body.
 #[skip_serializing_none]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetBody {
     pub handoff: Option<bool>,
     pub prompt: Option<String>,
     pub handoff_text: Option<String>,
     pub mode_id: Option<String>,
+    pub channel: Option<Channel>,
+    /// `"none" | "summary" | "transcript"`; wins over `handoff`/`handoffText`.
+    pub carry_over: Option<CarryOver>,
+    /// `"stop" | "wait"` (default `stop`).
+    pub when_busy: Option<WhenBusy>,
+    /// `"carry" | "drop"` (default `carry`; only meaningful with `whenBusy=stop`).
+    pub queued: Option<QueuedPolicy>,
 }
 
 /// `POST /sessions/:id/reset` success.
+#[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetResult {
     pub ok: bool,
     pub archived_session_id: String,
     pub new_session_id: String,
+    /// Which carry mode was applied (`none` when nothing was copied).
+    #[serde(default)]
+    pub carry_over: CarryOver,
+    /// `"reset" | "switch"`; absent when `carryOver` is `none`.
+    pub break_kind: Option<SessionBreakKind>,
+}
+
+/// `POST /sessions/:id/reset/cancel` success.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelResetResult {
+    pub ok: bool,
+    /// `false` when no reset is in flight or it already passed its point of no return.
+    pub cancelled: bool,
 }
 
 /// `POST /sessions/:id/handoff` success.

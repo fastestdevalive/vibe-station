@@ -11,6 +11,7 @@ fn make_turn(id: &str, order: u64) -> QueuedTurn {
         raw_message: format!("msg-{id}"),
         attachments: vec![],
         fork_from_chat_id: None,
+        silent: false,
     }
 }
 
