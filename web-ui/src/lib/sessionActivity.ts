@@ -53,3 +53,40 @@ export function sortByActivity<T>(items: readonly T[], at: (t: T) => string | nu
     })
     .map((x) => x.item);
 }
+
+/** Cards whose activity differs by no more than this keep their relative order. */
+export const ORDER_STABILITY_MS = 3 * 60 * 1000;
+
+/**
+ * Order `items` newest-activity-first, but with hysteresis: starting from the
+ * previous order (`prevIds`), an item only jumps ahead of a neighbour once it
+ * is MORE than `thresholdMs` newer. Items within the threshold of each other
+ * never swap, so a busy list doesn't reshuffle on every tick. Unknown ids
+ * enter at their newest-first position; vanished ids are dropped.
+ */
+export function stableActivityOrder<T>(
+  items: readonly T[],
+  idOf: (t: T) => string,
+  at: (t: T) => string | null | undefined,
+  prevIds: readonly string[],
+  thresholdMs: number = ORDER_STABILITY_MS,
+): T[] {
+  const byId = new Map(items.map((i) => [idOf(i), i]));
+  const kept = prevIds.filter((id) => byId.has(id));
+  const known = new Set(kept);
+  // Fresh arrivals are placed by the plain sort, then merged by the pass below.
+  const fresh = sortByActivity(items, at).filter((i) => !known.has(idOf(i)));
+  const arr = [...kept.map((id) => byId.get(id) as T), ...fresh];
+  const ms = (t: T) => toMs(at(t)) ?? -Infinity;
+  // Insertion pass: an item moves up to just above the topmost item it beats
+  // by more than the threshold (comparing only the neighbour would let a
+  // chain of small gaps strand a much newer item at the bottom).
+  for (let i = 1; i < arr.length; i++) {
+    const cur = arr[i] as T;
+    let k = arr.slice(0, i).findIndex((o) => ms(cur) - ms(o) > thresholdMs);
+    if (k < 0) continue;
+    for (let j = i; j > k; j--) arr[j] = arr[j - 1] as T;
+    arr[k] = cur;
+  }
+  return arr;
+}

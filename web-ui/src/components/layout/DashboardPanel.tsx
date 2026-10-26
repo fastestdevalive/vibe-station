@@ -561,6 +561,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     items: T[],
     idOf: (item: T) => string,
     renderItem: (item: T) => React.ReactNode,
+    activityOf: (item: T) => string | null | undefined,
   ) => (
     <DashboardCardGroup
       key={sectionKey}
@@ -569,6 +570,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
       header={<div className="dashboard-section__label">{label}</div>}
       items={items}
       idOf={idOf}
+      activityOf={activityOf}
       renderItem={renderItem}
       expanded={!!expandedCols[sectionKey]}
       onExpand={() => setExpandedCols((prev) => ({ ...prev, [sectionKey]: true }))}
@@ -580,6 +582,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     items: T[],
     idOf: (item: T) => string,
     renderItem: (item: T) => React.ReactNode,
+    activityOf: (item: T) => string | null | undefined,
   ) => {
     const config = KANBAN_COLS[colKey];
     const Icon = config.icon;
@@ -598,6 +601,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
         }
         items={items}
         idOf={idOf}
+        activityOf={activityOf}
         renderItem={renderItem}
         expanded={!!expandedCols[colKey]}
         onExpand={() => setExpandedCols((prev) => ({ ...prev, [colKey]: true }))}
@@ -607,6 +611,8 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
 
   const sessionId = (s: Session) => s.id;
   const groupId = (g: PrWorktreeGroup) => g.worktree.id;
+  const sessionAt = (s: Session) => sessionActivityAt(s);
+  const groupAt = (g: PrWorktreeGroup) => worktreeActivity.get(g.worktree.id);
 
   const toggleViewLabel =
     dashboardView === "list" ? "Switch to kanban layout" : "Switch to list layout";
@@ -667,30 +673,35 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
             {working.length > 0
               ? renderSection("working", "working", working, sessionId, (s) =>
                   renderDashboardItem(s, "working"),
+                sessionAt,
                 )
               : null}
 
             {needsYou.length > 0
               ? renderSection("needsYou", "needs you", needsYou, sessionId, (s) =>
                   renderDashboardItem(s, "needsYou"),
+                sessionAt,
                 )
               : null}
 
             {idle.length > 0
               ? renderSection("idle", "idle", idle, sessionId, (s) =>
                   renderDashboardItem(s, "idle"),
+                sessionAt,
                 )
               : null}
 
             {rolledUpPr.length > 0
               ? renderSection("pr", "pr created", rolledUpPr, groupId, (g) =>
                   renderDashboardWorktreeItem(g),
+                groupAt,
                 )
               : null}
 
             {showFinished && finished.length > 0
               ? renderSection("finished", "finished", finished, sessionId, (s) =>
                   renderDashboardItem(s, "finished"),
+                sessionAt,
                 )
               : null}
 
@@ -706,15 +717,18 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
           <div className={`dashboard-kanban${showFinished ? " dashboard-kanban--with-finished" : ""}`}>
             {renderKanbanCol("working", working, sessionId, (s) =>
               renderDashboardItem(s, "working"),
+            sessionAt,
             )}
             {renderKanbanCol("needsYou", needsYou, sessionId, (s) =>
               renderDashboardItem(s, "needsYou"),
+            sessionAt,
             )}
-            {renderKanbanCol("idle", idle, sessionId, (s) => renderDashboardItem(s, "idle"))}
-            {renderKanbanCol("pr", rolledUpPr, groupId, (g) => renderDashboardWorktreeItem(g))}
+            {renderKanbanCol("idle", idle, sessionId, (s) => renderDashboardItem(s, "idle"), sessionAt)}
+            {renderKanbanCol("pr", rolledUpPr, groupId, (g) => renderDashboardWorktreeItem(g), groupAt)}
             {showFinished
               ? renderKanbanCol("finished", finished, sessionId, (s) =>
                   renderDashboardItem(s, "finished"),
+                sessionAt,
                 )
               : null}
           </div>
