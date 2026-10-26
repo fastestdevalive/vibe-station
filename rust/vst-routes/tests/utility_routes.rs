@@ -60,7 +60,7 @@ fn init_git_repo(path: &Path) {
 #[tokio::test]
 async fn test_health_route() {
     let started = Instant::now() - Duration::from_secs(42);
-    let routes = HealthRoutes::new("1.2.3", 8080, started);
+    let routes = HealthRoutes::new("1.2.3", 8080, started, "boot-x".to_string());
     let res = routes.health();
 
     assert!(res.ok);

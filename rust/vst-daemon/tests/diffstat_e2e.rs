@@ -152,6 +152,7 @@ async fn diffstat_e2e_file_edit_activity_and_client_gate() {
         version: "test".to_string(),
         paths,
         limits: vst_harness_limits::LimitsHandle::inert(broadcaster.clone(), "test".to_string()),
+        update: vst_daemon::update::UpdateService::for_tests(tmp.path()),
     };
 
     let state = build_state(opts);

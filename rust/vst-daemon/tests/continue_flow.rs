@@ -47,6 +47,7 @@ fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServe
             vst_types::events::Broadcaster::new(16),
             "test".to_string(),
         ),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 

@@ -116,6 +116,7 @@ impl H {
             tmux: vst_proc::test_support::isolated_tmux(),
             started_at: Instant::now(),
             version: "test".into(),
+            update: vst_daemon::update::UpdateService::for_tests(&vst_home),
             paths: Paths::with_home(vst_home),
             limits: vst_harness_limits::LimitsHandle::inert(Broadcaster::new(16), "test".into()),
         });

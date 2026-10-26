@@ -45,9 +45,10 @@ use vst_types::domain::TokenScope;
 use vst_types::events::Broadcaster;
 
 use crate::env_setup::{install_harness_skill_dirs, patch_shell_configs, setup_vst_environment};
-use crate::lock::{acquire_lock, release_lock};
+use crate::lock::release_lock;
 use crate::port::{find_free_port, DEFAULT_PORT};
 use crate::server::{build_state, router_from_state, BuildServerOptions};
+use crate::update::{self, restart};
 
 /// Options controlling how the daemon boots.
 #[derive(Clone, Copy, Debug, Default)]
@@ -360,17 +361,24 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // ── Paths ────────────────────────────────────────────────────────────────
     let paths = Paths::default_home();
     let vst_home = paths.vst_home().clone();
-    let lock_path = vst_home.join(".daemon.lock");
     let config_path = vst_home.join("config.json");
+
+    // Captured before anything can replace the binary: on Linux a replaced
+    // exe reads `(deleted)` from `current_exe()` afterwards.
+    let boot_exe = std::env::current_exe().unwrap_or_default();
+    // Argv the restart `exec`s the successor with (see the end of this fn).
+    let boot_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let boot_id = gen_daemon_token().context("generate boot id")?;
 
     // ── Lock ─────────────────────────────────────────────────────────────────
     // Single-daemon invariant: acquireLock() → this also covers vibe-station.db
     // since it lives in the same directory. No additional DB locking needed.
     // The returned File MUST stay alive for the daemon's entire lifetime —
     // dropping it releases the flock immediately (see lock.rs).
-    let lock_file = acquire_lock(&lock_path)
-        .await
-        .context("acquire daemon lock")?;
+    // Read AND remove the handoff env before anything is spawned, so it never
+    // leaks to tmux/agents or the watcher env.
+    // `restart` also carries the handoff (auth, port) when this boot is a restart.
+    let (restart, lock_file) = restart::take_boot_restart(&vst_home).await?;
 
     // ── Best-effort environment setup ─────────────────────────────────────────
     // Write ~/.vibe-station/bin/vst shim, SKILL.md, shell configs.
@@ -399,7 +407,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
 
     // ── Manifest migration ───────────────────────────────────────────────────
     // One-time JSON → SQLite migration (idempotent after first successful boot).
-    let db_path = vst_home.join("vibe-station.db");
+    let db_path = update::paths::db(&vst_home);
     let store = StoreHandle::open(&db_path).context("open vibe-station.db")?;
     let projects_dir = vst_home.join("projects");
     let migration = store.migrate_manifests(&projects_dir).await;
@@ -430,11 +438,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     sweep_direct_pty_sessions_on_boot(&store, &paths).await;
 
     // ── Port ─────────────────────────────────────────────────────────────────
-    let port = match std::env::var("VST_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .filter(|&p| p > 0)
-    {
+    let port = match restart.port {
         Some(p) => p,
         None => find_free_port(DEFAULT_PORT).context("find free port")?,
     };
@@ -446,10 +450,13 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    // Fresh daemonToken in memory on every startup — NEVER persisted.
-    // All existing browser/CLI/Tauri sessions become invalid on restart.
-    let daemon_token = gen_daemon_token().context("generate daemon token")?;
-    let auth_state = AuthState::new(daemon_token, browser_epoch);
+    let auth_state = if let Some(auth) = restart.auth.clone() {
+        AuthState::from_handoff(auth)
+    } else {
+        // Fresh daemonToken in memory on startup — NEVER persisted.
+        let daemon_token = gen_daemon_token().context("generate daemon token")?;
+        AuthState::new(daemon_token, browser_epoch)
+    };
 
     // `daemon_token` is the HMAC signing key for every token: never log or print
     // it. A plain browser signs in through the continue flow instead
@@ -482,6 +489,14 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
 
     // ── Build Axum router ─────────────────────────────────────────────────────
     let broadcaster = Broadcaster::new(256);
+    let update_service =
+        crate::update::UpdateService::new(crate::update::UpdateConfig::with_defaults(
+            vst_home.clone(),
+            crate::version::current().to_string(),
+            boot_exe.clone(),
+            boot_id.clone(),
+            Some(broadcaster.clone()),
+        ));
     let json_registry = Arc::new(vst_agents::json_agent_registry::JsonAgentRegistry::<
         vst_agents::json_agent_session::JsonAgentSession,
     >::new());
@@ -563,6 +578,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         version: crate::version::current().to_string(),
         paths: paths.clone(),
         limits: limits.clone(),
+        update: update_service.clone(),
     });
 
     // Settle `working(background|subagent-notice)` rows a previous daemon left
@@ -666,19 +682,46 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let background_boot = BackgroundBoot::new();
     let background_boot_for_shutdown = background_boot.clone();
 
-    // Register SIGINT + SIGTERM + the API-triggered stop signal. `lock_file`
-    // moves into this task — it MUST stay alive until cleanup releases it
+    let restart_after_shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let restart_after_shutdown_for_signal = restart_after_shutdown.clone();
+    let restart_notify = update_service.restart_signal();
+    let restart_nonce_out = Arc::new(tokio::sync::Mutex::new(None::<String>));
+    let restart_nonce_out_for_signal = restart_nonce_out.clone();
+    let restart_ctx = restart::RestartCtx {
+        store: store.clone(),
+        auth: auth_state.clone(),
+        update: update_service.clone(),
+        vst_home: vst_home.clone(),
+        boot_exe: boot_exe.clone(),
+        boot_id: boot_id.clone(),
+        port,
+    };
+
+    // Register SIGINT + SIGTERM + the API-triggered stop signal + restart signal.
+    // `lock_file` moves into this task — it MUST stay alive until cleanup releases it
     // here, not before.
     tokio::spawn(async move {
         let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
         let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
-        tokio::select! {
-            _ = sigint.recv() => tracing::info!("\nReceived SIGINT; shutting down…"),
-            _ = sigterm.recv() => tracing::info!("\nReceived SIGTERM; shutting down…"),
+        let is_restart = tokio::select! {
+            _ = sigint.recv() => {
+                tracing::info!("\nReceived SIGINT; shutting down…");
+                false
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("\nReceived SIGTERM; shutting down…");
+                false
+            }
             _ = stop_requested_for_signal_task.notified() => {
                 tracing::info!("[vst] Stop requested via API; shutting down…");
+                false
             }
-        }
+            _ = restart_notify.notified() => {
+                tracing::info!("[vst] Restart requested via API; draining and restarting…");
+                tokio::time::sleep(update::timing::RESTART_FLUSH_DELAY).await;
+                true
+            }
+        };
         // Write what the artifact intake still holds (bounded), then stop it.
         artifacts.shutdown(std::time::Duration::from_secs(1)).await;
         artifacts_task.abort();
@@ -693,10 +736,21 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         limits_handle.abort();
         terminal_reaper_handle.abort();
         background_boot_for_shutdown.abort_all().await;
+
+        if is_restart {
+            *restart_nonce_out_for_signal.lock().await =
+                restart::prepare_restart(&restart_ctx).await;
+        }
+
         // Kill cloudflared but preserve `enabled` flag so restore_on_boot
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).
         let _ = cloudflared::shutdown_kill(&store_for_shutdown).await;
         release_lock(lock_file).await;
+
+        if is_restart {
+            restart_after_shutdown_for_signal.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
         // Broadcast shutdown to every waiter (the supervisor's serve tasks).
         let _ = shutdown_tx_for_signal.send(true);
     });
@@ -711,9 +765,8 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
 
     // Bind here (not inside the supervisor) so a port conflict is a startup error
     // with a non-zero exit, and "listening" is only printed once we really are.
-    let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{port}"))
-        .await
-        .with_context(|| format!("bind {bind_host}:{port}"))?;
+    let bind_addr = format!("{bind_host}:{port}");
+    let listener = restart::bind_with_restart_retry(&bind_addr, restart.is_restart).await?;
 
     tracing::info!("vst daemon listening on http://{bind_host}:{port}");
     println!("vst daemon listening on http://{bind_host}:{port}");
@@ -727,6 +780,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let tunnel_guard = cloudflared::lock_for_boot_restore().await;
     background_boot.spawn(cloudflared_boot_task(tunnel_guard, port, store.clone()));
     background_boot.spawn(tailscale_drift_check_task(port));
+    background_boot.spawn(update_service.clone().run_background());
     background_boot.spawn(skill_catalog_boot_task(
         config_path.clone(),
         vst_home.clone(),
@@ -738,11 +792,19 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // block it replaces — it only returns after the shutdown task above ran.
     let supervisor =
         crate::network::spawn_supervisor_with_listener(router, listener, shutdown_rx, swap_rx);
+    if restart.is_restart {
+        background_boot.spawn(restart::finish_handoff(vst_home.clone(), port));
+    }
     let _ = supervisor.await;
 
     // Lock release + all other cleanup already happened inside the
     // SIGINT/SIGTERM/stop-requested task above, before it broadcast shutdown —
     // the supervisor only returns after that already ran.
+    if restart_after_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+        let nonce = restart_nonce_out.lock().await.clone().unwrap_or_default();
+        restart::exec_successor(&boot_exe, &boot_args, &nonce, port);
+    }
+
     Ok(())
 }
 

@@ -43,8 +43,19 @@ tracing-subscriber = { workspace = true }
 futures = "0.3"
 regex = "1"
 ring = "0.17"
+# Decodes minisign key / signature lines (already in Cargo.lock at 0.22.1).
+base64 = "0.22"
 percent-encoding = { workspace = true }
 rust-embed = { version = "8", optional = true }
+# First outbound-HTTPS dep for the update feature — crate-local, not the
+# workspace table (same shape as vst-lifecycle). rustls-tls avoids native
+# OpenSSL linking issues in CI/sandboxes.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+semver = "1"
+# Install primitives: gzip + tar extraction (no C deps; `tar` drops xattr).
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+libc = "0.2"
 
 [features]
 # Embeds web-ui/dist and skill/SKILL.md into the binary at compile time, so a
@@ -62,6 +73,14 @@ embed-ui = ["dep:rust-embed"]
 # Compile-time opt-in to allow VST_NO_AUTH=1 to disable daemon authentication.
 # Must never be enabled for release builds. Off by default.
 insecure-no-auth = []
+# TEST ONLY — never enable for a shipped build. The ONE gate for every test seam in
+# this crate: `pinned_keys()` reads VST_TEST_RELEASE_PUBKEYS (throwaway signing key for
+# end-to-end tests), `UpdateService::{for_tests, with_env_for_tests,
+# set_trusted_keys_for_tests, set_detected_for_tests}`, `signature::test_support`, and the
+# VST_RESTART_WATCH_WINDOW_MS watcher window. Enabled solely via [dev-dependencies]
+# (this crate's own, and vst-cli's); optimized builds refuse it with `compile_error!`
+# and release CI greps the binary for the marker strings.
+test-seams = []
 
 [dev-dependencies]
 vst-testkit = { workspace = true }
@@ -70,6 +89,10 @@ http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
 tokio = { workspace = true, features = ["test-util"] }
+mockito = "0.31"
+# Self dev-dependency: turns the test seams on for tests/*.rs (integration tests link the
+# lib without cfg(test)).
+vst-daemon = { path = ".", features = ["test-seams"] }
 
 [lints]
 workspace = true

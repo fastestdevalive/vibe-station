@@ -14,6 +14,7 @@ pub mod review_boot;
 pub mod review_routes;
 pub mod run;
 pub mod server;
+pub mod update;
 pub mod version;
 
 pub use agy_stream_acp_cmd::run_agy_stream_acp;

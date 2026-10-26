@@ -27,6 +27,10 @@ vst daemon start
 
 # Start headless (no UI, for CI / GitHub Actions)
 vst daemon start --headless
+
+# Gracefully restart the daemon (in-place exec, preserves auth tokens)
+vst daemon restart
+vst daemon restart --yes      # bypass impact confirmation
 ```
 
 ---
@@ -260,6 +264,21 @@ vst agent transcript <sessionId> --json
 ```
 
 This returns an array of turn events. It errors on a tmux session (those have no event log).
+
+---
+
+### Update vst itself
+
+```bash
+vst update --check            # exit 0 = up to date, 10 = update available (prints "v<cur> → v<latest>"), 1 = error
+vst update --yes              # install without the typed "confirm" prompt (required when stdin is not a TTY)
+vst update --skip 1.2.3       # hide version 1.2.3 from the update chip; --unskip 1.2.3 reverses it
+```
+
+Without `--yes` and without a TTY, `vst update` prints the summary and exits 1 ("re-run with --yes"). It works with no
+daemon or an old daemon (it updates the binaries directly). After an install, restart the daemon
+(`vst daemon restart [--yes]`) and reload open browser tabs.
+- On macOS (.dmg) or Linux (.deb), updates are manual or semi-manual: for .dmg, it opens the browser download and prints install instructions; for .deb, it downloads and verifies the package to `~/Downloads` and prints the `sudo apt install` command.
 
 ---
 

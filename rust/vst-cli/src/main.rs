@@ -609,6 +609,24 @@ async fn main() {
                         die(&err, Some(code));
                     }
                 }
+                DaemonCommand::Restart { help: true, .. } => {
+                    println!("{}", program::RESTART_USAGE);
+                }
+                DaemonCommand::Restart { yes, .. } => {
+                    let code = commands::daemon::restart::run_restart(yes, false).await;
+                    if code != 0 {
+                        std::process::exit(code);
+                    }
+                }
+                DaemonCommand::RestartWatch(args) => match args {
+                    Ok(args) => std::process::exit(
+                        vst_daemon::update::run_watch(args.with_env_nonce()).await,
+                    ),
+                    Err(e) => {
+                        eprintln!("vst daemon _restart-watch: {e}");
+                        std::process::exit(2);
+                    }
+                },
                 DaemonCommand::Run => {
                     // Defensive fallback — normal dispatch intercepts "daemon
                     // run" before parse_args ever runs (see dispatch.rs).
@@ -666,6 +684,10 @@ async fn main() {
                     std::process::exit(code);
                 }
             }
+        }
+        Command::Update(args) => {
+            let code = commands::update::run_update(args).await;
+            std::process::exit(code);
         }
         _ => {
             eprintln!("Command not yet implemented in Rust port");

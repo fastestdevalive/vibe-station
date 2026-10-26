@@ -91,6 +91,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
         version: "test".to_string(),
         paths,
         limits: claude_handle(),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 

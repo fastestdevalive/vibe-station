@@ -12,9 +12,67 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+
+/// How long to keep trying a contended lock: `attempts` tries `interval` apart.
+/// Every lock in the daemon, the update feature and the CLI is taken through
+/// [`try_lock`], so each retry policy is a named `LockWait` with its reason at
+/// the definition (see `update/timing.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LockWait {
+    pub attempts: u32,
+    pub interval: Duration,
+}
+
+impl LockWait {
+    /// One try, no waiting.
+    pub const NONE: LockWait = LockWait {
+        attempts: 1,
+        interval: Duration::ZERO,
+    };
+
+    /// Enough `interval`-spaced tries to cover `total` (a zero `total` is [`Self::NONE`]).
+    pub fn covering(total: Duration, interval: Duration) -> LockWait {
+        if total.is_zero() || interval.is_zero() {
+            return LockWait::NONE;
+        }
+        let tries = total.as_millis().div_ceil(interval.as_millis()) as u32;
+        LockWait {
+            attempts: tries.saturating_add(1),
+            interval,
+        }
+    }
+}
+
+/// Open `path` (creating it and its parent directory, never truncating) and
+/// take an exclusive `flock` on it, retrying per `wait`. Blocking.
+///
+/// `Ok(None)` = another process still holds it. The returned `File` IS the
+/// lock: the caller must keep it alive for as long as the lock is needed.
+pub fn try_lock(path: &Path, wait: LockWait) -> std::io::Result<Option<File>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Explicitly NOT truncating at open time: acquire the flock FIRST, so a
+    // losing racer never destroys the winner's content (see `acquire_lock`).
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    Ok(vst_proc::try_lock_with_retry(&file, wait.attempts, wait.interval)?.then_some(file))
+}
+
+/// [`try_lock`] on the blocking pool, for async callers.
+pub async fn try_lock_async(path: PathBuf, wait: LockWait) -> std::io::Result<Option<File>> {
+    tokio::task::spawn_blocking(move || try_lock(&path, wait))
+        .await
+        .map_err(std::io::Error::other)?
+}
 
 /// Acquire `~/.vibe-station/.daemon.lock`.
 ///
@@ -23,52 +81,38 @@ use anyhow::{bail, Context, Result};
 /// the lock immediately. If another live process already holds the lock,
 /// bails with a human-readable message.
 pub async fn acquire_lock(lock_path: &PathBuf) -> Result<File> {
-    if let Some(parent) = lock_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .context("create ~/.vibe-station")?;
-    }
+    acquire_lock_with_retry(lock_path, Duration::ZERO).await
+}
 
-    let lock_path = lock_path.clone();
-    tokio::task::spawn_blocking(move || -> Result<File> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            // Explicitly NOT truncating at open time — clippy's own
-            // suggested fix here (.truncate(true)) would be a real bug: we
-            // must acquire the flock FIRST and only truncate afterward (see
-            // the set_len(0) call below), so a losing racer never destroys
-            // the winner's file content before even knowing whether it won.
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .context("open lock file")?;
-
-        match vst_proc::try_lock_exclusive(&file) {
-            Ok(true) => {}
-            Ok(false) => {
-                bail!(
-                    "Daemon is already running. \
-                     Use `vst daemon stop` first."
-                );
-            }
-            Err(e) => return Err(e).context("flock lock file"),
-        }
-
-        // Truncate before writing: a pre-existing file's old PID content may
-        // be longer than the new one, which would otherwise leave trailing
-        // garbage bytes behind. The PID written here is for human debugging
-        // only (e.g. `cat ~/.vibe-station/.daemon.lock`) — nothing re-reads
-        // it for correctness; the flock itself is the sole source of truth.
-        file.set_len(0).context("truncate lock file")?;
-        let pid_str = std::process::id().to_string();
-        file.write_all(pid_str.as_bytes())
-            .context("write pid to lock file")?;
-        file.flush().context("flush lock file")?;
-
-        Ok(file)
-    })
-    .await
-    .context("spawn_blocking acquire_lock")?
+/// [`acquire_lock`], retrying contention every 250 ms up to `total`. Used
+/// during a planned restart handoff where the old daemon is releasing the lock
+/// concurrently.
+pub async fn acquire_lock_with_retry(lock_path: &PathBuf, total: Duration) -> Result<File> {
+    let wait = LockWait::covering(total, crate::update::timing::RESTART_RETRY_INTERVAL);
+    let mut file = match try_lock_async(lock_path.clone(), wait)
+        .await
+        .context("flock lock file")?
+    {
+        Some(f) => f,
+        None if total.is_zero() => bail!(
+            "Daemon is already running. \
+             Use `vst daemon stop` first."
+        ),
+        None => bail!(
+            "Daemon is already running. \
+             Timed out waiting for lock release after {}s.",
+            total.as_secs()
+        ),
+    };
+    // Truncate before writing (after winning the lock): a pre-existing file's
+    // old PID content may be longer than the new one, which would otherwise
+    // leave trailing garbage. The PID is for human debugging only
+    // (`cat ~/.vibe-station/.daemon.lock`); the flock is the sole source of truth.
+    file.set_len(0).context("truncate lock file")?;
+    file.write_all(std::process::id().to_string().as_bytes())
+        .context("write pid to lock file")?;
+    file.flush().context("flush lock file")?;
+    Ok(file)
 }
 
 /// No-op — releasing the lock is `acquire_lock`'s returned `File` being
@@ -140,5 +184,30 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, std::process::id().to_string());
         release_lock(file).await;
+    }
+
+    #[tokio::test]
+    async fn retry_times_out_while_held_and_succeeds_after_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".daemon.lock");
+        let held = acquire_lock(&path).await.unwrap();
+        let err = acquire_lock_with_retry(&path, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Timed out waiting"));
+        release_lock(held).await;
+        acquire_lock_with_retry(&path, Duration::from_millis(300))
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn lock_wait_covers_the_total() {
+        let w = LockWait::covering(Duration::from_secs(15), Duration::from_millis(250));
+        assert_eq!(w.attempts, 61);
+        assert_eq!(
+            LockWait::covering(Duration::ZERO, Duration::from_millis(250)),
+            LockWait::NONE
+        );
     }
 }

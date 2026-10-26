@@ -25,6 +25,7 @@ pub mod sessions;
 pub mod settings;
 pub mod skills;
 pub mod tailscale;
+pub mod update;
 pub mod worktrees;
 
 pub mod shared;

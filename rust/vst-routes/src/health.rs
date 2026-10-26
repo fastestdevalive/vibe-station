@@ -16,14 +16,21 @@ pub struct HealthRoutes {
     version: String,
     port: i64,
     started_at: Instant,
+    boot_id: String,
 }
 
 impl HealthRoutes {
-    pub fn new(version: impl Into<String>, port: i64, started_at: Instant) -> Self {
+    pub fn new(
+        version: impl Into<String>,
+        port: i64,
+        started_at: Instant,
+        boot_id: String,
+    ) -> Self {
         Self {
             version: version.into(),
             port,
             started_at,
+            boot_id,
         }
     }
 
@@ -35,6 +42,7 @@ impl HealthRoutes {
             version: self.version.clone(),
             port: self.port,
             uptime,
+            boot_id: self.boot_id.clone(),
         }
     }
 }

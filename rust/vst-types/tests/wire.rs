@@ -15,6 +15,7 @@ use vst_types::limits::LimitsSnapshot;
 use vst_types::rest::modes::SupportedCli;
 use vst_types::rest::sessions::{EnqueueChatResult, ScheduleSnapshotDto};
 use vst_types::rest::shared::{GlobalDraft, Mode, Project, Session, Worktree};
+use vst_types::rest::update::UpdateStatus;
 use vst_types::ws::{ClientMessage, ServerMessage, SessionCreatedSnapshot};
 
 fn load_fixture(name: &str) -> Value {
@@ -574,4 +575,18 @@ fn old_payloads_default_the_new_review_fields() {
     }))
     .unwrap();
     assert!(!cli.supports_terminal_comments);
+}
+
+#[test]
+fn update_status_roundtrips() {
+    assert_roundtrip::<UpdateStatus>("update-status.json");
+}
+
+#[test]
+fn server_message_update_changed_roundtrips() {
+    let fixture = load_fixture("server-message-update-changed.json");
+    let msg: ServerMessage = serde_json::from_value(fixture.clone()).unwrap();
+    assert!(matches!(msg, ServerMessage::UpdateChanged { .. }));
+    let reserialized = serde_json::to_value(&msg).unwrap();
+    assert_eq!(reserialized, fixture);
 }

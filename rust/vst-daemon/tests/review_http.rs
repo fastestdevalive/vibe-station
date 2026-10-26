@@ -199,6 +199,7 @@ impl H {
             tmux: Tmux::with_socket(&socket),
             started_at: Instant::now(),
             version: "test".into(),
+            update: vst_daemon::update::UpdateService::for_tests(paths.vst_home()),
             paths,
             limits: vst_harness_limits::LimitsHandle::inert(Broadcaster::new(16), "test".into()),
         });

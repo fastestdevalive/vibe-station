@@ -42,6 +42,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
         version: "test".to_string(),
         paths: Paths::with_home(tmp.to_path_buf()),
         limits: vst_harness_limits::LimitsHandle::inert(Broadcaster::new(16), "test".to_string()),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 

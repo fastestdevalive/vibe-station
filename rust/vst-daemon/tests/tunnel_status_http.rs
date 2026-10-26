@@ -50,6 +50,7 @@ fn make_opts(
         tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
         paths: Paths::with_home(tmp.to_path_buf()),
         limits: vst_harness_limits::LimitsHandle::inert(
             vst_types::events::Broadcaster::new(16),

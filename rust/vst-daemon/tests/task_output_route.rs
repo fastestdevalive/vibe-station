@@ -184,6 +184,7 @@ async fn task_output_route_200_404_409_under_api() {
         tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
+        update: vst_daemon::update::UpdateService::for_tests(tmp.path()),
         paths: Paths::with_home(tmp.path().to_path_buf()),
         limits: vst_harness_limits::LimitsHandle::inert(Broadcaster::new(16), "test".to_string()),
     });

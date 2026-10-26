@@ -11,4 +11,6 @@ pub mod project;
 pub mod status;
 pub mod summary;
 pub mod terminal;
+pub mod update;
+pub mod update_install;
 pub mod worktree;

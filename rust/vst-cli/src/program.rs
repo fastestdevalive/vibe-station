@@ -11,7 +11,7 @@ pub const USAGE: &str = "\
 Usage: vst <command> [args]
 
 Commands:
-  daemon     status | run | stop
+  daemon     status | run | stop | restart
   project    add | create | rm | ls | info
   worktree   create | rm | done | ls | info | rename
   agent      create | ls | info | terminate | attach | restore | output |
@@ -26,11 +26,30 @@ Commands:
   status     daemon and session status
   summary    summarize sessions
   doctor     check the local environment
+  update     [--check | --yes | --skip <v> | --unskip <v>]  update vibe-station
   <path>     shorthand for `vst open <path>`
 
 Options:
   -v, --version   print the version
   -h, --help      print this help";
+
+/// Text printed by `vst update --help` (documents the manual undo).
+pub const UPDATE_USAGE: &str = "\
+Usage: vst update [--check | --yes | --skip <version> | --unskip <version>]
+
+  (no flag)          check, show the changelog, ask to type \"confirm\", install
+  --check            only check: exit 0 up to date, 10 update available, 1 error
+  -y, --yes          install without the prompt (required when stdin is not a terminal)
+  --skip <version>   hide <version> from the update chip; --unskip reverses it
+
+Undo an update by hand: in the install directory, for each updated file,
+run `mv .<name>.prev <name>`.";
+
+/// Text printed by `vst daemon restart --help`.
+pub const RESTART_USAGE: &str = "\
+Usage: vst daemon restart [--yes]
+
+Restart the running daemon (asks first if sessions would be interrupted; tmux sessions keep running).";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -50,7 +69,45 @@ pub enum Command {
     Status(StatusArgs),
     Summary(SummaryArgs),
     Doctor(DoctorArgs),
+    Update(UpdateArgs),
     Unknown(Vec<String>),
+}
+
+/// `vst update` flags.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct UpdateArgs {
+    pub check: bool,
+    pub yes: bool,
+    pub skip: Option<String>,
+    pub unskip: Option<String>,
+    /// `-h` / `--help`: print usage, do nothing else.
+    pub help: bool,
+    /// First unrecognised token, if any.
+    pub bad_arg: Option<String>,
+}
+
+fn parse_update_args(iter: impl Iterator<Item = String>) -> UpdateArgs {
+    let mut a = UpdateArgs::default();
+    let mut it = iter.peekable();
+    while let Some(tok) = it.next() {
+        match tok.as_str() {
+            "-h" | "--help" => a.help = true,
+            "--check" => a.check = true,
+            "--yes" | "-y" => a.yes = true,
+            "--skip" => a.skip = it.next(),
+            "--unskip" => a.unskip = it.next(),
+            _ => {
+                if let Some(v) = tok.strip_prefix("--skip=") {
+                    a.skip = Some(v.to_string());
+                } else if let Some(v) = tok.strip_prefix("--unskip=") {
+                    a.unskip = Some(v.to_string());
+                } else if a.bad_arg.is_none() {
+                    a.bad_arg = Some(tok);
+                }
+            }
+        }
+    }
+    a
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +121,14 @@ pub enum DaemonCommand {
     Run,
     /// `vst daemon stop` — request a graceful shutdown of a running daemon.
     Stop,
+    /// `vst daemon restart [--yes]` — request a graceful restart of a running daemon.
+    Restart {
+        yes: bool,
+        help: bool,
+    },
+    /// Hidden command: `vst daemon _restart-watch` (spawned by the daemon; the
+    /// flags are `WatchArgs`' contract, parse errors exit 2).
+    RestartWatch(Result<vst_daemon::update::WatchArgs, String>),
     Unknown(Vec<String>),
 }
 
@@ -240,6 +305,21 @@ where
                 Some("-h" | "--help") => Command::Help,
                 Some("run") => Command::Daemon(DaemonCommand::Run),
                 Some("stop") => Command::Daemon(DaemonCommand::Stop),
+                Some("restart") => {
+                    let mut yes = false;
+                    let mut help = false;
+                    for arg in iter {
+                        if arg == "--yes" || arg == "-y" {
+                            yes = true;
+                        } else if arg == "--help" || arg == "-h" {
+                            help = true;
+                        }
+                    }
+                    Command::Daemon(DaemonCommand::Restart { yes, help })
+                }
+                Some("_restart-watch") => Command::Daemon(DaemonCommand::RestartWatch(
+                    vst_daemon::update::WatchArgs::parse(iter),
+                )),
                 Some(other) => {
                     let mut rest = vec![other.to_string()];
                     rest.extend(iter);
@@ -414,6 +494,7 @@ where
         "doctor" => Command::Doctor(DoctorArgs {
             args: iter.collect(),
         }),
+        "update" => Command::Update(parse_update_args(iter)),
         // R7: real subcommand names are already matched above this arm, so `other`
         // here is guaranteed to not be a known subcommand — dispatch it as a bare
         // path through the same OpenArgs the "open" subcommand uses. A `-`-prefixed
@@ -441,5 +522,81 @@ pub fn hint_if_dir_collision(name: &str) -> Option<String> {
         ))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_help_parses_without_bad_arg() {
+        match parse_args(["vst", "update", "--help"]) {
+            Command::Update(a) => {
+                assert!(a.help);
+                assert_eq!(a.bad_arg, None);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn restart_help_parses_and_does_not_set_yes() {
+        assert_eq!(
+            parse_args(["vst", "daemon", "restart", "--help"]),
+            Command::Daemon(DaemonCommand::Restart {
+                yes: false,
+                help: true
+            })
+        );
+        assert_eq!(
+            parse_args(["vst", "daemon", "restart", "-y"]),
+            Command::Daemon(DaemonCommand::Restart {
+                yes: true,
+                help: false
+            })
+        );
+    }
+
+    #[test]
+    fn usage_lists_update_and_restart() {
+        assert!(USAGE.contains("update"));
+        assert!(USAGE.contains("restart"));
+        assert!(UPDATE_USAGE.contains("mv .<name>.prev <name>"));
+    }
+
+    #[test]
+    fn restart_watch_parses_what_the_daemon_builds() {
+        let args = vst_daemon::update::WatchArgs {
+            expect_version: "9.9.9".into(),
+            port: 7421,
+            pid: 77,
+            bin_dir: "/b".into(),
+            vst_home: "/h".into(),
+            db_snapshot: "/h/.prev/vibe-station.db".into(),
+            old_boot_id: "boot".into(),
+            nonce: None,
+        };
+        let argv: Vec<String> = std::iter::once("vst".to_string())
+            .chain(args.to_args())
+            .collect();
+        assert_eq!(
+            parse_args(argv),
+            Command::Daemon(DaemonCommand::RestartWatch(Ok(args)))
+        );
+        // A zero port is an error (exit 2 in main), not "watch port 0".
+        let bad = parse_args([
+            "vst",
+            "daemon",
+            "_restart-watch",
+            "--port",
+            "0",
+            "--pid",
+            "1",
+        ]);
+        assert!(matches!(
+            bad,
+            Command::Daemon(DaemonCommand::RestartWatch(Err(_)))
+        ));
     }
 }

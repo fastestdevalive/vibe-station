@@ -619,3 +619,37 @@ async fn two_axis_status_writers_do_not_clobber_each_other() {
         "lifecycle write must not clobber the PR state"
     );
 }
+
+#[tokio::test]
+async fn snapshot_to_produces_identical_database() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("vibe-station.db");
+    let store = StoreHandle::open(&db_path).unwrap();
+
+    let p1 = make_project("proj-snap-1");
+    let p2 = project_with_session("proj-snap-2", "wt-snap-2", "sess-snap-2");
+    store.add_project(p1.clone()).await.unwrap();
+    store.add_project(p2.clone()).await.unwrap();
+
+    let snap_path = tmp.path().join("backup").join("vibe-station.db");
+    store.snapshot_to(&snap_path).await.unwrap();
+
+    // Verify file exists
+    assert!(snap_path.exists());
+
+    // Open snapshot with fresh StoreHandle and verify identical projects
+    let snap_store = StoreHandle::open(&snap_path).unwrap();
+    let read_p1 = snap_store.get_project("proj-snap-1").await;
+    let read_p2 = snap_store.get_project("proj-snap-2").await;
+
+    assert_eq!(read_p1.map(|p| p.id), Some("proj-snap-1".into()));
+    assert_eq!(read_p2.map(|p| p.id), Some("proj-snap-2".into()));
+    assert_eq!(
+        snap_store.get_all_projects().await.len(),
+        store.get_all_projects().await.len()
+    );
+
+    // Overwrite snapshot test (snapshot_to must remove existing dest file first)
+    store.snapshot_to(&snap_path).await.unwrap();
+    assert!(snap_path.exists());
+}

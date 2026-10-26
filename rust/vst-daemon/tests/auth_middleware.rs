@@ -61,6 +61,7 @@ fn make_opts_with_dist(
             vst_types::events::Broadcaster::new(16),
             "test".to_string(),
         ),
+        update: vst_daemon::update::UpdateService::for_tests(tmp),
     }
 }
 
