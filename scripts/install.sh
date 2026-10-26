@@ -25,9 +25,19 @@
 # The CLI tarball also carries claude-acp and codex-acp (self-contained ACP adapters for
 # Rich Chat, no bun/node needed), installed beside vst. Both are self-contained Rust binaries (static on Linux, whose tarballs are musl).
 #
+# Every download is verified against the release's signed manifest: SHA256SUMS
+# + SHA256SUMS.minisig (minisign/Ed25519, pinned public key below). Requires
+# minisign or OpenSSL >= 3 to verify the signature; fails closed otherwise.
+# macOS only: if neither is installed (stock macOS ships LibreSSL, which cannot
+# verify Ed25519), the manifest signature cannot be checked, so trust moves to
+# the Apple code signature instead: every executable in the tarball must be
+# signed by the pinned Developer ID team (APPLE_TEAM_ID below) or nothing is
+# installed. The minisign/OpenSSL path is always preferred when available.
+#
 # Release assets consumed (GitHub Release of fastestdevalive/vibe-station):
-#   vst-<triple>.tar.gz              + vst-<triple>.tar.gz.sha256
-#   vibe-station-<triple>.AppImage   + .sha256          (glibc Linux only)
+#   SHA256SUMS + SHA256SUMS.minisig  signed manifest (always fetched first)
+#   vst-<triple>.tar.gz
+#   vibe-station-<triple>.AppImage   (glibc Linux only)
 # where <triple> is:
 #   x86_64-unknown-linux-musl / aarch64-unknown-linux-musl  (Linux CLI, static)
 #   aarch64-apple-darwin                                    (macOS CLI, Apple Silicon only --
@@ -49,6 +59,62 @@ set -eu
 
 REPO="fastestdevalive/vibe-station"
 APP_NAME="vibe-station"
+
+# Release signing public key(s); must equal rust/vst-daemon/release-keys/vst-release.pub line 2 (space-separated for rotation).
+# Production key, minisign key id 862C62A9DEFD74A8 (docs/UPDATE.md). Release CI
+# refuses to publish while the throwaway placeholder key is pinned here.
+PINNED_PUBKEYS="RWSodP3eqWIshjqVwU5lxHUF8jsaNvFkroYz+YENSWL9jPCYUpq1Qj3w"
+
+# Apple Developer Team ID that signs the macOS release binaries (macOS codesign
+# fallback verifier only; see verify_codesign). Single source of truth for
+# install.sh; release CI (scripts/macos-verify-signed.sh) reads THIS line, so
+# a CI signing identity from any other team fails the release.
+# Team NK3G6CGZ96 = "Developer ID Application: Gaurav bhola (NK3G6CGZ96)", the
+# certificate created in the maintainer's Apple Developer account (portal team
+# NK3G6CGZ96). Change this line only together with the CI signing identity.
+APPLE_TEAM_ID="NK3G6CGZ96"
+
+# Signed-release floor for "latest" installs (replay/downgrade defence). A signed but
+# OLDER release served as "latest" (API/redirect tampering) is refused below this.
+# Bump in the same PR as any security release. Never above the next release's tag.
+MIN_RELEASE="v0.0.3-beta"
+
+# Only these executables are ever installed from the CLI tarball (both trust modes);
+# anything else in the archive is ignored. Codesign mode additionally pins the code
+# identifier of each to its own name (CI signs with `--identifier <file name>`).
+ALLOWED_BINS="vst claude-acp codex-acp"
+
+# True ("0") if $1 (v<semver>) is strictly older than $2 per semver precedence on the
+# MAJOR.MINOR.PATCH core; with an equal core a prerelease ranks below the release.
+version_lt() {
+	awk -v a="$1" -v b="$2" '
+		function parse(v, o,   i, pre, p) {
+			sub(/^v/, "", v); sub(/\+.*/, "", v); pre = ""
+			i = index(v, "-")
+			if (i) { pre = substr(v, i + 1); v = substr(v, 1, i - 1) }
+			split(v, p, ".")
+			o[1] = p[1] + 0; o[2] = p[2] + 0; o[3] = p[3] + 0; o[4] = pre
+		}
+		BEGIN {
+			parse(a, x); parse(b, y)
+			for (k = 1; k <= 3; k++) { if (x[k] < y[k]) exit 0; if (x[k] > y[k]) exit 1 }
+			if (x[4] != "" && y[4] == "") exit 0
+			exit 1
+		}'
+}
+
+# is_allowed_bin <file name>
+is_allowed_bin() {
+	for _a in $ALLOWED_BINS; do [ "$1" = "$_a" ] && return 0; done
+	return 1
+}
+
+# Code identifier CI assigns to the signed binary <name> (macos-ci-sign.sh: --identifier).
+expected_identifier() { printf '%s' "$1"; }
+
+# How the release was authenticated: "manifest" (minisign/OpenSSL verified the
+# signed SHA256SUMS) or "codesign" (macOS fallback, see verify_manifest_sig).
+TRUST_MODE="manifest"
 
 say() { printf 'vst-install: %s\n' "$*"; }
 warn() { printf 'vst-install: warning: %s\n' "$*" >&2; }
@@ -106,16 +172,131 @@ sha256_of() {
 	else err "no sha256 tool (sha256sum/shasum/openssl) found"; fi
 }
 
-# download_verified <asset-name> <dest>
+# verify_manifest_sig: fetch SHA256SUMS + SHA256SUMS.minisig, verify the
+# signature against PINNED_PUBKEYS (minisign, else OpenSSL >= 3), then bind the
+# signed tag to the requested version. Fails closed; no bypass.
+verify_manifest_sig() {
+	say "verifying signed release manifest"
+	fetch "$(asset_url SHA256SUMS.minisig)" "$TMP/SHA256SUMS.minisig" ||
+		err "release $VERSION has no SHA256SUMS.minisig - it predates release signing or was tampered with; download manually from $DOWNLOAD_BASE"
+	fetch "$(asset_url SHA256SUMS)" "$TMP/SHA256SUMS" ||
+		err "release $VERSION has no SHA256SUMS; download manually from $DOWNLOAD_BASE"
+	[ "$(wc -c <"$TMP/SHA256SUMS.minisig" | tr -d ' ')" -le 4096 ] || err "signature file is too large"
+	[ "$(wc -c <"$TMP/SHA256SUMS" | tr -d ' ')" -le 65536 ] || err "manifest is too large"
+
+	# Only the non-prehashed "Ed" algorithm is accepted (base64 of "Ed.." starts "RW").
+	case "$(sed -n 2p "$TMP/SHA256SUMS.minisig")" in RW*) ;; *) err "unsupported or malformed signature" ;; esac
+
+	_ok=0
+	if command -v minisign >/dev/null 2>&1; then
+		for _k in $PINNED_PUBKEYS; do
+			if minisign -V -q -m "$TMP/SHA256SUMS" -x "$TMP/SHA256SUMS.minisig" -P "$_k" >/dev/null 2>&1; then
+				_ok=1
+				break
+			fi
+		done
+	elif command -v openssl >/dev/null 2>&1 && openssl pkeyutl -help 2>&1 | grep -q rawin; then
+		_ok="$(openssl_verify_manifest)"
+	elif [ "$OS" = darwin ] && [ -x /usr/bin/codesign ]; then
+		# Fail-closed fallback: the manifest is NOT authenticated here, so its
+		# hashes only detect corruption. Authenticity is enforced on the
+		# extracted binaries in install_cli (verify_codesign) BEFORE anything
+		# is installed. Not defended in this mode: replay of an older (but
+		# genuinely signed) release; install minisign to get tag binding.
+		TRUST_MODE="codesign"
+		warn "minisign / OpenSSL 3 not found: the release manifest signature cannot be verified"
+		warn "falling back to the Apple code signature (Team ID $APPLE_TEAM_ID) of the downloaded binaries; for full verification: brew install minisign"
+	else
+		err "cannot verify release signature: install minisign (apt install minisign / brew install minisign) or OpenSSL 3 and re-run"
+	fi
+	if [ "$TRUST_MODE" = manifest ]; then
+		[ "$_ok" = 1 ] || err "bad signature on SHA256SUMS (refusing to install)"
+		say "signature ok"
+	fi
+
+	# Tag binding: the signed manifest must be for the release being installed.
+	[ "$(sed -n 1p "$TMP/SHA256SUMS")" = "# vibe-station release manifest v1" ] || err "unrecognised manifest format"
+	[ "$(awk '/^# tag=/ {c++} END {print c+0}' "$TMP/SHA256SUMS")" = 1 ] || err "manifest must carry exactly one tag line"
+	_tag="$(sed -n 's/^# tag=//p' "$TMP/SHA256SUMS")"
+	if [ "$VERSION" = latest ]; then
+		printf '%s' "$_tag" | awk '/^v[0-9A-Za-z.+-]+$/ {ok=1} END {exit !ok}' || err "manifest carries an invalid tag"
+		VERSION="$_tag"
+		say "latest release: $VERSION"
+	else
+		[ "$_tag" = "$VERSION" ] || err "signed manifest is for $_tag, not $VERSION"
+	fi
+	# "latest" must not be an older signed release than the floor (replay/downgrade).
+	if [ "$REQUESTED_LATEST" = 1 ] && version_lt "$VERSION" "$MIN_RELEASE"; then
+		err "latest resolved to $VERSION, which is older than the minimum $MIN_RELEASE (possible replay of an old release); refusing to install. Pin a version with --version if this is intended"
+	fi
+}
+
+# openssl_verify_manifest: prints 1 if the file + global signature verify under
+# any pinned key, else 0. openssl's base64 prints nothing and exits 0 on
+# garbage, so every length check is mandatory. Octal printf escapes only.
+openssl_verify_manifest() {
+	_m="$TMP/SHA256SUMS.minisig"
+	b64d() { openssl base64 -d -A; }
+	[ "$(wc -l <"$_m" | tr -d ' ')" -eq 4 ] || { echo 0; return 0; }
+	sed -n 2p "$_m" | b64d >"$TMP/sigline.bin" 2>/dev/null
+	[ "$(wc -c <"$TMP/sigline.bin" | tr -d ' ')" -eq 74 ] && [ "$(head -c2 "$TMP/sigline.bin")" = Ed ] || { echo 0; return 0; }
+	_sig_kid="$(od -An -tx1 -j2 -N8 "$TMP/sigline.bin" | tr -d ' \n')"
+	tail -c 64 "$TMP/sigline.bin" >"$TMP/sig.bin"
+	case "$(sed -n 3p "$_m")" in "trusted comment: "*) ;; *) echo 0; return 0 ;; esac
+	sed -n 4p "$_m" | b64d >"$TMP/g.sig" 2>/dev/null
+	[ "$(wc -c <"$TMP/g.sig" | tr -d ' ')" -eq 64 ] || { echo 0; return 0; }
+	cp "$TMP/sig.bin" "$TMP/g.in"
+	sed -n 3p "$_m" | sed 's/^trusted comment: //' | tr -d '\n' >>"$TMP/g.in"
+	for _pub_b64 in $PINNED_PUBKEYS; do
+		printf '%s' "$_pub_b64" | b64d >"$TMP/pub.bin" 2>/dev/null
+		[ "$(wc -c <"$TMP/pub.bin" | tr -d ' ')" -eq 42 ] && [ "$(head -c2 "$TMP/pub.bin")" = Ed ] || continue
+		[ "$(od -An -tx1 -j2 -N8 "$TMP/pub.bin" | tr -d ' \n')" = "$_sig_kid" ] || continue
+		# DER SPKI for Ed25519 = 12-byte prefix + 32-byte key.
+		printf '\060\052\060\005\006\003\053\145\160\003\041\000' >"$TMP/pk.der"
+		tail -c 32 "$TMP/pub.bin" >>"$TMP/pk.der"
+		openssl pkeyutl -verify -pubin -inkey "$TMP/pk.der" -keyform DER -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/sig.bin" >/dev/null 2>&1 || continue
+		openssl pkeyutl -verify -pubin -inkey "$TMP/pk.der" -keyform DER -rawin -in "$TMP/g.in" -sigfile "$TMP/g.sig" >/dev/null 2>&1 || continue
+		echo 1
+		return 0
+	done
+	echo 0
+}
+
+# download_verified <asset-name> <dest>  (hash comes from the signed manifest)
 download_verified() {
 	_url="$(asset_url "$1")"
 	say "downloading $_url"
 	fetch "$_url" "$2" || err "download failed: $_url"
-	fetch "$_url.sha256" "$2.sha256" || err "checksum file missing: $_url.sha256 (refusing to install unverified binary)"
-	_want="$(cut -d' ' -f1 <"$2.sha256" | tr -d '\r\n' | tr 'A-F' 'a-f')"
+	_want="$(awk -v n="$1" 'NF==2 && $2==n {print $1; c++} END {exit c!=1}' "$TMP/SHA256SUMS")" ||
+		err "$1 is not listed exactly once in the signed manifest"
+	printf '%s' "$_want" | awk 'length($0)==64 && $0 !~ /[^0-9a-f]/ {ok=1} END {exit !ok}' || err "malformed manifest entry for $1"
 	_got="$(sha256_of "$2")"
-	[ -n "$_want" ] && [ "$_want" = "$_got" ] || err "checksum mismatch for $1 (expected $_want, got $_got)"
+	[ "$_want" = "$_got" ] || err "checksum mismatch for $1 (expected $_want, got $_got)"
 	say "checksum ok ($_got)"
+}
+
+# verify_codesign <file>: macOS fallback verifier. Fail closed (err exits) unless
+# the file carries a valid, untampered Apple code signature AND the leaf is a
+# "Developer ID Application" certificate (OID 1.2.840.113635.100.6.1.13) issued
+# by the Developer ID CA (OID ...100.6.2.6), chained to the Apple root, whose
+# subject OU is APPLE_TEAM_ID. Ad-hoc, self-signed, other-team and
+# Apple-development certificates all fail the requirement. codesign is called
+# by absolute path so a planted PATH entry cannot shadow it.
+# Notarization is deliberately NOT checked here: bare binaries cannot carry a
+# stapled ticket and a ticket lookup needs the network (release CI asserts
+# notarization acceptance; see docs/UPDATE.md).
+verify_codesign() {
+	_cs=/usr/bin/codesign
+	_f="$1"
+	_n="$(basename "$_f")"
+	"$_cs" --verify --strict "$_f" >/dev/null 2>&1 ||
+		err "$_n is unsigned, has an invalid code signature, or was modified after signing (refusing to install)"
+	_req="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$APPLE_TEAM_ID\""
+	"$_cs" --verify --strict -R "=$_req" "$_f" >/dev/null 2>&1 ||
+		err "$_n is not signed by Apple Developer ID team $APPLE_TEAM_ID (refusing to install)"
+	_id="$(expected_identifier "$_n")"
+	"$_cs" --verify --strict -R "=identifier \"$_id\"" "$_f" >/dev/null 2>&1 ||
+		err "$_n does not carry the expected code identifier \"$_id\" (refusing to install)"
 }
 
 asset_url() {
@@ -128,8 +309,10 @@ asset_url() {
 
 # /releases/latest ignores prereleases; while only -beta tags exist it 404s.
 # Fall back to the newest release of any kind via the API.
+REQUESTED_LATEST=0
 resolve_version() {
 	[ "$VERSION" = latest ] || return 0
+	REQUESTED_LATEST=1
 	_probe="$TMP/latest.json"
 	if fetch "$API_BASE/releases/latest" "$_probe" 2>/dev/null; then
 		_tag="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_probe" | head -n1)"
@@ -269,11 +452,25 @@ install_cli() {
 	mkdir -p "$TMP/cli"
 	tar -xzf "$TMP/$_asset" -C "$TMP/cli" || err "failed to extract $_asset"
 	mkdir -p "$INSTALL_DIR"
+	# macOS codesign fallback: authenticate EVERY executable we are about to
+	# install before touching INSTALL_DIR (all-or-nothing).
+	if [ "$TRUST_MODE" = codesign ]; then
+		_v=0
+		for _src in "$TMP/cli"/* "$TMP/cli"/*/*; do
+			[ -f "$_src" ] && [ -x "$_src" ] || continue
+			is_allowed_bin "$(basename "$_src")" || continue
+			verify_codesign "$_src"
+			_v=$((_v + 1))
+		done
+		[ "$_v" -gt 0 ] || err "no executables found in $_asset"
+		say "code signatures ok ($_v executables, Team ID $APPLE_TEAM_ID)"
+	fi
 	_n=0
 	# Accept either a flat archive or one wrapping directory (cargo-dist style).
 	for _src in "$TMP/cli"/* "$TMP/cli"/*/*; do
 		[ -f "$_src" ] && [ -x "$_src" ] || continue
 		_name="$(basename "$_src")"
+		is_allowed_bin "$_name" || { warn "ignoring unexpected file in archive: $_name"; continue; }
 		# Copy to a temp name then rename: atomic, and works even if the old
 		# binary is currently running ("text file busy").
 		cp "$_src" "$INSTALL_DIR/.$_name.new"
@@ -370,6 +567,7 @@ main() {
 	trap 'exit 1' INT TERM HUP
 
 	resolve_version
+	verify_manifest_sig
 	install_cli
 	if [ "$OS" = linux ]; then
 		if is_musl; then

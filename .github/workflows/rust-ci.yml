@@ -3,9 +3,13 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml", "scripts/install.sh", ".github/workflows/release.yml", "scripts/check-*.sh", "scripts/macos-*.sh", "scripts/*release*.sh", "scripts/test-*.sh", "scripts/check-workflow-policy.rb", ".github/workflows/desktop-build.yml"]
   pull_request:
-    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml", "scripts/install.sh", ".github/workflows/release.yml", "scripts/check-*.sh", "scripts/macos-*.sh", "scripts/*release*.sh", "scripts/test-*.sh", "scripts/check-workflow-policy.rb", ".github/workflows/desktop-build.yml"]
+
+# Least privilege: nothing here writes to the repo.
+permissions:
+  contents: read
 
 concurrency:
   group: rust-ci-${{ github.ref }}
@@ -19,9 +23,12 @@ jobs:
       # Opt in to the tests that start a real daemon binary (vst-testkit
       # proc_guard); they are skipped on dev hosts.
       VST_NATIVE_DAEMON_TESTS: "1"
+    timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Check version files are in sync
         run: bash scripts/check-version-sync.sh
@@ -30,8 +37,9 @@ jobs:
         run: bash scripts/check-rs-loc.sh
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch tip)
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       # vst-routes' LSP fallback-definition tests shell out to ripgrep --
@@ -55,8 +63,24 @@ jobs:
           fi
           rg --version
 
+      # Release-signing script tests (throwaway keys; no secrets involved).
+      - name: Release signing script tests
+        run: |
+          sudo apt-get install -y minisign
+          bash scripts/test-release-signing.sh
+          bash scripts/test-install-verify.sh
+          bash scripts/test-release-policy.sh
+
+      # install.sh's PINNED_PUBKEYS and vst-release.pub must be the SAME key set
+      # (the Rust test pinned_keys_parse_and_match_install_sh is one-directional).
+      - name: Pinned release keys in sync (install.sh <-> vst-release.pub)
+        run: bash scripts/check-pinned-keys-in-sync.sh
+
+      - name: Release file names in sync (updater, installer, release.yml)
+        run: bash scripts/check-release-names-in-sync.sh
+
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> target"
 
@@ -69,7 +93,7 @@ jobs:
       # rust/Cargo.toml (once via the action's own run, once via the
       # "cargo deny check (workspace)" step below).
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny
 
@@ -118,3 +142,31 @@ jobs:
       # actually passes locally against both manifests before fixing here.
       - name: cargo deny check (workspace)
         run: cargo deny --manifest-path rust/Cargo.toml check
+
+  # The macOS-only installer matrix: install.sh's codesign fallback (verify_codesign),
+  # plus the release-signing script tests on macOS (BSD userland, shasum, no GNU find).
+  # VST_CI=1 turns a SKIPPED case (notably forged_ou) into a failure so the matrix cannot
+  # silently shrink.
+  macos-installer-tests:
+    name: macOS installer + release script tests
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install minisign
+        run: brew install minisign
+
+      - name: Release script tests (macOS)
+        run: |
+          bash scripts/test-release-signing.sh
+          bash scripts/test-release-policy.sh
+          bash scripts/test-export-signing-secrets.sh
+
+      - name: install.sh codesign fallback matrix
+        env:
+          VST_CI: "1"
+        run: bash scripts/test-install-codesign.sh

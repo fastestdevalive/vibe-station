@@ -19,8 +19,10 @@ on:
         required: true
         type: string
 
+# Build jobs only read the repo (tauri-action gets no tagName/releaseId, so it
+# never uploads); publish-release restates the write scopes it needs.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -28,10 +30,83 @@ concurrency:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
-  # 1. Build standalone merged vst CLI archives (Linux musl + macOS)
+  # 0. Preflight: cheap, secret-free gates that must pass BEFORE any build,
+  #    signing or notarization time is spent (and before any artifact exists).
+  # ──────────────────────────────────────────────────────────────────────────
+  preflight:
+    name: Preflight (tag, versions, release key)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No environment: sees no secrets.
+    steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      # Duplicated in every job on purpose: it must run before checkout. test-release-policy.sh keeps the copies identical.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      # Full history: the on-main check below needs origin/main.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve tag, check versions and the pinned release key
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
+          bash scripts/check-version-sync.sh "${TAG#v}"
+          # A placeholder (throwaway) key must never be built into / sign a release.
+          bash scripts/check-release-key-not-placeholder.sh \
+            rust/vst-daemon/release-keys/vst-release.pub scripts/install.sh
+          # install.sh and the daemon must pin exactly the same key set.
+          bash scripts/check-pinned-keys-in-sync.sh
+
+      # The tagged commit must be merged to main. Honest-mistake guard only: a malicious tag
+      # carries its own workflow file, so the real control is the GitHub tag ruleset for
+      # refs/tags/v* (owner-only create/update/delete). See docs/UPDATE.md.
+      - name: Tagged commit must be reachable from origin/main
+        run: |
+          set -euo pipefail
+          # fetch-depth: 0 above fetched every branch; the script fails closed if origin/main is absent.
+          bash scripts/check-commit-on-main.sh "$GITHUB_SHA" refs/remotes/origin/main
+
+      # Re-running a release for a PUBLISHED tag would un-publish it and replace its assets.
+      - name: Refuse an already published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="$(bash scripts/resolve-release-tag.sh)"
+          bash scripts/check-release-not-published.sh "$TAG"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. Build standalone merged vst CLI archives (Linux musl + macOS).
+  #    NO environment and NO secrets in any leg: this job runs third-party dependency
+  #    code (pnpm, cargo). The macOS leg uploads its binaries UNSIGNED, as data
+  #    (`unsigned-cli-<target>`); the sign-macos job signs them on a fresh runner.
   # ──────────────────────────────────────────────────────────────────────────
   build-cli:
     name: Build CLI (${{ matrix.target }})
+    needs: preflight
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -58,18 +133,36 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      # Default ref = github.sha (the immutable triggering commit); never inputs.tag.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Resolve release version (R29)
         id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ github.ref_name }}"
-          if [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
-          fi
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
@@ -79,15 +172,14 @@ jobs:
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-          cache: "pnpm"
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
@@ -98,18 +190,14 @@ jobs:
 
       # ── Rust toolchain ────────────────────────────────────────────────────
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch tip)
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
         if: matrix.is_musl
         run: sudo apt-get update -y && sudo apt-get install -y musl-tools
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "rust -> target"
 
       # ── ACP adapters shipped in the CLI tarball ───────────────────────────
       # claude-acp / codex-acp are the pinned Rust ports (vendor/rust-acp/pins.toml),
@@ -138,6 +226,15 @@ jobs:
             exit 1
           fi
           echo "Confirmed: release binary does not contain insecure-no-auth."
+          # These names are compiled in only with the TEST-ONLY `test-seams` feature
+          # (replace the pinned key / shorten the rollback window).
+          for marker in VST_TEST_RELEASE_PUBKEYS VST_RESTART_WATCH_WINDOW_MS; do
+            if grep -qaF "$marker" "$BIN"; then
+              echo "ERROR: release binary contains the test-seams feature ($marker)!" >&2
+              exit 1
+            fi
+          done
+          echo "Confirmed: release binary does not contain test-seams."
 
       # ── Musl runtime verification in Alpine container (R30) ───────────────
       # Found in review: this used to `file "$BIN" | grep -i "statically
@@ -225,27 +322,8 @@ jobs:
           test "$STATUS" = "401" || { echo "expected HTTP 401 under VST_NO_AUTH=1, got $STATUS"; exit 1; }
           echo "Confirmed: VST_NO_AUTH=1 is ignored by release binary (HTTP 401 returned)"
 
-      # ── Native smoke test of the bundled adapters (macOS: no docker above) ─
-      - name: Smoke-test bundled adapters natively
-        if: ${{ !matrix.is_musl }}
-        run: |
-          BIN="rust/target/${{ matrix.target }}/release/vst"
-          CLAUDE="rust/target/rust-acp/claude/${{ matrix.target }}/claude-acp"
-          CODEX="rust/target/rust-acp/codex/${{ matrix.target }}/codex-acp"
-          test -x "$BIN" && test -x "$CLAUDE" && test -x "$CODEX"
-          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
-          # macOS has no `timeout`: let the server end on stdin EOF after the reply.
-          (cat /tmp/acp-init.json; sleep 8) | "$CLAUDE" > /tmp/acp-init.out || true
-          grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
-          # codex-acp needs a `codex app-server` to answer initialize; use the stub (see the Linux step).
-          (cat /tmp/acp-init.json; sleep 8) | CODEX_PATH="$(pwd)/scripts/fake-codex-app-server.sh" "$CODEX" > /tmp/codex-init.out || true
-          grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
-          # agy Rich Chat runs as a hidden subcommand of the vst binary itself.
-          (cat /tmp/acp-init.json; sleep 2) | "$BIN" agy-stream-acp > /tmp/agy-init.out
-          grep -q '"protocolVersion"' /tmp/agy-init.out || { echo "vst agy-stream-acp did not answer initialize"; cat /tmp/agy-init.out; exit 1; }
-
-      # ── Package archive + sha256 ──────────────────────────────────────────
       - name: Package archive and generate sha256
+        if: runner.os != 'macOS'
         run: |
           BIN_DIR="rust/target/${{ matrix.target }}/release"
           DIST_DIR="dist-cli"
@@ -270,17 +348,40 @@ jobs:
           cd -
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        if: runner.os != 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cli-${{ matrix.target }}
           path: dist-cli/*
           if-no-files-found: error
 
+      # macOS: hand the unsigned binaries to sign-macos as data (tar + sha256 manifest).
+      - name: Pack unsigned macOS CLI binaries
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/macos-pack-unsigned.sh cli dist-unsigned-cli \
+            "rust/target/${{ matrix.target }}/release/vst" \
+            "rust/target/rust-acp/claude/${{ matrix.target }}/claude-acp" \
+            "rust/target/rust-acp/codex/${{ matrix.target }}/codex-acp"
+
+      - name: Upload unsigned CLI data (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-cli-${{ matrix.target }}
+          path: dist-unsigned-cli/*
+          if-no-files-found: error
+          retention-days: 7
+
   # ──────────────────────────────────────────────────────────────────────────
-  # 2. Build desktop apps (Linux AppImage/deb + macOS dmg)
+  # 2. Build desktop apps (Linux AppImage/deb + macOS dmg).
+  #    NO environment and NO secrets (see build-cli). The macOS leg uploads the
+  #    unsigned .app and dmg as data (`unsigned-desktop-<target>`) for sign-macos.
   # ──────────────────────────────────────────────────────────────────────────
   build-desktop:
     name: Build Desktop (${{ matrix.target }})
+    needs: preflight
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -294,18 +395,36 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      # Default ref = github.sha (the immutable triggering commit); never inputs.tag.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Resolve release version and stamp metadata (R29)
         id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ github.ref_name }}"
-          if [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
-          fi
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
@@ -315,29 +434,24 @@ jobs:
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3.0.0
         with:
           version: 9
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-          cache: "pnpm"
 
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
       # ── Rust toolchain ────────────────────────────────────────────────────
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable (branch tip)
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "desktop/src-tauri -> target"
 
       # ── Linux system dependencies ─────────────────────────────────────────
       - name: Install Linux system dependencies
@@ -352,131 +466,614 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev
 
-      # ── Build Tauri app ───────────────────────────────────────────────────
+
+      # ── Build (no Apple secret exists anywhere in this job) ───────────────
+      # Everything that runs third-party dependency code (pnpm install above,
+      # cargo build scripts, prebuilt fetches, scripts/prep-sidecar.sh, the Tauri
+      # bundler) happens here. The bundle is built UNSIGNED (tauri.conf.json
+      # signingIdentity null). GITHUB_TOKEN is read-only (workflow `contents: read`)
+      # and tauri-action gets no tagName/releaseId, so it uploads nothing.
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         with:
           projectPath: desktop
           args: --target ${{ matrix.target }}
 
-      # ── Stage and checksum desktop assets ─────────────────────────────────
-      - name: Stage desktop assets and generate sha256
+      - name: Pack unsigned macOS app and dmg
+        if: runner.os == 'macOS'
         run: |
+          set -euo pipefail
+          B="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          apps=("$B"/macos/*.app); dmgs=("$B"/dmg/*.dmg)
+          [ "${#apps[@]}" -eq 1 ] && [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one .app and one .dmg"; exit 1; }
+          bash scripts/macos-pack-unsigned.sh desktop dist-unsigned-desktop "${apps[0]}" "${dmgs[0]}"
+
+      - name: Upload unsigned desktop data (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-desktop-${{ matrix.target }}
+          path: dist-unsigned-desktop/*
+          if-no-files-found: error
+          retention-days: 7
+
+      # ── Linux: stage and checksum desktop assets ──────────────────────────
+      - name: Stage desktop assets and generate sha256
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
           DIST_DIR="dist-desktop"
           mkdir -p "$DIST_DIR"
+          APPIMAGE_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage | head -n1)
+          APPIMAGE_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.AppImage"
+          cp "$APPIMAGE_SRC" "$APPIMAGE_DEST"
+          sha256sum "$APPIMAGE_DEST" | cut -d' ' -f1 > "$APPIMAGE_DEST.sha256"
 
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            # Stage AppImage
-            APPIMAGE_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage | head -n1)
-            APPIMAGE_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.AppImage"
-            cp "$APPIMAGE_SRC" "$APPIMAGE_DEST"
-            sha256sum "$APPIMAGE_DEST" | cut -d' ' -f1 > "$APPIMAGE_DEST.sha256"
-
-            # Stage deb
-            DEB_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb | head -n1)
-            DEB_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.deb"
-            cp "$DEB_SRC" "$DEB_DEST"
-            sha256sum "$DEB_DEST" | cut -d' ' -f1 > "$DEB_DEST.sha256"
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            # Stage dmg
-            DMG_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n1)
-            bash scripts/recompress-dmg.sh "$DMG_SRC"   # zlib -> lzma (ULMO), ~20-25% smaller
-            DMG_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.dmg"
-            cp "$DMG_SRC" "$DMG_DEST"
-            shasum -a 256 "$DMG_DEST" | cut -d' ' -f1 > "$DMG_DEST.sha256"
-          fi
+          DEB_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb | head -n1)
+          DEB_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.deb"
+          cp "$DEB_SRC" "$DEB_DEST"
+          sha256sum "$DEB_DEST" | cut -d' ' -f1 > "$DEB_DEST.sha256"
 
           echo "Staged files in $DIST_DIR:"
           ls -la "$DIST_DIR"
 
       - name: Upload desktop artifact
-        uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: desktop-${{ matrix.target }}
           path: dist-desktop/*
           if-no-files-found: error
 
   # ──────────────────────────────────────────────────────────────────────────
-  # 3. Publish release to GitHub Releases
+  # 3. Sign + notarize the macOS CLI binaries and desktop app (the ONLY job with
+  #    Apple secrets). Fresh runner that never ran dependency code: it checks out
+  #    the tagged commit itself, runs ONLY scripts from that checkout, installs
+  #    NOTHING (no pnpm/cargo/bun/brew; preinstalled macOS tools only) and treats
+  #    the downloaded build output as inert data (verified, unpacked, signed,
+  #    never executed). Final artifacts keep the names `cli-<target>` and
+  #    `desktop-<target>`. The always-run steps clean up the keychain and key file.
   # ──────────────────────────────────────────────────────────────────────────
-  publish-release:
-    name: Publish GitHub Release
-    needs: [build-cli, build-desktop]
-    runs-on: ubuntu-latest
+  sign-macos:
+    name: Sign macOS (${{ matrix.target }})
+    needs: [preflight, build-cli, build-desktop]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin]
+    # Apple secrets are ENVIRONMENT secrets of `release-signing` (deployment rule:
+    # tags `v*` only). If the job ever lost the environment its secrets would be
+    # empty and `macos-ci-sign.sh detect` fails the release (canonical repo)
+    # instead of shipping unsigned.
+    environment: release-signing
 
     steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      # A fresh checkout of the tagged commit: the scripts below are never taken from an artifact.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Assert checkout is the tagged commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      # Only presence is tested here: every secret but the (public, pinned) Team ID is
+      # replaced by a placeholder, so the detect step never holds a real secret value.
+      - name: Detect Apple signing secrets
+        id: apple
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' && 'present' || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' && 'present' || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY != '' && 'present' || '' }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 != '' && 'present' || '' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID != '' && 'present' || '' }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER != '' && 'present' || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Unsigned macOS builds are tolerated on forks only; the canonical
+          # repo fails closed when the secrets are missing.
+          VST_ALLOW_UNSIGNED_MACOS: ${{ github.repository != 'fastestdevalive/vibe-station' && '1' || '0' }}
+        run: bash scripts/macos-ci-sign.sh detect
+
+      - name: Download unsigned CLI data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-cli-${{ matrix.target }}
+          path: ${{ runner.temp }}/in/cli
+
+      - name: Download unsigned desktop data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-desktop-${{ matrix.target }}
+          path: ${{ runner.temp }}/in/desktop
+
+      - name: Verify and unpack unsigned data (no execution)
+        run: |
+          set -euo pipefail
+          bash scripts/macos-unpack-unsigned.sh cli "$RUNNER_TEMP/in/cli" "$RUNNER_TEMP/work/cli"
+          bash scripts/macos-unpack-unsigned.sh desktop "$RUNNER_TEMP/in/desktop" "$RUNNER_TEMP/work/desktop"
+
+      # ── signing identity: only the certificate and its password ───────────
+      - name: Import signing certificate
+        if: steps.apple.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: bash scripts/macos-ci-sign.sh keychain-setup
+
+      # ── CLI binaries: sign, verify, notarize, package ─────────────────────
+      # Bare executables cannot carry a stapled ticket (only .app/.dmg/.pkg can);
+      # install.sh and the daemon do not rely on one. See docs/UPDATE.md "Verification".
+      # The pinned Rust ACP prebuilts arrive without our signature, so they are
+      # re-signed like vst itself; notarization rejects any Mach-O in the
+      # submission not signed with our identity. All three: hardened runtime, no entitlements.
+      - name: Sign macOS CLI binaries
+        if: steps.apple.outputs.enabled == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/work/cli"
+          bash scripts/macos-ci-sign.sh sign "$W/vst" "$W/claude-acp" "$W/codex-acp"
+          bash scripts/macos-verify-signed.sh binary "$W/vst" "$W/claude-acp" "$W/codex-acp"
+
+      - name: Notarize macOS CLI binaries
+        if: steps.apple.outputs.enabled == 'true'
+        timeout-minutes: 30
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/work/cli"
+          bash scripts/macos-ci-sign.sh notarize "$W/vst" "$W/claude-acp" "$W/codex-acp"
+
+      - name: Package CLI archive and generate sha256
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/work/cli"
+          ASSET="vst-${{ matrix.target }}.tar.gz"
+          mkdir -p dist-cli
+          bash scripts/package-cli-tarball.sh "$W/vst" "$W/claude-acp" "$W/codex-acp" "dist-cli/$ASSET"
+          shasum -a 256 "dist-cli/$ASSET" | cut -d' ' -f1 > "dist-cli/$ASSET.sha256"
+          cat "dist-cli/$ASSET.sha256"
+
+      # ── Desktop app: sign, notarize + staple, repack into the dmg ─────────
+      # Same entitlements the bundler would have applied (tauri.conf.json bundle.macOS).
+      # The App Store Connect key is written by macos-ci-sign.sh to a 0600 temp
+      # file and removed by its EXIT trap; the always() step below is a backstop.
+      - name: Sign macOS app (Developer ID, hardened runtime)
+        if: steps.apple.outputs.enabled == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          apps=("$RUNNER_TEMP"/work/desktop/app/*.app)
+          bash scripts/macos-ci-sign.sh app-sign desktop/src-tauri/entitlements.mac.plist "${apps[0]}"
+
+      - name: Notarize and staple macOS app
+        if: steps.apple.outputs.enabled == 'true'
+        timeout-minutes: 30
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          apps=("$RUNNER_TEMP"/work/desktop/app/*.app)
+          bash scripts/macos-ci-sign.sh app-notarize "${apps[0]}"
+
+      # The dmg is named for the release asset before anything signs it (codesign's
+      # default identifier derives from the file name).
+      - name: Name the dmg
+        run: |
+          set -euo pipefail
+          mkdir -p dist-desktop
+          cp "$RUNNER_TEMP/work/desktop/unsigned.dmg" "dist-desktop/vibe-station-${{ matrix.target }}.dmg"
+
+      # No secrets: swap the signed + stapled app into the bundler's dmg.
+      - name: Put signed app into dmg
+        if: steps.apple.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          apps=("$RUNNER_TEMP"/work/desktop/app/*.app)
+          bash scripts/macos-repack-dmg.sh "dist-desktop/vibe-station-${{ matrix.target }}.dmg" "${apps[0]}"
+
+      # zlib -> lzma (ULMO), ~20-25% smaller. Must run BEFORE the dmg container
+      # is signed + notarized + stapled below: the repack drops the container's
+      # signature and ticket (the .app inside keeps its own).
+      - name: Recompress dmg (lzma)
+        run: bash scripts/recompress-dmg.sh "dist-desktop/vibe-station-${{ matrix.target }}.dmg"
+
+      # The dmg container is signed, notarized and stapled last.
+      - name: Sign, notarize and staple dmg container
+        if: steps.apple.outputs.enabled == 'true'
+        timeout-minutes: 30
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          DMG="dist-desktop/vibe-station-${{ matrix.target }}.dmg"
+          # `dmg` signs, notarizes and staples; the notarization wait is bounded by this step's timeout.
+          bash scripts/macos-ci-sign.sh dmg "$DMG"
+
+      - name: Verify signed and notarized macOS bundle
+        if: steps.apple.outputs.enabled == 'true'
+        run: bash scripts/macos-verify-signed.sh bundle "dist-desktop/vibe-station-${{ matrix.target }}.dmg"
+
+      - name: Remove signing keychain
+        if: always() && steps.apple.outputs.enabled == 'true'
+        run: bash scripts/macos-ci-sign.sh keychain-cleanup
+
+      # Backstop: macos-ci-sign.sh already removes its notary key file on exit.
+      - name: Remove App Store Connect API key file
+        if: always()
+        run: rm -f "${RUNNER_TEMP:-/nonexistent}"/vst-notary-key.*
+
+      - name: Generate dmg sha256
+        run: |
+          set -euo pipefail
+          DMG="dist-desktop/vibe-station-${{ matrix.target }}.dmg"
+          shasum -a 256 "$DMG" | cut -d' ' -f1 > "$DMG.sha256"
+          ls -la dist-desktop
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist-cli/*
+          if-no-files-found: error
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist-desktop/*
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3b. Smoke-test the SIGNED macOS CLI tarball that will ship. No environment,
+  #     no secrets, no dependency install: it only runs the packaged binaries.
+  # ──────────────────────────────────────────────────────────────────────────
+  smoke-cli-macos:
+    name: Smoke-test signed macOS CLI
+    needs: sign-macos
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      # Default ref = github.sha (the immutable triggering commit); never inputs.tag.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download signed CLI artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cli-aarch64-apple-darwin
+          path: ${{ runner.temp }}/cli
+
+      - name: Smoke-test bundled adapters natively
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/cli"
+          [ "$(cat "$D/vst-aarch64-apple-darwin.tar.gz.sha256")" = "$(shasum -a 256 "$D/vst-aarch64-apple-darwin.tar.gz" | cut -d' ' -f1)" ]
+          mkdir "$D/x" && tar -xzf "$D/vst-aarch64-apple-darwin.tar.gz" -C "$D/x"
+          BIN="$D/x/vst"; CLAUDE="$D/x/claude-acp"; CODEX="$D/x/codex-acp"
+          test -x "$BIN" && test -x "$CLAUDE" && test -x "$CODEX"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
+          test "$("$BIN" --version)" = "${TAG#v}"
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > "$D/acp-init.json"
+          # macOS has no `timeout`: let the server end on stdin EOF after the reply.
+          (cat "$D/acp-init.json"; sleep 8) | "$CLAUDE" > "$D/acp-init.out" || true
+          grep -q '"protocolVersion"' "$D/acp-init.out" || { echo "claude-acp did not answer initialize"; cat "$D/acp-init.out"; exit 1; }
+          # codex-acp needs a `codex app-server` to answer initialize; use the stub.
+          (cat "$D/acp-init.json"; sleep 8) | CODEX_PATH="$(pwd)/scripts/fake-codex-app-server.sh" "$CODEX" > "$D/codex-init.out" || true
+          grep -q '"protocolVersion"' "$D/codex-init.out" || { echo "codex-acp did not answer initialize"; cat "$D/codex-init.out"; exit 1; }
+          # agy Rich Chat runs as a hidden subcommand of the vst binary itself.
+          (cat "$D/acp-init.json"; sleep 2) | "$BIN" agy-stream-acp > "$D/agy-init.out"
+          grep -q '"protocolVersion"' "$D/agy-init.out" || { echo "vst agy-stream-acp did not answer initialize"; cat "$D/agy-init.out"; exit 1; }
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 4. Sign the release manifest. The only job that reads the minisign secrets;
+  #    it has no write scopes and no OIDC token. Hands the final asset set to
+  #    the next jobs as one artifact so they never rebuild or re-sign.
+  # ──────────────────────────────────────────────────────────────────────────
+  sign-manifest:
+    name: Sign release manifest
+    needs: [preflight, build-cli, build-desktop, sign-macos, smoke-cli-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The minisign secrets live in the environment `release-signing` next to the Apple secrets; this job only references the minisign ones
+    # (deployment rule: tags `v*` only); no Apple secret lives there and no other job
+    # uses it. Workflow-level `contents: read` applies. Manual re-run must be
+    # dispatched ON the tag:
+    #   gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
+    environment: release-signing
+
+    steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Resolve release tag
         id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ github.ref_name }}"
-          if [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+      # Each artifact lands in its own subdirectory (no merge); only the FINAL
+      # names match these patterns (the `unsigned-*` data never does).
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: cli-*
           path: downloaded-artifacts
 
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-*
+          path: downloaded-artifacts
+
+      # Takes each release asset from the one artifact allowed to produce it, refuses
+      # missing/duplicate/unexpected files and checks every .sha256.
       - name: Collect release assets
         run: |
-          RELEASE_DIR="release-assets"
-          mkdir -p "$RELEASE_DIR"
-
-          # Flatten artifacts into release-assets/
-          find downloaded-artifacts/ -type f -exec cp {} "$RELEASE_DIR/" \;
-
-          echo "==> All release assets to publish:"
-          ls -lh "$RELEASE_DIR"
-
+          set -euo pipefail
+          bash scripts/collect-release-assets.sh downloaded-artifacts release-assets
           echo "==> Checksums:"
-          for f in "$RELEASE_DIR"/*.sha256; do
+          for f in release-assets/*.sha256; do
             echo "--- $f ---"
             cat "$f"
           done
 
+      # A placeholder (throwaway) key must never sign or ship. Also checked in
+      # preflight (before any build); repeated here so signing never relies on it.
+      - name: Refuse placeholder release key
+        run: bash scripts/check-release-key-not-placeholder.sh rust/vst-daemon/release-keys/vst-release.pub scripts/install.sh
+
+      # No package manager and no root: one pinned upstream tarball, verified by sha256 before
+      # it is unpacked. check-workflow-policy.rb requires this body byte for byte.
+      - name: Install minisign (pinned sha256)
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/minisign"
+          mkdir -p "$d"
+          curl -fsSL --proto '=https' -o "$d/minisign.tar.gz" https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz
+          echo "f0a0954413df8531befed169e447a66da6868d79052ed7e892e50a4291af7ae0  $d/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$d/minisign.tar.gz" -C "$d" minisign-linux/x86_64/minisign
+          echo "$d/minisign-linux/x86_64" >> "$GITHUB_PATH"
+          "$d/minisign-linux/x86_64/minisign" -v
+
+      - name: Build manifest
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: bash scripts/make-release-manifest.sh release-assets "$TAG" release-assets/SHA256SUMS
+
+      - name: Sign manifest
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: bash scripts/sign-release-manifest.sh release-assets/SHA256SUMS rust/vst-daemon/release-keys/vst-release.pub
+
+      - name: Upload signed release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 4. Build-provenance attestations. Own job: the only one with the OIDC token
+  #    (id-token) + attestations scope. No checkout, no secrets, no repo code.
+  # ──────────────────────────────────────────────────────────────────────────
+  attest-provenance:
+    name: Attest build provenance
+    needs: sign-manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download signed release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            release-assets/*.tar.gz
+            release-assets/*.AppImage
+            release-assets/*.deb
+            release-assets/*.dmg
+            release-assets/SHA256SUMS
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 6. Publish release to GitHub Releases (contents: write only; no OIDC token,
+  #    no signing secrets).
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-release:
+    name: Publish GitHub Release
+    needs: [sign-manifest, attest-provenance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Its own approval gate with the same `v*` tag deployment rule, but NO secrets:
+    # this job holds a write token and must not be entitled to any signing secret. The environment `release-publish` MUST
+    # exist with that rule and a required reviewer (an unconfigured one is created
+    # on first use WITHOUT protection). A job-level `permissions` block REPLACES the
+    # workflow-level one (contents: read), so contents: write is granted here.
+    environment: release-publish
+    permissions:
+      contents: write
+
+    steps:
+      # Runs BEFORE checkout, from inline shell reading only env: values, so no
+      # repo code (which a dispatch could point at any ref) can run before the
+      # run is tied to a well-formed tag it is actually ON. The environment's
+      # `v*` deployment rule is evaluated against github.ref, so this is what
+      # makes that rule mean something. See docs/UPDATE.md.
+      - name: Validate release ref (before any repo code runs)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${REF#refs/tags/}}"
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$' \
+            || { echo "::error::not a well-formed v<semver> release tag"; exit 1; }
+          [ "$REF" = "refs/tags/$tag" ] \
+            || { echo "::error::release must run ON its tag: gh workflow run release.yml --ref <tag> -f tag=<tag>"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Resolve release tag
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          TAG="$(bash scripts/resolve-release-tag.sh)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download signed release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      # Any semver prerelease part (-beta, -rc, -dev.1, -pre, ...) => prerelease:
+      # the daemon updater and /releases/latest both follow GitHub's flag.
       - name: Determine prerelease status
         id: prerelease
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          TAG="${{ steps.ver.outputs.tag }}"
-          if echo "$TAG" | grep -Eq -- '-(beta|rc|alpha)'; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          if bash scripts/resolve-release-tag.sh --is-prerelease "$TAG"; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       # Curated notes live at .github/release-notes/<tag>.md (format: docs/RELEASE-NOTES.md).
       # No file for this tag -> fall back to GitHub's auto-generated notes.
       - name: Select release notes
         id: notes
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
-          F=".github/release-notes/${{ steps.ver.outputs.tag }}.md"
+          F=".github/release-notes/$TAG.md"
           if [ -f "$F" ]; then
-            echo "path=$F" >> $GITHUB_OUTPUT
-            echo "generate=false" >> $GITHUB_OUTPUT
+            echo "path=$F" >> "$GITHUB_OUTPUT"
           else
             echo "No curated notes at $F; using auto-generated notes"
-            echo "path=" >> $GITHUB_OUTPUT
-            echo "generate=true" >> $GITHUB_OUTPUT
+            echo "path=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: Release ${{ steps.ver.outputs.tag }}
-          draft: false
-          prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
-          body_path: ${{ steps.notes.outputs.path }}
-          generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
-          files: release-assets/*
+      # Never un-publish or replace a live release: a re-run for a published tag stops here.
+      - name: Refuse an already published release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: bash scripts/check-release-not-published.sh "$TAG"
+
+      # The preinstalled `gh`, no third-party action next to the write token. The release is
+      # created as a DRAFT on an existing tag (--verify-tag); a draft left by a failed run is
+      # reused (its assets are replaced), a published release was refused above. The final
+      # asset list must equal the signed set exactly.
+      - name: Create draft release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          PRERELEASE: ${{ steps.prerelease.outputs.is_prerelease }}
+          NOTES: ${{ steps.notes.outputs.path }}
+        run: |
+          set -euo pipefail
+          args=(--draft --verify-tag --title "Release $TAG")
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+          if [ -n "$NOTES" ]; then args+=(--notes-file "$NOTES"); else args+=(--generate-notes); fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then gh release create "$TAG" "${args[@]}"; fi
+          gh release upload "$TAG" release-assets/* --clobber
+          want="$(cd release-assets && printf '%s\n' * | sort)"
+          have="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          [ "$want" = "$have" ] || { echo "::error::draft release assets differ from the signed set"; exit 1; }
+
+      # Published only once every asset (incl. the signature) is attached, so clients
+      # never see a half-uploaded release.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
