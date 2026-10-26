@@ -13,7 +13,9 @@ import { StorageSetting } from "./StorageSetting";
 import { RemoteAccessSetting } from "./RemoteAccessSetting";
 import { LspSetting } from "./LspSetting";
 import { DoctorSetting } from "./DoctorSetting";
+import { UpdateSetting } from "./UpdateSetting";
 import { AboutSetting } from "./AboutSetting";
+import { SETTINGS_SECTION_LABELS as L } from "./settingsSections";
 import "./settings.css";
 
 interface Section {
@@ -33,17 +35,18 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const tabLayoutId = useId();
 
   const sections: Section[] = [
-    { id: "modes", label: "Harnesses and modes", content: <ModesSetting api={api} /> },
-    { id: "appearance", label: "Appearance", content: <AppearanceSetting /> },
-    { id: "markdown", label: "Markdown", content: <MarkdownStyleSetting /> },
-    { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },
-    { id: "skills", label: "Skills", content: <SkillsSetting api={api} /> },
-    { id: "hidden-projects", label: "Archived projects", content: <HiddenProjectsSetting api={api} /> },
-    { id: "storage", label: "Storage", content: <StorageSetting api={api} /> },
-    { id: "remote-access", label: "Remote Access", content: <RemoteAccessSetting api={api} /> },
-    { id: "lsp", label: "LSP", content: <LspSetting api={api} /> },
-    { id: "doctor", label: "Doctor", content: <DoctorSetting api={api} /> },
-    { id: "about", label: "About", content: <AboutSetting api={api} /> },
+    { id: "modes", label: L["modes"]!, content: <ModesSetting api={api} /> },
+    { id: "appearance", label: L["appearance"]!, content: <AppearanceSetting /> },
+    { id: "markdown", label: L["markdown"]!, content: <MarkdownStyleSetting /> },
+    { id: "projects", label: L["projects"]!, content: <ProjectsSetting api={api} /> },
+    { id: "skills", label: L["skills"]!, content: <SkillsSetting api={api} /> },
+    { id: "hidden-projects", label: L["hidden-projects"]!, content: <HiddenProjectsSetting api={api} /> },
+    { id: "storage", label: L["storage"]!, content: <StorageSetting api={api} /> },
+    { id: "remote-access", label: L["remote-access"]!, content: <RemoteAccessSetting api={api} /> },
+    { id: "lsp", label: L["lsp"]!, content: <LspSetting api={api} /> },
+    { id: "doctor", label: L["doctor"]!, content: <DoctorSetting api={api} /> },
+    { id: "updates", label: L["updates"]!, content: <UpdateSetting /> },
+    { id: "about", label: L["about"]!, content: <AboutSetting api={api} /> },
   ];
 
   const activeSection = sections.find((s) => s.id === sectionId) ?? sections[0]!;

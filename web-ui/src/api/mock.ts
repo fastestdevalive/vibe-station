@@ -616,7 +616,7 @@ export function createMockApi(seed: MockSeed = {}) {
       if (daemonDown) {
         throw new ApiError("unreachable", 0);
       }
-      return { ok: true, version: "0.0.0-mock", port: 7421 };
+      return { ok: true, version: "0.0.0-mock", port: 7421, bootId: "mock-boot" };
     },
 
     async listProjects(): Promise<Project[]> {

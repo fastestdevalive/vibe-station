@@ -1,0 +1,678 @@
+/* Update UI styles (chip, toast, dialog, changelog, settings) */
+/* Kept out of workspace.css (over the size cap). */
+
+/* Chip wrapper */
+.update-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+/* Filled pill button */
+.update-chip__main {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--transition-fast);
+}
+
+.update-chip__main:hover {
+  opacity: 0.9;
+}
+
+/* Variants */
+.update-chip--available .update-chip__main {
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
+}
+
+.update-chip--installing .update-chip__main {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+  border-color: var(--border-default);
+}
+
+.update-chip--restart .update-chip__main {
+  background: var(--success);
+  color: var(--fg-on-success);
+  border-color: var(--success);
+}
+
+.update-chip--rolled-back .update-chip__main {
+  background: var(--warning);
+  color: var(--fg-on-warning);
+  border-color: var(--warning);
+}
+
+/* Icon-only narrow variant (< 640px) */
+.update-chip--icon-only .update-chip__main {
+  width: 24px;
+  padding: 0;
+  justify-content: center;
+}
+
+.update-chip--icon-only .update-chip__label {
+  display: none;
+}
+
+/* Skip button (×) */
+.update-chip__skip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  padding: 0;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.update-chip__skip:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+/* Inline Spinner */
+.update-chip__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--fg-primary);
+  border-radius: var(--radius-full);
+  animation: update-spin 1s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+@keyframes update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-chip__spinner {
+    animation: none;
+  }
+}
+
+/* Undo Toast */
+.update-undo-toast {
+  position: fixed;
+  bottom: calc(var(--global-status-bar-h, 24px) + var(--space-2));
+  right: var(--space-4);
+  z-index: 1000;
+  display: inline-flex;
+  gap: var(--space-3);
+  align-items: center;
+  background: var(--bg-active);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-xs);
+  box-shadow: var(--shadow-md);
+}
+
+.update-undo-toast__btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.update-undo-toast__btn:hover {
+  opacity: 0.8;
+}
+
+/* Update Dialog & Changelog */
+.update-dialog {
+  max-width: 520px;
+  width: 100%;
+}
+
+.update-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+
+.update-dialog__sub {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__notice,
+.update-dialog__readonly-notice {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  border: 1px solid var(--border-default);
+}
+
+.update-dialog__targets {
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__targets-header {
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+  margin-bottom: var(--space-1);
+  display: block;
+}
+
+.update-dialog__impact-title {
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+  margin-bottom: var(--space-1);
+  display: block;
+}
+
+.update-dialog__targets ul,
+.update-dialog__impact-box ul,
+.update-dialog__result-list ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--fg-secondary);
+}
+
+.update-dialog__stage-log {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__stage-log li[data-state="active"] {
+  color: var(--fg-primary);
+}
+
+.update-dialog__stage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+}
+
+.update-dialog__progress-bar {
+  height: 6px;
+  background: var(--bg-active);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-top: var(--space-1);
+}
+
+.update-dialog__progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--transition-base);
+}
+
+.update-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.update-dialog__error-box {
+  background: var(--destructive-muted);
+  border: 1px solid var(--destructive);
+  color: var(--fg-primary);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.update-dialog__muted {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* Changelog View */
+.update-changelog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  padding: var(--space-3);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.update-changelog__body {
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+  line-height: var(--line-height-normal);
+}
+
+.update-changelog__body ul,
+.update-changelog__body ol {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+}
+
+.update-changelog__body p {
+  margin: var(--space-1) 0;
+}
+
+.update-changelog__body a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.update-changelog__empty {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.update-changelog__compare {
+  font-size: var(--font-size-xs);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-default);
+}
+
+.update-changelog__compare a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Settings error recovery box */
+.update-setting__cmd {
+  margin-top: var(--space-2);
+}
+
+/* Restart Overlay */
+.restart-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.restart-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(4px);
+}
+
+.restart-overlay__content:focus {
+  outline: none;
+}
+
+.restart-overlay__content {
+  position: relative;
+  z-index: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  max-width: 400px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  box-shadow: var(--shadow-lg);
+}
+
+.restart-overlay__spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-default);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: update-spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .restart-overlay__spinner {
+    animation: none;
+  }
+}
+
+.restart-overlay__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+}
+
+.restart-overlay__desc {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+
+.restart-overlay__actions {
+  margin-top: var(--space-2);
+}
+
+/* Manual step state */
+.update-dialog__manual-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.update-dialog__deb-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.update-dialog__cmd-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__cmd-text {
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--fg-primary);
+}
+
+.update-dialog__step-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.update-dialog__step-text {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__sha-link {
+  font-size: var(--font-size-xs);
+}
+
+.update-dialog__sha-link a,
+.update-dialog__link {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.update-dialog__deb-path {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.update-dialog__deb-path code {
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+}
+
+
+/* Visually hidden, still announced (polite stage live region). */
+.update-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Buttons in the update UI. The shared `.btn` set (workspace.css) has no
+   `--ghost`/`--danger` modifiers and never styles anchors, so an
+   `<a class="btn">` (View release, Download .dmg) rendered as a browser-default
+   (violet) underlined link. Scoped to the update surfaces. */
+:is(.update-dialog, .update-setting) a.btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  border: 1px solid var(--border-default);
+  background: var(--bg-card);
+  color: var(--fg-primary);
+}
+
+:is(.update-dialog, .update-setting) a.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+}
+
+:is(.update-dialog, .update-setting) .btn--ghost {
+  background: transparent;
+  border-color: var(--border-default);
+  color: var(--fg-primary);
+}
+
+:is(.update-dialog, .update-setting) .btn--ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+:is(.update-dialog, .update-setting) .btn--danger {
+  background: transparent;
+  border-color: var(--destructive);
+  color: var(--destructive);
+}
+
+:is(.update-dialog, .update-setting) .btn--danger:hover:not(:disabled) {
+  background: var(--destructive-muted);
+}
+
+/* ---- Settings > Updates ---- */
+.update-setting__muted {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.update-setting__note {
+  margin: var(--space-3) 0;
+}
+
+.update-setting__link {
+  color: var(--accent);
+}
+
+.update-setting__row {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) 0;
+}
+
+.update-setting__row-label {
+  width: 120px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.update-setting__row-value {
+  color: var(--fg-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.update-setting__targets {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.update-setting__check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+.update-setting__ok {
+  font-size: var(--font-size-sm);
+  color: var(--fg-success);
+}
+
+.update-setting__check-error-text {
+  font-size: var(--font-size-sm);
+  color: var(--fg-danger);
+}
+
+.update-setting__small-btn {
+  font-size: var(--font-size-xs);
+}
+
+.update-setting__banner {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+}
+
+.update-setting__banner-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+}
+
+.update-setting__banner-title--warn {
+  font-weight: inherit;
+  color: var(--warning);
+}
+
+.update-setting__banner-note {
+  margin-top: var(--space-1);
+}
+
+.update-setting__banner-body {
+  margin-top: var(--space-2);
+}
+
+.update-setting__banner-impact {
+  margin-bottom: var(--space-2);
+}
+
+.update-setting__banner-error {
+  color: var(--fg-danger);
+  margin-bottom: var(--space-2);
+}
+
+.update-setting__banner-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.update-setting__banner-actions--spaced {
+  margin-top: var(--space-2);
+}
+
+.update-setting__block {
+  margin: var(--space-3) 0;
+}
+
+.update-setting__progress-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+}
+
+.update-setting__offer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.update-setting__offer-text {
+  font-size: var(--font-size-sm);
+}
+
+.update-setting__offer-text--muted {
+  color: var(--fg-muted);
+}
+
+.update-setting__error-box {
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  background: var(--destructive-muted);
+  border: 1px solid var(--destructive);
+  border-radius: var(--radius-md);
+}
+
+.update-setting__error-title {
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.update-setting__error-detail {
+  color: var(--fg-secondary);
+  font-weight: var(--font-weight-normal);
+}
+
+.update-setting__error-actions {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.update-setting__alert {
+  margin: var(--space-3) 0;
+  font-size: var(--font-size-sm);
+  color: var(--fg-danger);
+}
+
+.update-setting__auto {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  margin-top: var(--space-3);
+}

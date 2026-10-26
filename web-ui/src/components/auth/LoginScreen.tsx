@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { consumeRecentRestart } from "@/lib/restartMarker";
 import "./LoginScreen.css";
 
 interface LoginScreenProps {
@@ -7,15 +9,42 @@ interface LoginScreenProps {
 // All non-Tauri browsers (LAN and tunnel) see this notice — no token form.
 // Tauri auto-login via __VST_TOKEN__ injection is handled in useAuth.ts.
 export function LoginScreen(_props: LoginScreenProps) {
+  const [restartedNotice, setRestartedNotice] = useState(false);
+
+  useEffect(() => {
+    if (consumeRecentRestart(2 * 60 * 1000)) setRestartedNotice(true);
+  }, []);
+
   return (
     <div className="login-screen">
       <div className="login-card">
         <div className="login-card__brand">Vibe Station</div>
         <div className="login-card__divider" />
-        <p style={{ textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)", lineHeight: 1.5 }}>
-          Open the desktop app → <strong>Settings</strong> → <strong>Remote Access</strong> → <strong>Show QR</strong> and scan it with your phone (turn on <strong>Allow access</strong> first if you want to pair over your local network).
-        </p>
+        {restartedNotice ? (
+          <p
+            style={{
+              textAlign: "center",
+              color: "var(--fg-secondary)",
+              fontSize: "var(--font-size-sm)",
+              lineHeight: 1.5,
+            }}
+          >
+            Signed out by restart — run <code className="code-badge">vst open</code>
+          </p>
+        ) : (
+          <p
+            style={{
+              textAlign: "center",
+              color: "var(--fg-muted)",
+              fontSize: "var(--font-size-sm)",
+              lineHeight: 1.5,
+            }}
+          >
+            Open the desktop app → <strong>Settings</strong> → <strong>Remote Access</strong> → <strong>Show QR</strong> and scan it with your phone (turn on <strong>Allow access</strong> first if you want to pair over your local network).
+          </p>
+        )}
       </div>
     </div>
   );
 }
+

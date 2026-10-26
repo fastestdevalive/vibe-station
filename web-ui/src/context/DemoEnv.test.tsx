@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { renderHook } from '@testing-library/react';
 import { useDemoEnv, usePortalRoot, useViewportWidth, useEventTargets, DemoEnvProvider } from './DemoEnv';
 import { describe, it, expect } from 'vitest';
@@ -31,7 +32,7 @@ describe('DemoEnv Context', () => {
   it('respects provided values', () => {
      const dummyElement = document.createElement('div');
      const customEnv = { demo: true, viewport: { w: 100, h: 200 }, scale: 2, portalRoot: dummyElement, eventRoot: dummyElement };
-     const wrapper = ({ children }: { children: React.ReactNode }) => <DemoEnvProvider value={customEnv}>{children}</DemoEnvProvider>;
+     const wrapper = ({ children }: { children: ReactNode }) => <DemoEnvProvider value={customEnv}>{children}</DemoEnvProvider>;
      
      const { result: rootResult } = renderHook(() => usePortalRoot(), { wrapper });
      expect(rootResult.current).toBe(dummyElement);

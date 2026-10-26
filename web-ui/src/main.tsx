@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
+import { createPreloadErrorHandler } from "./lib/preloadReload";
 import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/themes.generated.css";
@@ -15,6 +16,11 @@ import "./styles/tasks.css";
 import "./styles/mentions.css";
 import "./styles/selection.css";
 
+window.addEventListener(
+  "vite:preloadError",
+  createPreloadErrorHandler(() => window.location.reload()),
+);
+
 const root = document.getElementById("root");
 if (!root) throw new Error("#root not found");
 
@@ -25,3 +31,4 @@ createRoot(root).render(
     </BrowserRouter>
   </StrictMode>,
 );
+

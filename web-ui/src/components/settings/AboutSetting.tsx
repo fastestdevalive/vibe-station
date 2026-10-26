@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Github } from "lucide-react";
+import { Link, useInRouterContext } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import { Logo } from "@/components/shared/Logo";
 import { SectionHeader } from "./SectionHeader";
@@ -24,6 +25,9 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
   useEffect(() => {
     void api.health().then((res) => setVersion(res.version));
   }, [api]);
+
+  const inRouter = useInRouterContext();
+  const versionText = version ?? "—";
 
   return (
     <div>
@@ -74,7 +78,13 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
         description="The running daemon's version."
         control={
           <span className="settings-mono selectable" style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
-            {version ?? "—"}
+            {inRouter ? (
+              <Link to="/settings/updates" style={{ color: "inherit" }}>
+                {versionText}
+              </Link>
+            ) : (
+              versionText
+            )}
           </span>
         }
       />

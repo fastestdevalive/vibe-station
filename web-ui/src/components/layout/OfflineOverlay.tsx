@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance, ConnectionState } from "@/api";
+import { useUpdateStore } from "@/hooks/useUpdateStore";
 
 export interface OfflineOverlayProps {
   api: ApiInstance;
@@ -12,13 +13,14 @@ export interface OfflineOverlayProps {
  * frozen/stale content while the daemon is down, reconnecting, or disconnected.
  */
 export function OfflineOverlay({ api, className }: OfflineOverlayProps) {
+  const restarting = useUpdateStore((s) => s.restarting);
   const [connState, setConnState] = useState<ConnectionState>(() => api.getConnectionState());
 
   useEffect(() => {
     return api.subscribeConnection((s) => setConnState(s));
   }, [api]);
 
-  if (connState === "online") return null;
+  if (restarting || connState === "online") return null;
 
   const offlineLabel =
     connState === "disconnected"

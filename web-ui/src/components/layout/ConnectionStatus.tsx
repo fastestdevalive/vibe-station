@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/api";
 import type { ConnectionState } from "@/api";
+import { useUpdateStore } from "@/hooks/useUpdateStore";
 
 export function ConnectionStatus() {
+  const restarting = useUpdateStore((s) => s.restarting);
   const [state, setState] = useState<ConnectionState>(() => api.getConnectionState());
   const [showRecovered, setShowRecovered] = useState(false);
   const hasEverBeenOnline = useRef(false);
@@ -26,7 +28,7 @@ export function ConnectionStatus() {
     };
   }, []);
 
-  if (state === "online" && !showRecovered) return null;
+  if (restarting || (state === "online" && !showRecovered)) return null;
 
   const label =
     state === "online"
