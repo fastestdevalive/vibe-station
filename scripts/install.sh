@@ -56,8 +56,29 @@ err() { printf 'vst-install: error: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || err "required command '$1' not found"; }
 
 usage() {
-	sed -n '2,44p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
-	echo "See https://github.com/$REPO for usage."
+	# Printed from here, not read back out of "$0": when piped (`curl … | sh -s -- --help`)
+	# $0 is the shell, not this file.
+	cat <<EOF
+vibe-station installer
+
+  curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh | sh
+  curl -fsSL .../install.sh | sh -s -- --version v0.2.0
+  wget -qO-  .../install.sh | sh          # e.g. Alpine (busybox wget, no curl)
+
+Installs the vst CLI (+ desktop app on Linux x86_64 glibc) into ~/.local/bin and
+~/.local/share/vibe-station, and adds the CLI dir to PATH via your shell rc files.
+No sudo. Safe to re-run: upgrades in place and never duplicates PATH entries.
+
+Options (each also settable via env var):
+  --version <tag>     VST_VERSION        release tag, default: latest
+  --install-dir <d>   VST_INSTALL_DIR    default: ~/.local/bin
+  --no-modify-path    VST_NO_MODIFY_PATH=1
+  -h, --help
+Testing/mirrors:  VST_DOWNLOAD_BASE (default https://github.com/$REPO/releases)
+                  VST_API_BASE      (default https://api.github.com/repos/$REPO)
+
+See https://github.com/$REPO for usage.
+EOF
 }
 
 # ── download helpers ──────────────────────────────────────────────────────────

@@ -6,6 +6,30 @@
 pub const NAME: &str = "vst";
 pub const DESCRIPTION: &str = "vibe-station — orchestrate parallel AI coding agents";
 
+/// Text printed by `vst --help` / `vst help` / `vst daemon --help`.
+pub const USAGE: &str = "\
+Usage: vst <command> [args]
+
+Commands:
+  daemon     status | run | stop
+  project    add | create | rm | ls | info
+  worktree   create | rm | done | ls | info | rename
+  agent      create | ls | info | terminate | attach | restore | output |
+             transcript | reset | handoff | rename | send | stop
+  terminal   create | ls | info | terminate | attach | output | rename
+  mode       ls | add | rm
+  file       open
+  files      ls | open | close
+  open       open a path in the UI
+  status     daemon and session status
+  summary    summarize sessions
+  doctor     check the local environment
+  <path>     shorthand for `vst open <path>`
+
+Options:
+  -v, --version   print the version
+  -h, --help      print this help";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Version,
@@ -194,6 +218,7 @@ where
                     }
                     Command::Daemon(DaemonCommand::Status { json })
                 }
+                Some("-h" | "--help") => Command::Help,
                 Some("run") => Command::Daemon(DaemonCommand::Run),
                 Some("stop") => Command::Daemon(DaemonCommand::Stop),
                 Some(other) => {
