@@ -2,14 +2,12 @@
 //! terminal-phase turns into `NormalizedEvent`s (R0.5–R0.9). Ports
 //! `services/nativeHistoryImporter.ts`.
 //!
-//! The importer registry is the P3 toggle GATE: claude + opencode + codex
-//! ship here; cursor + agy are DEFERRED and intentionally absent.
+//! The importer itself is reached as an [`crate::plugin::AgentPlugin`] method
+//! (`native_history_importer()`, default `None`) — NOT a `match cli` registry
+//! (AGENTS.md § Agent plugin). claude + opencode + codex + omp return their
+//! singletons; cursor + agy (+ pi, terminal-only) are DEFERRED and absent.
 
 use vst_types::NormalizedEvent;
-
-use crate::claude_import::claude_history_importer;
-use crate::codex_import::codex_history_importer;
-use crate::opencode_import::opencode_history_importer;
 
 /// Inputs to one import pass.
 #[derive(Clone, Debug)]
@@ -37,24 +35,16 @@ pub struct NativeImportResult {
 pub trait NativeHistoryImporter: Send + Sync {
     fn cli(&self) -> &'static str;
     fn import(&self, req: &NativeImportRequest) -> NativeImportResult;
-}
-
-/// A concrete importer created from a test seam (an injected store path).
-pub fn get_native_history_importer(cli: &str) -> Option<&'static dyn NativeHistoryImporter> {
-    match cli {
-        "claude" => Some(claude_history_importer()),
-        "opencode" => Some(opencode_history_importer()),
-        "codex" => Some(codex_history_importer()),
-        _ => None,
+    /// The native cursor sealing the watermark at the CURRENT end of the store,
+    /// without importing (Decision 9: json→tty seals so ACP-written turns are never
+    /// re-imported). Default `None` = no seal (plugins without an importer, and
+    /// importers whose store can't be read).
+    fn current_cursor(&self, _req: &NativeImportRequest) -> Option<String> {
+        None
     }
 }
 
-/// Whether a CLI can import terminal-phase history (the P3 toggle gate).
-pub fn has_native_history_importer(cli: &str) -> bool {
-    matches!(cli, "claude" | "opencode" | "codex")
-}
-
-// Re-export the store-path resolvers for the test seams.
+// The per-CLI store-path resolvers, re-exported for the test seams.
 pub use crate::claude_import::claude_native_store_path;
 pub use crate::codex_import::codex_native_store_path;
 pub use crate::opencode_import::opencode_native_store_path;

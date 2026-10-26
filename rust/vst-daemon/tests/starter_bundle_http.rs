@@ -88,8 +88,8 @@ async fn test_starter_bundle_http_supported_for_all_clis() {
             )
         });
 
-        // Specifically check that pi and codex succeed with created default modes
-        if cli == CliId::Pi || cli == CliId::Codex {
+        // Specifically check that pi, codex and omp succeed with created default modes
+        if cli == CliId::Pi || cli == CliId::Codex || cli == CliId::Omp {
             assert!(
                 result.models_error.is_none(),
                 "CLI {} had models_error: {:?}",
@@ -122,7 +122,7 @@ async fn test_starter_bundle_http_supported_for_all_clis() {
             .unwrap();
         let result2: StarterBundleResult = serde_json::from_slice(&bytes2).unwrap();
 
-        if cli == CliId::Pi || cli == CliId::Codex {
+        if cli == CliId::Pi || cli == CliId::Codex || cli == CliId::Omp {
             assert!(result2.created.is_empty());
             assert!(result2.already_complete);
             assert!(result2

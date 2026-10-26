@@ -186,6 +186,15 @@ each plugin declares it only by which optional methods it implements:
 | cursor | `unavailable` | No, and no bridge exists (`cursor-agent acp` stores sessions in `~/.cursor/acp-sessions/<id>/store.db`, separate from what `--resume` reads) | best-effort cwd-keyed guess | **`false`** (`cursor.rs`) | Starts a **fresh** terminal conversation (no crash, no bogus `--resume`); UI warns beforehand via `GET /supported-clis`. Rich Chat transcript is unaffected (lives in SQLite) |
 | codex | `bridged` | No — but `codex-acp`'s `session/new` sets `sessionId` directly to codex's native `thread_id`, so the native id is trivially recoverable with no separate lookup | `capture_native_chat_id` (trivial: adopts ACP session id verbatim) | `true` (default) | Resumes correctly via `codex resume <id>` |
 | pi | no ACP / no json channel | N/A — no ACP layer exists for pi | not implemented | `true` (default, but meaningless — json channel is never offered for pi) | N/A — terminal only |
+| omp | `identical` | Yes | not implemented | `true` (default) | Resumes correctly via `omp --resume <id>` |
+
+> **History import for omp:** omp's terminal turns are imported into Rich Chat
+> after a tty→json toggle (`historyImported: true`) by reading its session
+> `.jsonl` directly — an active-branch walk (leaf → root via `parentId`) — with
+> the watermark sealed on json→tty so ACP-written turns are never re-imported.
+> Implemented via `AgentPlugin::native_history_importer()`; see
+> `rust/vst-agents/src/omp_import.rs` and the "History import" section of
+> `docs/PLUGINS.md`.
 
 Per-CLI native-id resolvers live in `rust/vst-agents/src/native_chat_id.rs`; opencode's
 absence there is meaningful (its id never needs out-of-band discovery).
@@ -240,11 +249,12 @@ extension); otherwise the message is queued (cancel-and-resend is the ceiling).
 
 | CLI | Steering | Notes |
 |---|---|---|
-| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0; reports `_meta.steering.supported: true` in `initialize`. The only plugin implementing `supports_mid_turn_steering()` |
+| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0; reports `_meta.steering.supported: true` in `initialize`. One of two plugins implementing `supports_mid_turn_steering()` |
 | opencode | **Disabled deliberately** | Advertises steering and replies `injected`, but the text never reaches the model (silently swallowed). Re-enable only after a fixed version is verified |
 | agy | Not supported | `agy-acp` has no `_session/steering`; handshake reports `false` |
 | cursor | Not supported | Closed binary, no steering surface; cancelling starts a fresh conversation |
 | codex | Not supported | `codex-acp` has no `_session/steering` extension |
+| omp | **Supported, verified omp 18.12.6 (injected + promptRequired)** | Model re-streams the answer so text can appear duplicated |
 | pi | N/A | Terminal only — no Rich Chat channel at all |
 
 **Two gates, both required:** `supportsSteering` (what the CLI *claims* in
@@ -271,6 +281,7 @@ send button's `aria-label` reads "Interrupts and steers the running turn" when
 | claude | Up to 1M via `betas: ["context-1m-2025-08-07"]` | **Passed** — `claude.rs` `acp_meta()` sends the beta and the model on `session/new` (the same `_meta` also carries `extraArgs.chrome` and `env.CLAUDE_CODE_ARTIFACT=1`, giving terminal parity for Claude-in-Chrome and claude.ai Artifacts; the adapter honours those on `session/load` too) | The adapter ranks `ANTHROPIC_MODEL` above everything else; inherited from the user's shell (e.g. `claude-sonnet-4-6`), it was re-asserted on `session/load`, so a `sonnet` mode ran 4-6 at 200k. `acp_model_env()` pins the var to the session's model (left alone when the mode has none). `_meta` is also ignored on load, so `acp_initial_config_option()` re-pins the model with `session/set_config_option` after every load, and a status event says so |
 | opencode / cursor / agy | CLI-managed | None | No ACP field exposes it |
 | codex | CLI-managed | None | No ACP field exposes it |
+| omp | CLI-managed | None | No ACP field exposes it |
 | pi | CLI-managed | None | Terminal only — no ACP |
 
 Update sections 5–8 when a CLI ships a new ACP version or the daemon wires a

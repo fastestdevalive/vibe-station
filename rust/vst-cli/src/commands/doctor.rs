@@ -277,9 +277,24 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
     }
     all_ok = git_ok && all_ok;
 
-    for bin in ["claude", "cursor", "opencode", "agy", "codex", "pi"] {
+    for bin in ["claude", "cursor", "opencode", "agy", "codex", "pi", "omp"] {
         if !check(&format!("{bin} is on PATH"), || which(bin)) {
             print_table_hint(&format!("plugin-{bin}"));
+        }
+    }
+
+    // `omp` installed through bun is a bun script: it needs `bun` on PATH too.
+    if let Some(omp) = SyncCommand::new("which")
+        .arg("omp")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+    {
+        if vst_daemon::doctor::script_needs_bun(std::path::Path::new(omp.trim()))
+            && !check("bun is on PATH (omp needs it)", || which("bun"))
+        {
+            print_table_hint("omp-bun");
         }
     }
 

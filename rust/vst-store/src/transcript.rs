@@ -788,6 +788,25 @@ impl TranscriptStore {
             .ok()
     }
 
+    /// Seal the native watermark at the CURRENT end of the CLI's store, without
+    /// importing anything (Decision 9: json→tty seals so ACP-written Rich-Chat
+    /// turns are never re-imported on the next tty→json). Reuses the same
+    /// upsert as `import_transaction`.
+    pub fn set_native_watermark(&mut self, cli: &str, cursor: &str) {
+        // A failed seal is not fatal, but it must be visible: the next tty→json
+        // would re-import ACP-written turns (their ids differ from the CLI's).
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO native_watermark (session_id, cli, cursor) VALUES (?1, ?2, ?3)
+             ON CONFLICT(session_id) DO UPDATE SET cli = excluded.cli, cursor = excluded.cursor",
+            params![self.session_id, cli, cursor],
+        ) {
+            tracing::warn!(
+                "[native-import] seal failed for session={}: {e}",
+                self.session_id
+            );
+        }
+    }
+
     /// The last `n_turns` whole turns, turn-aligned, plus a cursor.
     ///
     /// The candidate window is the last `n_turns` turns (newest-first, from

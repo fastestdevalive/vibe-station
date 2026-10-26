@@ -13,6 +13,7 @@ use vst_agents::claude::create_claude_plugin;
 use vst_agents::codex::create_codex_plugin;
 use vst_agents::cursor::create_cursor_plugin;
 use vst_agents::home::with_home;
+use vst_agents::omp::create_omp_plugin;
 use vst_agents::opencode::create_opencode_plugin;
 use vst_agents::paths::Paths;
 use vst_agents::pi::create_pi_plugin;
@@ -1626,6 +1627,208 @@ mod pi_plugin {
         let argv = restore(known, None).await;
         let idx = argv.iter().position(|a| a == "--session-id").unwrap();
         assert_eq!(argv[idx + 1], "established");
+    }
+}
+
+mod omp_plugin {
+    use super::*;
+
+    /// Seed omp's per-session store (`cwd/.vibe-station/omp-sessions/<sid>`) with
+    /// one `<ts>_<id>.jsonl` file per `(ts, id, has_user_turn)` entry.
+    fn seed_store(cwd: &std::path::Path, sid: &str, entries: &[(&str, &str, bool)]) {
+        let dir = cwd.join(".vibe-station/omp-sessions").join(sid);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (ts, id, has_user_turn) in entries {
+            let body = if *has_user_turn {
+                format!(
+                    "{{\"type\":\"session\",\"id\":\"{id}\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n"
+                )
+            } else {
+                // Header only (session/new wrote it, no user turn yet).
+                "{\"type\":\"session\",\"id\":\"abc\"}\n{\"type\":\"title\"}\n".to_string()
+            };
+            std::fs::write(dir.join(format!("{ts}_{id}.jsonl")), body).unwrap();
+        }
+    }
+
+    #[test]
+    fn name_is_omp() {
+        assert_eq!(create_omp_plugin().name(), "omp");
+        assert_eq!(create_omp_plugin().binary_name(), "omp");
+    }
+
+    #[test]
+    fn defaults_to_json_and_supports_acp_and_steering() {
+        let p = create_omp_plugin();
+        assert_eq!(p.default_channel(), Channel::Json);
+        assert!(p.supports_json());
+        assert!(p.supports_acp());
+        assert!(p.supports_mid_turn_steering());
+        // `identical` identity strategy: the ACP id IS the native resume id, so
+        // the tty→json toggle may drop a stale acp_session_id.
+        assert!(p.acp_session_id_is_native());
+    }
+
+    #[test]
+    fn launch_command_pins_store_approval_and_model() {
+        // A fresh session (no user turn) launches without `--resume`.
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        let mut cfg = launch_cfg_worktree();
+        cfg.session = make_session("s1");
+        cfg.ctx.cwd = cwd.clone();
+        cfg.model = Some("deepseek-local/m".into());
+        let argv = create_omp_plugin().get_launch_command(&cfg);
+        assert_eq!(argv[0], "omp");
+        let joined = argv.join(" ");
+        assert!(joined.contains("--approval-mode"));
+        assert!(joined.contains("yolo"));
+        assert!(joined.contains("--allow-home"));
+        assert!(joined.contains("--session-dir"));
+        let store = cwd
+            .join(".vibe-station/omp-sessions/s1")
+            .to_string_lossy()
+            .into_owned();
+        assert!(argv
+            .windows(2)
+            .any(|w| w[0] == "--session-dir" && w[1] == store));
+        assert!(argv
+            .windows(2)
+            .any(|w| w[0] == "--model" && w[1] == "deepseek-local/m"));
+        assert!(!argv.iter().any(|a| a == "--resume"));
+    }
+
+    #[test]
+    fn launch_command_resumes_an_established_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        seed_store(&cwd, "s1", &[("1700000000", "conv-1", true)]);
+        let mut cfg = launch_cfg_worktree();
+        cfg.session = make_session("s1");
+        cfg.ctx.cwd = cwd;
+        let argv = create_omp_plugin().get_launch_command(&cfg);
+        let resume_idx = argv.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(argv[resume_idx + 1], "conv-1");
+    }
+
+    #[tokio::test]
+    async fn restore_command_none_on_header_only_store() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        // File exists but holds no user turn (session/new header only) → nothing
+        // to resume; the caller falls back to a fresh launch.
+        seed_store(&cwd, "s1", &[("1700000000", "abc", false)]);
+        let session = make_session("s1");
+
+        let result = create_omp_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: cwd.to_str().unwrap(),
+                model: None,
+            })
+            .await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn restore_command_resumes_with_resume_id_after_a_user_turn() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        seed_store(&cwd, "s1", &[("1700000000", "conv-9", true)]);
+        let session = make_session("s1");
+        let argv = create_omp_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: cwd.to_str().unwrap(),
+                model: Some("anthropic/claude"),
+            })
+            .await
+            .expect("a user turn must yield a resume command");
+        let joined = argv.join(" ");
+        assert_eq!(argv[0], "omp", "{argv:?}");
+        assert!(joined.contains("--approval-mode") && joined.contains("yolo"));
+        assert!(joined.contains("--allow-home"));
+        let resume_idx = argv.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(argv[resume_idx + 1], "conv-9");
+        let model_idx = argv.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(argv[model_idx + 1], "anthropic/claude");
+        // No system-prompt file written yet → nothing appended.
+        assert!(!joined.contains("--append-system-prompt"));
+    }
+
+    /// A session created in Rich Chat never ran `compose_launch_prompt`, so it has
+    /// no tty-only prompt copy; the resume must still carry the vst instructions,
+    /// via the shared per-session file `omp acp` is launched with.
+    #[tokio::test]
+    async fn restore_command_passes_the_shared_system_prompt_file() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        seed_store(&cwd, "s1", &[("1700000000", "conv-9", true)]);
+        let session = make_session("s1");
+        let shared = vst_agents::paths::Paths::default().direct_system_prompt_path("p1", "s1");
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "vst prompt").unwrap();
+        let argv = create_omp_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: cwd.to_str().unwrap(),
+                model: None,
+            })
+            .await
+            .unwrap();
+        let idx = argv
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(argv[idx + 1], shared.to_string_lossy());
+    }
+
+    #[tokio::test]
+    async fn refresh_chat_id_on_toggle_picks_the_newest_of_two_files() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        // Two conversations in the same store (a second writer moved omp to a new
+        // id); refresh must return the NEWEST by filename timestamp, not mtime.
+        seed_store(&cwd, "s1", &[("1000", "old", true), ("2000", "new", true)]);
+        let session = make_session("s1");
+        let refreshed = create_omp_plugin()
+            .refresh_chat_id_on_toggle(CaptureArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: cwd.to_str().unwrap(),
+                worktree: None,
+            })
+            .await;
+        assert_eq!(refreshed.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn compose_launch_prompt_keeps_the_prompt_off_the_command_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut input = compose_input(Some("task"));
+        input.system_prompt = "x".repeat(60_000);
+        input.system_prompt_file = dir.path().join("system-prompt.md").display().to_string();
+        input.launch_cfg.ctx.cwd = dir.path().to_path_buf();
+        let line = create_omp_plugin()
+            .compose_launch_prompt(input)
+            .shell_line
+            .expect("shell line");
+        // --append-system-prompt is passed the FILE path, keeping the big prompt
+        // off tmux's ~16 KB line limit.
+        assert!(line.contains("--append-system-prompt '"), "{line}");
+        assert!(line.len() < 4_000, "line is {} bytes", line.len());
+        assert!(!line.contains("xxxxx"), "{line}");
     }
 }
 

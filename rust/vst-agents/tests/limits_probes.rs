@@ -273,7 +273,7 @@ mod agy_parser {
 
 #[tokio::test]
 async fn default_plugins_report_unsupported() {
-    for cli in [CliId::Cursor, CliId::Opencode, CliId::Pi] {
+    for cli in [CliId::Cursor, CliId::Opencode, CliId::Pi, CliId::Omp] {
         let plugin = resolve_plugin(cli);
         let res = plugin.get_limits().await;
         assert_eq!(

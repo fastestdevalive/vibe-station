@@ -109,7 +109,7 @@ async fn test_modes_supported_clis_and_models() {
     let routes = ModeRoutes::new(store, broadcaster);
 
     let supported = routes.list_supported_clis().await;
-    assert_eq!(supported.len(), 6);
+    assert_eq!(supported.len(), 7);
 
     let claude = supported.iter().find(|s| s.id == CliId::Claude).unwrap();
     // claude has no hardcoded default model (the adapter/account default applies).
@@ -144,6 +144,13 @@ async fn test_modes_supported_clis_and_models() {
     // Empty by design: pi is multi-provider, the user's own default applies.
     assert!(pi.default_model.is_empty());
     assert!(!pi.supports_json);
+
+    let omp = supported.iter().find(|s| s.id == CliId::Omp).unwrap();
+    // Empty by design: omp is multi-provider, the user's own default applies.
+    assert!(omp.default_model.is_empty());
+    assert!(omp.supports_json);
+    assert!(omp.imports_native_history);
+    assert!(omp.supports_json_to_terminal_resume);
 
     // Test resolve_cli_models
     let models = routes.resolve_cli_models(CliId::Claude).await;

@@ -35,6 +35,7 @@ use vst_types::{
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_transport::AcpTransportError;
+use crate::native_history_importer::NativeHistoryImporter;
 use crate::normalize::AcpEnrichHook;
 
 /// How a plugin delivers its system/task prompts.
@@ -421,6 +422,32 @@ pub trait AgentPlugin: Send + Sync {
     /// resume when toggled to the Terminal channel. Default `true`.
     fn supports_json_to_terminal_resume(&self) -> bool {
         true
+    }
+
+    /// Read this CLI's at-rest native store so terminal-phase turns can be
+    /// backfilled into Rich Chat on a tty→json toggle (Decision 1).
+    ///
+    /// Default `None` ⇒ toggle reports `historyImported: false` and the UI warns.
+    /// Every harness SHOULD override once its store is readable (AGENTS.md:
+    /// importing history is preferred). See `native_history_importer::NativeHistoryImporter`.
+    fn native_history_importer(&self) -> Option<&'static dyn NativeHistoryImporter> {
+        None
+    }
+
+    /// Whether this plugin's `acp_session_id` (the ACP `session/new` id) IS its
+    /// own native resume id (Decision 5). Default `false` — for most plugins the
+    /// ACP id is a protocol-level handle that either differs from the native id
+    /// (`bridged`/`unavailable` strategies) or is discovered post-turn; plugins
+    /// that maintain an `agentChatId` equivalent overload it.
+    ///
+    /// When `true`, the tty→json toggle may reset a stale `acp_session_id` after
+    /// refreshing `agent_chat_id`: reconnect prefers `acp_session_id`, but for an
+    /// `identical`-strategy plugin (omp) the refreshed native id IS the ACP id, so
+    /// a left-over `acp_session_id` from before the terminal moved ids must not
+    /// win over it on the next reconnect. See `docs/RICH-CHAT-ACP.md` § Two
+    /// session identities.
+    fn acp_session_id_is_native(&self) -> bool {
+        false
     }
 
     /// Optional extension metadata payload passed in `session/new` and `session/load`.

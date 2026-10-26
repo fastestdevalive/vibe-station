@@ -280,6 +280,9 @@ case "$CMD" in
     # pin the inode at container-create time. A rebuilt binary is a NEW inode,
     # so without recreating, a still-running container (compose sees no config
     # change) keeps executing the stale daemon. Volumes persist across recreate.
+    # A missing bind-mount source is created by Docker as root; create the omp seed dir
+    # ourselves so a later host `omp` login does not hit EACCES.
+    mkdir -p "${OMP_AGENT_HOME:-$HOME/.omp/agent}"
     docker compose "${COMPOSE_ARGS[@]}" -p "$WORKTREE" up --build --force-recreate -d
     echo "Up: http://localhost:${PORT}"
     ;;

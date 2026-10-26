@@ -71,6 +71,23 @@ fn resolve_bin_path(binary: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Whether `path` is a script whose shebang runs under `bun` (the npm/bun-installed
+/// `omp`). A native binary or an unreadable file is not.
+pub fn script_needs_bun(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 128];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let n = f.read(&mut head).unwrap_or(0);
+    let head = &head[..n];
+    head.starts_with(b"#!")
+        && head
+            .split(|b| *b == b'\n')
+            .next()
+            .is_some_and(|line| String::from_utf8_lossy(line).contains("bun"))
+}
+
 // Every subprocess-backed check goes through this — a hung `tailscale status`
 // or CLI `--version` call degrades to Timeout instead of hanging run_doctor
 // forever (PRD §1: "a timed-out check can never itself count as a blocking
@@ -623,6 +640,7 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
             vst_types::CliId::Agy => "agy",
             vst_types::CliId::Codex => "codex",
             vst_types::CliId::Pi => "pi",
+            vst_types::CliId::Omp => "omp",
         };
         let check_name = format!("plugin-{name}");
         let name_str = name.to_string();
@@ -721,6 +739,43 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
                 ..Default::default()
             }
         });
+    }
+
+    // 8b. omp-bun: the npm/bun-installed `omp` is a `#!/usr/bin/env bun` script, so
+    // omp sessions fail to spawn when `bun` is off the daemon PATH (typical for a
+    // GUI-launched daemon). Only checked when omp is installed AND needs bun, so
+    // users of a native omp build (brew/curl) aren't warned.
+    // Blocking `which` + a file read: off the runtime and bounded like every other
+    // subprocess-backed check.
+    let omp_bun = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(|| {
+            let omp_path = resolve_bin_path("omp")?;
+            if !script_needs_bun(Path::new(&omp_path)) {
+                return None;
+            }
+            let bun = resolve_bin_path("bun");
+            Some(DoctorCheck {
+                name: "omp-bun".to_string(),
+                status: if bun.is_some() {
+                    DoctorStatus::Ok
+                } else {
+                    DoctorStatus::Warn
+                },
+                required: false,
+                group: CheckGroup::Feature,
+                message: match &bun {
+                    Some(p) => format!("bun found at {p} (omp runs under bun)"),
+                    None => "bun not found on PATH — omp sessions will fail to start.".to_string(),
+                },
+                resolved_path: bun,
+                ..Default::default()
+            })
+        }),
+    )
+    .await;
+    if let Ok(Ok(Some(check))) = omp_bun {
+        checks.push(check);
     }
 
     // 9. orphan-sessions (Diagnostic, false)
@@ -892,6 +947,25 @@ mod tests {
     }
 
     // 3.T8
+    #[test]
+    fn script_needs_bun_only_for_a_bun_shebang() {
+        let dir = std::env::temp_dir().join(format!("vst-bun-shebang-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        assert!(script_needs_bun(&write(
+            "a",
+            b"#!/usr/bin/env bun\nconsole.log(1)\n"
+        )));
+        assert!(!script_needs_bun(&write("b", b"#!/usr/bin/env node\n")));
+        assert!(!script_needs_bun(&write("c", b"\x7fELF\x02\x01 bun")));
+        assert!(!script_needs_bun(&dir.join("missing")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn compute_hard_ok_handles_timeout_vs_error() {
         let checks_with_timeout = vec![

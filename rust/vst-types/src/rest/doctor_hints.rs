@@ -131,6 +131,27 @@ static PLUGIN_PI: HintSpec = HintSpec {
     action: None,
     fallback_text: None,
 };
+static PLUGIN_OMP: HintSpec = HintSpec {
+    why: "Optional agent CLI (oh-my-pi). Rich Chat uses its built-in ACP server.",
+    commands: &[
+        (HintOs::Macos, "brew install can1357/tap/omp"),
+        (HintOs::Linux, "curl -fsSL https://omp.sh/install | sh"),
+        (HintOs::Any, "bun install -g @oh-my-pi/pi-coding-agent"),
+    ],
+    docs_url: Some("https://github.com/can1357/oh-my-pi"),
+    action: None,
+    fallback_text: None,
+};
+static OMP_BUN: HintSpec = HintSpec {
+    why: "The installed `omp` is a bun script, but `bun` is not on the daemon PATH, so omp sessions will fail to start.",
+    commands: &[
+        (HintOs::Macos, "brew install oven-sh/bun/bun"),
+        (HintOs::Any, "curl -fsSL https://bun.sh/install | bash"),
+    ],
+    docs_url: Some("https://bun.sh/docs/installation"),
+    action: None,
+    fallback_text: None,
+};
 static CLOUDFLARED: HintSpec = HintSpec {
     why: "Optional. Public share links use a Cloudflare tunnel.",
     commands: &[(HintOs::Macos, "brew install cloudflared")],
@@ -196,6 +217,8 @@ pub fn hint_spec(check_name: &str) -> Option<&'static HintSpec> {
         "plugin-codex" => &PLUGIN_CODEX,
         "codex-acp" => &CODEX_ACP,
         "plugin-pi" => &PLUGIN_PI,
+        "plugin-omp" => &PLUGIN_OMP,
+        "omp-bun" => &OMP_BUN,
         "cloudflared" => &CLOUDFLARED,
         "tailscale" => &TAILSCALE,
         "github-cli" => &GITHUB_CLI,
@@ -339,6 +362,8 @@ mod tests {
         "plugin-codex",
         "codex-acp",
         "plugin-pi",
+        "plugin-omp",
+        "omp-bun",
         "cloudflared",
         "tailscale",
         "github-cli",
@@ -354,6 +379,23 @@ mod tests {
             assert!(!spec.why.is_empty(), "{name} has an empty why");
             assert!(hint_dto(name).is_some());
         }
+    }
+
+    #[test]
+    fn omp_hints_offer_an_install_command_per_os() {
+        assert_eq!(
+            hint_for("plugin-omp", "macos"),
+            Some("brew install can1357/tap/omp")
+        );
+        assert_eq!(
+            hint_for("plugin-omp", "linux"),
+            Some("curl -fsSL https://omp.sh/install | sh")
+        );
+        assert_eq!(
+            hint_for("plugin-omp", "windows"),
+            Some("bun install -g @oh-my-pi/pi-coding-agent")
+        );
+        assert!(hint_for("omp-bun", "linux").is_some_and(|c| c.contains("bun.sh/install")));
     }
 
     #[test]

@@ -53,7 +53,6 @@ use vst_agents::json_agent_chat::{
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
-use vst_agents::native_history_importer::has_native_history_importer;
 use vst_agents::plugin::{CaptureArgs, ReadySignal, RestoreArgs};
 use vst_agents::prompt_builder::{
     build_direct_prompt, build_prompt, BuildDirectPromptInput, BuildPromptInput,
@@ -4425,9 +4424,29 @@ impl SessionRoutes {
         let switch_result: Result<(), String> = async {
             if from_json {
                 // json → tty: detach the in-memory JSON session, then spawn TTY resuming agentChatId.
-                let json_agent_to_close = self.json_registry.get(id);
+                let mut json_agent_to_close = self.json_registry.get(id);
+                if json_agent_to_close.is_none() {
+                    // The registry is lazy: after a daemon restart nothing is live
+                    // until the chat is opened. Materialise the agent (spawns
+                    // nothing) so the watermark can still be sealed below.
+                    if let Ok(resolved) = resolve_json_agent(
+                        id,
+                        self.daemon_port,
+                        &self.store,
+                        &self.json_registry,
+                        self.broadcaster.clone(),
+                    )
+                    .await
+                    {
+                        json_agent_to_close = Some(std::sync::Arc::new(resolved.agent));
+                    }
+                }
                 self.json_registry.remove(id);
                 if let Some(agent) = json_agent_to_close {
+                    // Seal BEFORE release() — release() latches the store, so any
+                    // persist after it is a no-op. No-op for plugins without a
+                    // `current_cursor()` (Decision 9).
+                    agent.seal_native_watermark().await;
                     agent.release().await;
                 }
                 session.tmux_name = tty_tmux_name.clone();
@@ -4514,6 +4533,16 @@ impl SessionRoutes {
                             session.agent_chat_id = Some(captured_id);
                         }
                     }
+                }
+
+                // Decision 5: for an `identical`-strategy plugin (omp) the
+                // refreshed `agent_chat_id` IS its ACP id, so a stale
+                // `acp_session_id` (from before the terminal moved to a new id)
+                // must not win on reconnect — reconnect prefers `acp_session_id`
+                // (json_agent_session/connection.rs). Drop it so the settled id
+                // is authoritative.
+                if reset_stale_acp_session_id(plugin.acp_session_id_is_native(), &session) {
+                    session.acp_session_id = None;
                 }
 
                 session.tmux_name = json_tmux_name.clone();
@@ -4617,18 +4646,15 @@ impl SessionRoutes {
             .await;
             match resolved {
                 Ok(res) => {
-                    let cli_str = cli_name(provider_to_cli(res.mode.cli));
-                    if has_native_history_importer(cli_str) {
-                        // Reflect the actual outcome, not just "this CLI has
-                        // an importer" — `import_native_history()` itself
-                        // returns `None` (no import even attempted, e.g. no
-                        // `agent_chat_id` yet) whenever the importer never
-                        // runs, which previously still reported
-                        // `history_imported: true` to the caller even though
-                        // zero events were imported. See
-                        // .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B2/A4).
-                        history_imported = res.agent.import_native_history().await.is_some();
-                    }
+                    // Reflect the actual outcome, not just "this CLI has an
+                    // importer" — `import_native_history()` itself returns
+                    // `None` (no import even attempted, e.g. no `agent_chat_id`
+                    // yet, or no `native_history_importer()`) whenever the
+                    // importer never runs, which previously still reported
+                    // `history_imported: true` to the caller even though zero
+                    // events were imported. See
+                    // .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B2/A4).
+                    history_imported = res.agent.import_native_history().await.is_some();
                     res.agent.get_meta()
                 }
                 Err(_) => {
@@ -5772,6 +5798,7 @@ fn provider_to_cli(p: NormalizedEventProvider) -> CliId {
         NormalizedEventProvider::Agy => CliId::Agy,
         NormalizedEventProvider::Codex => CliId::Codex,
         NormalizedEventProvider::Pi => CliId::Pi,
+        NormalizedEventProvider::Omp => CliId::Omp,
     }
 }
 
@@ -6338,9 +6365,26 @@ fn pick_resume_model(
     }
 }
 
+/// Decision 5: whether a session's stale `acp_session_id` must be dropped on a
+/// tty→json toggle. Only when the plugin's ACP id IS its native id
+/// (`acp_session_id_is_native`), and the refreshed `agent_chat_id` differs from
+/// the stored ACP id — i.e. the terminal moved to a new id, so keeping the old
+/// `acp_session_id` would let reconnect (which prefers it) resurrect the stale
+/// conversation instead of the settled one.
+fn reset_stale_acp_session_id(
+    acp_session_id_is_native: bool,
+    session: &vst_types::SessionRecord,
+) -> bool {
+    // Only with a settled id to replace it: with `agent_chat_id` unset the stale
+    // ACP id is the only handle left to the conversation.
+    acp_session_id_is_native
+        && session.agent_chat_id.is_some()
+        && session.acp_session_id != session.agent_chat_id
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{pick_resume_model, shell_command_parts, ReadySignal};
+    use super::{pick_resume_model, reset_stale_acp_session_id, shell_command_parts, ReadySignal};
     use vst_proc::tmux::NewSessionOptions;
 
     #[test]
@@ -6560,6 +6604,77 @@ mod tests {
 
         tmux.kill_session(name);
         tmux.kill_server();
+    }
+
+    /// Decision 5 — the tty→json stale-ACP-id reset only fires for an
+    /// `identical`-strategy plugin AND when the settled `agent_chat_id` differs
+    /// from the stale `acp_session_id`.
+    #[test]
+    fn stale_acp_id_reset_only_for_native_id_plugins_when_ids_diverge() {
+        let mk = |acp: Option<&str>, chat: Option<&str>| vst_types::SessionRecord {
+            id: "s1".into(),
+            acp_session_id: acp.map(Into::into),
+            agent_chat_id: chat.map(Into::into),
+            ..empty_session()
+        };
+        // Native-id plugin (omp) with a stale ACP id != refreshed chat id → reset.
+        assert!(reset_stale_acp_session_id(
+            true,
+            &mk(Some("old"), Some("new"))
+        ));
+        // In sync → keep.
+        assert!(!reset_stale_acp_session_id(
+            true,
+            &mk(Some("new"), Some("new"))
+        ));
+        // Nothing settled (no chat id): the stale ACP id is the only handle → keep.
+        assert!(!reset_stale_acp_session_id(true, &mk(Some("old"), None)));
+        // No ACP id to drop (already None): the predicate fires, the reset is a no-op.
+        assert!(reset_stale_acp_session_id(true, &mk(None, Some("new"))));
+        // Any other plugin: ACP id is never treated as the native id → never reset.
+        assert!(!reset_stale_acp_session_id(
+            false,
+            &mk(Some("old"), Some("new"))
+        ));
+    }
+
+    fn empty_session() -> vst_types::SessionRecord {
+        vst_types::SessionRecord {
+            id: String::new(),
+            worktree_id: None,
+            project_id: String::new(),
+            is_main: false,
+            sort_order: 0.0,
+            r#type: vst_types::SessionType::Agent,
+            mode_id: None,
+            mode_icon: None,
+            name: None,
+            name_source: None,
+            tmux_name: String::new(),
+            use_tmux: true,
+            channel: None,
+            lifecycle: vst_types::SessionLifecycle {
+                state: vst_types::LifecycleState::Working,
+                reason: None,
+                last_transition_at: String::new(),
+            },
+            transcript_ref: None,
+            agent_chat_id: None,
+            acp_session_id: None,
+            model_override: None,
+            pinned_at: None,
+            initial_prompt: None,
+            draft_prompt: None,
+            draft_config: None,
+            archived_at: None,
+            handoff_summary: None,
+            parent_session_id: None,
+            superseded_by: None,
+            pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
+        }
     }
 }
 

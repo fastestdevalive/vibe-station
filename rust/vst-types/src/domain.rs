@@ -47,6 +47,7 @@ pub enum CliId {
     Agy,
     Codex,
     Pi,
+    Omp,
 }
 
 impl CliId {
@@ -58,6 +59,7 @@ impl CliId {
             CliId::Agy => "agy",
             CliId::Codex => "codex",
             CliId::Pi => "pi",
+            CliId::Omp => "omp",
         }
     }
 }
@@ -91,6 +93,7 @@ impl std::str::FromStr for CliId {
             "agy" => Ok(CliId::Agy),
             "codex" => Ok(CliId::Codex),
             "pi" => Ok(CliId::Pi),
+            "omp" => Ok(CliId::Omp),
             _ => Err(ParseCliIdError),
         }
     }
@@ -222,6 +225,7 @@ pub enum NormalizedEventProvider {
     Agy,
     Codex,
     Pi,
+    Omp,
 }
 
 /// Provider-agnostic chat event kind.

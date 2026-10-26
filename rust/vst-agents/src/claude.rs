@@ -552,6 +552,12 @@ impl AgentPlugin for ClaudePlugin {
         true
     }
 
+    fn native_history_importer(
+        &self,
+    ) -> Option<&'static dyn crate::native_history_importer::NativeHistoryImporter> {
+        Some(crate::claude_import::claude_history_importer())
+    }
+
     fn format_skill_directive(
         &self,
         message: &str,

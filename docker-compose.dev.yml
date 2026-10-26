@@ -72,6 +72,10 @@ services:
       # Requires the daemon binary to be compiled with `insecure-no-auth` (scripts/dev-sandbox.sh
       # builds this automatically). VST_NO_AUTH_BIND_ALL allows 0.0.0.0 binding inside the container.
       VST_NO_AUTH: "1"
+      # omp's models.yml names custom-provider keys by env var (e.g. a local vLLM
+      # provider with `apiKey: DEEPSEEK_LOCAL_API_KEY`). Placeholder so such a
+      # provider works in the sandbox; export your own value to override.
+      DEEPSEEK_LOCAL_API_KEY: "${DEEPSEEK_LOCAL_API_KEY:-none}"
       VST_NO_AUTH_BIND_ALL: "1"
       VITE_DEV_ALLOW_ALL_HOSTS: "1"
       # Forward host GITHUB_TOKEN into the sandbox so the daemon's PR status
@@ -158,6 +162,11 @@ services:
       - ${CODEX_HOME:-${HOME}/.codex}:/seed/codex:ro
       # pi creds/config (~/.pi/agent/{auth,models,settings}.json) so `pi --list-models` works.
       - ${PI_AGENT_HOME:-${HOME}/.pi/agent}:/seed/pi-agent:ro
+      # omp (oh-my-pi) creds/config: ~/.omp/agent holds agent.db (provider
+      # credentials), models.yml (custom providers, e.g. a local vLLM), config.yml
+      # and models.db. Bulk state (sessions/, cache/, ...) is excluded by the entrypoint.
+      # omp itself is installed IN the image (dev.Dockerfile) — never mounted.
+      - ${OMP_AGENT_HOME:-${HOME}/.omp/agent}:/seed/omp-agent:ro
       # codex-acp vendor: the ACP adapter for Codex Rich Chat, installed
       # by scripts/install-codex-acp-vendor.sh into vendor/codex-acp/. Mount
       # read-only so the daemon (running from /app) finds it by walking upward.

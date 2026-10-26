@@ -18,6 +18,9 @@
 //! it fails with `unknown sessionId` and silently forks a fresh session (Rich
 //! Chat -> terminal also forks). Revert `supports_json` to `true` once the ids
 //! are bridged (see docs/RICH-CHAT-ACP.md).
+//!
+//! No history importer: the agy badge store is not yet parsed (deferred harness
+//! work) — see `.vibekit/feature-plans/pending/omp-history-import`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

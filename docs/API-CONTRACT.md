@@ -21,7 +21,7 @@ User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst 
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>] [--channel=tmux\|json]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. The main session's channel defaults to the mode's CLI default (Rich Chat/`json` for claude/cursor/opencode, Terminal/`tmux` for agy); `--channel` overrides it. Prints the new worktree id on the last line of stdout. |
+| `vst worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>] [--channel=tmux\|json]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. The main session's channel defaults to the mode's CLI default (Rich Chat/`json` for claude/cursor/opencode/omp, Terminal/`tmux` for agy/pi); `--channel` overrides it. Prints the new worktree id on the last line of stdout. |
 | `vst worktree rm` | `<worktree-id>` | Remove worktree (terminates all sessions, removes git worktree dir). |
 | `vst worktree ls` | `[--project=<id>] [--json]` | List worktrees. `--project` defaults to `$VST_PROJECT` if set. |
 | `vst worktree info` | `<worktree-id> [--json]` | Worktree details + all sessions. |
@@ -32,7 +32,7 @@ A session is always one of two kinds — an **agent** (`vst agent ...`) or a pla
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst agent create` | `<worktree-id> [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--channel=tmux\|json]` | Add an agent session to the worktree. `--mode` required. `--prompt`/`--prompt-file` sent to the new agent on first ready. The channel defaults to the mode's CLI default (Rich Chat/`json` for claude/cursor/opencode, Terminal/`tmux` for agy); `--channel` overrides it. When `--channel` and `--mode` are both omitted, a subagent inherits the parent's channel (only when the modes share a CLI). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
+| `vst agent create` | `<worktree-id> [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--channel=tmux\|json]` | Add an agent session to the worktree. `--mode` required. `--prompt`/`--prompt-file` sent to the new agent on first ready. The channel defaults to the mode's CLI default (Rich Chat/`json` for claude/cursor/opencode/omp, Terminal/`tmux` for agy/pi); `--channel` overrides it. When `--channel` and `--mode` are both omitted, a subagent inherits the parent's channel (only when the modes share a CLI). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
 | `vst terminal create` | `<worktree-id>` | Add a plain terminal tab to the worktree — no agent, no mode/prompt/channel flags. Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
 | `vst agent ls` / `vst terminal ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions of that kind. `--worktree` defaults to `$VST_WORKTREE`. |
 | `vst agent info` / `vst terminal info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
@@ -67,7 +67,7 @@ A session is always one of two kinds — an **agent** (`vst agent ...`) or a pla
 |---|---|---|
 | `vst open` | `[target]` | Open browser. `target` = session id, worktree id, project id, or `all`. |
 | `vst status` | `[--project=<id>] [--json]` | Cross-cutting view of sessions + states across projects. |
-| `vst doctor` | — | Health checks (tmux, git, claude/cursor/opencode on PATH). |
+| `vst doctor` | — | Health checks (tmux, git, every supported agent CLI on PATH, plus `bun` when an installed `omp` needs it). |
 
 ### Meta
 
@@ -178,7 +178,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 
 | Method | Path | Query / Body | Returns | Notes |
 |---|---|---|---|---|
-| GET | `/supported-clis` | — | `SupportedCli[]` | One entry per known CLI. `SupportedCli = { id, defaultModel, supportsJson, importsNativeHistory, supportsJsonToTerminalResume, detected, starterBundleNames, usingFallbackOnly, defaultChannel, defaultChannelOverridden }`. `defaultChannel` is the CLI's **effective** default execution channel (a `defaultChannelByCli` override if set, else the plugin's own default: `json` for claude/cursor/opencode, `tmux` for agy). `defaultChannelOverridden` is `true` when `defaultChannel` reflects a user override rather than the plugin's hardwired default. |
+| GET | `/supported-clis` | — | `SupportedCli[]` | One entry per known CLI. `SupportedCli = { id, defaultModel, supportsJson, importsNativeHistory, supportsJsonToTerminalResume, detected, starterBundleNames, usingFallbackOnly, defaultChannel, defaultChannelOverridden }`. `defaultChannel` is the CLI's **effective** default execution channel (a `defaultChannelByCli` override if set, else the plugin's own default: `json` for claude/cursor/opencode/omp, `tmux` for agy/pi). `defaultChannelOverridden` is `true` when `defaultChannel` reflects a user override rather than the plugin's hardwired default. |
 | GET | `/modes` | — | `Mode[]` | Max 10 per user. |
 | POST | `/modes` | `{ name, cli, context, presetId? }` | `Mode` | 409 on duplicate name. |
 | PUT | `/modes/:id` | `{ name?, context? }` | `Mode` | `cli` is **immutable** post-create (cli switch would invalidate every session that's already running this mode). |

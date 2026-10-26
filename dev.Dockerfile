@@ -104,6 +104,17 @@ RUN pnpm install --no-frozen-lockfile
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/vst/.bun/bin:${PATH}"
 
+# oh-my-pi (`omp`): installed in-image, never mounted from the host — the host's
+# copy carries a platform-specific native package (e.g. pi-natives-darwin-arm64)
+# that cannot run in this Linux container, and on macOS hosts host binaries are
+# never mounted anyway. Installs the matching Linux native package. Runs as `vst`
+# so it lands next to bun under $HOME/.bun (already on PATH above). `omp acp`
+# (Rich Chat) needs no adapter, so this is the whole install.
+# Pinned: the plugin/importer rely on undocumented behaviour verified on this version
+# (session/load ignoring --session-dir, ACP id == session-file id, v3 entry shape —
+# see rust/vst-agents/tests/fixtures/omp/README.txt). Bump them together.
+RUN bun install -g @oh-my-pi/pi-coding-agent@18.12.6
+
 # Vendor install for Claude's ACP adapter (see scripts/install-claude-acp-vendor.sh
 # for why `--omit=optional` matters — skips 600MB+ of per-platform binaries
 # this project never uses). `rust/vst-agents/src/claude.rs::claude_acp_entry_path`

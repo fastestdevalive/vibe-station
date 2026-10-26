@@ -40,7 +40,6 @@ use crate::acp_connection::AcpConnection;
 use crate::acp_transport::AcpTransport;
 use crate::json_agent_registry::JsonAgentRegistry;
 use crate::json_agent_stream::JsonAgentStream;
-use crate::native_history_importer::get_native_history_importer;
 use crate::plugin::AgentPlugin;
 use vst_store::StoreHandle;
 
@@ -624,7 +623,7 @@ impl JsonAgentSession {
         };
 
         let cli = provider_str(self.0.cli);
-        let importer = get_native_history_importer(&cli)?;
+        let importer = self.0.plugin.native_history_importer()?;
 
         let watermark = {
             let store = self.0.store.lock().unwrap();
@@ -658,6 +657,54 @@ impl JsonAgentSession {
         self.rebuild_meta_from_transcript();
         self.emit_meta();
         Some(outcome)
+    }
+
+    /// Seal the native watermark at the CURRENT end of the CLI's store, without
+    /// importing (Decision 9). Called on json→tty BEFORE `release()` (which
+    /// latches the store, so persists are no-ops after it) so the Rich-Chat
+    /// turns `omp acp` already wrote never re-import on the next tty→json.
+    ///
+    /// No-op when there is no importer, no chat id, or the CLI's
+    /// `current_cursor()` returns `None` (store unreadable / missing).
+    pub async fn seal_native_watermark(&self) {
+        // Chat id: the native id (`agent_chat_id`) else the ACP id; none → no-op.
+        let (agent_chat_id, cwd) = {
+            let s = self.0.state.lock().unwrap();
+            let id = s
+                .session
+                .agent_chat_id
+                .clone()
+                .or_else(|| s.session.acp_session_id.clone());
+            let Some(agent_chat_id) = id else { return };
+            (agent_chat_id, self.0.cwd.clone())
+        };
+
+        let importer = match self.0.plugin.native_history_importer() {
+            Some(i) => i,
+            None => return,
+        };
+
+        let session_id = self.0.state.lock().unwrap().session.id.clone();
+        let req = crate::native_history_importer::NativeImportRequest {
+            session_id,
+            agent_chat_id,
+            cwd: cwd.display().to_string(),
+            // `current_cursor()` reads the settled leaf, not the prior watermark.
+            watermark: None,
+        };
+
+        let cursor = match tokio::task::spawn_blocking(move || importer.current_cursor(&req)).await
+        {
+            Ok(Some(c)) => c,
+            // spawn_blocking span failed, or current_cursor() = None (store not found) → no-op.
+            _ => return,
+        };
+
+        let cli = provider_str(self.0.cli);
+        let mut store = self.0.store.lock().unwrap();
+        if let Some(st) = store.as_mut() {
+            st.set_native_watermark(&cli, &cursor);
+        }
     }
 }
 
@@ -1097,6 +1144,7 @@ pub(crate) fn provider_str(p: NormalizedEventProvider) -> String {
         NormalizedEventProvider::Agy => "agy".to_string(),
         NormalizedEventProvider::Codex => "codex".to_string(),
         NormalizedEventProvider::Pi => "pi".to_string(),
+        NormalizedEventProvider::Omp => "omp".to_string(),
     }
 }
 
