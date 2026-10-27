@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
 import { createChatRepository } from "@/api/repositories/chatRepository";
+import { fromWire, toWire } from "@/lib/mentions";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** Cap on live (non-load-all) events held in memory. When exceeded, the oldest
@@ -496,7 +497,11 @@ export function useChat(
   const send = useCallback(
     async (message: string, attachmentIds?: string[], queue?: boolean): Promise<"queued" | "steered" | undefined> => {
       if (!sessionId) return;
-      const res = await chatRepo.sendChat(sessionId, message, attachmentIds, queue);
+      const w = toWire(message);
+      const res =
+        w.mentions.length === 0
+          ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue)
+          : await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue, w.mentions);
       // Dedupe: only add the optimistic bubble if the authoritative `user` event
       // for this turnId hasn't already landed (Decision 12).
       setPending((prev) => {
@@ -564,7 +569,7 @@ export function useChat(
       const res = await chatRepo.beginEditQueuedTurn(sessionId, turnId);
       setEditingDrafts((prev) => ({
         ...prev,
-        [turnId]: { message: res.message, attachments: res.attachments },
+        [turnId]: { message: fromWire(res.message, res.mentions), attachments: res.attachments },
       }));
     },
     [chatRepo, sessionId],
@@ -573,8 +578,14 @@ export function useChat(
   const saveEdit = useCallback(
     async (turnId: string, message: string, attachmentIds: string[]) => {
       if (!sessionId) return;
+      const w = toWire(message);
       try {
-        await chatRepo.resubmitQueuedTurn(sessionId, turnId, { edited: true, message, attachmentIds });
+        await chatRepo.resubmitQueuedTurn(sessionId, turnId, {
+          edited: true,
+          message: w.text,
+          attachmentIds,
+          ...(w.mentions.length ? { mentions: w.mentions } : {}),
+        });
       } finally {
         // Close the editor whether it succeeded or not — on failure the caller
         // salvages the text into the composer (A9).
@@ -604,7 +615,8 @@ export function useChat(
   const forkTurn = useCallback(
     async (turnId: string, message: string, attachmentIds?: string[]) => {
       if (!sessionId) return;
-      await chatRepo.forkChat(sessionId, turnId, message, attachmentIds);
+      // forkChat has no mentions sidecar; convert draft tokens to plain text.
+      await chatRepo.forkChat(sessionId, turnId, toWire(message).text, attachmentIds);
     },
     [chatRepo, sessionId],
   );

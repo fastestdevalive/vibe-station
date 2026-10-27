@@ -20,11 +20,13 @@ vi.mock("../chat/SkillEditor", () => ({
   SkillEditor: ({
     onChangeText,
     onSubmit,
+    mentions,
   }: {
     onChangeText: (text: string, hasContent: boolean) => void;
     onSubmit: () => void;
+    mentions?: { worktreeId?: string | null };
   }) => (
-    <div>
+    <div data-testid="skill-editor-stub" data-worktree-id={mentions?.worktreeId ?? ""}>
       <input
         data-testid="prompt-input"
         onChange={(e) => onChangeText(e.target.value, e.target.value.trim().length > 0)}
@@ -1302,5 +1304,114 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     const send = /\.draft-composer \.chat-composer__send[^{]*\{([^}]*)\}/.exec(block)?.[1] ?? "";
     expect(send).toMatch(/min-width:\s*var\(--h-touch\)/);
     expect(send).toMatch(/min-height:\s*var\(--h-touch\)/);
+  });
+
+  describe("DraftComposer mentions (2.T7)", () => {
+    it("prompt with token, Start -> api.startDraft draftPrompt is toPlainText form, updateDraft keeps raw token", async () => {
+      vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+      vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+      const startSpy = vi.spyOn(api, "startDraft").mockResolvedValue({ ok: true });
+      const updateSpy = vi.spyOn(api, "updateDraft").mockResolvedValue({} as never);
+
+      const rawToken = 'start {@agent ["s-other","Fix login"]} now';
+      renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+      await findChannelSwitch();
+      await typePrompt(rawToken);
+
+      // Autosave updateDraft payload retains the raw token
+      await waitFor(() => {
+        expect(updateSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ draftPrompt: rawToken }));
+      }, { timeout: 2500 });
+
+      // StartDraft payload receives toPlainText form
+      await startTier1Draft();
+      await waitFor(() => {
+        expect(startSpy).toHaveBeenCalledWith(
+          "t1-draft",
+          expect.objectContaining({
+            draftPrompt: 'start @agent:"Fix login" (id=s-other) now',
+          }),
+        );
+      });
+    });
+
+    it("non-git retry converts only at startDraft call", async () => {
+      const project: Project = {
+        id: "t1-proj-nogit",
+        name: "t1-proj-nogit",
+        path: "/tmp/t1-proj-nogit",
+        prefix: "t1",
+        isGit: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        hidden: false,
+        lspEnabled: false,
+      };
+      const draft = makeDraftSession({
+        id: "s-nogit-draft",
+        projectId: "t1-proj-nogit",
+        modeId: "claude-mode",
+      });
+      useServerStore.setState({ projects: [project], worktrees: [], sessions: [draft], loaded: true });
+
+      const notGitErr = new ApiError(JSON.stringify({ error: "NOT_GIT" }), 422);
+      let startCalls = 0;
+      const startSpy = vi.spyOn(api, "startDraft").mockImplementation(async () => {
+        startCalls += 1;
+        if (startCalls === 1) throw notGitErr;
+        return { ok: true, worktreeId: undefined };
+      });
+      vi.spyOn(api, "gitInitProject").mockResolvedValue({
+        ok: true,
+        isGit: true,
+        defaultBranch: "main",
+      });
+
+      render(
+        <MemoryRouter initialEntries={["/draft/s-nogit-draft"]}>
+          <DraftComposer api={api as never} draftSessionId="s-nogit-draft" onStarted={onStarted} onDiscard={() => {}} />
+        </MemoryRouter>,
+      );
+      await findChannelSwitch();
+      const rawToken = 'work {@agent ["s-other","Fix login"]}';
+      await typePrompt(rawToken);
+      await startTier1Draft();
+
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(startSpy.mock.calls[0]![1]).toEqual(
+        expect.objectContaining({
+          draftPrompt: 'work @agent:"Fix login" (id=s-other)',
+        }),
+      );
+
+      // Confirm git init
+      const initBtn = await screen.findByRole("button", { name: /Run git init and continue/i });
+      await act(async () => {
+        initBtn.click();
+      });
+
+      await waitFor(() => {
+        expect(startSpy).toHaveBeenCalledTimes(2);
+      });
+      expect(startSpy.mock.calls[1]![1]).toEqual(
+        expect.objectContaining({
+          draftPrompt: 'work @agent:"Fix login" (id=s-other)',
+        }),
+      );
+    });
+
+    it("config uses session.worktreeId for a tab draft", async () => {
+      vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+      vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+      renderTier1(
+        makeDraftSession({
+          modeId: "claude-mode",
+          worktreeId: "wt-tab-123",
+          draftConfig: { entryPoint: "tab", modeId: "claude-mode" },
+        }),
+      );
+      await findChannelSwitch();
+      const stub = screen.getByTestId("skill-editor-stub");
+      expect(stub).toHaveAttribute("data-worktree-id", "wt-tab-123");
+    });
   });
 });

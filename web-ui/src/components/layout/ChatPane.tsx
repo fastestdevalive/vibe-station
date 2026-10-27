@@ -26,6 +26,7 @@ import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { fromWire, toPlainText, toWire } from "@/lib/mentions";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -273,7 +274,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     for (const ev of events) {
       if (ev.kind === "user" && ev.turnId && !ev.silent) {
         ids.add(ev.turnId);
-        map.set(ev.turnId, { text: ev.text ?? "", attachments: ev.attachments });
+        map.set(ev.turnId, { text: fromWire(ev.text ?? "", ev.mentions), attachments: ev.attachments });
       }
     }
     return { map, ids };
@@ -287,7 +288,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const queuedTurnsMeta = useMemo(() => {
     const map = new Map<string, { text: string; attachments?: Attachment[] }>();
     for (const qt of meta?.queuedTurns ?? []) {
-      map.set(qt.turnId, { text: qt.message, ...(qt.attachments ? { attachments: qt.attachments } : {}) });
+      map.set(qt.turnId, { text: fromWire(qt.message, qt.mentions), ...(qt.attachments ? { attachments: qt.attachments } : {}) });
     }
     return map;
   }, [meta?.queuedTurns]);
@@ -360,7 +361,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // FIX-19) so the retry composer doesn't pre-fill with the notice-turn prompt.
   const lastUserText = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]!.kind === "user" && !events[i]!.silent) return events[i]!.text ?? "";
+      if (events[i]!.kind === "user" && !events[i]!.silent) return fromWire(events[i]!.text ?? "", events[i]!.mentions);
     }
     return pending.length > 0 ? pending[pending.length - 1]!.message : "";
   }, [events, pending]);
@@ -634,7 +635,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             {...(resetPending ? { disabled: true } : {})}
             usage={meta?.usage}
             onScheduleSend={async (message, ids, fireAt) => {
-              await api.scheduleMessage(sessionId, message, fireAt, ids);
+              await api.scheduleMessage(sessionId, toPlainText(message), fireAt, ids);
             }}
             onSend={async (message, ids, queue) => {
               setSalvage(null);
@@ -650,7 +651,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 (meta?.canSteer ?? false) &&
                 !queue &&
                 ids.length === 0 &&
-                (meta?.queueDepth ?? 0) === 0;
+                (meta?.queueDepth ?? 0) === 0 &&
+                toWire(message).mentions.length === 0;
               const requestSessionId = sessionId;
               const delivery = await send(message, ids, queue);
               if (requestSessionId !== sessionId) return; // switched sessions mid-send

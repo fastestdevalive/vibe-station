@@ -12,6 +12,7 @@ import { WorkingDots } from "./WorkingDots";
 import { RowUiStateProvider } from "./rowUiState";
 import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
 import { SessionBreakCard } from "./SessionBreakCard";
+import { fromWire } from "@/lib/mentions";
 
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean; ts?: string }
@@ -192,7 +193,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           if (existingIdx != null) {
             const existing = items[existingIdx];
             if (existing && existing.type === "user") {
-              existing.text = ev.text ?? "";
+              existing.text = fromWire(ev.text ?? "", ev.mentions);
               existing.attachments = ev.attachments;
               existing.id = ev.id;
               existing.cancelled = ev.cancelled;
@@ -204,7 +205,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         items.push({
           type: "user",
           id: ev.id,
-          text: ev.text ?? "",
+          text: fromWire(ev.text ?? "", ev.mentions),
           attachments: ev.attachments,
           ts: ev.ts,
           ...(ev.turnId ? { turnId: ev.turnId } : {}),

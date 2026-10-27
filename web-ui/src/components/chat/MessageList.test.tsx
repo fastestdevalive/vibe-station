@@ -41,6 +41,23 @@ describe("groupEvents dedupe (2.T1 / A7)", () => {
   });
 });
 
+describe("groupEvents mention hydration is by id", () => {
+  it("two same-named agents in one message rehydrate to their own chips", () => {
+    const ev: NormalizedEvent = {
+      ...userEvent("t1", "@agent:main (id=s-b) then @agent:main (id=s-a)"),
+      mentions: [
+        { kind: "agent", id: "s-a", label: "main" },
+        { kind: "agent", id: "s-b", label: "main" },
+      ],
+    };
+    const [item] = groupEvents([ev]).filter((i) => i.type === "user");
+    expect(item).toMatchObject({
+      type: "user",
+      text: '{@agent ["s-b","main"]} then {@agent ["s-a","main"]}',
+    });
+  });
+});
+
 function statusEvent(id: string, text: string): NormalizedEvent {
   return { id, sessionId: "s1", ts: "", provider: "claude", kind: "status", text };
 }

@@ -506,3 +506,25 @@ There are three different "skill" concepts in this repo, two of which share a fi
 - **A second path from HTML text to a rendered view.** Every new render site for untrusted HTML must go through `buildHtmlSrcdoc` — never `dangerouslySetInnerHTML`, never injecting into app DOM (a sanitizer bypass then becomes app XSS), never adding `allow-same-origin` to measure iframe height (Decision 2's rejected option D).
 - **Editing the prompt section without the sanitizer/caps, or vice versa.** The UI lets an agent render exactly what the prompt promises (inline CSS, `data:` images, ≤256 KiB, http(s)/mailto links); they must not drift apart.
 - **Size caps have one owner:** `HtmlView.isOverHtmlCap` — callers (`FilePreviewPane`, `HtmlBlock`) only call it to pick Source vs Rendered, never re-implement thresholds.
+
+---
+
+## @-mentions — draft-form vs wire-form
+
+**Files:** `web-ui/src/lib/mentions.ts` · `web-ui/src/components/mentions/` · `web-ui/src/lexical/`
+
+### The invariant
+
+Mentions inside the editor, drafts, and all UI components below `useChat` use **draft-form** strings containing `{@kind [id, label]}` tokens. Conversion to wire (plain text + `mentions[]` sidecar) happens strictly at send/promotion seams (`useChat.send`/`saveEdit`, `firstTurn.ts`, `ChatPane` schedule, and `DraftComposer` start calls via `toWire` or `toPlainText`).
+
+- **Hydrate with `fromWire` only at the 6 ingress points** (`MessageList.tsx` user items, `useChat` begin-edit, `QueuedTurnEditor`, `ChatPane` initial session load, history, retry).
+- **Convert with `toWire` (with sidecar) or `toPlainText` (sidecar-less)** only at the designated send/start sites. Never drop IDs where sidecars cannot travel; `toPlainText` appends `(id=...)` for non-file mentions.
+- **Never resolve a mention by name.** Mention identity is `{kind, id}`; labels are untrusted hints.
+- **Key handlers register once and read refs.** `mentionStateRef` (`{ open, hasSelectable }`) is the single source of popover-open truth passed between plugins and handlers.
+- **Adding a new mention kind (Decision 8) touches exactly these places:**
+  1. `MentionKind` in `vst-types` (Rust) and `web-ui/src/api/types.ts`, same commit.
+  2. One entry in `MENTION_KINDS` (`components/mentions/kinds.ts`): `kind`, `section`, `singular`, `title`, `Icon`, `caption`, `plainPrefix`, `plainValue`. This single entry already drives the `@section:` scope regex/lookup (`mentionQuery.ts`), the draft-token `isKnownMentionKind` check and `mentionPlainText` (`lib/mentions.ts`), the popover groups and `mentionRows.ts`. Do not add hard-coded copies of the kind list.
+  3. One source hook in `useMentionSources.ts` (take `open`, return a stable empty result while closed) and its entry in the returned `Record<MentionKind, SourceResult>`.
+  4. `mentionRows.ts` ranks non-file kinds client-side; `file` keeps server order (never re-filter/re-sort server-ranked kinds).
+  5. Daemon: id-resolution/validation for the new kind. Tests for the kind def, the source hook and rows.
+  Unknown kinds (stale clients) must keep rendering a generic chip: `mentionKindDef` never throws.

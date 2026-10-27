@@ -25,6 +25,8 @@ import { useGlobalDraftStore, type GlobalDraftState } from "@/store/globalDraftS
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { useSkillCommands } from "@/hooks/useSkillCommands";
 import { draftLabel } from "@/lib/sessionLabel";
+import { toPlainText } from "@/lib/mentions";
+import type { MentionEditorConfig } from "@/components/mentions/types";
 import "./DraftComposer.css";
 
 interface DraftComposerProps {
@@ -550,7 +552,7 @@ function DraftComposerInner({
       let res: Awaited<ReturnType<typeof api.startDraft>>;
       try {
         res = await api.startDraft(draftSessionId, {
-          draftPrompt: prompt,
+          draftPrompt: toPlainText(prompt),
           draftConfig: currentConfig,
           skipAutoTurn: isJson,
         });
@@ -687,7 +689,7 @@ function DraftComposerInner({
           branch: branch.trim() || undefined,
           baseBranch: baseBranch.trim() || project.defaultBranch,
           modeId,
-          prompt: prompt.trim(),
+          prompt: toPlainText(prompt.trim()),
           // Pass the channel the user actually selected — this path used to
           // hardcode `"json"`, which turned a Terminal-selected agent into a
           // Rich Chat agent (the pane showed ChatPane even though the sidebar
@@ -715,7 +717,7 @@ function DraftComposerInner({
           projectId: project.id,
           type: "agent",
           modeId,
-          prompt: prompt.trim(),
+          prompt: toPlainText(prompt.trim()),
           channel: currentConfig.channel,
           skipAutoTurn: true,
         });
@@ -800,7 +802,7 @@ function DraftComposerInner({
       await finishWorktreeStart(wt);
     } else {
       const res = await api.startDraft(pending.sessionId, {
-        draftPrompt: pending.prompt,
+        draftPrompt: toPlainText(pending.prompt),
         draftConfig: pending.draftConfig,
         skipAutoTurn: pending.skipAutoTurn,
       });
@@ -858,7 +860,7 @@ function DraftComposerInner({
         try {
           try {
             await api.startDraft(sess.id, {
-              draftPrompt: prompt.trim(),
+              draftPrompt: toPlainText(prompt.trim()),
               draftConfig: currentConfig,
               skipAutoTurn: isJson,
             });
@@ -934,6 +936,28 @@ function DraftComposerInner({
   // prompt alone, so say so rather than silently dropping staged files.
   const attachmentNotice =
     !isJson && files.length > 0 ? "Attachments are only sent to Rich Chat agents — switch Rich Chat on or remove them." : null;
+
+  const mentionConfig = useMemo<MentionEditorConfig>(
+    () => ({
+      api,
+      projectId,
+      worktreeId:
+        session?.worktreeId ??
+        (useWorktree && worktreeChoice === "existing" && existingWorktreeId
+          ? existingWorktreeId
+          : null),
+      selfSessionId: draftSessionId ?? null,
+    }),
+    [
+      api,
+      projectId,
+      session?.worktreeId,
+      useWorktree,
+      worktreeChoice,
+      existingWorktreeId,
+      draftSessionId,
+    ],
+  );
 
   return (
     <div className={"draft-composer" + (shortPane ? " draft-composer--short" : "")} ref={rootRef}>
@@ -1248,6 +1272,7 @@ function DraftComposerInner({
                     editorKey={`draft-${draftSessionId ?? "new"}-${editorSeq}`}
                     initialText={prompt}
                     commands={skillCommands}
+                    mentions={mentionConfig}
                     ariaLabel="Prompt"
                     placeholder="What should this agent do?"
                     className="chat-composer__textarea"

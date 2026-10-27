@@ -45,7 +45,7 @@ describe("useFileSearch", () => {
     await flushDebounce();
 
     expect(fileSearch).toHaveBeenCalledTimes(1);
-    expect(fileSearch).toHaveBeenCalledWith("wt-1", "abc", 50, expect.any(AbortSignal));
+    expect(fileSearch).toHaveBeenCalledWith("wt-1", "abc", 50, expect.any(AbortSignal), "worktree");
     expect(result.current.loading).toBe(false);
   });
 
@@ -83,23 +83,19 @@ describe("useFileSearch", () => {
     expect(result.current.files).toEqual(["beta-result.ts"]);
   });
 
-  it("4.T3: project scope calls fileList (not fileSearch) and scores prefix-first", async () => {
+  it("4.T3: project scope calls fileSearch (..., 'project'), never fileList", async () => {
     const api = createMockApi();
-    const fileSearch = vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false });
-    const fileList = vi
-      .spyOn(api, "fileList")
-      .mockResolvedValue({
-        files: ["src/main.rs", "src/helper/main.ts", "README.md", "src/xmain.ts"],
-        truncated: false,
-        source: "node",
-      });
+    const fileSearch = vi
+      .spyOn(api, "fileSearch")
+      .mockResolvedValue({ files: ["src/main.rs", "src/helper/main.ts"], truncated: false });
+    const fileList = vi.spyOn(api, "fileList");
 
     const { result } = renderHook(() => useFileSearch(api, "id", "main", "project"));
     await flushDebounce();
 
-    expect(fileSearch).not.toHaveBeenCalled();
-    expect(fileList).toHaveBeenCalledWith("id", expect.any(AbortSignal), "project");
-    expect(result.current.files).toEqual(["src/main.rs", "src/helper/main.ts", "src/xmain.ts"]);
+    expect(fileSearch).toHaveBeenCalledWith("id", "main", 50, expect.any(AbortSignal), "project");
+    expect(fileList).not.toHaveBeenCalled();
+    expect(result.current.files).toEqual(["src/main.rs", "src/helper/main.ts"]);
   });
 
   it("4.T4a: superseded-error — a late-rejecting older call does not clobber newer state", async () => {
@@ -149,7 +145,7 @@ describe("useFileSearch", () => {
     const fileSearch = vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false });
 
     const { result } = renderHook(() => useFileSearch(api, null, "q", "worktree"));
-    expect(result.current).toEqual({ files: [], truncated: false, loading: false, error: null });
+    expect(result.current).toEqual({ files: [], truncated: false, indexing: false, slowIndexing: false, loading: false, error: null });
 
     await flushDebounce(200);
     expect(fileSearch).not.toHaveBeenCalled();
@@ -166,5 +162,110 @@ describe("useFileSearch", () => {
 
     expect(result.current.error).toBeNull();
     expect(result.current.loading).toBe(false);
+  });
+
+  describe("indexing polling", () => {
+    it("re-queries every ~500ms while indexing, stops once done", async () => {
+      const api = createMockApi();
+      const fileSearch = vi
+        .spyOn(api, "fileSearch")
+        .mockResolvedValueOnce({ files: [], truncated: false, indexing: true })
+        .mockResolvedValueOnce({ files: [], truncated: false, indexing: true })
+        .mockResolvedValue({ files: ["a.ts"], truncated: false, indexing: false });
+
+      const { result } = renderHook(() => useFileSearch(api, "wt-1", "a", "worktree"));
+      await flushDebounce();
+      expect(fileSearch).toHaveBeenCalledTimes(1);
+      expect(result.current.indexing).toBe(true);
+
+      await flushDebounce(500);
+      expect(fileSearch).toHaveBeenCalledTimes(2);
+      expect(fileSearch.mock.calls[1]![1]).toBe("a");
+      await flushDebounce(500);
+      expect(fileSearch).toHaveBeenCalledTimes(3);
+      expect(result.current.indexing).toBe(false);
+      expect(result.current.files).toEqual(["a.ts"]);
+
+      await flushDebounce(5000);
+      expect(fileSearch).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops polling on unmount", async () => {
+      const api = createMockApi();
+      const fileSearch = vi
+        .spyOn(api, "fileSearch")
+        .mockResolvedValue({ files: [], truncated: false, indexing: true });
+      const { unmount } = renderHook(() => useFileSearch(api, "wt-1", "a", "worktree"));
+      await flushDebounce();
+      expect(fileSearch).toHaveBeenCalledTimes(1);
+      unmount();
+      await flushDebounce(5000);
+      expect(fileSearch).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops polling when the query changes (new query starts its own cycle)", async () => {
+      const api = createMockApi();
+      const fileSearch = vi
+        .spyOn(api, "fileSearch")
+        .mockResolvedValue({ files: [], truncated: false, indexing: true });
+      const { rerender } = renderHook(({ q }) => useFileSearch(api, "wt-1", q, "worktree"), {
+        initialProps: { q: "a" },
+      });
+      await flushDebounce();
+      rerender({ q: "b" });
+      await flushDebounce();
+      fileSearch.mockClear();
+      await flushDebounce(500);
+      expect(fileSearch.mock.calls.every((c) => c[1] === "b")).toBe(true);
+      expect(fileSearch).toHaveBeenCalledTimes(1);
+    });
+
+    it("never gives up: after 30s it flags slowIndexing and polls every 2s, then clears when done", async () => {
+      const api = createMockApi();
+      const fileSearch = vi
+        .spyOn(api, "fileSearch")
+        .mockResolvedValue({ files: [], truncated: false, indexing: true });
+      const { result } = renderHook(() => useFileSearch(api, "wt-1", "a", "worktree"));
+      await flushDebounce(60);
+      expect(result.current.slowIndexing).toBe(false);
+      await flushDebounce(31_000);
+      expect(result.current.indexing).toBe(true);
+      expect(result.current.slowIndexing).toBe(true);
+      // Slow cadence: ~2s between polls, still going well past 30s.
+      fileSearch.mockClear();
+      await flushDebounce(10_000);
+      expect(fileSearch.mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(fileSearch.mock.calls.length).toBeLessThanOrEqual(6);
+      expect(result.current.indexing).toBe(true);
+
+      fileSearch.mockResolvedValue({ files: ["a.ts"], truncated: false, indexing: false });
+      await flushDebounce(2_500);
+      expect(result.current.indexing).toBe(false);
+      expect(result.current.slowIndexing).toBe(false);
+      expect(result.current.files).toEqual(["a.ts"]);
+      fileSearch.mockClear();
+      await flushDebounce(10_000);
+      expect(fileSearch).not.toHaveBeenCalled();
+    });
+
+    it("stops slow polling on unmount and resets slowIndexing on query change", async () => {
+      const api = createMockApi();
+      const fileSearch = vi
+        .spyOn(api, "fileSearch")
+        .mockResolvedValue({ files: [], truncated: false, indexing: true });
+      const { result, rerender, unmount } = renderHook(({ q }) => useFileSearch(api, "wt-1", q, "worktree"), {
+        initialProps: { q: "a" },
+      });
+      await flushDebounce(60);
+      await flushDebounce(32_000);
+      expect(result.current.slowIndexing).toBe(true);
+      rerender({ q: "b" });
+      await flushDebounce(100);
+      expect(result.current.slowIndexing).toBe(false);
+      unmount();
+      fileSearch.mockClear();
+      await flushDebounce(10_000);
+      expect(fileSearch).not.toHaveBeenCalled();
+    });
   });
 });

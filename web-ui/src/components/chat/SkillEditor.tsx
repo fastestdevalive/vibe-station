@@ -49,15 +49,24 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ComposerCommand } from "@/api/types";
+import type { ComposerCommand, Mention } from "@/api/types";
 import { escapeSkillArgs, escapeSkillText, filterCommands, parseSkillSegments } from "@/lib/skillInvocation";
 import { sortCommandsByGroup } from "@/lib/composerCommands";
+import { parseDraftSegments, serializeMentionToken, toWire } from "@/lib/mentions";
 import {
   $createSkillChipNode,
   $isSkillChipNode,
   SkillChipContext,
   SkillChipNode,
 } from "@/lexical/SkillChipNode";
+import {
+  $createMentionChipNode,
+  $isMentionChipNode,
+  MentionChipNode,
+} from "@/lexical/MentionChipNode";
+import { MentionChipKeysPlugin } from "@/lexical/MentionChipKeysPlugin";
+import { MentionPlugin } from "@/components/mentions/MentionPlugin";
+import type { MentionEditorConfig } from "@/components/mentions/types";
 import { SkillPopover } from "./SkillPopover";
 import { useEventTargets } from "@/context/DemoEnv";
 
@@ -87,6 +96,7 @@ export interface SkillEditorHandle {
   /** Reset to empty and refocus — called after a successful send. */
   clear: () => void;
   focus: () => void;
+  getWire: () => { text: string; mentions: Mention[] };
 }
 
 interface SkillEditorProps {
@@ -101,6 +111,8 @@ interface SkillEditorProps {
    *  `"vibe-station"` entries. `undefined` — not yet loaded — disables the
    *  popover entirely (Requirement 11 parity). */
   commands?: ComposerCommand[];
+  /** When passed, enables the @-mention popover with these sources. */
+  mentions?: MentionEditorConfig;
   disabled?: boolean;
   ariaLabel: string;
   placeholder?: string;
@@ -132,7 +144,7 @@ interface SkillEditorProps {
   onVibeCommand?: (name: string) => void;
 }
 
-const EDITOR_NODES = [SkillChipNode];
+const EDITOR_NODES = [SkillChipNode, MentionChipNode];
 
 function onLexicalError(error: Error): void {
   console.error("[SkillEditor]", error);
@@ -146,10 +158,14 @@ function seedEditorState(initialText: string) {
         const root = $getRoot();
         if (root.getChildrenSize() > 0) return;
         const paragraph = $createParagraphNode();
-        const segments = parseSkillSegments(initialText);
+        const segments = parseDraftSegments(initialText);
         for (const seg of segments) {
           if (seg.type === "token") {
             paragraph.append($createSkillChipNode(seg.name, seg.args));
+            continue;
+          }
+          if (seg.type === "mention") {
+            paragraph.append($createMentionChipNode(seg.mention));
             continue;
           }
           const lines = seg.text.split("\n");
@@ -185,6 +201,10 @@ function serializeEditor(editor: LexicalEditor): { text: string; hasChip: boolea
               hasChip = true;
               const args = node.getArgs();
               return args.length > 0 ? `{/${node.getName()} ${escapeSkillArgs(args)}}` : `{/${node.getName()}}`;
+            }
+            if ($isMentionChipNode(node)) {
+              hasChip = true;
+              return serializeMentionToken(node.getMention());
             }
             if ($isLineBreakNode(node)) return "\n";
             if ($isTextNode(node)) {
@@ -328,6 +348,9 @@ function $serializeSelectionTokens(selection: RangeSelection): string {
         const args = node.getArgs();
         return args.length > 0 ? `{/${node.getName()} ${escapeSkillArgs(args)}}` : `{/${node.getName()}}`;
       }
+      if ($isMentionChipNode(node)) {
+        return serializeMentionToken(node.getMention());
+      }
       if ($isLineBreakNode(node)) return "\n";
       if ($isTextNode(node)) {
         let text = node.getTextContent();
@@ -344,11 +367,15 @@ function $serializeSelectionTokens(selection: RangeSelection): string {
 }
 
 /** Nodes to insert for a parsed segment list — shared by paste-reconstruction. */
-function segmentsToNodes(segments: ReturnType<typeof parseSkillSegments>): LexicalNode[] {
+function segmentsToNodes(segments: ReturnType<typeof parseDraftSegments>): LexicalNode[] {
   const nodes: LexicalNode[] = [];
   for (const seg of segments) {
     if (seg.type === "token") {
       nodes.push($createSkillChipNode(seg.name, seg.args));
+      continue;
+    }
+    if (seg.type === "mention") {
+      nodes.push($createMentionChipNode(seg.mention));
       continue;
     }
     const lines = seg.text.split("\n");
@@ -426,6 +453,7 @@ function SkillEditorPlugin({
   popoverItemsRef,
   suppressedTokenRef,
   pasteSuppressRef,
+  mentionStateRef,
 }: {
   inputRefs: Map<NodeKey, HTMLInputElement>;
   onSubmit: () => void;
@@ -438,6 +466,7 @@ function SkillEditorPlugin({
   popoverItemsRef: React.MutableRefObject<ComposerCommand[]>;
   suppressedTokenRef: React.MutableRefObject<{ nodeKey: NodeKey; start: number } | null>;
   pasteSuppressRef: React.MutableRefObject<boolean>;
+  mentionStateRef: React.MutableRefObject<{ open: boolean; hasSelectable: boolean }>;
 }) {
   const [editor] = useLexicalComposerContext();
   const softKeyboardVisible = useSoftKeyboardVisible();
@@ -520,6 +549,7 @@ function SkillEditorPlugin({
       editor.registerCommand(
         KEY_ESCAPE_COMMAND,
         (event) => {
+          if (mentionStateRef.current.open) return false;
           if (popoverStateRef.current) {
             event?.preventDefault();
             event?.stopImmediatePropagation();
@@ -562,6 +592,7 @@ function SkillEditorPlugin({
       editor.registerCommand(
         KEY_TAB_COMMAND,
         (event) => {
+          if (mentionStateRef.current.open && mentionStateRef.current.hasSelectable) return false;
           if (!popoverStateRef.current) return false;
           event?.preventDefault();
           selectActivePopoverItem();
@@ -572,6 +603,11 @@ function SkillEditorPlugin({
       editor.registerCommand(
         KEY_ENTER_COMMAND,
         (event) => {
+          if (event?.isComposing) {
+            event?.preventDefault();
+            return true;
+          }
+          if (mentionStateRef.current.open && mentionStateRef.current.hasSelectable) return false;
           if (popoverStateRef.current) {
             event?.preventDefault();
             selectActivePopoverItem();
@@ -638,7 +674,7 @@ function SkillEditorPlugin({
           clipboardEvent.preventDefault();
           const selection = $getSelection();
           if (!$isRangeSelection(selection)) return true;
-          selection.insertNodes(segmentsToNodes(parseSkillSegments(tokenData)));
+          selection.insertNodes(segmentsToNodes(parseDraftSegments(tokenData)));
           return true;
         },
         COMMAND_PRIORITY_CRITICAL,
@@ -665,6 +701,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     editorKey,
     initialText,
     commands,
+    mentions,
     disabled,
     ariaLabel,
     placeholder,
@@ -686,6 +723,18 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const inputRefs = useMemo(() => new Map<NodeKey, HTMLInputElement>(), [editorKey]);
   const listboxId = useId();
+
+  const mentionStateRef = useRef<{ open: boolean; hasSelectable: boolean }>({
+    open: false,
+    hasSelectable: false,
+  });
+  const [mentionAria, setMentionAria] = useState<{ listboxId: string; activeOrdinal: number } | null>(null);
+  const onMentionOpenChange = useCallback(
+    (state: { listboxId: string; activeOrdinal: number } | null) => {
+      setMentionAria(state);
+    },
+    [],
+  );
 
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverQuery, setPopoverQuery] = useState("");
@@ -769,6 +818,11 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
         if (!editor) return "";
         return serializeEditor(editor).text;
       },
+      getWire: () => {
+        const editor = editorRef.current;
+        if (!editor) return { text: "", mentions: [] };
+        return toWire(serializeEditor(editor).text);
+      },
       clear: () => {
         const editor = editorRef.current;
         if (!editor) return;
@@ -832,6 +886,14 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
             }
           }}
         >
+          {mentions ? (
+            <MentionPlugin
+              config={mentions}
+              mentionStateRef={mentionStateRef}
+              onOpenChange={onMentionOpenChange}
+            />
+          ) : null}
+          <MentionChipKeysPlugin />
           {popoverOpen && commands && popoverItems.length > 0 ? (
             <SkillPopover
               items={popoverItems}
@@ -854,10 +916,16 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
               contentEditable={
                 <ContentEditable
                   aria-label={ariaLabel}
-                  role={popoverOpen ? "combobox" : undefined}
-                  aria-expanded={popoverOpen}
-                  aria-controls={popoverOpen ? listboxId : undefined}
-                  aria-activedescendant={popoverOpen ? `${listboxId}-${activeIndex}` : undefined}
+                  role={mentionAria ? "combobox" : popoverOpen ? "combobox" : undefined}
+                  aria-expanded={Boolean(mentionAria) || popoverOpen}
+                  aria-controls={mentionAria ? mentionAria.listboxId : popoverOpen ? listboxId : undefined}
+                  aria-activedescendant={
+                    mentionAria
+                      ? `${mentionAria.listboxId}-${mentionAria.activeOrdinal}`
+                      : popoverOpen
+                      ? `${listboxId}-${activeIndex}`
+                      : undefined
+                  }
                   className="chat-skill-editor__content"
                 />
               }
@@ -927,6 +995,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
               popoverItemsRef={popoverItemsRef}
               suppressedTokenRef={suppressedTokenRef}
               pasteSuppressRef={pasteSuppressRef}
+              mentionStateRef={mentionStateRef}
             />
           </div>
         </div>

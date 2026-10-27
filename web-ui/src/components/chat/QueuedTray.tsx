@@ -3,7 +3,7 @@ import { Clock, RotateCcw, TriangleAlert } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Command, ScheduledFailedMessage } from "@/api/types";
 import type { EditingDraft } from "@/hooks/useChat";
-import { renderSkillMessageText } from "@/lib/skillInvocation";
+import { renderDraftText } from "@/lib/mentions";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
 
 export type QueuedTrayStatus = "queued" | "editing" | "pending";
@@ -226,7 +226,7 @@ export function QueuedTray({
         // carries chips holds `{/name args}` tokens and `\{`-escaped braces.
         // Never render it directly (Phase 7 Risk 5, escape leakage): the tray
         // shows the same `/name args` form the transcript bubble does.
-        const displayText = renderSkillMessageText(row.text);
+        const displayText = renderDraftText(row.text);
         return (
           <div
             key={row.turnId}
@@ -312,7 +312,7 @@ export function QueuedTray({
         );
       })}
       {sortedScheduled.map((row) => {
-        const displayText = renderSkillMessageText(row.message);
+        const displayText = renderDraftText(row.message);
         return (
           <div
             key={row.id}
@@ -358,7 +358,7 @@ export function QueuedTray({
         );
       })}
       {failed.map((row) => {
-        const displayText = renderSkillMessageText(row.message);
+        const displayText = renderDraftText(row.message);
         return (
           <div
             key={row.id}

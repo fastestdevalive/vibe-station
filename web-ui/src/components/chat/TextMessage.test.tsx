@@ -96,3 +96,20 @@ describe("TextMessage sent time", () => {
     expect(container.querySelector(".chat-bubble__time")).toBeNull();
   });
 });
+
+describe("TextMessage — sent mention tokens (1.T9)", () => {
+  it("user text with a mention token renders .chat-mention-chip and no literal {@", () => {
+    const { container } = render(
+      <TextMessage role="user" text={'Check {@file ["src/app.tsx","app.tsx"]} and {@agent ["s1","Agent Smith"]}'} />,
+    );
+    const chips = container.querySelectorAll(".chat-mention-chip");
+    expect(chips.length).toBe(2);
+    expect(chips[0]?.getAttribute("data-kind")).toBe("file");
+    expect(chips[0]?.getAttribute("data-mention-id")).toBe("src/app.tsx");
+    expect(chips[1]?.getAttribute("data-mention-id")).toBe("s1");
+    expect(chips[0]?.querySelector(".chat-mention-chip__label")?.textContent).toBe("app.tsx");
+    expect(chips[1]?.getAttribute("data-kind")).toBe("agent");
+    expect(chips[1]?.querySelector(".chat-mention-chip__label")?.textContent).toBe("Agent Smith");
+    expect(container.textContent).not.toContain("{@");
+  });
+});

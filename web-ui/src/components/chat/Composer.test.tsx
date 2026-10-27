@@ -597,3 +597,21 @@ describe("Composer toolbar — long model / mode names", () => {
     expect(label.contains(container.querySelector(".chat-model-switch__caret"))).toBe(false);
   });
 });
+
+describe("Composer mentions (2.T7)", () => {
+  it("composer seeded with a mention token and Send -> onSend receives the DRAFT-form string", async () => {
+    const onSend = vi.fn();
+    const token = 'hello {@file ["src/a.ts","a.ts"]} world';
+    localStorage.setItem("vst-chat-draft-s-mention", token);
+    const { container } = render(
+      <Composer api={createMockApi()} sessionId="s-mention" onSend={onSend} />,
+    );
+    const sendBtn = container.querySelector(".chat-composer__send") as HTMLButtonElement;
+    expect(sendBtn).toBeTruthy();
+    expect(sendBtn.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+    expect(onSend).toHaveBeenCalledWith(token, []);
+  });
+});
