@@ -203,10 +203,9 @@ pub trait AcpTransport: Send + Sync {
     /// Best-effort by design: some adapters carry model/options entirely
     /// through `session/new`'s `_meta` (see [`crate::AgentPlugin::acp_meta`])
     /// and never need this; others ignore `_meta` at session creation and
-    /// require this explicit follow-up call instead (e.g. openab's
-    /// `agy-acp`, which hardcodes `model_id: None` in its `session/new`
-    /// handler — see
-    /// `.vibekit/reports/2026-09-22-agy-toggle-no-reply.md`). Callers should
+    /// require this explicit follow-up call instead (an adapter
+    /// whose `session/new` handler ignores `_meta` and only reads a model
+    /// from an explicit follow-up call). Callers should
     /// treat any error (including method-not-found on an adapter that
     /// doesn't implement it at all) as non-fatal and proceed with whatever
     /// the adapter already defaulted to.
@@ -220,6 +219,13 @@ pub trait AcpTransport: Send + Sync {
     /// [`AcpTransport::dispose`], an idle timeout, or the child process
     /// exiting/crashing on its own.
     fn is_alive(&self) -> bool;
+
+    /// True while the in-flight turn has at least one tool call that has
+    /// started but not completed/failed. Default `false` for transports that
+    /// don't track it.
+    fn has_open_tools(&self) -> bool {
+        false
+    }
 
     /// Hard teardown: terminate the child process and release resources.
     /// Idempotent — safe to call on an already-disposed transport.

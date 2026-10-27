@@ -492,8 +492,8 @@ fn baseline_patch() -> PatchSettingsBody {
 #[tokio::test]
 async fn test_settings_default_channel_by_cli_merge_is_per_key() {
     // 6.T1 — per-key merge: PATCH {cursor: json} then PATCH {opencode: json}
-    // must leave cursor's override intact (not a whole-map replace). (agy is
-    // terminal-only — a json override for it is rejected, so use opencode.)
+    // must leave cursor's override intact (not a whole-map replace). (pi can't run
+    // Rich Chat — a json override for it is rejected, so use opencode.)
     let tmp = tempdir().unwrap();
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));
     let broadcaster = Broadcaster::new(32);
@@ -561,8 +561,8 @@ async fn test_settings_default_channel_by_cli_null_clears_one_key() {
 async fn test_supported_clis_reflects_default_channel_override() {
     // 6.T3 — a just-set override is reflected by GET /supported-clis immediately
     // (no caching lag), via the actual PATCH -> GET round trip. Uses cursor
-    // (default json) overridden to tmux — agy can't be overridden to json, and
-    // agy already defaults to tmux, so cursor is the clean non-default case.
+    // (default json) overridden to tmux — pi can't be overridden to json, and
+    // pi already defaults to tmux, so cursor is the clean non-default case.
     let tmp = tempdir().unwrap();
     let _guard = with_home(tmp.path().to_path_buf());
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));

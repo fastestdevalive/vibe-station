@@ -102,7 +102,7 @@ SESSION_ID=$(vst agent ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 
 **The default channel is per-CLI**: sessions default to **Rich Chat** (`json`) for `claude`/`cursor`/`opencode`/`codex`/`omp` modes, and **Terminal** (`tmux`) for `agy` and `pi` modes — this applies to both `vst agent create` and `vst worktree create` (its main session inherits the same `--channel` flag and default). A user can override a CLI's default in the Settings UI ("Default channel"). Pass `--channel=json` or `--channel=tmux` explicitly on either command to override the default either way. `--channel=pty` is not supported by the CLI.
 
-> **agy is temporarily terminal-only.** `agy` cannot run Rich Chat: `--channel=json` on create, or a terminal→Rich Chat toggle, is rejected with a 4xx until the terminal↔ACP conversation-id bridge lands. Do not pass `--channel=json` for an `agy` mode.
+> **agy defaults to Terminal, but `--channel=json` works.** agy Rich Chat auto-approves tool calls and has no mid-turn steering (messages sent while a turn runs are queued).
 
 **Modes** bind an agent CLI (`claude`, `cursor`, `opencode`, `omp`) + mode-specific system-prompt context. The mode determines which CLI is used — do not pass `--agent` separately. Use `vst mode ls --json` to discover available modes.
 

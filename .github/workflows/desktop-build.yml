@@ -33,10 +33,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # agy-acp adapter binary comes from a git submodule (rust/vendor/openab);
-          # prep-sidecar.sh builds it from the submodule.
-          submodules: true
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm
@@ -81,9 +77,9 @@ jobs:
       # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh,
       # which builds the merged vst binary (CLI + daemon, one binary as of
       # cli-daemon-unification's Part 00), downloads
-      # cloudflared, installs the vendored claude-agent-acp adapter (`bun
-      # install` — a bundle.resources input, so the build fails without bun),
-      # and builds the agy-acp adapter — everything the now-removed
+      # cloudflared and installs the vendored claude-agent-acp adapter (`bun
+      # install` — a bundle.resources input, so the build fails without bun) —
+      # everything the now-removed
       # "Build TypeScript (daemon)" / "Build daemon binary" / "Copy daemon
       # binary" / "Download cloudflared binary" steps used to do by hand, back
       # when the daemon was still the Node/TS build under cli/. That tree was

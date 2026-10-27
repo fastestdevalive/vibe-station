@@ -136,6 +136,18 @@ fn unwrap_tool_call_content(entry: &ToolCallContent) -> Option<&ContentBlock> {
     }
 }
 
+/// A 1-based line start an agent attached to a `Diff` via `_meta`
+/// (`oldStart` / `newStart`). Anything that is not an integer in `1..=u32::MAX`
+/// is ignored. A diff that carries starts is treated as already positioned
+/// (`vst_diff::trim_tool_diffs` leaves it untouched).
+fn meta_line_start(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> Option<u32> {
+    let n = meta?.get(key)?.as_u64()?;
+    u32::try_from(n).ok().filter(|n| *n >= 1)
+}
+
 /// Extract `{type:"diff"}` entries from a `tool_call`/`tool_call_update.content`
 /// array.
 fn tool_diffs_from_content(content: &[ToolCallContent]) -> Option<Vec<ToolDiff>> {
@@ -146,14 +158,20 @@ fn tool_diffs_from_content(content: &[ToolCallContent]) -> Option<Vec<ToolDiff>>
                 path,
                 old_text,
                 new_text,
+                meta,
                 ..
-            }) => Some(ToolDiff {
-                path: path.to_string_lossy().into_owned(),
-                old_text: old_text.clone(),
-                new_text: new_text.clone(),
-                old_start: None,
-                new_start: None,
-            }),
+            }) => {
+                let starts = meta_line_start(meta.as_ref(), "oldStart")
+                    .zip(meta_line_start(meta.as_ref(), "newStart"));
+                Some(ToolDiff {
+                    path: path.to_string_lossy().into_owned(),
+                    old_text: old_text.clone(),
+                    new_text: new_text.clone(),
+                    // Both starts or neither: a lone one would number one side wrong.
+                    old_start: starts.map(|(old, _)| old),
+                    new_start: starts.map(|(_, new)| new),
+                })
+            }
             _ => None,
         })
         .collect();

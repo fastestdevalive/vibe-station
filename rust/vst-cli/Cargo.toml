@@ -19,7 +19,6 @@ vst-agents = { workspace = true }
 vst-daemon = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-proc = { workspace = true }
-vst-agy-acp = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

@@ -33,7 +33,7 @@ use crate::normalize::{normalize_session_update, AcpEnrichHook};
 use crate::plugin::{base_event, TurnContext, TurnInput};
 
 /// Produce the optional first-turn `session_init` event (given the ACP session
-/// id). `None` = Option B (cursor/agy); `Some` = Option A (claude/opencode).
+/// id). `None` = Option B (cursor/codex); `Some` = Option A (claude/opencode).
 pub type FirstTurnSessionInit = Arc<dyn Fn(&TurnContext, &str) -> NormalizedEvent + Send + Sync>;
 
 /// Build the prompt content blocks for this turn.
@@ -59,14 +59,14 @@ pub struct RunTurnAcpParams {
     /// per the plan, not a no-op removed for tidiness).
     pub enrich: Option<Arc<AcpEnrichHook>>,
     /// Produce the optional first-turn `session_init` event (given the ACP
-    /// session id). `None` = Option B (cursor/agy — do NOT surface the ACP id
+    /// session id). `None` = Option B (cursor/codex — do NOT surface the ACP id
     /// as `agentChatId`); `Some` = Option A (claude/opencode).
     pub first_turn_session_init: Option<FirstTurnSessionInit>,
     /// Build the prompt content blocks for this turn. `system` is the system
     /// prompt file's contents on the first turn (empty string when the file is
     /// missing/unreadable, `None` on later turns). The plugin decides system-
     /// prompt placement (append-as-second-block for claude, prepend-to-message
-    /// for cursor/agy, none for opencode). The user message MUST remain
+    /// for cursor, none for opencode). The user message MUST remain
     /// prompt[0].
     pub build_prompt_blocks: BuildPromptBlocks,
     /// Whether a `StopReason::Refusal` yields a terminal `error` event
@@ -181,19 +181,21 @@ pub async fn run_turn_acp(
     );
 
     let mut updates = turn.updates;
-    // A tool call only leaves this set on a terminal status. Every
-    // `ToolCallUpdate` (including in-progress `rawInput` refinements) also
-    // normalizes to `ToolResult` — only `Completed`/`Failed` actually mean
-    // the call is done — so gating on status (not just presence of a
-    // `ToolResult` event) is required or the set empties within ~1s of
-    // every tool call, making this watchdog fire on nearly any silence.
-    let mut open_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Open tool calls are tracked by the connection (`has_open_tools`), the
+    // single source of truth shared with `do_send_prompt`'s open-tool limit.
     let mut deadline = tokio::time::Instant::now() + stuck_turn_idle;
     let mut watchdog_fired = false;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return,
-            _ = tokio::time::sleep_until(deadline), if open_tool_ids.is_empty() => {
+            _ = tokio::time::sleep_until(deadline) => {
+                // Always armed (no `if` guard): the open-tool set can be
+                // cleared without waking this loop, which would leave a
+                // guarded branch disabled forever. Re-check on expiry.
+                if conn.has_open_tools() {
+                    deadline = tokio::time::Instant::now() + stuck_turn_idle;
+                    continue;
+                }
                 conn.cancel_active_prompt();
                 watchdog_fired = true;
                 break;
@@ -208,26 +210,6 @@ pub async fn run_turn_acp(
                             params.provider,
                             params.enrich.as_deref(),
                         ) {
-                            if let Some(id) = &ev.tool_id {
-                                match ev.kind {
-                                    NormalizedEventKind::ToolUse => {
-                                        open_tool_ids.insert(id.clone());
-                                    }
-                                    NormalizedEventKind::ToolResult => match ev.tool_status {
-                                        Some(
-                                            vst_types::ToolStatus::Completed
-                                            | vst_types::ToolStatus::Failed,
-                                        ) => {
-                                            open_tool_ids.remove(id);
-                                        }
-                                        // Pending/InProgress/unknown: still open.
-                                        _ => {
-                                            open_tool_ids.insert(id.clone());
-                                        }
-                                    },
-                                    _ => {}
-                                }
-                            }
                             let _ = tx.send(ev);
                         }
                     }

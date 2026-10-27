@@ -9,8 +9,9 @@ use std::sync::Arc;
 use vst_types::NormalizedEventKind;
 
 use super::model_race::{
-    establish_with_recovery, select_budget, setup_verdict, should_persist_session_id,
-    EstablishParams, ModelState, SetupVerdict,
+    alt_prior_session_id, establish_with_recovery, native_id_sync, pick_prior_session_id,
+    select_budget, setup_verdict, should_persist_session_id, EstablishParams, ModelState,
+    SetupVerdict,
 };
 use super::JsonAgentSession;
 use crate::{
@@ -73,13 +74,26 @@ impl JsonAgentSession {
             ..spec
         };
 
-        // Reconnect id: prefer acpSessionId (Option B), fall back to agentChatId (Option A).
-        let prior_acp_id = {
+        // Reconnect id. Non-native plugins keep `acpSessionId` first (Option B)
+        // with `agentChatId` as fallback (Option A). An `identical` plugin
+        // (its ACP session id IS its native chat id) must prefer
+        // `agentChatId` — that is what the CLI itself resumes by — and pass the
+        // other stored id as a one-shot load fallback (see model_race).
+        let (prior_acp_id, alt_prior_id) = {
             let s = self.0.state.lock().unwrap();
-            s.session
-                .acp_session_id
-                .clone()
-                .or_else(|| s.session.agent_chat_id.clone())
+            let native = self.0.plugin.acp_session_id_is_native();
+            (
+                pick_prior_session_id(
+                    native,
+                    s.session.acp_session_id.as_deref(),
+                    s.session.agent_chat_id.as_deref(),
+                ),
+                alt_prior_session_id(
+                    native,
+                    s.session.acp_session_id.as_deref(),
+                    s.session.agent_chat_id.as_deref(),
+                ),
+            )
         };
 
         // A model switch (`set_model`) made while setup is in flight finds no
@@ -125,6 +139,7 @@ impl JsonAgentSession {
             let params = EstablishParams {
                 cwd: &cwd,
                 prior_session_id: prior_acp_id.as_deref(),
+                alt_prior_session_id: alt_prior_id.as_deref(),
                 acp_meta,
                 model_option,
                 extra_options: self.0.plugin.acp_session_config_options(),
@@ -234,7 +249,35 @@ impl JsonAgentSession {
             // conversation on the next respawn. A `set_model` landing after
             // the store disposes this connection; the id still names the
             // right conversation for its `session/load`.
-            if should_persist_session_id(est.resumed, &est.model) {
+            // Both ids of an `identical` plugin must end up equal to the
+            // established one: after a load fallback (or on a legacy record)
+            // leaving either behind forks the conversation again on the next
+            // toggle. Non-native plugins keep the old rule.
+            if self.0.plugin.acp_session_id_is_native() {
+                let (stored_acp, stored_chat) = {
+                    let s = self.0.state.lock().unwrap();
+                    (
+                        s.session.acp_session_id.clone(),
+                        s.session.agent_chat_id.clone(),
+                    )
+                };
+                let sync = native_id_sync(
+                    true,
+                    &est.session_id,
+                    stored_acp.as_deref(),
+                    stored_chat.as_deref(),
+                );
+                if sync.persist_acp {
+                    self.persist_acp_session_id(est.session_id.clone()).await;
+                }
+                if sync.persist_chat {
+                    {
+                        let mut s = self.0.state.lock().unwrap();
+                        s.session.agent_chat_id = Some(est.session_id.clone());
+                    }
+                    self.persist_chat_id(est.session_id.clone()).await;
+                }
+            } else if should_persist_session_id(est.resumed, &est.model) {
                 self.persist_acp_session_id(est.session_id).await;
             }
 

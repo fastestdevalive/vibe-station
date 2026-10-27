@@ -67,13 +67,16 @@ mod resolution {
     }
 
     #[test]
-    fn agy_is_terminal_only() {
+    fn agy_is_identical_rich_chat_default_tmux() {
         let p = resolve_plugin(CliId::Agy);
         assert_eq!(p.name(), "agy");
-        // TEMPORARY: agy is terminal-only until terminal<->ACP conversation ids
-        // are bridged — it must not support (or default to) the JSON channel.
-        assert!(!p.supports_json());
+        assert!(p.supports_json());
+        assert!(p.supports_acp());
+        assert!(p.acp_session_id_is_native());
+        assert!(p.supports_json_to_terminal_resume());
         assert_eq!(p.default_channel(), Channel::Tmux);
+        assert!(!p.supports_mid_turn_steering());
+        assert!(p.native_history_importer().is_none());
     }
 
     #[test]
@@ -82,6 +85,17 @@ mod resolution {
             let p = resolve_plugin(cli);
             assert!(!p.name().is_empty());
         }
+    }
+
+    /// Guards the only callers of the native-id branch in `json_agent_session`:
+    /// an `identical`-strategy plugin declares that its ACP session id IS its
+    /// own native chat id. agy joins this set; claude/cursor keep the old
+    /// `acpSessionId`-first behaviour.
+    #[test]
+    fn omp_is_native_while_claude_and_cursor_are_not() {
+        assert!(create_omp_plugin().acp_session_id_is_native());
+        assert!(!create_claude_plugin().acp_session_id_is_native());
+        assert!(!create_cursor_plugin().acp_session_id_is_native());
     }
 }
 

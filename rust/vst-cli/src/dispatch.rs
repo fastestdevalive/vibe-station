@@ -11,16 +11,24 @@
 pub enum EntryMode {
     /// Run the daemon.
     Daemon,
+    /// Run the hidden agy stream-json ACP agent (stdio protocol; never logs to stdout).
+    AgyStreamAcp,
     /// Run as the ordinary CLI (`program::parse_args` + dispatch).
     Cli,
 }
 
 /// Decide whether this invocation should run as the daemon or the CLI.
 ///
+/// `args` starting with `agy-stream-acp` always wins (even for argv0
+/// `vst-daemon`): it is the hidden ACP agent entry the agy plugin spawns.
+///
 /// Two ways to trigger daemon mode:
 /// - argv0's file stem is exactly `vst-daemon` (a symlink/copy named that way).
 /// - `args` (i.e. everything after argv0) starts with `["daemon", "run"]`.
 pub fn resolve_entry_mode(argv0: &str, args: &[String]) -> EntryMode {
+    if args.first().map(String::as_str) == Some("agy-stream-acp") {
+        return EntryMode::AgyStreamAcp;
+    }
     let argv0_is_daemon = std::path::Path::new(argv0)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -70,5 +78,17 @@ mod tests {
             EntryMode::Cli
         );
         assert_eq!(resolve_entry_mode("vst", &args(&[])), EntryMode::Cli);
+    }
+
+    #[test]
+    fn agy_stream_acp_subcommand_is_its_own_mode() {
+        assert_eq!(
+            resolve_entry_mode("vst", &args(&["agy-stream-acp"])),
+            EntryMode::AgyStreamAcp
+        );
+        assert_eq!(
+            resolve_entry_mode("/x/vst-daemon", &args(&["agy-stream-acp", "--model", "M"])),
+            EntryMode::AgyStreamAcp
+        );
     }
 }

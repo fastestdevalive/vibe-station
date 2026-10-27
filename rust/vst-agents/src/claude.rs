@@ -52,6 +52,7 @@ fn claude_acp_spec(cwd: PathBuf) -> AcpLaunchSpec {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     }
 }
 

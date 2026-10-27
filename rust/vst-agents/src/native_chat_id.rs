@@ -115,15 +115,6 @@ pub async fn read_latest_agy_conversation_id(cwd: &str) -> Option<String> {
     }
 }
 
-/// The ACP-id → native-id BRIDGE for agy: read the openab `agy-acp` adapter's
-/// own session store, keyed by ACP session id. The store path is owned by
-/// `vst-agy-acp` (the same one the adapter writes via `AGY_ACP_STATE_DIR`), so
-/// the bridge and the adapter can never disagree. Mirrors
-/// `native-chat-id/agy.ts`'s `readAgyAcpSessionConversationId`.
-pub async fn read_agy_acp_session_conversation_id(acp_session_id: &str) -> Option<String> {
-    vst_agy_acp::conversation_id_for_acp_session(acp_session_id)
-}
-
 fn is_uuid(s: &str) -> bool {
     s.len() == 36 && s.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }

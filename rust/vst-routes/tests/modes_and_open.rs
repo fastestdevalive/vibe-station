@@ -129,9 +129,8 @@ async fn test_modes_supported_clis_and_models() {
 
     let agy = supported.iter().find(|s| s.id == CliId::Agy).unwrap();
     assert!(!agy.imports_native_history);
-    // TEMPORARY: agy is terminal-only until terminal<->ACP conversation ids
-    // are bridged — it must not support (or default to) the JSON channel.
-    assert!(!agy.supports_json);
+    // agy runs Rich Chat (stream-json ACP agent) but still defaults to Terminal.
+    assert!(agy.supports_json);
     assert_eq!(agy.default_channel, vst_types::Channel::Tmux);
 
     let codex = supported.iter().find(|s| s.id == CliId::Codex).unwrap();

@@ -1272,7 +1272,7 @@ mod tests {
     }
 
     /// A plugin that defaults to `Tmux` and does NOT `supports_json()` — the
-    /// stub keeps this 2.T11 test hermetic (agy now really is Tmux+no-json, but
+    /// stub keeps this test hermetic (pi is Tmux+no-json, but
     /// wiring it in here would couple this pure function test to the real
     /// registry), which is exactly why the stub is needed to exercise the
     /// total-ness branch.
@@ -1351,24 +1351,27 @@ mod tests {
     }
 
     #[test]
-    fn json_unsupported_cli_flags_agy_mode() {
-        // TEMPORARY: agy is terminal-only until terminal<->ACP conversation ids
-        // are bridged — an agy mode must be flagged so session/worktree create
-        // rejects `--channel=json` instead of silently forking a fresh session.
+    fn json_unsupported_cli_flags_pi_mode() {
+        // A CLI that can't run Rich Chat (pi) must be flagged so
+        // session/worktree create rejects `--channel=json`; agy supports it.
         use vst_agents::home::{home_dir, with_home};
         use vst_types::rest::shared::Mode;
 
         let tmp = tempdir().unwrap();
         let _guard = with_home(tmp.path().to_path_buf());
-        let modes = vec![Mode {
-            id: "agy-mode".to_string(),
-            name: "Agy".to_string(),
-            cli: CliId::Agy,
+        let mk = |id: &str, name: &str, cli: CliId| Mode {
+            id: id.to_string(),
+            name: name.to_string(),
+            cli,
             context: String::new(),
             created_at: "2026-09-15T00:00:00Z".to_string(),
             model: None,
             icon: None,
-        }];
+        };
+        let modes = vec![
+            mk("pi-mode", "Pi", CliId::Pi),
+            mk("agy-mode", "Agy", CliId::Agy),
+        ];
         let home = home_dir();
         std::fs::create_dir_all(home.join(".vibe-station")).unwrap();
         std::fs::write(
@@ -1377,7 +1380,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(json_unsupported_cli("agy-mode"), Some(CliId::Agy));
+        assert_eq!(json_unsupported_cli("pi-mode"), Some(CliId::Pi));
+        assert_eq!(json_unsupported_cli("agy-mode"), None);
         assert_eq!(json_unsupported_cli("non-existent-id-xyz"), None);
     }
 }

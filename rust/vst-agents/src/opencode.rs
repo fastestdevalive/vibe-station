@@ -665,6 +665,7 @@ impl AgentPlugin for OpencodePlugin {
                     initialize_timeout_ms: None,
                     prompt_timeout_ms: None,
                     reap_detached_descendants: OpencodePlugin.reap_detached_descendants(),
+                    open_tool_idle_timeout_ms: None,
                 }
             }),
             enrich: None,

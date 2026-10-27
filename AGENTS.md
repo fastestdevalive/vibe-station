@@ -26,7 +26,7 @@ to refactor it in an unrelated PR.
 
 - **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
   `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity` (types, store) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
-  `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. No library crate depends on `vst-routes`/`vst-daemon`.
+  `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by `vst-daemon` (hidden `agy-stream-acp` subcommand). No library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
 - **New feature crates stay CLI-agnostic (target):** take per-CLI behaviour by injection (closure/trait
@@ -246,15 +246,15 @@ else if (mode.cli === "opencode") { ... }
 | `getReadySignal()` | yes | Sentinel string or fallback timeout |
 | `composeLaunchPrompt(...)` | yes | Build the shell line / post-launch input |
 | `default_channel()` | yes | Default execution channel for this CLI (`json` for claude/cursor/opencode/codex/omp, `tmux` for agy/pi); used when no explicit/inherited channel and no user override resolve otherwise |
-| `supports_json()` | optional (default `false`) | Whether this CLI can run the JSON (Rich Chat) channel. **Temporarily `false` for agy** — terminal-only until the terminal↔ACP conversation id bridge lands (`agy.rs`); `true` for omp (speaks ACP natively via `omp acp`). When false, the daemon rejects `--channel=json` on session/worktree create and the tty→json toggle with a 4xx, and the web UI hides/disables the Rich Chat affordances |
+| `supports_json()` | optional (default `false`) | Whether this CLI can run the JSON (Rich Chat) channel. `true` for agy (Rich Chat spoken via the hidden `vst agy-stream-acp` subcommand, crate `vst-agy-stream-acp`) and for omp (speaks ACP natively via `omp acp`). When false, the daemon rejects `--channel=json` on session/worktree create and the tty→json toggle with a 4xx, and the web UI hides/disables the Rich Chat affordances |
 | `setupWorkspaceHooks?(path)` | optional | Write hook scripts into the worktree |
 | `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
 | `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |
 | `getRestoreCommand?(args)` | optional | Return resume argv, or null for fresh spawn |
 | `supportsAcp?()` | optional | ACP migration: true once `runTurn` drives a persistent ACP connection (`ctx.getAcpConnection`) instead of a per-turn one-shot spawn |
-| `captureNativeChatId?(args)` | optional | Two-identity model: read the CLI's NATIVE resume id out-of-band, for a plugin whose ACP `session/new` id was empirically proven to diverge from it (`bridged` = agy, `unavailable` = cursor). Deliberately NOT implemented by an `identical`-strategy plugin (claude, opencode, omp) |
+| `captureNativeChatId?(args)` | optional | Two-identity model: read the CLI's NATIVE resume id out-of-band, for a plugin whose ACP `session/new` id was empirically proven to diverge from it (`unavailable` = cursor). Deliberately NOT implemented by an `identical`-strategy plugin (claude, opencode, omp, agy) |
 | `supportsChannelResume?()` | optional | Two-identity model: `false` (cursor only) declares that no bridge exists from this CLI's ACP session to its own resume flag, so a json→tty toggle starting a fresh conversation is expected, not a bug. Unimplemented ≡ `true` |
-| `acpSessionIdIsNative?()` | optional (default `false`) | Two-identity model: `true` (omp) declares the ACP `session/new` id IS the CLI's own resume id (`identical` strategy), so after a tty→json toggle refreshes `agent_chat_id` the daemon may drop a stale stored `acp_session_id` (which would otherwise win on reconnect). Decision 5 — see `rust/vst-agents/src/omp.rs` |
+| `acpSessionIdIsNative?()` | optional (default `false`) | Two-identity model: `true` (omp, agy) declares the ACP `session/new` id IS the CLI's own resume id (`identical` strategy), so after a tty→json toggle refreshes `agent_chat_id` the daemon may drop a stale stored `acp_session_id` (which would otherwise win on reconnect). See `rust/vst-agents/src/omp.rs` |
 | `native_history_importer?()` | optional (default `None`) | At-rest history importer for this harness's native store (`None` ⇒ toggle reports `historyImported:false` and the UI warns). Implement once the store is readable — importing terminal history into Rich Chat is preferred for every harness, so a plugin that omits it carries a comment saying why not |
 | `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id` |
 
@@ -268,8 +268,7 @@ always the native one; never store an ACP id in it.
 
 Whether the two coincide is a per-CLI fact, not a choice, and each plugin
 declares its answer only by which of the two methods above it implements:
-`identical` (claude, opencode — implement neither; omp — only `acpSessionIdIsNative`, because its ACP id *is* the native id), `bridged` (agy —
-`captureNativeChatId`), `unavailable` (cursor — plus `supportsChannelResume:
+`identical` (claude, opencode — implement neither; omp and agy — only `acpSessionIdIsNative`, because their ACP id *is* the native id; agy's ACP agent uses the conversation id from `agy --output-format stream-json` as the ACP `sessionId`), `unavailable` (cursor — plus `supportsChannelResume:
 false`). Per-CLI resolution code lives in
 `daemon/src/agent-plugins/native-chat-id/` (one file per CLI that needs one —
 opencode's absence is meaningful). The model is stated once in the

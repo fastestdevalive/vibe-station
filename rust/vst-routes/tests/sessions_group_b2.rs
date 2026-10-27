@@ -29,11 +29,10 @@ use vst_agents::json_agent_session::read_transcript_from_data_dir;
 use vst_agents::paths::Paths as AgentPaths;
 use vst_agents::transcript_export::transcript_instruction;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
-use vst_routes::modes::json_unsupported_cli;
 use vst_routes::sessions::{
     find_session_context, repair_superseded_pins, wait_for_handoff_file, wait_for_turn_start,
     DoneError, DoneResult, HandoffRouteError, HandoffTurnPhase, ResetError, ResetFlag, ResumeError,
-    SessionContext, SessionRoutes, StartError,
+    SessionContext, SessionRoutes,
 };
 use vst_routes::settings::load_default_channel_overrides;
 use vst_store::transcript::open_transcript_store;
@@ -158,16 +157,6 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         model_catalog: Default::default(),
         handoff_timeout: Duration::from_secs(120),
         reset_cancels: Default::default(),
-    }
-}
-
-/// `routes` but with `json_unsupported` wired to the REAL `json_unsupported_cli`
-/// (which consults each mode's plugin capability), so an agy mode is flagged as
-/// unable to run Rich Chat. Needed to exercise the draft-start json gate.
-fn routes_with_real_json_gate(store: StoreHandle) -> SessionRoutes {
-    SessionRoutes {
-        json_unsupported: Arc::new(json_unsupported_cli),
-        ..routes(store)
     }
 }
 
@@ -1651,25 +1640,6 @@ async fn subagent_parent_mode_deleted_does_not_inherit() {
 }
 
 #[tokio::test]
-async fn agy_override_to_json_dropped_agy_is_terminal_only() {
-    // 2.T12 — agy is terminal-only, so a persisted defaultChannelByCli override
-    // {agy: json} is DROPPED (resolve_effective_default_channel falls back to
-    // the plugin's Tmux default) instead of winning — creating an agy-mode
-    // session must never land on Json.
-    let (home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
-    std::fs::write(
-        home.path().join(".vibe-station").join("config.json"),
-        r#"{"defaultChannelByCli": {"agy": "json"}}"#,
-    )
-    .unwrap();
-    let (_d, store) = store();
-    add_project(&store, make_project("p1")).await;
-    let r = routes(store.clone());
-    let s = create_direct_agent(&r, "p1", "agy-mode").await;
-    assert_eq!(s.channel, Channel::Tmux);
-}
-
-#[tokio::test]
 async fn load_default_channel_overrides_skips_unparseable_entries() {
     // 2.T13 — per-entry parsing: an unknown/typo'd CliId key must be skipped
     // without dropping the valid claude entry (round-2 M3).
@@ -1731,43 +1701,6 @@ async fn start_draft_agy_no_channel_defaults_to_tmux() {
     let started = &project.direct_sessions[0];
     assert_eq!(started.channel, Some(Channel::Tmux));
     assert_eq!(started.mode_id.as_deref(), Some("agy-mode"));
-}
-
-#[tokio::test]
-async fn start_draft_agy_explicit_json_rejected() {
-    // agy is terminal-only — promoting a draft with an explicit `channel: json`
-    // for an agy mode must be rejected (400), not silently forked into a Rich
-    // Chat session (the exact bug this feature exists to prevent).
-    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
-    let (_d, store) = store();
-    let mut p = make_project("p1");
-    let mut s = make_session("s-draft", "p1");
-    s.lifecycle.state = LifecycleState::Drafting;
-    s.draft_prompt = Some("initial".into());
-    p.direct_sessions.push(s);
-    add_project(&store, p).await;
-
-    let r = routes_with_real_json_gate(store.clone());
-    let body = StartDraftBody {
-        draft_prompt: "do it".into(),
-        draft_config: DraftConfig {
-            entry_point: DraftEntryPoint::Direct,
-            mode_id: Some("agy-mode".into()),
-            channel: Some(Channel::Json), // explicit json -> must be rejected
-            channel_explicit: Some(true),
-            worktree_choice: None,
-            existing_worktree_id: None,
-            branch: None,
-            base_branch: None,
-            use_tmux: None,
-            use_worktree: None,
-        },
-        skip_auto_turn: Some(true),
-    };
-    let err = r.start_session("s-draft", &body).await.unwrap_err();
-    assert!(
-        matches!(err, StartError::Validation(m) if m.contains("does not support JSON chat mode"))
-    );
 }
 
 #[tokio::test]
@@ -2045,30 +1978,6 @@ async fn reset_tmux_old_session_writes_no_transcript() {
     assert!(
         !new_dir.exists(),
         "a tmux reset must not create/copy a transcript store"
-    );
-}
-
-#[tokio::test]
-async fn reset_explicit_json_on_agy_mode_rejected_400() {
-    let (_home, _guard) = home_with_modes(&channel_modes());
-    let (_d, store) = store();
-    let mut p = make_project("p1");
-    let mut old = json_session("s1", "p1");
-    old.mode_id = Some("claude-mode".into());
-    p.direct_sessions.push(old);
-    add_project(&store, p).await;
-
-    let r = routes_with_real_json_gate(store.clone());
-    let body = ResetBody {
-        mode_id: Some("agy-mode".into()),
-        channel: Some(Channel::Json),
-        ..reset_body()
-    };
-    let err = r.reset_session("s1", &body).await.unwrap_err();
-    assert!(
-        matches!(err, ResetError::JsonUnsupported(_)),
-        "expected JsonUnsupported, got {:?}",
-        err
     );
 }
 

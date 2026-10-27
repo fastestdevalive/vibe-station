@@ -492,10 +492,9 @@ pub trait AgentPlugin: Send + Sync {
     /// adapter — it rides along on the same request that creates the
     /// session. This hook exists only for adapters that ignore `_meta` at
     /// session-creation time entirely and instead require an explicit
-    /// follow-up request (e.g. openab's `agy-acp`, whose `session/new`
-    /// handler hardcodes `model_id: None` and only ever reads a model from a
-    /// dedicated `session/set_config_option` call — see
-    /// `.vibekit/reports/2026-09-22-agy-toggle-no-reply.md`). Most plugins
+    /// follow-up request (an adapter that ignores `_meta` at session
+    /// creation and only ever reads a model from a dedicated
+    /// `session/set_config_option` call). Most plugins
     /// should leave this as `None` and use `acp_meta` instead.
     fn acp_initial_config_option(&self, _model: &str) -> Option<(String, String)> {
         None

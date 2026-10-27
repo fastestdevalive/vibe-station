@@ -32,10 +32,9 @@
 //! `AGENTS.md` § Agent plugin is the authoritative method table. The
 //! `identical` / `bridged` / `unavailable` strategy determines which optional
 //! methods a plugin implements:
-//! - `claude` / `opencode` — `identical`: implement neither
-//!   `capture_native_chat_id` nor `supports_channel_resume` (≡ `true`).
-//! - `agy` — `bridged`: implements `capture_native_chat_id`, not
-//!   `supports_channel_resume`.
+//! - `claude` / `opencode` / `agy` — `identical`: implement neither
+//!   `capture_native_chat_id` nor `supports_channel_resume` (≡ `true`). `agy`
+//!   (like `omp`) declares only `acp_session_id_is_native`.
 //! - `cursor` — `unavailable`: implements `capture_native_chat_id` (best-effort)
 //!   AND `supports_json_to_terminal_resume() -> false`.
 //!
@@ -92,7 +91,7 @@ pub mod tool_activity;
 pub mod transcript_export;
 pub mod util;
 
-pub use agy::{create_agy_plugin, parse_agy_stream_line, AgyStreamState};
+pub use agy::create_agy_plugin;
 pub use claude::{create_claude_plugin, format_skill_directive};
 pub use codex::create_codex_plugin;
 pub use cursor::{create_cursor_plugin, parse_cursor_stream_line};
