@@ -1,0 +1,23 @@
+{
+  "_synthetic": true,
+  "_note": "SYNTHETIC: built from plan Findings F4/F9 shapes (tool_name = ACP title = description, input shape carries subagent_type); replace with a live capture when available",
+  "event": {
+    "id": "s2e",
+    "sessionId": "s1",
+    "ts": "2026-10-27T10:00:00.000Z",
+    "provider": "claude",
+    "kind": "tool_use",
+    "toolId": "toolu_nest1",
+    "toolName": "Read `src/main.rs`",
+    "toolKind": "read",
+    "parentToolUseId": "toolu_sub1",
+    "toolInput": {
+      "file_path": "src/main.rs"
+    },
+    "toolLocations": [
+      {
+        "path": "src/main.rs"
+      }
+    ]
+  }
+}

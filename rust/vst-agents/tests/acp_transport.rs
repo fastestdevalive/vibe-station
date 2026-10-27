@@ -776,3 +776,40 @@ async fn dispose_spares_setsid_child_when_reaping_not_opted_in() {
         .status();
     assert!(survived, "setsid'd child was killed with reaping disabled");
 }
+
+/// Task-tray 1.T15 / plan F6 — an unknown `sessionUpdate` variant (e.g. a newer
+/// adapter's `async_task_spawned`) arriving mid-turn is logged-and-ignored by
+/// the typed notification handler: the turn still streams and resolves, and the
+/// SAME connection runs a second turn.
+#[tokio::test]
+async fn unknown_session_update_variant_mid_turn_does_not_break_turn_or_connection() {
+    let conn = make_connection("unknown_update");
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+
+    for round in 0..2 {
+        let turn = conn.send_prompt(
+            &session_id,
+            vec![ContentBlock::Text(TextContent::new("hi"))],
+        );
+        let mut updates = turn.updates;
+        let seen = drain_updates(&mut updates).await;
+        let stop = turn
+            .result
+            .await
+            .expect("result resolves")
+            .expect("prompt succeeds");
+        assert_eq!(stop.stop_reason, StopReason::EndTurn, "round {round}");
+        assert!(
+            seen.iter()
+                .any(|u| matches!(u, SessionUpdate::AgentMessageChunk(_))),
+            "round {round}: the known chunk after the unknown update still streams: {seen:?}"
+        );
+        assert!(conn.is_alive(), "round {round}: connection survives");
+    }
+    conn.dispose().await;
+}

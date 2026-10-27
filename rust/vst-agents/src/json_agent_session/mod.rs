@@ -10,6 +10,8 @@
 //! The no-live-session meta assembly free functions live in [`meta`].
 
 mod activity;
+pub mod background;
+pub mod boot_sweep;
 pub mod connection;
 pub mod drain;
 pub mod events;
@@ -18,6 +20,7 @@ pub mod model_race;
 pub mod out_of_band;
 pub mod pids;
 pub mod queue;
+pub mod tasks;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -46,7 +49,15 @@ use vst_store::StoreHandle;
 /// How long `release()` waits for an aborted turn to unwind.
 pub const RELEASE_DRAIN_TIMEOUT_MS: u64 = 2_000;
 /// Quiet gap after which the next out-of-band ACP event starts a new pseudo-turn.
-pub const OUT_OF_BAND_BURST_GAP_MS: u64 = 30_000;
+/// Must stay above the adapter's ~30 s heartbeat so a long-running tool's
+/// heartbeats stay inside one burst (else each heartbeat spams the transcript).
+pub const OUT_OF_BAND_BURST_GAP_MS: u64 = 90_000;
+/// Quiet gap after the last out-of-band content that settles the lifecycle
+/// back to `waiting_for_human` (reason `background-settled`).
+pub const BACKGROUND_QUIET_MS: u64 = 60_000;
+/// Heartbeats keep a background window open only this long after the last
+/// non-heartbeat content (same bound as a stuck human turn).
+pub const BACKGROUND_HEARTBEAT_CAP_MS: u64 = crate::acp_run_turn::DEFAULT_STUCK_TURN_IDLE_MS;
 
 // ---------------------------------------------------------------------------
 // Queue / hold types
@@ -204,6 +215,20 @@ pub(super) struct State {
     pub(super) out_of_band_turn_id: Option<String>,
     pub(super) out_of_band_last_at_ms: u64,
 
+    // ---- lifecycle writer / background window (see `background.rs`) ----
+    /// Last lifecycle state this session wrote (under `Inner::lifecycle_lock`).
+    pub(super) last_written: LifecycleState,
+    /// An out-of-band window is open: lifecycle is `working` without a drain.
+    pub(super) bg_working: bool,
+    /// Bumped whenever a window opens or a real drain invalidates it.
+    pub(super) bg_gen: u64,
+    /// Last non-heartbeat out-of-band content (or window start).
+    pub(super) bg_last_content: Option<tokio::time::Instant>,
+    /// When the quiet timer should settle the window.
+    pub(super) bg_deadline: Option<tokio::time::Instant>,
+    /// A quiet-timer task is alive (it exits itself; never aborted mid-write).
+    pub(super) bg_timer_active: bool,
+
     // ---- activity tail (see `activity.rs`) ----
     /// Most recent tool call `(tool_id, summary)`; kept until the next one.
     pub(super) last_tool: Option<(Option<String>, vst_types::activity::ToolActivity)>,
@@ -226,6 +251,12 @@ pub(super) struct Inner {
     /// Daemon-wide activity sink; attached by `get_or_create_json_agent_session`.
     pub(super) activity: std::sync::OnceLock<Arc<dyn vst_types::activity::ActivitySink>>,
     pub(super) state: Mutex<State>,
+    /// Serialises EVERY lifecycle write of this session (see
+    /// `write_lifecycle`). Async mutex: held across the store write. Lock
+    /// order: `lifecycle_lock` before `state`/`store`, never the reverse.
+    pub(super) lifecycle_lock: tokio::sync::Mutex<()>,
+    /// Background-task registry (task tray); see `tasks.rs`.
+    pub(super) tasks: vst_tasks::TaskRegistry,
     /// The per-session SQLite transcript store, in its OWN lock — deliberately
     /// a sibling of `state`, not a field inside it.
     ///
@@ -360,6 +391,8 @@ impl JsonAgentSession {
 
         let (drain_tx, _) = watch::channel(true); // true = idle initially
 
+        let initial_lifecycle = opts.session.lifecycle.state;
+        let session_id_for_tasks = opts.session.id.clone();
         let state = State {
             project: opts.project,
             worktree: opts.worktree,
@@ -388,14 +421,27 @@ impl JsonAgentSession {
             last_unrecovered_model: None,
             out_of_band_turn_id: None,
             out_of_band_last_at_ms: 0,
+            last_written: initial_lifecycle,
+            bg_working: false,
+            bg_gen: 0,
+            bg_last_content: None,
+            bg_deadline: None,
+            bg_timer_active: false,
             last_tool: None,
             notice_slot: None,
             active_notice: None,
         };
 
+        let tasks = tasks::new_registry(
+            opts.plugin.clone(),
+            opts.broadcaster.clone(),
+            session_id_for_tasks,
+        );
         let inner = Inner {
             activity: std::sync::OnceLock::new(),
             state: Mutex::new(state),
+            lifecycle_lock: tokio::sync::Mutex::new(()),
+            tasks,
             store: Mutex::new(Some(store)),
             released: AtomicBool::new(false),
             stream: JsonAgentStream::new(),
@@ -761,7 +807,14 @@ impl JsonAgentSession {
             s.notice_slot = None;
             s.active_notice = None;
             s.promoted_notice = false;
+            s.bg_working = false;
+            s.bg_gen += 1;
         }
+        // Wait out any in-flight lifecycle write. Writers re-check the latch
+        // inside `lifecycle_lock`, so none can land after this point and a
+        // caller's own post-release write (mark-done) is always the last.
+        drop(self.0.lifecycle_lock.lock().await);
+        self.0.tasks.shutdown();
         self.abort_and_drain();
         // Wait for drain to unwind (bounded).
         let _ = tokio::time::timeout(
@@ -797,19 +850,30 @@ impl JsonAgentSession {
         let _ = rx.wait_for(|&v| v).await;
     }
 
-    /// Persist lifecycle state for this session (JSON-channel authoritative writer).
-    #[allow(dead_code)]
-    pub(super) async fn persist_lifecycle(&self, new_state: LifecycleState) {
-        let (project_id, session_id) = {
-            let s = self.0.state.lock().unwrap();
-            (s.project.id.clone(), s.session.id.clone())
-        };
+    /// The single JSON-channel lifecycle writer. Takes `lifecycle_lock`,
+    /// then no-ops if released (checked INSIDE the lock).
+    pub(super) async fn write_lifecycle(&self, new_state: LifecycleState, reason: Option<&str>) {
+        let _guard = self.0.lifecycle_lock.lock().await;
+        self.write_lifecycle_locked(new_state, reason).await;
+    }
+
+    /// Body of [`Self::write_lifecycle`]; the caller MUST hold `lifecycle_lock`.
+    pub(super) async fn write_lifecycle_locked(
+        &self,
+        new_state: LifecycleState,
+        reason: Option<&str>,
+    ) {
         if self.is_released() {
             return;
         }
+        let (project_id, session_id) = {
+            let mut s = self.0.state.lock().unwrap();
+            s.last_written = new_state;
+            (s.project.id.clone(), s.session.id.clone())
+        };
         let lifecycle = SessionLifecycle {
             state: new_state,
-            reason: None,
+            reason: reason.map(str::to_string),
             last_transition_at: crate::util::now_iso_8601(),
         };
         let _ = self
@@ -820,8 +884,25 @@ impl JsonAgentSession {
         self.0.broadcaster.send(ServerEvent::SessionState {
             session_id,
             state: new_state,
-            reason: None,
+            reason: reason.map(str::to_string),
         });
+    }
+
+    /// `working` for a human-originated turn (send / chat / resubmit / create /
+    /// scheduled delivery), reason `None`. Skipped unless a turn is running or
+    /// queued: a fast turn may already have finished (drain's final
+    /// `waiting_for_human`) before the caller got here, and a late `working`
+    /// would then stick.
+    pub async fn write_working_for_human_turn(&self) {
+        let _guard = self.0.lifecycle_lock.lock().await;
+        let live = {
+            let s = self.0.state.lock().unwrap();
+            s.running || !s.queue.is_empty()
+        };
+        if live {
+            self.write_lifecycle_locked(LifecycleState::Working, None)
+                .await;
+        }
     }
 
     /// Persist the per-session model override.
@@ -990,14 +1071,23 @@ pub fn get_or_create_json_agent_session(
     // `get()` ... `set()` here was a lost-update race that could silently
     // build and immediately discard a whole `JsonAgentSession` (with its
     // own turn stream nobody was listening to).
+    let mut created = false;
     let session = registry.get_or_insert_with(&session_id, || {
+        created = true;
         let s = JsonAgentSession::new(opts);
         if let Some(sink) = registry.activity_sink() {
             s.attach_activity_sink(sink);
         }
+        // Buffer live task observations until the rebuild below finishes.
+        s.0.tasks.begin_rebuild();
         s
     });
-    (*session).clone()
+    let session = (*session).clone();
+    if created {
+        // OUTSIDE the registry lock: reads the transcript.
+        session.start_task_rebuild();
+    }
+    session
 }
 
 // ---------------------------------------------------------------------------

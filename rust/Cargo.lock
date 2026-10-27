@@ -3065,6 +3065,7 @@ dependencies = [
  "vst-proc",
  "vst-rpc",
  "vst-store",
+ "vst-tasks",
  "vst-types",
 ]
 
@@ -3246,6 +3247,7 @@ dependencies = [
  "vst-lsp",
  "vst-proc",
  "vst-store",
+ "vst-tasks",
  "vst-types",
  "vst-ws",
 ]
@@ -3272,6 +3274,18 @@ dependencies = [
  "tokio",
  "tracing",
  "vst-diff",
+ "vst-types",
+]
+
+[[package]]
+name = "vst-tasks"
+version = "0.0.3-beta"
+dependencies = [
+ "chrono",
+ "libc",
+ "notify",
+ "tempfile",
+ "tokio",
  "vst-types",
 ]
 

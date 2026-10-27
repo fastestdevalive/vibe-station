@@ -4607,9 +4607,7 @@ impl SessionRoutes {
             .map_err(ChatRouteError::from_enqueue)?;
             // Mark it working, exactly as POST /chat does — otherwise
             // `vst session send --wait` returns before the turn even starts.
-            if let Some(jctx) = find_json_session_context(&self.store, id).await {
-                self.persist_working(&jctx).await;
-            }
+            self.persist_working(id).await;
             self.subagent_notify.note_human_turn(id);
             return Ok(ChatActionResult { ok: true });
         }
@@ -4724,9 +4722,7 @@ impl SessionRoutes {
         .map_err(ChatRouteError::from_enqueue)?;
 
         // Mark the session working while the turn runs (JSON lifecycle, D11).
-        if let Some(jctx) = find_json_session_context(&self.store, id).await {
-            self.persist_working(&jctx).await;
-        }
+        self.persist_working(id).await;
         // Someone is actively driving this session, so the unattended
         // subagent-notice budget starts over.
         self.subagent_notify.note_human_turn(id);
@@ -4859,9 +4855,11 @@ impl SessionRoutes {
                 .map_err(ChatRouteError::BadRequest)?;
         }
 
-        let ctx = find_json_session_context(&self.store, id)
-            .await
-            .ok_or_else(|| ChatRouteError::NotFound(format!("Session '{id}' not found")))?;
+        if find_json_session_context(&self.store, id).await.is_none() {
+            return Err(ChatRouteError::NotFound(format!(
+                "Session '{id}' not found"
+            )));
+        }
         let Some(agent) = self.json_registry.get(id) else {
             return Err(ChatRouteError::NotEditing("not_editing".to_string()));
         };
@@ -4887,7 +4885,7 @@ impl SessionRoutes {
 
         // Drain may have persisted `idle` while the turn was held (R17) — the
         // re-enqueued turn will run, so re-flip the lifecycle to working (A4).
-        self.persist_working(&ctx).await;
+        self.persist_working(id).await;
         Ok(TurnActionResult {
             ok: true,
             turn_id: turn_id.to_string(),
@@ -6009,11 +6007,12 @@ impl SessionRoutes {
         Ok(attachments)
     }
 
-    /// Persist the session's lifecycle axis to `working` and broadcast the
-    /// state change (JSON lifecycle, D11). Mirrors `persistLifecycleState`.
-    async fn persist_working(&self, ctx: &vst_agents::json_agent_chat::JsonSessionContext) {
-        vst_agents::json_agent_chat::persist_session_working(&self.store, &self.broadcaster, ctx)
-            .await;
+    /// Mark a JSON session `working` for a human-originated turn, through the
+    /// session's single lifecycle writer (skipped if the turn already ended).
+    async fn persist_working(&self, session_id: &str) {
+        if let Some(agent) = self.json_registry.get(session_id) {
+            agent.write_working_for_human_turn().await;
+        }
     }
 
     /// Apply a mutation closure to a worktree or direct session. The closure

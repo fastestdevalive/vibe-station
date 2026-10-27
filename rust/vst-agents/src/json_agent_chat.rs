@@ -395,6 +395,23 @@ pub async fn enqueue_chat_turn(
 
 /// `reason` on the `waiting_for_human` transition of a prompt-less json session.
 pub const READY_REASON: &str = "ready";
+/// `working` while the daemon-started subagent-notice turn runs.
+pub const SUBAGENT_NOTICE_REASON: &str = "subagent-notice";
+/// `working` while the agent produces output with no prompt in flight
+/// (adapter-driven autonomous cycle / background-work output).
+pub const BACKGROUND_REASON: &str = "background";
+/// `waiting_for_human` written when a background window goes quiet.
+pub const BACKGROUND_SETTLED_REASON: &str = "background-settled";
+
+/// Reasons whose lifecycle transitions are invisible to the subagent-notify
+/// listener (a `ready`/`background*` transition is not "a subagent finished").
+/// `subagent-notice` is deliberately NOT silent.
+pub fn is_silent_state_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        READY_REASON | BACKGROUND_REASON | BACKGROUND_SETTLED_REASON
+    )
+}
 
 /// Options for `start_json_create_turn`.
 pub struct StartJsonCreateTurnOpts {
@@ -478,22 +495,10 @@ pub async fn start_json_create_turn(
         return;
     }
 
-    // Persist lifecycle → working.
-    if let Some(ctx) = find_json_session_context(&opts.store, &opts.session_id).await {
-        let lifecycle = SessionLifecycle {
-            state: LifecycleState::Working,
-            reason: None,
-            last_transition_at: now_iso_8601(),
-        };
-        let _ = opts
-            .store
-            .update_session_lifecycle(&ctx.project.id, &ctx.session.id, lifecycle)
-            .await;
-        opts.broadcaster.send(ServerEvent::SessionState {
-            session_id: ctx.session.id.clone(),
-            state: LifecycleState::Working,
-            reason: None,
-        });
+    // Persist lifecycle → working, through the session's single writer (skipped
+    // if the turn already finished).
+    if let Some(agent) = registry.get(&opts.session_id) {
+        agent.write_working_for_human_turn().await;
     }
 }
 
@@ -636,29 +641,6 @@ fn parse_attachments_json(json: Option<&str>) -> Option<Vec<Attachment>> {
     json.and_then(|s| serde_json::from_str::<Vec<Attachment>>(s).ok())
 }
 
-/// Persist the session's lifecycle axis to `working` and broadcast the state
-/// change (JSON lifecycle, D11) — what every human-originated turn does once
-/// it has been handed to the agent.
-pub async fn persist_session_working(
-    store: &StoreHandle,
-    broadcaster: &Broadcaster,
-    ctx: &JsonSessionContext,
-) {
-    let lifecycle = SessionLifecycle {
-        state: LifecycleState::Working,
-        reason: None,
-        last_transition_at: now_iso_8601(),
-    };
-    let _ = store
-        .update_session_lifecycle(&ctx.project.id, &ctx.session.id, lifecycle)
-        .await;
-    broadcaster.send(ServerEvent::SessionState {
-        session_id: ctx.session.id.clone(),
-        state: LifecycleState::Working,
-        reason: None,
-    });
-}
-
 /// Deliver a claimed scheduled message exactly as if the user had pressed
 /// Send on freshly typed text: `submit()` steers a running turn when it can
 /// and otherwise queues, and the session is marked working. Returns a
@@ -698,7 +680,9 @@ pub async fn deliver_scheduled_message(
         }
         ResolveJsonAgentError::ModeError(m) => format!("The agent could not be started: {m}"),
     })?;
-    persist_session_working(store, broadcaster, &ctx).await;
+    if let Some(agent) = registry.get(&row.session_id) {
+        agent.write_working_for_human_turn().await;
+    }
     Ok(result)
 }
 

@@ -569,6 +569,10 @@ impl AgentPlugin for ClaudePlugin {
         true
     }
 
+    fn task_observations(&self, ev: &NormalizedEvent) -> Vec<vst_tasks::TaskObservation> {
+        crate::claude_tasks::claude_task_observations(ev)
+    }
+
     fn run_turn(
         &self,
         input: TurnInput,
@@ -579,7 +583,9 @@ impl AgentPlugin for ClaudePlugin {
         let params = RunTurnAcpParams {
             provider: NormalizedEventProvider::Claude,
             build_spec: Box::new(|ctx| claude_acp_spec(ctx.cwd.clone())),
-            enrich: None,
+            // Copies `_meta.claudeCode.parentToolUseId` onto nested tool events
+            // (task tray). Shared with the out-of-band sink via the connection.
+            enrich: Some(crate::claude_tasks::claude_enrich_hook()),
             // Decision 6 Option A: the ACP session id IS claude's native resume
             // id — surface it as `agentChatId` via a synthetic `session_init`.
             first_turn_session_init: Some(Arc::new(|ctx, acp_id| {

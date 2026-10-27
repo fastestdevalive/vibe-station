@@ -1,0 +1,17 @@
+{
+  "_synthetic": true,
+  "_note": "SYNTHETIC: built from plan Findings F4/F9 shapes (tool_name = ACP title = description, input shape carries subagent_type); replace with a live capture when available",
+  "event": {
+    "id": "s4e",
+    "sessionId": "s1",
+    "ts": "2026-10-27T10:00:00.000Z",
+    "provider": "claude",
+    "kind": "tool_result",
+    "toolId": "toolu_sub1",
+    "toolStatus": "failed",
+    "toolResult": {
+      "content": "Subagent crashed",
+      "isError": true
+    }
+  }
+}

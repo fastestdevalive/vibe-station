@@ -1,0 +1,18 @@
+{
+  "_source": "F2/F9: refinement update carries the real input",
+  "event": {
+    "id": "l1",
+    "sessionId": "s1",
+    "ts": "2026-10-27T10:00:00.000Z",
+    "provider": "claude",
+    "kind": "tool_result",
+    "toolId": "toolu_bg1",
+    "toolKind": "execute",
+    "toolStatus": "in_progress",
+    "toolInput": {
+      "command": "sleep 90; echo done",
+      "run_in_background": true,
+      "description": "wait"
+    }
+  }
+}

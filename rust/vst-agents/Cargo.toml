@@ -10,6 +10,7 @@ vst-types = { workspace = true }
 vst-diff = { workspace = true }
 vst-proc = { workspace = true }
 vst-store = { workspace = true }
+vst-tasks = { workspace = true }
 vst-rpc = { workspace = true }
 vst-git = { workspace = true }
 vst-agy-acp = { workspace = true }
@@ -31,7 +32,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 
 [lints]
 workspace = true

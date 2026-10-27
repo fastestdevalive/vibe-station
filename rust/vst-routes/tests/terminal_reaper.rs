@@ -288,7 +288,16 @@ async fn listener_reaps_on_exited_event_and_sweeps_at_start() {
     });
     wait_until(|| async { all_ids(&store, "p1").await.is_empty() }).await;
 
-    let deleted = drain_deleted(&mut rx);
+    // The store removal happens before the `SessionDeleted` broadcast, so poll
+    // for the events instead of draining once (flaky under load otherwise).
+    let mut deleted: Vec<String> = Vec::new();
+    for _ in 0..100 {
+        deleted.extend(drain_deleted(&mut rx));
+        if deleted.contains(&"dt".to_string()) && deleted.contains(&"wt".to_string()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert!(deleted.contains(&"dt".to_string()) && deleted.contains(&"wt".to_string()));
     handle.abort();
 }

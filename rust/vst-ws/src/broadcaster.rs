@@ -304,6 +304,15 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             scheduled_failed,
             scheduled_turn_ids,
         },
+        ServerEvent::SessionTasksChanged {
+            session_id,
+            rev,
+            tasks,
+        } => ServerMessage::SessionTasks {
+            session_id,
+            rev,
+            tasks,
+        },
         ServerEvent::LimitsUpdated { limits } => ServerMessage::LimitsUpdated { limits },
     }
 }
@@ -344,7 +353,9 @@ pub fn spawn_event_fanout(
             // Scheduled-send state is only meaningful to clients looking at that
             // session (chat open or explicit subscribe) — and can be sizeable —
             // so it is NOT fanned out to every connection.
-            if let ServerMessage::SessionScheduled { session_id, .. } = &msg {
+            if let ServerMessage::SessionScheduled { session_id, .. }
+            | ServerMessage::SessionTasks { session_id, .. } = &msg
+            {
                 hub.notify_session(session_id, &msg);
             } else {
                 hub.broadcast_all(&msg);

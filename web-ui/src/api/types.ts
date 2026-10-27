@@ -461,6 +461,42 @@ export interface NormalizedEvent {
   fromMode?: string;
   /** `session_break` only — display name of the replacement mode. */
   toMode?: string;
+  /** Tool events only — tool call id of the subagent this nested event ran under. */
+  parentToolUseId?: string;
+}
+
+/** Background task kinds (mirror of `TaskKind`). `monitor` is reserved. */
+export type TaskKind = "command" | "monitor" | "subagent";
+/** `stale` = no end signal observed (ended or unknown). */
+export type TaskState = "running" | "done" | "failed" | "stopped" | "stale";
+export type TaskOutputKind = "file" | "events" | "none";
+
+/** One background task in a `session:tasks` snapshot (mirror of `TaskSummary`). */
+export interface TaskSummary {
+  id: string;
+  toolId: string;
+  kind: TaskKind;
+  label: string;
+  state: TaskState;
+  reason?: string;
+  startedAt: string;
+  endedAt?: string;
+  lastActivityAt?: string;
+  outputKind: TaskOutputKind;
+  outputRev: number;
+  outputPath?: string;
+  canStop: boolean;
+}
+
+/** Body of `GET /api/sessions/:id/tasks/:taskId/output?tail=200` (mirror of `TaskOutput`). */
+export interface TaskOutput {
+  lines: string[];
+  truncated: boolean;
+  totalBytes?: number;
+  outputKind: TaskOutputKind;
+  path?: string;
+  /** Subagent only — its final message, once finished. */
+  finalText?: string;
 }
 
 /** Which catalog a slash command came from (mirror of `CommandGroup`). */
@@ -964,6 +1000,14 @@ export type WSEvent =
       scheduledSends: ScheduledPendingMessage[];
       scheduledFailed: ScheduledFailedMessage[];
       scheduledTurnIds: string[];
+    }
+  | {
+      /** Full replace-not-diff snapshot of a session's background tasks.
+       *  Drop any snapshot whose `rev` is <= the one already held. */
+      type: "session:tasks";
+      sessionId: string;
+      rev: number;
+      tasks: TaskSummary[];
     }
   | {
       /** JSON agent chat: an edit-a-sent-message fork truncated these turns —

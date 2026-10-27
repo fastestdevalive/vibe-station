@@ -183,6 +183,10 @@ impl JsonAgentSession {
                 continue;
             }
 
+            // The previous adapter process (if any) is gone: its background
+            // tasks can no longer be tracked.
+            self.0.tasks.bump_epoch();
+
             if stale_kept {
                 self.emit_status(&format!(
                     "the model changed during startup; the agent is running on the earlier \

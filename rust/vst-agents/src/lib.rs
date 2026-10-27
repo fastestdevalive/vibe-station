@@ -60,6 +60,7 @@ pub mod agy_limits;
 pub mod claude;
 pub mod claude_import;
 pub mod claude_limits;
+pub mod claude_tasks;
 pub mod codex;
 pub mod codex_import;
 pub mod codex_limits;

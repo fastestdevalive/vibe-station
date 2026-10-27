@@ -289,6 +289,14 @@ pub enum ServerMessage {
         scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
         scheduled_turn_ids: Vec<String>,
     },
+    /// Background-task snapshot for a session — see
+    /// `ServerEvent::SessionTasksChanged`. Client drops `rev <=` current.
+    #[serde(rename = "session:tasks", rename_all = "camelCase")]
+    SessionTasks {
+        session_id: String,
+        rev: u64,
+        tasks: Vec<crate::domain::TaskSummary>,
+    },
     #[serde(rename = "session:fork", rename_all = "camelCase")]
     SessionFork {
         session_id: String,

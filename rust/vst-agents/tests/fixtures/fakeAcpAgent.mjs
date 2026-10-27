@@ -70,6 +70,10 @@
 //     notification 200ms later. Models an agent that keeps working after its
 //     prompt ended, so the update arrives with no prompt in flight and must be
 //     routed to the out-of-band sink (2.T2).
+//   FAKE_ACP_MODE=unknown_update — like normal, but session/prompt first sends a
+//     `session/update` whose `sessionUpdate` is `async_task_spawned` (a variant
+//     the vendored adapter 0.70.0 never emits but a newer one does). The typed
+//     handler cannot parse it; the turn and the connection must survive (F6).
 //   FAKE_ACP_MODE=steering_strict — steering supported; every session/prompt holds for
 //     STEER_PROMPT_MS (default 400; the FIRST prompt for STEER_FIRST_MS, default 20)
 //     and `_session/steering` answers `outcome: "injected"` only while a prompt is
@@ -369,6 +373,16 @@ rl.on("line", (line) => {
             status: "completed",
             content: [{ type: "diff", path: "/tmp/demo.ts", oldText, newText }],
           },
+        },
+      });
+    }
+    if (mode === "unknown_update") {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: sid,
+          update: { sessionUpdate: "async_task_spawned", taskId: "t1", taskType: "bash", outputFilePath: "/tmp/x" },
         },
       });
     }

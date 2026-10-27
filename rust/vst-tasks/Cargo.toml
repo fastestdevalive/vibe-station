@@ -1,0 +1,23 @@
+[package]
+name = "vst-tasks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Owner of the per-session background-task registry (task tray). CLI-agnostic:
+# per-harness detection is injected as an `ObservationsFn` built from
+# `AgentPlugin::task_observations` in `vst-agents`. Depends on `vst-types` only.
+[dependencies]
+vst-types = { workspace = true }
+tokio = { workspace = true }
+notify = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
+
+[lints]
+workspace = true
