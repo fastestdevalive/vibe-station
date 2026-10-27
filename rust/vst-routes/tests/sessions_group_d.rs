@@ -238,15 +238,14 @@ async fn patch_channel_terminal_session_400() {
 }
 
 #[tokio::test]
-async fn patch_channel_tty_to_json_rejected_for_agy() {
-    // agy is terminal-only — toggling it to Rich Chat must be rejected, not
-    // silently fork a fresh session.
-    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy", "agy", None)]);
+async fn patch_channel_tty_to_json_rejected_for_pi() {
+    // pi can't run Rich Chat — toggling it must be rejected.
+    let (_home, _guard) = home_with_modes(&[("pi-mode", "Pi", "pi", None)]);
 
     let (_d, store) = store();
     let mut p = make_project("p1");
     let mut s = make_session("s1", "p1");
-    s.mode_id = Some("agy-mode".to_string());
+    s.mode_id = Some("pi-mode".to_string());
     p.direct_sessions.push(s);
     add_project(&store, p).await;
 
@@ -515,7 +514,7 @@ async fn patch_channel_tty_to_json_unknown_mode_id_rejected_record_unchanged() {
 
 #[tokio::test]
 async fn patch_channel_tty_to_json_mode_id_unsupported_json_rejected_record_unchanged() {
-    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy", "agy", None)]);
+    let (_home, _guard) = home_with_modes(&[("pi-mode", "Pi", "pi", None)]);
     let (_d, store) = store();
     let mut p = make_project("p1");
     let mut s = make_session("s1", "p1");
@@ -530,7 +529,7 @@ async fn patch_channel_tty_to_json_mode_id_unsupported_json_rejected_record_unch
             "s1",
             PatchChannelBody {
                 channel: Channel::Json,
-                mode_id: Some("agy-mode".to_string()),
+                mode_id: Some("pi-mode".to_string()),
             },
         )
         .await

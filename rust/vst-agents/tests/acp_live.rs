@@ -39,6 +39,7 @@ async fn live_conn() -> Option<AcpConnection> {
         initialize_timeout_ms: Some(60_000),
         prompt_timeout_ms: Some(60_000),
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     }))
 }
 

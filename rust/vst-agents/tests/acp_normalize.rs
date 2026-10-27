@@ -381,3 +381,58 @@ fn small_snippet_diff_is_untouched_by_the_trim() {
     assert_eq!(diffs[0].old_start, None);
     assert_eq!(diffs[0].new_start, None);
 }
+
+fn diff_with_meta(meta: serde_json::Value) -> Vec<vst_types::ToolDiff> {
+    let meta = meta.as_object().cloned();
+    norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-meta", "Edit").content(vec![ToolCallContent::Diff(
+            Diff::new("/m.txt", "new").old_text("old").meta(meta),
+        )]),
+    ))
+    .expect("tool_use")
+    .tool_diffs
+    .expect("toolDiffs populated")
+}
+
+#[test]
+fn diff_meta_line_starts_are_carried_and_not_retrimmed() {
+    let diffs = diff_with_meta(serde_json::json!({"oldStart": 7, "newStart": 9}));
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].old_start, Some(7));
+    assert_eq!(diffs[0].new_start, Some(9));
+    assert_eq!(diffs[0].old_text.as_deref(), Some("old"));
+    assert_eq!(diffs[0].new_text, "new");
+}
+
+#[test]
+fn diff_without_meta_has_no_line_starts() {
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-nometa", "Edit").content(vec![ToolCallContent::Diff(
+            Diff::new("/m.txt", "new").old_text("old"),
+        )]),
+    ))
+    .expect("tool_use");
+    let diffs = ev.tool_diffs.expect("toolDiffs populated");
+    assert_eq!((diffs[0].old_start, diffs[0].new_start), (None, None));
+}
+
+#[test]
+fn malformed_diff_meta_is_ignored() {
+    for meta in [
+        serde_json::json!({"oldStart": 0, "newStart": 0}),
+        serde_json::json!({"oldStart": -3, "newStart": 1.5}),
+        serde_json::json!({"oldStart": "4", "newStart": null}),
+        serde_json::json!({"oldStart": 4_294_967_296_u64, "newStart": true}),
+        serde_json::json!({"other": 1}),
+        serde_json::json!({"newStart": 9}),
+        serde_json::json!({"oldStart": 4}),
+        serde_json::json!({"oldStart": 4, "newStart": 0}),
+    ] {
+        let diffs = diff_with_meta(meta.clone());
+        assert_eq!(
+            (diffs[0].old_start, diffs[0].new_start),
+            (None, None),
+            "{meta}"
+        );
+    }
+}

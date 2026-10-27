@@ -13,7 +13,6 @@ vst-store = { workspace = true }
 vst-tasks = { workspace = true }
 vst-rpc = { workspace = true }
 vst-git = { workspace = true }
-vst-agy-acp = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }

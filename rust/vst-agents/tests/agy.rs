@@ -13,7 +13,7 @@ use vst_agents::agy::{
     agy_log_path, create_agy_plugin, parse_agy_models_output, poll_log_for_conversation_id,
 };
 use vst_agents::home::with_home;
-use vst_agents::plugin::{CaptureArgs, CaptureNativeChatIdArgs, ComposePromptInput};
+use vst_agents::plugin::{CaptureArgs, ComposePromptInput};
 use vst_agents::AgentPlugin;
 
 use common::{make_project, make_session};
@@ -358,118 +358,62 @@ async fn compose_launch_prompt_writes_combined_prompt_file() {
     assert_eq!(written, "System Rules\n\nDo the task");
 }
 
-mod capture_native_chat_id {
-    use super::*;
-
-    // The bridge reads vst_agy_acp::agy_acp_sessions_path(), which is the
-    // adapter's store under the state dir (AGY_ACP_STATE_DIR, else
-    // $HOME/.vibe-station/agy-acp). Point AGY_ACP_STATE_DIR at the temp home
-    // and write the adapter's store there so the bridge and adapter agree.
-    // The env var is restored on guard drop so it never leaks to other tests.
-    struct StateDirGuard;
-
-    impl Drop for StateDirGuard {
-        fn drop(&mut self) {
-            std::env::remove_var(vst_agy_acp::AGY_ACP_STATE_DIR_ENV);
-        }
+fn restore_args<'a>(
+    session: &'a vst_types::SessionRecord,
+    project: &'a vst_types::ProjectRecord,
+    model: Option<&'a str>,
+) -> vst_agents::plugin::RestoreArgs<'a> {
+    vst_agents::plugin::RestoreArgs {
+        session,
+        project,
+        cwd: "/repos/p1",
+        model,
     }
+}
 
-    async fn write_acp_sessions_file(home: &std::path::Path, sessions_json: &str) -> StateDirGuard {
-        let state_dir = home.join(".vibe-station").join("agy-acp");
-        std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join("sessions.json"), sessions_json).unwrap();
-        std::env::set_var(vst_agy_acp::AGY_ACP_STATE_DIR_ENV, &state_dir);
-        StateDirGuard
-    }
+#[tokio::test]
+async fn restore_command_passes_log_file() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    let plugin = create_agy_plugin();
+    let project = make_project("p1");
+    let mut s = session("sess-restore");
+    s.agent_chat_id = Some("conv-123".to_string());
+    let expected_log = log_path_for(home.path(), "sess-restore")
+        .to_string_lossy()
+        .into_owned();
 
-    #[tokio::test]
-    async fn prefers_acp_adapter_session_keyed_conversation_id() {
-        let home = tempfile::tempdir().unwrap();
-        let _guard = with_home(home.path().to_path_buf());
-        let _state_guard = write_acp_sessions_file(
-            home.path(),
-            // Real openab StoredSession shape: conversation_id (snake_case).
-            r#"{"sessions":{"acp-session-1":{"conversation_id":"e1daa217-70be-4b99-b7e5-78706623762b","last_step_idx":1,"model_id":null}}}"#,
-        )
-        .await;
-        let plugin = create_agy_plugin();
-        let s = session("sess-acp-1");
-        let id = plugin
-            .capture_native_chat_id(CaptureNativeChatIdArgs {
-                session: &s,
-                project: &make_project("p1"),
-                cwd: "/tmp/ws",
-                acp_session_id: "acp-session-1",
-            })
-            .await;
-        assert_eq!(id.as_deref(), Some("e1daa217-70be-4b99-b7e5-78706623762b"));
-    }
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await
+        .expect("restore argv");
+    assert!(argv.windows(2).any(|w| w == ["--conversation", "conv-123"]));
+    assert!(argv.contains(&"--dangerously-skip-permissions".to_string()));
+    assert_eq!(
+        &argv[argv.len() - 2..],
+        ["--log-file", expected_log.as_str()]
+    );
+    assert!(home.path().join(".vibe-station").join("agy-logs").exists());
 
-    #[tokio::test]
-    async fn never_overwrites_already_captured_native_id() {
-        let home = tempfile::tempdir().unwrap();
-        let _guard = with_home(home.path().to_path_buf());
-        let _state_guard = write_acp_sessions_file(
-            home.path(),
-            r#"{"sessions":{"acp-session-2":{"conversation_id":"some-other-id"}}}"#,
-        )
-        .await;
-        let plugin = create_agy_plugin();
-        let mut s = session("sess-acp-2");
-        s.agent_chat_id = Some("already-set-id".into());
-        let id = plugin
-            .capture_native_chat_id(CaptureNativeChatIdArgs {
-                session: &s,
-                project: &make_project("p1"),
-                cwd: "/tmp/ws",
-                acp_session_id: "acp-session-2",
-            })
-            .await;
-        assert_eq!(id.as_deref(), Some("already-set-id"));
-    }
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, Some("M")))
+        .await
+        .expect("restore argv");
+    let model_idx = argv.iter().position(|a| a == "--model").unwrap();
+    let log_idx = argv.iter().position(|a| a == "--log-file").unwrap();
+    assert_eq!(argv[model_idx + 1], "M");
+    assert!(model_idx < log_idx);
+}
 
-    #[tokio::test]
-    async fn falls_back_to_cwd_keyed_last_conversations() {
-        let home = tempfile::tempdir().unwrap();
-        let _guard = with_home(home.path().to_path_buf());
-        let cache_dir = home
-            .path()
-            .join(".gemini")
-            .join("antigravity-cli")
-            .join("cache");
-        std::fs::create_dir_all(&cache_dir).unwrap();
-        std::fs::write(
-            cache_dir.join("last_conversations.json"),
-            r#"{"\/tmp\/ws":"fallback-conversation-id"}"#,
-        )
-        .unwrap();
-        let plugin = create_agy_plugin();
-        let s = session("sess-acp-3");
-        let id = plugin
-            .capture_native_chat_id(CaptureNativeChatIdArgs {
-                session: &s,
-                project: &make_project("p1"),
-                cwd: "/tmp/ws",
-                acp_session_id: "acp-session-missing",
-            })
-            .await;
-        assert_eq!(id.as_deref(), Some("fallback-conversation-id"));
-    }
-
-    #[tokio::test]
-    async fn returns_null_when_neither_channel_has_value() {
-        let home = tempfile::tempdir().unwrap();
-        let _guard = with_home(home.path().to_path_buf());
-        let plugin = create_agy_plugin();
-        let s = session("sess-acp-4");
-        let id = plugin
-            .capture_native_chat_id(CaptureNativeChatIdArgs {
-                session: &s,
-                project: &make_project("p1"),
-                cwd: "/tmp/ws",
-                acp_session_id: "acp-session-4",
-            })
-            .await;
-        assert_eq!(id, None);
-    }
+#[tokio::test]
+async fn restore_command_none_without_any_conversation_id() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    let plugin = create_agy_plugin();
+    let project = make_project("p1");
+    let s = session("sess-none");
+    assert!(plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await
+        .is_none());
 }

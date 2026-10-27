@@ -9,9 +9,16 @@ use vst_cli::program::{
 #[tokio::main]
 async fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
-    if vst_cli::dispatch::resolve_entry_mode(&raw_args[0], &raw_args[1..])
-        == vst_cli::dispatch::EntryMode::Daemon
-    {
+    let entry = vst_cli::dispatch::resolve_entry_mode(&raw_args[0], &raw_args[1..]);
+    if entry == vst_cli::dispatch::EntryMode::AgyStreamAcp {
+        // stdout is the ACP channel: never `init_tracing` here.
+        if let Err(e) = vst_daemon::run_agy_stream_acp().await {
+            eprintln!("{e:?}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if entry == vst_cli::dispatch::EntryMode::Daemon {
         vst_daemon::init_tracing();
         if let Err(e) = vst_daemon::run_daemon(vst_daemon::DaemonOptions::default()).await {
             eprintln!("{e:?}");

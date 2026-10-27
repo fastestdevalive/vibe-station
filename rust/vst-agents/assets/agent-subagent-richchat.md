@@ -77,11 +77,9 @@ Terminal for agy/pi). An explicitly-passed `--channel` on either command is only
 
 **Exception — `agy`-mode sessions:** the daemon's own default for `agy` is
 Terminal (`tmux`), so a spawned `agy` subagent/worktree is already tmux by
-default even while you yourself are running in Rich Chat. **`agy` is
-temporarily terminal-only** — it cannot run Rich Chat, so `--channel=json` on
-create (or a terminal→Rich Chat toggle) is rejected with a 4xx until the
-terminal↔ACP conversation-id bridge lands. Do not pass `--channel=json` for an
-`agy` mode.
+default even while you yourself are running in Rich Chat. `--channel=json`
+works for `agy` too; agy Rich Chat auto-approves tool calls and has no
+mid-turn steering (messages sent mid-turn are queued).
 
 ---
 

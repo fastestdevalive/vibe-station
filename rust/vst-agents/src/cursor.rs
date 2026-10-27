@@ -512,6 +512,7 @@ impl AgentPlugin for CursorPlugin {
                 initialize_timeout_ms: None,
                 prompt_timeout_ms: None,
                 reap_detached_descendants: false,
+                open_tool_idle_timeout_ms: None,
             }),
             enrich: None,
             // cursor spike (3.0a): Option B — the ACP session id does NOT

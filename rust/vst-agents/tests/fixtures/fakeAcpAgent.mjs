@@ -33,6 +33,13 @@
 //     agent that is actively streaming (so an IDLE timeout must NOT fire
 //     while updates keep arriving) and then genuinely hangs (so it must
 //     eventually fire once updates stop).
+//   FAKE_ACP_MODE=tool_open_then_silent — session/prompt sends a tool_call
+//     (in_progress), stays silent TOOL_SILENT_MS (default 400), then sends
+//     tool_call_update completed and resolves end_turn.
+//   FAKE_ACP_MODE=tool_open_forever — tool_call (in_progress) then silence
+//     forever; never answers the prompt (even after session/cancel).
+//   FAKE_ACP_MODE=silent_no_tool — no updates, never answers the prompt.
+//   CANCEL_OUT_FILE (any mode) — append a line per received session/cancel.
 //   FAKE_ACP_MODE=steering_supported — initialize includes _meta.steering.supported=true;
 //     session/prompt behaves like normal mode.
 //   FAKE_ACP_MODE=steering_method_not_found — _session/steering returns a
@@ -197,6 +204,7 @@ rl.on("line", (line) => {
   }
   if (msg.method === "session/cancel") {
     cancelRequested = true;
+    if (process.env.CANCEL_OUT_FILE) appendFileSync(process.env.CANCEL_OUT_FILE, "cancel\n");
     return;
   }
   if (msg.method === "session/prompt") {
@@ -300,6 +308,27 @@ rl.on("line", (line) => {
         method: "session/request_permission",
         params: { sessionId: sid, toolCall: { toolCallId: "tc-1" }, options },
       });
+      return;
+    }
+    if (mode === "tool_open_then_silent" || mode === "tool_open_forever") {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "tc-open", title: "schedule", kind: "other", status: "in_progress" } },
+      });
+      if (mode === "tool_open_then_silent") {
+        setTimeout(() => {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "tc-open", status: "completed" } },
+          });
+          write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+        }, Number(process.env.TOOL_SILENT_MS ?? 400));
+      }
+      return;
+    }
+    if (mode === "silent_no_tool") {
       return;
     }
     if (mode === "prompt_hang") {

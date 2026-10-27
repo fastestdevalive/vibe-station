@@ -101,6 +101,79 @@ pub(super) fn should_persist_session_id(resumed: bool, _model: &ModelState) -> b
     !resumed
 }
 
+/// Which stored id to reconnect with.
+///
+/// `identical`-strategy plugins (`acp_session_id_is_native()`) must prefer
+/// `agentChatId`: that is the id the CLI's own resume flag understands, and a
+/// legacy record can hold an unrelated ACP id (the shape left by the old, since-removed ACP adapter).
+/// Every other plugin keeps `acpSessionId` first, exactly as before.
+/// Empty strings count as absent.
+pub(super) fn pick_prior_session_id(
+    native: bool,
+    acp: Option<&str>,
+    chat: Option<&str>,
+) -> Option<String> {
+    let acp = acp.filter(|id| !id.is_empty());
+    let chat = chat.filter(|id| !id.is_empty());
+    let picked = if native { chat.or(acp) } else { acp.or(chat) };
+    picked.map(str::to_string)
+}
+
+/// The OTHER stored id — a one-shot `session/load` fallback when the primary
+/// one fails.
+///
+/// Only native plugins have two identities that can disagree. A record split
+/// by a PAST load fallback holds an ACP id that still loads while the chat id
+/// does not; a legacy record holds the opposite shape. No static order serves
+/// both, so both are tried before forking a fresh session.
+pub(super) fn alt_prior_session_id(
+    native: bool,
+    acp: Option<&str>,
+    chat: Option<&str>,
+) -> Option<String> {
+    if !native {
+        return None;
+    }
+    let acp = acp.filter(|id| !id.is_empty());
+    let chat = chat.filter(|id| !id.is_empty());
+    let picked = pick_prior_session_id(native, acp, chat);
+    let picked = picked.as_deref();
+    [acp, chat]
+        .into_iter()
+        .flatten()
+        .find(|id| Some(*id) != picked)
+        .map(str::to_string)
+}
+
+/// Which of the two stored ids a just-established connection must rewrite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct NativeIdSync {
+    pub persist_acp: bool,
+    pub persist_chat: bool,
+}
+
+/// For a native plugin both ids must end up equal to the established one:
+/// after a load fallback (or on a legacy record) leaving either behind makes
+/// every toggle round trip fork the conversation once more. Non-native plugins
+/// keep the old `should_persist_session_id` behaviour.
+pub(super) fn native_id_sync(
+    native: bool,
+    established: &str,
+    stored_acp: Option<&str>,
+    stored_chat: Option<&str>,
+) -> NativeIdSync {
+    if !native {
+        return NativeIdSync {
+            persist_acp: false,
+            persist_chat: false,
+        };
+    }
+    NativeIdSync {
+        persist_acp: stored_acp.filter(|id| !id.is_empty()) != Some(established),
+        persist_chat: stored_chat.filter(|id| !id.is_empty()) != Some(established),
+    }
+}
+
 /// Whether the session ended up on the model the plugin asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ModelState {
@@ -137,6 +210,9 @@ pub(super) type RetryNotifier<'a> = dyn Fn(&str, &str) + Send + Sync + 'a;
 pub(super) struct EstablishParams<'a> {
     pub cwd: &'a Path,
     pub prior_session_id: Option<&'a str>,
+    /// A second stored id to try ONCE if the primary `session/load` fails
+    /// (native plugins only; `None` for every other plugin).
+    pub alt_prior_session_id: Option<&'a str>,
     pub acp_meta: Option<serde_json::Value>,
     /// `(config_id, value)` from the plugin; `None` = plugin doesn't care.
     pub model_option: Option<(String, String)>,
@@ -179,7 +255,25 @@ async fn establish_once<T: AcpTransport>(
                 adapter_models = o.models;
                 session = Some((prior.to_string(), true));
             }
-            Err(AcpTransportError::SessionLoadFailed(_)) => load_fell_back = true,
+            Err(AcpTransportError::SessionLoadFailed(_)) => {
+                // A native plugin may have a second stored id: try it ONCE
+                // before forking. A successful alt load is still a resume, so
+                // `load_fell_back` stays false.
+                match p.alt_prior_session_id {
+                    Some(alt) if alt != prior => {
+                        match conn.load_session(p.cwd, alt, p.acp_meta.clone()).await {
+                            Ok(o) => {
+                                reported = o.current_model;
+                                adapter_models = o.models;
+                                session = Some((alt.to_string(), true));
+                            }
+                            Err(AcpTransportError::SessionLoadFailed(_)) => load_fell_back = true,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    _ => load_fell_back = true,
+                }
+            }
             Err(e) => return Err(e),
         }
     }
@@ -324,7 +418,9 @@ mod tests {
         set_ok: bool,
         reported: Arc<Mutex<Vec<Option<String>>>>,
         load_model: Option<String>,
-        load_ok: bool,
+        /// `None` = every id loads (the old `load_ok: true`);
+        /// `Some(set)` = only those ids load (old `false` = `Some(empty)`).
+        loadable: Option<std::collections::HashSet<String>>,
         spawn_no: usize,
         fail_new_on_spawn: Option<usize>,
         disposed: Arc<AtomicBool>,
@@ -361,11 +457,15 @@ mod tests {
         async fn load_session(
             &self,
             _: &Path,
-            _: &str,
+            id: &str,
             _: Option<serde_json::Value>,
         ) -> Result<LoadSessionOutcome, AcpTransportError> {
             self.log.lock().unwrap().push("load".into());
-            if !self.load_ok {
+            let loads = match &self.loadable {
+                None => true,
+                Some(set) => set.contains(id),
+            };
+            if !loads {
                 return Err(AcpTransportError::SessionLoadFailed("gone".into()));
             }
             Ok(LoadSessionOutcome {
@@ -416,8 +516,10 @@ mod tests {
         set_ok: bool,
         model: Option<&'static str>,
         prior: Option<&'static str>,
+        alt_prior: Option<&'static str>,
         load_model: Option<&'static str>,
-        load_ok: bool,
+        /// `None` = every id loads; `Some(list)` = only those ids load.
+        loadable: Option<Vec<&'static str>>,
         fail_new_on_spawn: Option<usize>,
         budget: RetryBudget,
         models: Vec<&'static str>,
@@ -436,8 +538,9 @@ mod tests {
                 set_ok,
                 model,
                 prior: None,
+                alt_prior: None,
                 load_model: None,
-                load_ok: true,
+                loadable: None,
                 fail_new_on_spawn: None,
                 budget: budget(5),
                 models: vec![],
@@ -463,12 +566,19 @@ mod tests {
         ));
         let spawns = Arc::new(Mutex::new(0usize));
         let (l, r, s) = (log.clone(), reported.clone(), spawns.clone());
-        let (set_ok, load_ok, fail) = (sc.set_ok, sc.load_ok, sc.fail_new_on_spawn);
+        let (set_ok, fail) = (sc.set_ok, sc.fail_new_on_spawn);
         let load_model = sc.load_model.map(String::from);
         let models: Vec<String> = sc.models.iter().map(|m| m.to_string()).collect();
+        let loadable = sc.loadable.as_ref().map(|ids| {
+            ids.iter()
+                .copied()
+                .map(str::to_string)
+                .collect::<std::collections::HashSet<String>>()
+        });
         let p = EstablishParams {
             cwd: Path::new("/tmp"),
             prior_session_id: sc.prior,
+            alt_prior_session_id: sc.alt_prior,
             acp_meta: None,
             model_option: sc.model.map(|m| ("model".to_string(), m.to_string())),
             extra_options: Vec::new(),
@@ -490,7 +600,7 @@ mod tests {
                     set_ok,
                     reported: r.clone(),
                     load_model: load_model.clone(),
-                    load_ok,
+                    loadable: loadable.clone(),
                     spawn_no,
                     fail_new_on_spawn: fail,
                     disposed: Arc::new(AtomicBool::new(false)),
@@ -680,7 +790,7 @@ mod tests {
     async fn failed_load_falls_back_to_a_fresh_session() {
         let mut sc = Script::new(vec![Some("good")], true, Some("good"));
         sc.prior = Some("acp-old");
-        sc.load_ok = false;
+        sc.loadable = Some(Vec::new());
         let (est, _, _) = run_script(sc).await;
         let est = est.unwrap();
         assert!(est.load_fell_back && !est.resumed);
@@ -789,5 +899,144 @@ mod tests {
         // A resumed session already has its id stored.
         assert!(!should_persist_session_id(true, &ModelState::Confirmed));
         assert!(!should_persist_session_id(true, &mismatch));
+    }
+
+    // --- native-id policy (identical strategy) -------------------------
+
+    #[test]
+    fn pick_prior_native_prefers_chat_over_acp() {
+        // Legacy shape: acpSessionId is an unrelated (old-adapter-era) id.
+        assert_eq!(
+            pick_prior_session_id(true, Some("X"), Some("A")).as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn pick_prior_native_falls_back_to_acp_when_chat_missing() {
+        assert_eq!(
+            pick_prior_session_id(true, Some("X"), None).as_deref(),
+            Some("X")
+        );
+        assert_eq!(
+            pick_prior_session_id(true, Some("X"), Some("")).as_deref(),
+            Some("X")
+        );
+    }
+
+    #[test]
+    fn pick_prior_non_native_keeps_acp_first() {
+        // claude/cursor/opencode behaviour must not change.
+        assert_eq!(
+            pick_prior_session_id(false, Some("X"), Some("A")).as_deref(),
+            Some("X")
+        );
+        assert_eq!(
+            pick_prior_session_id(false, None, Some("A")).as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn pick_prior_treats_empty_as_none() {
+        assert_eq!(
+            pick_prior_session_id(false, Some(""), Some("A")).as_deref(),
+            Some("A")
+        );
+        assert_eq!(pick_prior_session_id(true, Some(""), Some("")), None);
+        assert_eq!(pick_prior_session_id(false, None, None), None);
+    }
+
+    #[test]
+    fn native_sync_noop_when_ids_equal_omp_regression() {
+        let sync = native_id_sync(true, "id", Some("id"), Some("id"));
+        assert_eq!(
+            sync,
+            NativeIdSync {
+                persist_acp: false,
+                persist_chat: false
+            }
+        );
+    }
+
+    #[test]
+    fn native_sync_after_load_fallback_rewrites_both() {
+        let sync = native_id_sync(true, "B", Some("A"), Some("A"));
+        assert!(sync.persist_acp && sync.persist_chat);
+    }
+
+    #[test]
+    fn native_sync_legacy_record_rewrites_acp_only() {
+        let sync = native_id_sync(true, "A", Some("X"), Some("A"));
+        assert!(sync.persist_acp);
+        assert!(!sync.persist_chat);
+    }
+
+    #[test]
+    fn native_sync_new_session_sets_both() {
+        let sync = native_id_sync(true, "N", None, None);
+        assert!(sync.persist_acp && sync.persist_chat);
+    }
+
+    #[test]
+    fn native_sync_never_for_non_native() {
+        let sync = native_id_sync(false, "N", None, None);
+        assert!(!sync.persist_acp && !sync.persist_chat);
+        let sync = native_id_sync(false, "N", Some("other"), Some("other2"));
+        assert!(!sync.persist_acp && !sync.persist_chat);
+    }
+
+    #[test]
+    fn alt_prior_native_returns_the_other_id() {
+        assert_eq!(
+            alt_prior_session_id(true, Some("X"), Some("A")).as_deref(),
+            Some("X")
+        );
+        // chat is preferred, so the acp id is the fallback.
+        assert_eq!(
+            alt_prior_session_id(true, Some("A"), Some("X")).as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn alt_prior_none_for_non_native_or_equal_or_empty() {
+        assert_eq!(alt_prior_session_id(false, Some("X"), Some("A")), None);
+        assert_eq!(alt_prior_session_id(true, Some("A"), Some("A")), None);
+        assert_eq!(alt_prior_session_id(true, Some(""), Some("A")), None);
+        assert_eq!(alt_prior_session_id(true, None, None), None);
+    }
+
+    /// The alt id is tried ONCE before `session/new`, and a successful alt
+    /// load is still a resume (never `load_fell_back`).
+    #[tokio::test]
+    async fn alt_prior_loads_when_primary_fails() {
+        let mut sc = Script::new(vec![Some("good")], true, None);
+        sc.prior = Some("A");
+        sc.alt_prior = Some("B");
+        sc.loadable = Some(vec!["B"]);
+        let (est, log, _) = run_script(sc).await;
+        let est = est.unwrap();
+        assert_eq!(est.session_id, "B");
+        assert!(est.resumed);
+        assert!(!est.load_fell_back);
+        assert_eq!(*log, ["load", "load"], "two loads, no new_session");
+
+        // Neither id loads: fall through to a fresh session.
+        let mut sc = Script::new(vec![Some("good")], true, None);
+        sc.prior = Some("A");
+        sc.alt_prior = Some("B");
+        sc.loadable = Some(Vec::new());
+        let (est, log, _) = run_script(sc).await;
+        let est = est.unwrap();
+        assert!(est.load_fell_back);
+        assert!(!est.resumed);
+        assert_eq!(est.session_id, "acp-1");
+        assert!(log.contains(&"new".to_string()), "new_session was called");
+        assert_eq!(
+            log.iter().filter(|e| *e == "load").count(),
+            2,
+            "the alt id is tried exactly once"
+        );
     }
 }

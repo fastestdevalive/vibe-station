@@ -22,7 +22,7 @@
 # Gatekeeper checks. Download the .dmg from the Releases page and install it
 # the normal way instead.
 #
-# The CLI tarball also carries agy-acp, claude-acp and codex-acp (self-contained ACP adapters for
+# The CLI tarball also carries claude-acp and codex-acp (self-contained ACP adapters for
 # Rich Chat, no bun/node needed), installed beside vst. claude-acp and codex-acp are skipped on musl.
 #
 # Release assets consumed (GitHub Release of fastestdevalive/vibe-station):

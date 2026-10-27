@@ -1056,6 +1056,7 @@ impl AgentPlugin for SteerPlugin {
             initialize_timeout_ms: None,
             prompt_timeout_ms: None,
             reap_detached_descendants: false,
+            open_tool_idle_timeout_ms: None,
         };
         let params = vst_agents::acp_run_turn::RunTurnAcpParams {
             provider: vst_types::NormalizedEventProvider::Claude,

@@ -46,6 +46,7 @@ fn spec_for(mode: &str) -> AcpLaunchSpec {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     }
 }
 
@@ -406,6 +407,7 @@ async fn stuck_turn_watchdog_recovers_when_adapter_abandons_the_turn() {
         // is what recovers this turn.
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     };
     let (ctx, captured) = ctx_with_spec(spec.clone());
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -448,6 +450,71 @@ async fn stuck_turn_watchdog_recovers_when_adapter_abandons_the_turn() {
             .filter(|e| e.kind == NormalizedEventKind::Text)
             .count(),
         3
+    );
+}
+
+/// Run one turn against the fake agent in `mode` with the stuck-turn watchdog
+/// cranked down to `idle_ms` (grace 100 ms) and the given extra fake-agent env;
+/// returns the emitted events and the wall-clock duration.
+async fn run_watchdog_turn(
+    mode: &str,
+    idle_ms: u64,
+    extra_env: &[(&str, &str)],
+) -> (Vec<NormalizedEvent>, std::time::Duration) {
+    let mut spec = spec_for(mode);
+    // Fail fast (error event) instead of hanging ~60 min if the watchdog breaks.
+    spec.prompt_timeout_ms = Some(3000);
+    for (k, v) in extra_env {
+        spec.env.insert((*k).to_string(), (*v).to_string());
+    }
+    let (ctx, captured) = ctx_with_spec(spec.clone());
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut params = base_params(NormalizedEventProvider::Claude, mode);
+    params.build_spec = Box::new(move |_ctx| spec.clone());
+    params.stuck_turn_idle_ms = Some(idle_ms);
+    params.stuck_turn_cancel_grace_ms = Some(100);
+    let start = std::time::Instant::now();
+    run_turn_acp(
+        tx,
+        default_input(true),
+        ctx,
+        CancellationToken::new(),
+        params,
+    )
+    .await;
+    let elapsed = start.elapsed();
+    dispose_captured(&captured).await;
+    (collect(&mut rx), elapsed)
+}
+
+/// The watchdog must stay quiet while a tool call is open: the agent opens a
+/// tool, is silent for 700 ms (7x the 100 ms watchdog window), then completes.
+/// If the watchdog had fired it would have cancelled at ~100-200 ms.
+#[tokio::test]
+async fn stuck_turn_watchdog_stays_quiet_while_a_tool_is_open() {
+    let (events, elapsed) =
+        run_watchdog_turn("tool_open_then_silent", 100, &[("TOOL_SILENT_MS", "700")]).await;
+    assert!(
+        elapsed >= std::time::Duration::from_millis(600),
+        "turn ended after {elapsed:?}: the watchdog cancelled despite the open tool"
+    );
+    assert_eq!(
+        events.last().map(|e| e.kind),
+        Some(NormalizedEventKind::Result)
+    );
+}
+
+/// Converse: with no tool open, a silent turn IS cut short by the watchdog.
+#[tokio::test]
+async fn stuck_turn_watchdog_fires_for_a_silent_turn_with_no_tool() {
+    let (events, elapsed) = run_watchdog_turn("silent_no_tool", 100, &[]).await;
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "watchdog must fire, took {elapsed:?}"
+    );
+    assert_eq!(
+        events.last().map(|e| e.kind),
+        Some(NormalizedEventKind::Result)
     );
 }
 

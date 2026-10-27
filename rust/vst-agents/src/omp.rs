@@ -520,6 +520,7 @@ impl AgentPlugin for OmpPlugin {
                     initialize_timeout_ms: None,
                     prompt_timeout_ms: None,
                     reap_detached_descendants: false,
+                    open_tool_idle_timeout_ms: None,
                 }
             }),
             enrich: None,

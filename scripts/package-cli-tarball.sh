@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # package-cli-tarball.sh — assemble the standalone CLI release tarball.
 #
-#   scripts/package-cli-tarball.sh <vst-bin> <agy-acp-bin> <claude-acp-bin> <codex-acp-bin> <out.tar.gz>
+#   scripts/package-cli-tarball.sh <vst-bin> <claude-acp-bin> <codex-acp-bin> <out.tar.gz>
 #
 # Layout (flat; scripts/install.sh installs every executable beside `vst`):
 #   vst
-#   agy-acp      (found by vst_agy_acp::agy_acp_bin: beside current_exe)
 #   claude-acp   (found by vst_agents::claude::claude_acp_bin: beside current_exe)
 #   codex-acp    (found by vst_agents::codex::codex_acp_bin: beside current_exe)
 # claude-acp / codex-acp are the pinned ACP adapters compiled with the bun
@@ -13,10 +12,10 @@
 
 set -euo pipefail
 
-[[ $# -eq 5 ]] || { echo "usage: $0 <vst-bin> <agy-acp-bin> <claude-acp-bin> <codex-acp-bin> <out.tar.gz>" >&2; exit 1; }
-VST_BIN="$1"; AGY_BIN="$2"; CLAUDE_BIN="$3"; CODEX_BIN="$4"; OUT="$5"
+[[ $# -eq 4 ]] || { echo "usage: $0 <vst-bin> <claude-acp-bin> <codex-acp-bin> <out.tar.gz>" >&2; exit 1; }
+VST_BIN="$1"; CLAUDE_BIN="$2"; CODEX_BIN="$3"; OUT="$4"
 
-for f in "$VST_BIN" "$AGY_BIN" "$CLAUDE_BIN" "$CODEX_BIN"; do
+for f in "$VST_BIN" "$CLAUDE_BIN" "$CODEX_BIN"; do
   [[ -x "$f" ]] || { echo "error: not an executable file: $f" >&2; exit 1; }
 done
 
@@ -24,11 +23,10 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 cp "$VST_BIN" "$STAGE/vst"
-cp "$AGY_BIN" "$STAGE/agy-acp"
 cp "$CLAUDE_BIN" "$STAGE/claude-acp"
 cp "$CODEX_BIN" "$STAGE/codex-acp"
-chmod 755 "$STAGE"/vst "$STAGE"/agy-acp "$STAGE"/claude-acp "$STAGE"/codex-acp
+chmod 755 "$STAGE"/vst "$STAGE"/claude-acp "$STAGE"/codex-acp
 
 mkdir -p "$(dirname "$OUT")"
-COPYFILE_DISABLE=1 tar -czf "$OUT" -C "$STAGE" vst agy-acp claude-acp codex-acp
+COPYFILE_DISABLE=1 tar -czf "$OUT" -C "$STAGE" vst claude-acp codex-acp
 echo "wrote $OUT ($(du -h "$OUT" | cut -f1))" >&2

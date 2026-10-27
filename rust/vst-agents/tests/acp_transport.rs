@@ -43,6 +43,7 @@ fn make_connection(mode: &str) -> AcpConnection {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     })
 }
 
@@ -79,6 +80,7 @@ async fn initialize_times_out_with_initialize_failed_not_indefinitely() {
         initialize_timeout_ms: Some(300),
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     let start = std::time::Instant::now();
     let err = conn.initialize().await.expect_err("should time out");
@@ -277,6 +279,7 @@ async fn prompt_times_out_with_clear_error_instead_of_hanging() {
         initialize_timeout_ms: None,
         prompt_timeout_ms: Some(200),
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     conn.initialize().await.expect("initialize");
     let session_id = conn
@@ -326,6 +329,7 @@ async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent()
         // (non-idle) timeout would fire well before streaming finishes.
         prompt_timeout_ms: Some(100),
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     conn.initialize().await.expect("initialize");
     let session_id = conn
@@ -397,6 +401,7 @@ async fn initialize_sends_fs_and_terminal_client_capabilities_on_the_wire() {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     conn.initialize().await.expect("initialize");
     conn.dispose().await;
@@ -668,6 +673,7 @@ async fn dispose_spares_deliberately_detached_processes() {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     let pid = read_pid(&pid_file).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -703,6 +709,7 @@ async fn dispose_kills_descendants_that_escaped_the_process_group() {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: true,
+        open_tool_idle_timeout_ms: None,
     });
     let pid = loop {
         if let Some(p) = std::fs::read_to_string(&pid_file)
@@ -764,6 +771,7 @@ async fn dispose_spares_setsid_child_when_reaping_not_opted_in() {
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
         reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
     });
     let pid = read_pid(&pid_file).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -812,4 +820,121 @@ async fn unknown_session_update_variant_mid_turn_does_not_break_turn_or_connecti
         assert!(conn.is_alive(), "round {round}: connection survives");
     }
     conn.dispose().await;
+}
+
+// ---- open-tool idle timeout ------------------------------------------------
+
+/// Run one prompt against `mode`; returns the turn result and the number of
+/// `session/cancel` notifications the fake agent received.
+async fn run_open_tool_turn(
+    mode: &str,
+    prompt_timeout_ms: u64,
+    open_tool_idle_timeout_ms: Option<u64>,
+    extra_env: &[(&str, &str)],
+) -> (Result<(), AcpTransportError>, usize) {
+    static CANCEL_FILE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = CANCEL_FILE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let cancel_file = std::env::temp_dir().join(format!(
+        "vst-cancel-{}-{}-{}.log",
+        std::process::id(),
+        mode,
+        seq
+    ));
+    let _ = std::fs::remove_file(&cancel_file);
+    let mut env = HashMap::new();
+    env.insert("FAKE_ACP_MODE".to_string(), mode.to_string());
+    env.insert(
+        "CANCEL_OUT_FILE".to_string(),
+        cancel_file.to_string_lossy().into_owned(),
+    );
+    for (k, v) in extra_env {
+        env.insert((*k).to_string(), (*v).to_string());
+    }
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "node".to_string(),
+        args: vec![fake_agent()],
+        cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        env,
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: Some(prompt_timeout_ms),
+        reap_detached_descendants: false,
+        open_tool_idle_timeout_ms,
+    });
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+    let turn = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("hi"))],
+    );
+    let mut updates_rx = turn.updates;
+    let drain = tokio::spawn(async move { drain_updates(&mut updates_rx).await });
+    let result = turn.result.await.expect("result resolves");
+    let _ = drain.await;
+    assert!(
+        !conn.has_open_tools(),
+        "open set must be cleared after the turn"
+    );
+    // Give the fake agent a moment to flush the cancel line it received.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let cancels = std::fs::read_to_string(&cancel_file)
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+    let _ = std::fs::remove_file(&cancel_file);
+    conn.dispose().await;
+    (result.map(|_| ()), cancels)
+}
+
+#[tokio::test]
+async fn open_tool_silence_beyond_normal_limit_completes_when_opted_in() {
+    let (res, cancels) = run_open_tool_turn(
+        "tool_open_then_silent",
+        150,
+        Some(10_000),
+        &[("TOOL_SILENT_MS", "700")],
+    )
+    .await;
+    res.expect("turn must complete despite silence longer than the normal limit");
+    assert_eq!(cancels, 0);
+}
+
+#[tokio::test]
+async fn open_tool_forever_fails_at_open_tool_limit_and_cancels_agent() {
+    let (res, cancels) = run_open_tool_turn("tool_open_forever", 100, Some(400), &[]).await;
+    let err = res.expect_err("must time out at the open-tool limit");
+    assert!(
+        err.to_string().contains("idle-timed out after 400ms"),
+        "got: {err}"
+    );
+    assert!(cancels >= 1, "agent must have received session/cancel");
+}
+
+#[tokio::test]
+async fn silent_turn_without_open_tool_still_fails_at_normal_limit() {
+    let (res, cancels) = run_open_tool_turn("silent_no_tool", 150, Some(10_000), &[]).await;
+    let err = res.expect_err("no tool open: normal limit applies");
+    assert!(
+        err.to_string().contains("idle-timed out after 150ms"),
+        "got: {err}"
+    );
+    assert!(cancels >= 1);
+}
+
+#[tokio::test]
+async fn plain_plugin_with_open_tool_times_out_at_normal_limit() {
+    let (res, _) = run_open_tool_turn(
+        "tool_open_then_silent",
+        150,
+        None,
+        &[("TOOL_SILENT_MS", "5000")],
+    )
+    .await;
+    let err = res.expect_err("None => unchanged default");
+    assert!(
+        err.to_string().contains("idle-timed out after 150ms"),
+        "got: {err}"
+    );
 }

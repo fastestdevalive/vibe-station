@@ -37,16 +37,11 @@ if want rust; then
   grep -q "test result: ok. 1 passed" /tmp/no-auth-feature.txt \
     || { echo "feature-build variant did not run exactly once and pass" >&2; exit 1; }
 
-  step "agy-acp walled-garden gate"
-  AGY_ACP_SKIP_CONTRACT=1 rust/scripts/agy-acp-gate.sh
-
   if command -v cargo-deny >/dev/null 2>&1; then
     step "cargo deny (workspace)"
     cargo deny --manifest-path rust/Cargo.toml check
-    step "cargo deny licenses (agy-acp)"
-    cargo deny --manifest-path rust/vendor/openab/agy-acp/Cargo.toml check licenses
   else
-    echo "!! cargo-deny not installed — skipping the two deny checks (CI runs them)"
+    echo "!! cargo-deny not installed — skipping the deny check (CI runs it)"
   fi
 fi
 

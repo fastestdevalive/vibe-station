@@ -3,6 +3,9 @@
 # scripts/rs-loc-allowlist.txt. Allowlisted files may grow freely for now (the
 # recorded line count in the allowlist is informational, not enforced); an entry
 # whose file is back under MAX_LOC is flagged STALE so the list only shrinks.
+# Test files are exempt (anything under a `tests/` directory, `tests.rs`, and
+# `*_tests.rs`): the cap is about keeping production modules reviewable.
+# Inline `#[cfg(test)]` modules inside a production file still count.
 # Run by CI (rust-ci.yml) and scripts/ci-steps.sh.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
@@ -24,6 +27,6 @@ while read -r lines path; do
     echo "TOO LONG $path: $lines lines (limit $MAX_LOC) — split it" >&2
     fail=1
   fi
-done < <(git ls-files '*.rs' | grep -v '^rust/vendor/' | xargs wc -l | grep -v ' total$' | awk '{ print $1, $2 }')
+done < <(git ls-files '*.rs' | grep -v '^rust/vendor/' | grep -vE '(^|/)tests/|(^|/)tests\.rs$|_tests\.rs$' | xargs wc -l | grep -v ' total$' | awk '{ print $1, $2 }')
 
 exit "$fail"

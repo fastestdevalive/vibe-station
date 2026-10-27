@@ -1,7 +1,9 @@
 //! `JsonAgentSession` event-handling methods — handle_event,
 //! handle_out_of_band_event, new_event, emit_user_event, update_turn_state.
 //!
-//! **Invariant:** `agentChatId` capture happens on `session_init` only;
+//! **Invariant:** `agentChatId` capture happens on `session_init` only
+//! (write-once; native plugins are synced in `connection.rs` /
+//! `model_race.rs::native_id_sync`);
 //! a no-real-usage turn must not clobber `usage` — the `has_real_usage` gate
 //! is a load-bearing check (per the TS doc comment on that function).
 

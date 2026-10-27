@@ -12,7 +12,6 @@ members = [
     "vst-rpc",
     "vst-agents",
     "vst-agy-stream-acp",
-    "vst-agy-acp",
     "vst-lifecycle",
     "vst-harness-limits",
     "vst-ws",
@@ -21,11 +20,6 @@ members = [
     "vst-lsp",
     "vst-cli",
 ]
-# Vendor dir is a git submodule (openab/agy-acp) built in isolation as a
-# standalone binary — never a member of this workspace. Excluding it keeps
-# Cargo from ever discovering its crates (walled-garden: nothing else from
-# openab may be imported).
-exclude = ["vendor"]
 
 [workspace.package]
 version = "0.0.3-beta"
@@ -61,7 +55,6 @@ vst-git = { path = "vst-git" }
 vst-rpc = { path = "vst-rpc" }
 vst-agents = { path = "vst-agents" }
 vst-agy-stream-acp = { path = "vst-agy-stream-acp" }
-vst-agy-acp = { path = "vst-agy-acp" }
 vst-lifecycle = { path = "vst-lifecycle" }
 vst-harness-limits = { path = "vst-harness-limits" }
 vst-ws = { path = "vst-ws" }

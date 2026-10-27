@@ -51,7 +51,7 @@ use agent_client_protocol::schema::v1::{
     SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
     TerminalExitStatus as AcpTerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse,
-    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    ToolCallStatus, WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
     WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
@@ -90,6 +90,60 @@ pub struct AcpLaunchSpec {
     /// `AgentPlugin::reap_detached_descendants`; off, agent-detached
     /// processes survive dispose.
     pub reap_detached_descendants: bool,
+    /// ms of silence tolerated while at least one tool call is OPEN (started
+    /// and not yet completed/failed) on the in-flight turn. `None` = unchanged:
+    /// the normal `prompt_timeout_ms` idle window applies even with a tool
+    /// open. Only agy opts in (its `schedule` tool can legitimately stay open
+    /// for hours with no output). Do NOT enable it for claude "for parity":
+    /// Claude's adapter has known never-completing / stale `tool_use` calls,
+    /// and a larger window would turn those into hour-long hangs. Clamped to
+    /// 7 days at use. Measured with `Instant` (monotonic): it pauses across
+    /// system sleep, so a sleeping laptop does not burn the budget.
+    pub open_tool_idle_timeout_ms: Option<u64>,
+}
+
+/// Upper bound for `open_tool_idle_timeout_ms` (avoids `Instant` overflow).
+const MAX_OPEN_TOOL_IDLE_TIMEOUT_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// After the idle limit expires we send `session/cancel` and wait up to this
+/// long (never longer than the limit itself, so sub-second test limits stay
+/// fast) for the prompt response before returning the timeout error. Same
+/// value as `acp_run_turn::DEFAULT_STUCK_TURN_CANCEL_GRACE_MS` (45 s): Claude's
+/// adapter can take up to 30 s to force a cancel, and the next prompt must not
+/// overlap a cancel still in progress.
+const IDLE_TIMEOUT_CANCEL_GRACE: Duration =
+    Duration::from_millis(crate::acp_run_turn::DEFAULT_STUCK_TURN_CANCEL_GRACE_MS);
+
+/// Track which tool calls are open from a stream of `session/update`s.
+/// `ToolCall` opens its id unless it is already Completed/Failed;
+/// `ToolCallUpdate` closes on Completed/Failed, (re)opens on
+/// Pending/InProgress, and is a no-op when the status is absent or unknown
+/// (a content-only update after completion must not re-open the tool).
+fn apply_tool_update(set: &mut std::collections::HashSet<String>, update: &SessionUpdate) {
+    match update {
+        SessionUpdate::ToolCall(tc) => {
+            if matches!(
+                tc.status,
+                ToolCallStatus::Completed | ToolCallStatus::Failed
+            ) {
+                set.remove(tc.tool_call_id.to_string().as_str());
+                return;
+            }
+            set.insert(tc.tool_call_id.to_string());
+        }
+        SessionUpdate::ToolCallUpdate(u) => {
+            let id = u.tool_call_id.to_string();
+            match u.fields.status {
+                Some(ToolCallStatus::Completed | ToolCallStatus::Failed) => {
+                    set.remove(&id);
+                }
+                Some(ToolCallStatus::Pending | ToolCallStatus::InProgress) => {
+                    set.insert(id);
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
 }
 
 const DEFAULT_INITIALIZE_TIMEOUT_MS: u64 = 30_000;
@@ -148,6 +202,11 @@ struct Shared {
     /// than a flat cap on total turn duration. Reset whenever a notification
     /// arrives, regardless of whether a sink is currently attached.
     last_activity: Mutex<Instant>,
+    /// Ids of tool calls currently open on the in-flight turn — single source
+    /// of truth for both the open-tool idle limit and `run_turn_acp`'s
+    /// watchdog. Own mutex, never held across an await; lock order: take it
+    /// AFTER `active_update`.
+    open_tools: Mutex<std::collections::HashSet<String>>,
     /// Stamped into the agent's environment purely so its root pid can be
     /// located among the daemon's children (see `snapshot_descendants`);
     /// nothing is ever killed by matching it.
@@ -176,6 +235,7 @@ impl Shared {
             steering_supported: AtomicBool::new(false),
             disposed: AtomicBool::new(false),
             last_activity: Mutex::new(Instant::now()),
+            open_tools: Mutex::new(std::collections::HashSet::new()),
             root_tag: uuid::Uuid::new_v4().to_string(),
             descendants: Mutex::new(Vec::new()),
             prompt_gate: tokio::sync::Mutex::new(()),
@@ -443,12 +503,17 @@ impl AcpTransport for AcpConnection {
         !self.0.shared.disposed.load(Ordering::Relaxed)
     }
 
+    fn has_open_tools(&self) -> bool {
+        !self.0.shared.open_tools.lock().unwrap().is_empty()
+    }
+
     async fn dispose(&self) {
         if self.0.shared.disposed.swap(true, Ordering::SeqCst) {
             return; // idempotent
         }
         // Clear any active sink so late notifications are dropped.
         self.0.shared.active_update.lock().unwrap().take();
+        self.0.shared.open_tools.lock().unwrap().clear();
         self.0.shared.out_of_band.lock().unwrap().take();
         // Ask the actor to stop its loop, which lets the `connect_with` closure
         // return, closing the connection and terminating the child process.
@@ -465,7 +530,7 @@ fn spawn_actor(
 ) {
     tokio::spawn(async move {
         // Surface the child's stderr to the daemon's own logs. Without this,
-        // a failure the adapter only reports on stderr (e.g. openab agy-acp's
+        // a failure the adapter only reports on stderr (e.g. agy's
         // "jetski: no output produced — a tool required the ... permission
         // that headless mode cannot prompt for, so it was auto-denied")
         // vanishes entirely — nothing in `docker logs`/journal ever mentions
@@ -504,6 +569,18 @@ fn spawn_actor(
             let guard = notif_shared.active_update.lock().unwrap();
             if let Some(tx) = guard.as_ref() {
                 *notif_shared.last_activity.lock().unwrap() = Instant::now();
+                // Track open tool calls for this turn's session (lock order:
+                // `open_tools` after `active_update`; `session_id` is a leaf).
+                let current = notif_shared.session_id.lock().unwrap().clone();
+                if current
+                    .as_deref()
+                    .map_or(true, |c| c == notification.session_id.to_string())
+                {
+                    apply_tool_update(
+                        &mut notif_shared.open_tools.lock().unwrap(),
+                        &notification.update,
+                    );
+                }
                 let _ = tx.send(notification.update);
                 return Ok(());
             }
@@ -699,6 +776,7 @@ fn spawn_actor(
         // any late commands fail fast.
         shared_after.disposed.store(true, Ordering::SeqCst);
         shared_after.active_update.lock().unwrap().take();
+        shared_after.open_tools.lock().unwrap().clear();
         shared_after.out_of_band.lock().unwrap().take();
 
         // `AcpAgent` has already SIGKILLed the child's process group. Finish
@@ -859,6 +937,7 @@ async fn command_loop(
                 // (the single loop must not block on `block_task` or it can
                 // never answer the Cancel command, deadlocking the turn).
                 let timeout_ms = spec.prompt_timeout_ms;
+                let open_tool_timeout_ms = spec.open_tool_idle_timeout_ms;
                 let cx2 = cx.clone();
                 let shared2 = Arc::clone(&shared);
                 let updates_tx2 = updates_tx.clone();
@@ -868,8 +947,15 @@ async fn command_loop(
                     let _gate = tokio::time::timeout(PROMPT_GATE_WAIT, shared2.prompt_gate.lock())
                         .await
                         .ok();
-                    let result =
-                        do_send_prompt(&cx2, &shared2, &session_id, prompt, timeout_ms).await;
+                    let result = do_send_prompt(
+                        &cx2,
+                        &shared2,
+                        &session_id,
+                        prompt,
+                        timeout_ms,
+                        open_tool_timeout_ms,
+                    )
+                    .await;
                     // The turn is over — stop routing notifications to its
                     // sink, but ONLY if `active_update` still points at THIS
                     // turn's sink. A caller (e.g. `run_turn_acp`'s stuck-turn
@@ -879,27 +965,14 @@ async fn command_loop(
                     // already installed its own sink, clearing here would
                     // wipe it out from under the new turn and silently drop
                     // its streamed updates.
-                    let mut guard = shared2.active_update.lock().unwrap();
-                    if guard
-                        .as_ref()
-                        .is_some_and(|cur| cur.same_channel(&updates_tx2))
-                    {
-                        guard.take();
-                    }
-                    drop(guard);
+                    release_turn_sink(&shared2, &updates_tx2);
                     let _ = result_tx.send(result);
                     Ok(())
                 });
                 if spawned.is_err() {
                     // Connection is dead; clear the sink (the result channel is
                     // dropped, surfacing as a closed-receiver error to the caller).
-                    let mut guard = shared.active_update.lock().unwrap();
-                    if guard
-                        .as_ref()
-                        .is_some_and(|cur| cur.same_channel(&updates_tx))
-                    {
-                        guard.take();
-                    }
+                    release_turn_sink(&shared, &updates_tx);
                 }
             }
             Command::Cancel => {
@@ -920,6 +993,7 @@ async fn command_loop(
             Command::Dispose { reply } => {
                 shared.disposed.store(true, Ordering::SeqCst);
                 shared.active_update.lock().unwrap().take();
+                shared.open_tools.lock().unwrap().clear();
                 let _ = reply.send(());
                 break;
             }
@@ -1023,6 +1097,7 @@ async fn do_new_session(
         .map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
     let session_id = response.session_id.to_string();
     *shared.session_id.lock().unwrap() = Some(session_id.clone());
+    shared.open_tools.lock().unwrap().clear();
     let (models, current_model) = response
         .config_options
         .as_deref()
@@ -1079,6 +1154,7 @@ async fn do_load_session(
         .await
         .map_err(|e| AcpTransportError::SessionLoadFailed(e.to_string()))?;
     *shared.session_id.lock().unwrap() = Some(prior_session_id.to_string());
+    shared.open_tools.lock().unwrap().clear();
     let (models, current_model) = response
         .config_options
         .as_deref()
@@ -1102,8 +1178,47 @@ async fn do_send_prompt(
     session_id: &str,
     prompt: Vec<ContentBlock>,
     timeout_ms: Option<u64>,
+    open_tool_timeout_ms: Option<u64>,
 ) -> Result<PromptTurnOutcome, AcpTransportError> {
     let idle_timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS));
+    let open_tool_timeout =
+        open_tool_timeout_ms.map(|ms| Duration::from_millis(ms.min(MAX_OPEN_TOOL_IDLE_TIMEOUT_MS)));
+    shared.open_tools.lock().unwrap().clear();
+    let result = send_prompt_inner(
+        cx,
+        shared,
+        session_id,
+        prompt,
+        idle_timeout,
+        open_tool_timeout,
+    )
+    .await;
+    // The end-of-turn clear of `open_tools` lives in `release_turn_sink`
+    // (guarded by sink ownership): a slow-unwinding predecessor must not
+    // erase the next turn's open tools.
+    result
+}
+
+/// End-of-turn cleanup for the turn that installed `tx`: stop routing
+/// notifications to it and clear the open-tool set, but ONLY while
+/// `active_update` still points at THIS turn's sink. A newer turn that has
+/// already installed its own sink owns both.
+fn release_turn_sink(shared: &Shared, tx: &mpsc::UnboundedSender<SessionUpdate>) {
+    let mut guard = shared.active_update.lock().unwrap();
+    if guard.as_ref().is_some_and(|cur| cur.same_channel(tx)) {
+        guard.take();
+        shared.open_tools.lock().unwrap().clear();
+    }
+}
+
+async fn send_prompt_inner(
+    cx: &ConnectionTo<Agent>,
+    shared: &Arc<Shared>,
+    session_id: &str,
+    prompt: Vec<ContentBlock>,
+    idle_timeout: Duration,
+    open_tool_timeout: Option<Duration>,
+) -> Result<PromptTurnOutcome, AcpTransportError> {
     // Reset the clock right before issuing the request so a notification left
     // over from a previous turn (or from `initialize`/`new_session`) can't
     // pre-arm — or falsely extend — this turn's idle window.
@@ -1114,7 +1229,12 @@ async fn do_send_prompt(
         .block_task();
     tokio::pin!(future);
 
-    let poll_interval = Duration::from_millis(IDLE_POLL_INTERVAL_MS).min(idle_timeout);
+    // Clamp to >= 1 ms so a zero limit cannot make the poll loop spin.
+    let open_tool_timeout = open_tool_timeout.map(|t| t.max(Duration::from_millis(1)));
+    let mut poll_interval = Duration::from_millis(IDLE_POLL_INTERVAL_MS).min(idle_timeout);
+    if let Some(t) = open_tool_timeout {
+        poll_interval = poll_interval.min(t);
+    }
     loop {
         match tokio::time::timeout(poll_interval, &mut future).await {
             Ok(response) => {
@@ -1126,10 +1246,21 @@ async fn do_send_prompt(
             }
             Err(_) => {
                 let idle_for = shared.last_activity.lock().unwrap().elapsed();
-                if idle_for >= idle_timeout {
+                let has_open = !shared.open_tools.lock().unwrap().is_empty();
+                let limit = match (has_open, open_tool_timeout) {
+                    (true, Some(t)) => t,
+                    _ => idle_timeout,
+                };
+                if idle_for >= limit {
+                    // Don't leave the agent running an abandoned turn (its
+                    // later updates would surface as out-of-band work): ask it
+                    // to cancel and give it a short grace to answer.
+                    do_cancel(cx, shared);
+                    let _ = tokio::time::timeout(IDLE_TIMEOUT_CANCEL_GRACE.min(limit), &mut future)
+                        .await;
                     return Err(AcpTransportError::RequestFailed(format!(
                         "session/prompt idle-timed out after {}ms with no session/update activity",
-                        idle_timeout.as_millis()
+                        limit.as_millis()
                     )));
                 }
                 // Still receiving activity within the window — keep waiting.
@@ -1422,5 +1553,97 @@ mod wire_tests {
     fn extract_usage_none_when_neither_path_present() {
         let resp = PromptResponse::new(agent_client_protocol::schema::v1::StopReason::EndTurn);
         assert!(extract_usage(&resp).is_none());
+    }
+}
+
+#[cfg(test)]
+mod tool_tracking_tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{
+        ToolCall, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
+    };
+    use std::collections::HashSet;
+
+    fn call(id: &str, status: ToolCallStatus) -> SessionUpdate {
+        SessionUpdate::ToolCall(ToolCall::new(ToolCallId::new(id), "t").status(status))
+    }
+    fn upd(id: &str, status: Option<ToolCallStatus>) -> SessionUpdate {
+        let mut f = ToolCallUpdateFields::new();
+        f.status = status;
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(ToolCallId::new(id), f))
+    }
+
+    #[test]
+    fn insert_then_complete_removes() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::InProgress));
+        assert!(s.contains("a"));
+        apply_tool_update(&mut s, &upd("a", Some(ToolCallStatus::Completed)));
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn completed_at_birth_not_inserted() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::Completed));
+        apply_tool_update(&mut s, &call("b", ToolCallStatus::Failed));
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn content_only_update_does_not_reopen() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::Pending));
+        apply_tool_update(&mut s, &upd("a", Some(ToolCallStatus::Completed)));
+        apply_tool_update(&mut s, &upd("a", None));
+        assert!(s.is_empty());
+        // ...and a status-less update never opens an unknown tool either.
+        apply_tool_update(&mut s, &upd("z", None));
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn duplicate_call_is_idempotent_and_unknown_removal_harmless() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::Pending));
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::Pending));
+        assert_eq!(s.len(), 1);
+        apply_tool_update(&mut s, &upd("nope", Some(ToolCallStatus::Completed)));
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn failed_removes_and_progress_reopens() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &upd("a", Some(ToolCallStatus::InProgress)));
+        assert!(s.contains("a"));
+        apply_tool_update(&mut s, &upd("a", Some(ToolCallStatus::Failed)));
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn completed_call_for_open_id_removes_it() {
+        let mut s = HashSet::new();
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::InProgress));
+        apply_tool_update(&mut s, &call("a", ToolCallStatus::Completed));
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn stale_turn_release_keeps_newer_turns_open_tools() {
+        let shared = Shared::new();
+        let (old_tx, _old_rx) = mpsc::unbounded_channel::<SessionUpdate>();
+        let (new_tx, _new_rx) = mpsc::unbounded_channel::<SessionUpdate>();
+        // Newer turn owns the sink and has a tool open.
+        *shared.active_update.lock().unwrap() = Some(new_tx.clone());
+        shared.open_tools.lock().unwrap().insert("t".to_string());
+        // The stale predecessor finishes late: must not touch either.
+        release_turn_sink(&shared, &old_tx);
+        assert!(shared.active_update.lock().unwrap().is_some());
+        assert!(shared.open_tools.lock().unwrap().contains("t"));
+        // The owner's own release clears both.
+        release_turn_sink(&shared, &new_tx);
+        assert!(shared.active_update.lock().unwrap().is_none());
+        assert!(shared.open_tools.lock().unwrap().is_empty());
     }
 }

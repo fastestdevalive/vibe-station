@@ -18,9 +18,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # The agy-acp adapter lives in a git submodule (rust/vendor/openab).
-          submodules: true
 
       - name: Check version files are in sync
         run: bash scripts/check-version-sync.sh
@@ -48,12 +45,12 @@ jobs:
 
       # EmbarkStudios/cargo-deny-action runs its OWN check internally (against
       # whatever manifest-path/arguments it's given) but doesn't leave the
-      # `cargo-deny` binary on PATH for later steps -- the two manual
-      # `cargo deny check` steps below (workspace, then agy-acp licenses)
-      # failed with "no such command: deny" because of that. Install the
-      # actual binary instead so both manual invocations can find it; this
-      # also avoids double-checking rust/Cargo.toml (once via the action's
-      # own run, once via the "cargo deny check (workspace)" step below).
+      # `cargo-deny` binary on PATH for later steps -- the manual
+      # `cargo deny check` step below failed with "no such command: deny"
+      # because of that. Install the actual binary instead so the manual
+      # invocation can find it; this also avoids double-checking
+      # rust/Cargo.toml (once via the action's own run, once via the
+      # "cargo deny check (workspace)" step below).
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
@@ -94,14 +91,6 @@ jobs:
           grep -q "test result: ok. 1 passed" /tmp/no-auth-feature.txt \
             || { echo "feature-build variant did not run exactly once and pass" >&2; exit 1; }
 
-      # agy / agy-acp Rich Chat is temporarily off (terminal-only): keep the
-      # walled-garden checks + isolated build, skip only the live ACP
-      # `initialize` contract test (needs a working agy runtime).
-      - name: Build + gate agy-acp (walled-garden)
-        env:
-          AGY_ACP_SKIP_CONTRACT: "1"
-        run: rust/scripts/agy-acp-gate.sh
-
       # `--manifest-path` is a cargo-deny GLOBAL flag (before the `check`
       # subcommand), not a `check` flag -- `cargo deny check --manifest-path
       # ...` is invalid syntax on this cargo-deny version ("unexpected
@@ -109,6 +98,3 @@ jobs:
       # actually passes locally against both manifests before fixing here.
       - name: cargo deny check (workspace)
         run: cargo deny --manifest-path rust/Cargo.toml check
-
-      - name: cargo deny check licenses (agy-acp)
-        run: cargo deny --manifest-path rust/vendor/openab/agy-acp/Cargo.toml check licenses

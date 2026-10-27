@@ -50,9 +50,6 @@ trap cleanup EXIT INT TERM
 if [ -n "$REV" ]; then
   TMP_WT="$(mktemp -d "${TMPDIR:-/tmp}/vst-ci-src.XXXXXX")"
   git worktree add --detach "$TMP_WT" "$REV" >/dev/null
-  REF=(); [ -d "$TOP/rust/vendor/openab/.git" ] || [ -f "$TOP/rust/vendor/openab/.git" ] && REF=(--reference "$TOP/rust/vendor/openab")
-  git -C "$TMP_WT" submodule update --init --recursive ${REF[@]+"${REF[@]}"} >/dev/null 2>&1 || \
-    git -C "$TMP_WT" submodule update --init --recursive
   SRC="$TMP_WT"
 elif ! git diff --quiet HEAD 2>/dev/null; then
   echo "note: working tree has uncommitted changes — testing them as-is" >&2

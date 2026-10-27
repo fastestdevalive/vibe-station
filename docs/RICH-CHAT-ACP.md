@@ -10,16 +10,6 @@ lives in `rust/vst-agents` (plugins, `acp_connection.rs`, `json_agent_session/`)
 > launch argv/env, an `enrich()` event hook, and chat-id handling. Nothing in
 > shared code branches on which CLI is running (see `AGENTS.md` → Agent plugin).
 
-> **TEMPORARY — agy is terminal-only.** `agy` currently has `supports_json() ==
-> false`, so it cannot be created as, or toggled to, Rich Chat. Reason: the
-> daemon passes agy's NATIVE conversation id to `agy-acp`'s `session/load`,
-> which only knows ACP ids from its own store, so it fails with `unknown
-> sessionId` and the daemon silently falls back to a fresh session (and Rich
-> Chat → terminal also forks). A proper bridge (map native↔ACP ids in the
-> adapter) is deferred; until it lands, agy must not offer Rich Chat. Revert
-> `agy::supports_json` (and the web-ui `supportsJson: false` for agy in
-> `web-ui/src/api/mock.ts`) once bridged. See § Two session identities below.
-
 ## 1. Architecture
 
 ```mermaid
@@ -251,7 +241,7 @@ each plugin declares it only by which optional methods it implements:
 |---|---|---|---|---|---|
 | claude | `identical` | Yes | not implemented | `true` (default) | Resumes correctly |
 | opencode | `identical` | Yes | not implemented | `true` (default) | Resumes correctly |
-| agy | `bridged` | No — but the `agy-acp` adapter persists an ACP-id-keyed mapping in `~/.vibe-station/agy-acp/sessions.json` | reads that file | `true` (default) | Resumes correctly; falls back to a cwd-keyed best effort only for sessions predating the store |
+| agy | `identical` | Yes — the ACP `sessionId` is agy's `init.conversation_id` (the `vst agy-stream-acp` agent reports it verbatim; `session/load` of an id agy does not own fails instead of forking) | not implemented | `true` (default) | Resumes correctly (`agy --conversation <id> --log-file <p>`) |
 | cursor | `unavailable` | No, and no bridge exists (`cursor-agent acp` stores sessions in `~/.cursor/acp-sessions/<id>/store.db`, separate from what `--resume` reads) | best-effort cwd-keyed guess | **`false`** (`cursor.rs`) | Starts a **fresh** terminal conversation (no crash, no bogus `--resume`); UI warns beforehand via `GET /supported-clis`. Rich Chat transcript is unaffected (lives in SQLite) |
 | codex | `bridged` | No — but `codex-acp`'s `session/new` sets `sessionId` directly to codex's native `thread_id`, so the native id is trivially recoverable with no separate lookup | `capture_native_chat_id` (trivial: adopts ACP session id verbatim) | `true` (default) | Resumes correctly via `codex resume <id>` |
 | pi | no ACP / no json channel | N/A — no ACP layer exists for pi | not implemented | `true` (default, but meaningless — json channel is never offered for pi) | N/A — terminal only |
@@ -320,7 +310,7 @@ extension); otherwise the message is queued (cancel-and-resend is the ceiling).
 |---|---|---|
 | claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0; reports `_meta.steering.supported: true` in `initialize`. One of two plugins implementing `supports_mid_turn_steering()` |
 | opencode | **Disabled deliberately** | Advertises steering and replies `injected`, but the text never reaches the model (silently swallowed). Re-enable only after a fixed version is verified |
-| agy | Not supported | `agy-acp` has no `_session/steering`; handshake reports `false` |
+| agy | Not supported | `agy` stream-json stdin accepts only `user` events (anything else is ignored) and `initialize` does not advertise steering; the daemon queues. No competitor steers agy mid-turn |
 | cursor | Not supported | Closed binary, no steering surface; cancelling starts a fresh conversation |
 | codex | Not supported | `codex-acp` has no `_session/steering` extension |
 | omp | **Supported, verified omp 18.12.6 (injected + promptRequired)** | Model re-streams the answer so text can appear duplicated |
@@ -342,6 +332,62 @@ flowchart TD
 `delivery` is returned in the `POST /sessions/:id/chat` 202 body; the Composer
 send button's `aria-label` reads "Interrupts and steers the running turn" when
 `meta.canSteer` is true.
+
+## 7b. agy stream-json agent
+
+agy Rich Chat is the `vst-agy-stream-acp` crate, run as the hidden subcommand
+`<current_exe> agy-stream-acp [--model <m>]` of `vst` / `vst-daemon`.
+
+- Invocation: one long-lived `agy --input-format stream-json --output-format
+  stream-json --print= --dangerously-skip-permissions [--conversation <id>]
+  [--model <m>]` per ACP session, run in the cwd of `session/new|load`.
+- Id rule: ACP `sessionId` == `init.conversation_id` == `agentChatId` == stored
+  `acpSessionId`. Reconnect prefers `agentChatId`; both ids are rewritten after
+  any load fallback.
+- Usage is the sum of per-step `agent_response` usage (`result.usage` is
+  conversation-cumulative and is not used).
+- Cancel = SIGINT -> `result{ERROR,"interrupted"}` -> `stopReason cancelled`;
+  the next prompt lazily respawns `--conversation <id>`.
+- Silence of up to ~10 s before the first delta is normal.
+- Tools are auto-approved (same as the terminal launch) and `ask_question` is
+  unsupported; `denied_actions` are surfaced as a trailing note.
+- File-edit diffs: agy's stream events for `write_file`/`edit_file` carry only
+  `Path`, so the agent reads the arguments from agy's own
+  `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/logs/transcript_full.jsonl`
+  (read-only, `src/transcript.rs`). A `write_file` that overwrites an existing
+  file shows as all additions because the stream gives no pre-image; any lookup
+  miss just shows the tool without a diff.
+  An `edit_file` diff covers only the replaced snippet (Target to Replacement) but is numbered with the real file lines: agy's transcript result row (`Made N replacement(s) in <path> starting at line L`) gives the first replacement's line, and since agy replaces ALL occurrences of Target, N>1 yields one diff per located occurrence (only the first when they cannot be located exactly). Without a result row a line is used only when Replacement occurs exactly once in the file, otherwise the card carries no diff. Later-call guard: the file is read only when no other non-read tool call follows that edit in the transcript (and the transcript did not grow during the read); with parallel or later tool calls the file may already hold their changes, so the card shows the first replacement only (its reported line is exact) or, with no result row, no diff. Numbers are therefore never guessed. A `_meta` is honoured only when BOTH `oldStart` and `newStart` are valid. Generic convention for any ACP agent: set `_meta: {"oldStart": n, "newStart": n}` (1-based, both required) on a `Diff`; the daemon (`normalize.rs`) maps it to `ToolDiff.oldStart/newStart` and passes the diff through untrimmed. Agents that send no `_meta` are unaffected.
+- Whether `--model` changes the model in stream-json mode is unverified.
+
+### Turn timeouts
+
+Two timers guard a Rich Chat turn, both idle (silence) based and both reset by
+any `session/update`:
+
+- **Connection idle limit** (`acp_connection.rs::do_send_prompt`,
+  `AcpLaunchSpec::prompt_timeout_ms`, default 60 min): rejects the
+  `session/prompt` after that long with no update. On expiry the daemon now
+  sends `session/cancel` and waits up to ~45 s (never longer than the limit) for the agent to answer
+  before returning the (unchanged) idle-timeout error, so the agent is not left running
+  an abandoned turn whose later updates would surface as out-of-band work.
+  The idle-timeout `session/cancel` is now sent for every plugin; for cursor a
+  cancel starts a fresh conversation, so a turn silent for the full idle window
+  loses its context (previously the abandoned turn kept running out-of-band) —
+  an accepted trade-off. Claude's adapter may also stop background subagents it
+  was waiting on at that point.
+- **Stuck-turn watchdog** (`acp_run_turn.rs`, 10 min): fires only while NO tool
+  call is open; it reads the connection's open-tool set (`has_open_tools()`).
+- **Open-tool cap** (`AcpLaunchSpec::open_tool_idle_timeout_ms`, default `None`):
+  while at least one tool call is open, the connection idle limit is this value
+  instead. Only agy opts in (12 h; its `schedule` tool can stay open for hours).
+  Claude is deliberately unchanged: its adapter has known never-completing tool
+  calls, so a long cap would turn them into hour-long hangs. Clamped to 7 days;
+  measured on a monotonic clock, which pauses across system sleep.
+
+The open set lives in the connection (`Shared::open_tools`), maintained by
+`apply_tool_update` and cleared at turn start/end, on dispose and on
+new/load session.
 
 ## 8. Context window
 

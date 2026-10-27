@@ -1003,11 +1003,10 @@ impl SessionRoutes {
                             let child_cli =
                                 mode_id.as_deref().and_then(resolve_mode).map(|m| m.cli);
                             if child_cli.is_some() && child_cli == parent_cli {
-                                // Generic capability check (survives the agy
-                                // revert): don't inherit a JSON channel when
-                                // the child's CLI can no longer run Rich Chat
-                                // (e.g. an agy parent created before agy went
-                                // terminal-only) — fall through to the child
+                                // Generic capability check: don't inherit a
+                                // JSON channel when the child's CLI can't run
+                                // Rich Chat (e.g. a pi child of a claude
+                                // parent) — fall through to the child
                                 // CLI's own default instead of 400ing the
                                 // create.
                                 let child_supports_json = child_cli
@@ -2212,11 +2211,9 @@ impl SessionRoutes {
             StartError::Validation("draftConfig.modeId is required to start a session".to_string())
         })?;
 
-        // TEMPORARY-related generic capability gate: a draft explicitly carrying
-        // channel "json" for a CLI that can't run Rich Chat (agy currently trips
-        // it — terminal-only, see agy.rs `supports_json`) must be rejected on
-        // start rather than silently promoted to a forking Rich Chat session.
-        // This check is generic and must survive the agy revert.
+        // Generic capability gate: a draft explicitly carrying channel "json"
+        // for a CLI that can't run Rich Chat (e.g. pi — `supports_json()` is
+        // false) must be rejected on start rather than silently promoted.
         if draft_config.channel == Some(Channel::Json) {
             // Canonicalize (mode id OR name) so `json_unsupported_cli`'s id
             // lookup resolves, matching the create path.
@@ -5215,9 +5212,8 @@ impl SessionRoutes {
                 .map_or(true, |old| old.cli != mode.cli);
 
         // Generic capability gate: a CLI whose plugin doesn't `supports_json()`
-        // cannot be toggled to Rich Chat. agy currently trips it (temporary —
-        // terminal-only, see agy.rs `supports_json`), but this check is generic
-        // and must SURVIVE the agy revert — don't delete it when re-enabling agy.
+        // cannot be toggled to Rich Chat (e.g. pi). The check is generic —
+        // never branch on the CLI name here.
         if to_json && !plugin.supports_json() {
             return Err(ChannelError::JsonUnsupported(format!(
                 "Rich Chat (json) is not supported for CLI '{}'",

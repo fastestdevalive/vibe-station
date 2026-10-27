@@ -105,7 +105,7 @@ The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re
 
 The `vst` binary contains the daemon and web UI; the desktop bundle adds `cloudflared` as a sidecar — you install neither Node.js nor pnpm.
 
-The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Claude and Codex adapters compiled with the bun runtime, so no bun or Node is needed) and `agy-acp` (shipped ready for agy Rich Chat, which is off while agy is terminal-only). They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `claude-acp` and `codex-acp` are glibc builds and are skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
+The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Claude and Codex adapters compiled with the bun runtime, so no bun or Node is needed). (agy Rich Chat needs no adapter binary: it runs as the hidden `vst agy-stream-acp` subcommand of `vst` itself.) They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `claude-acp` and `codex-acp` are glibc builds and are skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
 
 **You still need** `tmux`, `git`, and at least one agent CLI on your `PATH`: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy. Run `vst doctor` to check.
 
@@ -126,7 +126,6 @@ vst --version
 vst doctor
 ```
 
-Rich Chat on agy additionally needs the `agy-acp` adapter (built from the vendored `rust/vendor/openab` submodule; see `scripts/build-agy-acp.sh`).
 
 ---
 
@@ -354,7 +353,7 @@ Rust tests and lints: `cargo test` / `cargo clippy` from `rust/` (CI runs `rust/
 | `rust/vst-daemon`, `vst-routes`, `vst-ws` | Axum daemon: REST routes, WebSocket streaming |
 | `rust/vst-cli` | The `vst` CLI (also hosts the daemon in the single merged binary) |
 | `rust/vst-store`, `vst-types`, `vst-lifecycle` | SQLite persistence, shared types, lifecycle poller |
-| `rust/vst-agents`, `vst-agy-acp`, `vst-lsp`, `vst-git`, `vst-proc` | Agent plugins and ACP, language servers, git, process/tmux control |
+| `rust/vst-agents`, `vst-agy-stream-acp`, `vst-lsp`, `vst-git`, `vst-proc` | Agent plugins and ACP, language servers, git, process/tmux control |
 | `skill/` | The `vst` agent skill published for external agents |
 
 README screenshots are generated, not hand-captured — see [`docs/screenshots/README.md`](docs/screenshots/README.md). Contributor and agent guidelines live in [`AGENTS.md`](AGENTS.md).
