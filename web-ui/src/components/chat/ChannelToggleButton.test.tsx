@@ -170,5 +170,36 @@ describe("ChannelToggleButton (item 4, Decision 6) — 4.T1", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
     expect(spy).toHaveBeenLastCalledWith("s1", "json", "mode-1");
   });
-});
 
+  describe("importsHistory dialog copy", () => {
+    const dirs = [
+      ["toTerminal", "⇄ Terminal"],
+      ["toJson", "⇄ Rich Chat"],
+    ] as const;
+
+    it.each(dirs)("%s: without an importer there is no backfill promise but the warning stays", async (direction, label) => {
+      render(
+        <ChannelToggleButton
+          api={createMockApi()}
+          sessionId="s1"
+          direction={direction}
+          importsHistory={false}
+          warning="⚠ lossy switch"
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: label }));
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).not.toContain("backfilled");
+      expect(dialog.textContent).toContain("⚠ lossy switch");
+      expect(dialog.textContent).not.toContain("--resume");
+    });
+
+    it.each(dirs)("%s: by default the backfill sentence is present", async (direction, label) => {
+      render(<ChannelToggleButton api={createMockApi()} sessionId="s1" direction={direction} />);
+      await userEvent.click(screen.getByRole("button", { name: label }));
+      const dialog = screen.getByRole("dialog");
+      expect(dialog.textContent).toContain("backfilled");
+      expect(dialog.textContent).not.toContain("--resume");
+    });
+  });
+});

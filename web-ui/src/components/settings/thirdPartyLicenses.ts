@@ -25,12 +25,6 @@ export const THIRD_PARTY_LICENSES: ThirdPartyLicense[] = [
     url: "https://github.com/oven-sh/bun",
   },
   {
-    name: "agy-acp (openab)",
-    role: "agy ACP adapter, shipped beside vst",
-    license: "MIT",
-    url: "https://github.com/fastestdevalive/openab",
-  },
-  {
     name: "cloudflared",
     role: "Remote-access tunnel, desktop app bundle only",
     license: "Apache-2.0",

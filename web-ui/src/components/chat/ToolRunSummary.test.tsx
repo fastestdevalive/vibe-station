@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ToolRunSummary, toolRunSummaryPropsEqual } from "./ToolRunSummary";
-import type { ToolCallEntry } from "./toolFormat";
+import { summarizeToolInput, type ToolCallEntry } from "./toolFormat";
 import type { ToolDiff } from "@/api/types";
 
 function tool(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
@@ -23,6 +23,25 @@ describe("ToolRunSummary status-aware spinner/checkmark (Decision 4b, 3.T3)", ()
     render(<ToolRunSummary tools={[tool({ status: "completed" })]} live />);
     expect(document.querySelector(".chat-spinner")).toBeNull();
     expect(document.querySelector(".chat-tool-entry__done")).toBeTruthy();
+  });
+});
+
+describe("ToolRunSummary shows an agy CommandLine inline", () => {
+  it("renders the command in the header for an execute tool keyed by CommandLine", () => {
+    render(
+      <ToolRunSummary
+        tools={[tool({ toolName: "echo hi", toolKind: "execute", toolInput: { CommandLine: "echo hi" }, status: "completed" })]}
+        live={false}
+      />,
+    );
+    const header = document.querySelector(".chat-tool-entry__header") as HTMLElement;
+    expect(header.textContent).toContain("Ran");
+    const code = header.querySelector("code");
+    expect(code?.textContent).toBe("echo hi");
+  });
+
+  it("summarizeToolInput reads CommandLine", () => {
+    expect(summarizeToolInput({ CommandLine: "ls -la" })).toBe("ls -la");
   });
 });
 

@@ -82,6 +82,7 @@ export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls }
               api={api!}
               sessionId={sessionId!}
               direction="toTerminal"
+              importsHistory={importsHistory !== false}
               triggerDisabled={!idle}
               confirmBlocked={!idle}
               blockedMessage="The session just went busy — wait for it to finish (or clear the queue) before switching."

@@ -77,6 +77,7 @@ export function summarizeToolInput(input: unknown, locations?: { path: string; l
       for (const key of [
         "command",
         "cmd",
+        "CommandLine",
         "path",
         "file_path",
         "filePath",

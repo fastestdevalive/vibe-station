@@ -18,7 +18,7 @@ interface TerminalChannelToggleProps {
  * daemon supports the toggle for all agent CLIs in both contexts.
  *
  * Switching tears down the live terminal and reopens the same conversation as
- * JSON chat (resumed via --resume). The terminal-phase turns are backfilled by
+ * JSON chat. The terminal-phase turns are backfilled by
  * the P2 importer only for CLIs that ship one (`importsNativeHistory`); for
  * cursor/agy the switch is lossy (those turns won't appear in JSON, though the
  * agent still has them), so we surface a warning before confirming. Unlike
@@ -81,7 +81,7 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
 
   if (!structurallyEligible || !modesLoaded || !clis || clisFailed) return null;
 
-  // If mode exists, check if its CLI supports Rich Chat (hide if false, e.g. agy/pi).
+  // If mode exists, check if its CLI supports Rich Chat (hide if false, e.g. pi).
   let importsHistory = true;
   if (!modeMissing) {
     // Inside `!modeMissing`, modeId is guaranteed non-empty and present in the
@@ -102,6 +102,7 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
       sessionId={session.id}
       direction="toJson"
       needsMode={modeMissing}
+      importsHistory={modeMissing || importsHistory}
       filterMode={filterMode}
       {...(!modeMissing && !importsHistory
         ? {
