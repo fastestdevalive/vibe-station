@@ -482,9 +482,9 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     };
   }
 
-  it("4.T1 — agy mode with no explicit channel defaults the switch to Terminal", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
-    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
+  it("4.T1 — pi mode with no explicit channel defaults the switch to Terminal", async () => {
+    const pi = makeCli({ id: "pi", defaultChannel: "tmux", supportsJson: false });
+    renderTier2([makeMode({ id: "pi-mode", cli: "pi" })], [pi]);
     const sw = await findChannelSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
   });
@@ -520,17 +520,17 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     });
   });
 
-  it("4.T5 — scaffold draft with channel:json and no channelExplicit flips to Terminal for an agy mode (B1)", async () => {
+  it("4.T5 — scaffold draft with channel:json and no channelExplicit flips to Terminal for a pi mode (B1)", async () => {
     // LeftSidebar's scaffold `{ entryPoint, worktreeChoice, channel: "json" }`
     // carries channel but NOT channelExplicit — so the mode-follow effect must
-    // still fire and flip an agy mode's channel to Terminal.
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
-    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "agy-mode", cli: "agy" })]);
-    vi.spyOn(api, "getSupportedClis").mockResolvedValue([agy]);
+    // still fire and flip a pi mode's channel to Terminal.
+    const pi = makeCli({ id: "pi", defaultChannel: "tmux", supportsJson: false });
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "pi-mode", cli: "pi" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([pi]);
     const session = makeDraftSession({
-      modeId: "agy-mode",
+      modeId: "pi-mode",
       channel: "json",
-      draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "agy-mode", channel: "json" },
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "pi-mode", channel: "json" },
     });
     renderTier1(session);
     const sw = await findChannelSwitch();
@@ -560,7 +560,7 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
   });
 
   it("4.T3 — a manual channel pick survives a later mode change (touched ref)", async () => {
-    // agy can no longer be the tmux-default starter here (it can't pick Rich
+    // pi can't be the tmux-default starter here (it can't pick Rich
     // Chat at all now), so use a synthetic tmux-default, json-capable CLI to
     // exercise the touched-ref logic.
     const tmuxDefault = makeCli({ id: "tmux-default", defaultChannel: "tmux" });
@@ -590,12 +590,12 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     await waitFor(() => expect(channelSwitch()).not.toBeChecked());
   });
 
-  it("4.T8a — an untouched agy default flips back to Rich Chat when the mode changes to claude", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
+  it("4.T8a — an untouched pi default flips back to Rich Chat when the mode changes to claude", async () => {
+    const pi = makeCli({ id: "pi", defaultChannel: "tmux", supportsJson: false });
     const claude = makeCli({ id: "claude", defaultChannel: "json" });
     renderTier2(
-      [makeMode({ id: "agy-mode", name: "Agy", cli: "agy" }), makeMode({ id: "claude-mode", name: "Claude", cli: "claude" })],
-      [agy, claude],
+      [makeMode({ id: "pi-mode", name: "Pi", cli: "pi" }), makeMode({ id: "claude-mode", name: "Claude", cli: "claude" })],
+      [pi, claude],
     );
     const sw = await findChannelSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
@@ -617,21 +617,21 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(channelSwitch()).toBeDisabled();
   });
 
-  it("4.T10 — a persisted json default override for agy is dropped (agy is terminal-only)", async () => {
+  it("4.T10 — a persisted json default override for pi is dropped (pi is terminal-only)", async () => {
     // The daemon drops a json override for a CLI that can't run Rich Chat
-    // (agy supportsJson=false), so the server never reports agy's defaultChannel
+    // (pi supportsJson=false), so the server never reports pi's defaultChannel
     // as json. Rich Chat stays disabled and Terminal is forced.
-    const agyJson = makeCli({ id: "agy", defaultChannel: "json", defaultChannelOverridden: true, supportsJson: false });
-    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agyJson]);
+    const piJson = makeCli({ id: "pi", defaultChannel: "json", defaultChannelOverridden: true, supportsJson: false });
+    renderTier2([makeMode({ id: "pi-mode", cli: "pi" })], [piJson]);
     const sw = await findChannelSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
     expect(sw).toBeDisabled();
   });
 
-  it("4.T6 — Tier 2 agy mode: the default Terminal channel reaches the createWorktree payload as tmux", async () => {
-    const agy = makeCli({ id: "agy", defaultChannel: "tmux", supportsJson: false });
+  it("4.T6 — Tier 2 pi mode: the default Terminal channel reaches the createWorktree payload as tmux", async () => {
+    const pi = makeCli({ id: "pi", defaultChannel: "tmux", supportsJson: false });
     const spy = vi.spyOn(api, "createWorktree");
-    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
+    renderTier2([makeMode({ id: "pi-mode", cli: "pi" })], [pi]);
     const sw = await findChannelSwitch();
     await waitFor(() => expect(sw).not.toBeChecked());
     await typePrompt("build the thing");

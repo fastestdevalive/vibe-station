@@ -53,6 +53,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     await userEvent.click(toggle);
     // cursor can't import → the confirm dialog carries the lossy-switch warning.
     await screen.findByText(/won't be imported into Rich Chat/i);
+    expect(screen.queryByText(/backfilled/i)).toBeNull();
     // The toggle still works (lossy return is not a block).
     await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
     await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json", undefined));
@@ -97,17 +98,35 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
   });
 
-  it("hides the toggle for a CLI that can't run Rich Chat (agy, terminal-only)", async () => {
-    // Render agy directly. The toggle is absent while the capability lookup is
+  it("hides the toggle for a CLI that can't run Rich Chat (pi, terminal-only)", async () => {
+    // Render pi directly. The toggle is absent while the capability lookup is
     // in flight (cli/supportsJson reset to null on each effect run), so wait
     // until the lookup has RESOLVED before asserting — this proves it stays
-    // hidden because agy can't run Rich Chat, not merely hidden during the
+    // hidden because pi can't run Rich Chat, not merely hidden during the
     // loading window. (A json-capable CLI like claude/cursor shows the toggle
     // after resolution — see the tests above — so if the `supportsJson ===
-    // false` check were removed, `cli` would resolve to agy and the button
+    // false` check were removed, `cli` would resolve to pi and the button
     // would appear here.)
     const api = createMockApi();
     const getClisSpy = vi.spyOn(api, "getSupportedClis");
+    vi.spyOn(api, "listModes").mockResolvedValue([
+      { id: "mode-pi", name: "Pi", cli: "pi", context: "" } as Mode,
+    ]);
+    render(
+      <TerminalChannelToggle api={api} session={session({ id: "sess-pi", modeId: "mode-pi" })} />,
+    );
+
+    // Let the capability lookup run to completion (cli -> pi, supportsJson -> false).
+    await waitFor(() => expect(getClisSpy).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
+  });
+
+  it("shows the toggle for an agy session", async () => {
+    const api = createMockApi();
     vi.spyOn(api, "listModes").mockResolvedValue([
       { id: "mode-agy", name: "Antigravity", cli: "agy", context: "" } as Mode,
     ]);
@@ -115,13 +134,9 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
       <TerminalChannelToggle api={api} session={session({ id: "sess-agy", modeId: "mode-agy" })} />,
     );
 
-    // Let the capability lookup run to completion (cli -> agy, supportsJson -> false).
-    await waitFor(() => expect(getClisSpy).toHaveBeenCalled());
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Switch to Rich Chat" })).toBeTruthy();
   });
 
   it("shows toggle when session modeId is null, opens picker, and switches channel with selected modeId", async () => {
@@ -146,7 +161,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     const api = createMockApi({
       modes: [
         { id: "m-claude", name: "Claude Mode", cli: "claude", context: "" },
-        { id: "m-agy", name: "Agy Mode", cli: "agy", context: "" },
+        { id: "m-pi", name: "Pi Mode", cli: "pi", context: "" },
       ],
     });
     const spy = vi.spyOn(api, "setSessionChannel");
@@ -155,7 +170,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
     await userEvent.click(toggle);
 
-    // Picker should only list claude (supportsJson true), agy is filtered out
+    // Picker should only list claude (supportsJson true), pi is filtered out
     const select = (await screen.findByLabelText("Mode")) as HTMLSelectElement;
     expect(select.children.length).toBe(1);
     expect(select.value).toBe("m-claude");
@@ -228,7 +243,7 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
   it("shows empty state when no Rich Chat-capable modes exist", async () => {
     const api = createMockApi({
       modes: [
-        { id: "m-agy", name: "Agy", cli: "agy", context: "" },
+        { id: "m-pi", name: "Pi", cli: "pi", context: "" },
       ],
     });
     render(<TerminalChannelToggle api={api} session={session({ modeId: null })} />);

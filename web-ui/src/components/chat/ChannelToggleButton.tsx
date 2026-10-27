@@ -66,6 +66,11 @@ interface ChannelToggleButtonProps {
    * Optional filter for modes shown in the mode picker (e.g. only supportsJson CLIs).
    */
   filterMode?: (m: Mode) => boolean;
+  /**
+   * Whether the session's CLI ships a native-history importer. When `false`
+   * the default explanation must not promise a backfill. Defaults to `true`.
+   */
+  importsHistory?: boolean;
 }
 
 interface DirectionCopy {
@@ -74,6 +79,8 @@ interface DirectionCopy {
   targetChannel: Channel;
   dialogTitle: string;
   defaultMessage: string;
+  /** Default explanation for a CLI without a native-history importer (no backfill promise). */
+  defaultMessageNoImport: string;
   confirmVerb: string;
   idleTriggerTitle: string;
   busyTriggerTitle: string;
@@ -99,7 +106,9 @@ const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
     targetChannel: "tmux",
     dialogTitle: "Switch to terminal?",
     defaultMessage:
-      "This closes Rich Chat and reopens the same conversation in a raw terminal (resumed via --resume). You can switch back to Rich Chat from the terminal — your terminal-phase turns will be backfilled here.",
+      "This closes Rich Chat and reopens the same conversation in a raw terminal. You can switch back to Rich Chat from the terminal — your terminal-phase turns will be backfilled here.",
+    defaultMessageNoImport:
+      "This closes Rich Chat and reopens the same conversation in a raw terminal. You can switch back to Rich Chat from the terminal.",
     confirmVerb: "Switch to terminal",
     idleTriggerTitle: "Switch this session to a raw terminal (keeps the same conversation)",
     busyTriggerTitle: "Finish or clear the queue before switching channel",
@@ -116,7 +125,9 @@ const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
     targetChannel: "json",
     dialogTitle: "Switch to Rich Chat?",
     defaultMessage:
-      "This ends the live terminal and reopens the same conversation in Rich Chat (json based, resumed via --resume). Your terminal-phase turns will be backfilled into the chat.",
+      "This ends the live terminal and reopens the same conversation in Rich Chat (json based). Your terminal-phase turns will be backfilled into the chat.",
+    defaultMessageNoImport:
+      "This ends the live terminal and reopens the same conversation in Rich Chat (json based).",
     confirmVerb: "Switch to Rich Chat",
     idleTriggerTitle: "Switch this terminal back to Rich Chat (keeps the same conversation)",
     busyTriggerTitle: "Switch this terminal back to Rich Chat (keeps the same conversation)",
@@ -152,6 +163,7 @@ export function ChannelToggleButton({
   warning,
   needsMode,
   filterMode,
+  importsHistory = true,
 }: ChannelToggleButtonProps) {
   const copy = COPY[direction];
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -246,7 +258,9 @@ export function ChannelToggleButton({
               ? blockedMessage
               : selectedModeId
                 ? copy.pickedModeMessage
-                : copy.defaultMessage,
+                : importsHistory === false
+                  ? copy.defaultMessageNoImport
+                  : copy.defaultMessage,
             // The lossy-import warning is moot when a fresh conversation starts.
             selectedModeId ? undefined : warning,
           ]

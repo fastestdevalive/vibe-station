@@ -220,13 +220,13 @@ export interface MockSeed {
 }
 
 // Mirrors the daemon's per-CLI `supports_json()` capability for the mock's
-// `setSessionChannel` modeId gate (agy/pi are terminal-only, review #16).
+// `setSessionChannel` modeId gate (pi is terminal-only, review #16).
 const CLI_SUPPORTS_JSON: Record<string, boolean> = {
   claude: true,
   cursor: true,
   opencode: true,
   codex: true,
-  agy: false,
+  agy: true,
   pi: false,
 };
 
@@ -1691,9 +1691,9 @@ export function createMockApi(seed: MockSeed = {}) {
         {
           id: "agy",
           defaultModel: "Gemini 3.1 Pro (High)",
-          // TEMPORARY: agy is terminal-only until terminal<->ACP conversation
-          // ids are bridged — mirrors the daemon's agy `supports_json() == false`.
-          supportsJson: false,
+          // Mirrors the daemon's agy `supports_json() == true` (stream-json
+          // ACP agent); agy still defaults to Terminal.
+          supportsJson: true,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1766,8 +1766,8 @@ export function createMockApi(seed: MockSeed = {}) {
       ];
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
       // override-aware default_channel / default_channel_overridden). A Json
-      // override for a CLI that can't run Rich Chat (e.g. agy while
-      // terminal-only) is dropped, exactly as the daemon's
+      // override for a CLI that can't run Rich Chat (e.g. pi) is
+      // dropped, exactly as the daemon's
       // resolve_effective_default_channel does.
       if (mockSettings.defaultChannelByCli) {
         for (const cli of base) {
