@@ -1,0 +1,42 @@
+[package]
+name = "vst-agy-stream-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ACP agent (stdio, server side) that drives one long-lived `agy
+# --input-format stream-json` process per session. Deliberately zero `vst-*`
+# dependencies: it is spawned as a subcommand of the `vst`/`vst-daemon` binary
+# and must stay removable/replaceable on its own.
+
+[lib]
+name = "vst_agy_stream_acp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vst-agy-stream-acp"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exact, same version the daemon-side ACP client uses (see vst-agents).
+agent-client-protocol = { version = "=2.1.0", features = ["unstable_end_turn_token_usage"] }
+tokio = { workspace = true, features = [
+    "process",
+    "io-util",
+    "io-std",
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
