@@ -5,6 +5,7 @@ members = [
     "vst-diff",
     "vst-testkit",
     "vst-store",
+    "vst-tasks",
     "vst-activity",
     "vst-proc",
     "vst-git",
@@ -52,6 +53,7 @@ vst-types = { path = "vst-types" }
 vst-diff = { path = "vst-diff" }
 vst-testkit = { path = "vst-testkit", default-features = false }
 vst-store = { path = "vst-store" }
+vst-tasks = { path = "vst-tasks" }
 vst-activity = { path = "vst-activity" }
 vst-proc = { path = "vst-proc" }
 vst-git = { path = "vst-git" }

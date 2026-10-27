@@ -522,6 +522,19 @@ pub trait AgentPlugin: Send + Sync {
         Vec::new()
     }
 
+    /// Background-task observations for one persisted event (task tray).
+    ///
+    /// **Contract:** pure and tolerant — a function of the event's PERSISTED
+    /// fields only (`tool_kind`, `tool_input`, `tool_result`, `tool_status`,
+    /// `parent_tool_use_id`, ...), never of live adapter state, so rebuilding
+    /// from the transcript yields exactly what live observation did. Must not
+    /// panic on malformed input. Unstable harness text/format parsing belongs
+    /// in ONE file per harness (claude: `claude_tasks.rs`). Default: none, so
+    /// the tray stays hidden for harnesses without task support.
+    fn task_observations(&self, _ev: &NormalizedEvent) -> Vec<vst_tasks::TaskObservation> {
+        Vec::new()
+    }
+
     /// Whether disposing this adapter's ACP connection must also SIGKILL its
     /// descendant process tree, including children that `setsid()` out of the
     /// process group the transport already kills.

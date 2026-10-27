@@ -21,6 +21,26 @@ Background/rationale: `.vibekit/reports/2026-08-16-pr-detection-broken-root-caus
 - `session.pr.prBranch` records the branch the PR was found on. A PR is only ever rendered when
   `prBranch === worktree.branch` — a stale PR after a branch switch must never colour anything.
 
+### Rich Chat (JSON channel) lifecycle writes
+
+JSON sessions are not polled; every lifecycle write goes through one
+`JsonAgentSession` method (`write_lifecycle`, under `lifecycle_lock`; released sessions no-op).
+A JSON session can return to `working` **without a human prompt**:
+
+| Write | Reason | Trigger | Returns to `waiting_for_human` |
+|-------|--------|---------|-------------------------------|
+| `working` | `None` | human turn (send / chat / resubmit / create / scheduled) | drain's final write |
+| `working` | `subagent-notice` | daemon-started "child is waiting" turn | drain's final write |
+| `working` | `background` | agent output with no prompt in flight (adapter autonomous cycle) | quiet timer, reason `background-settled` |
+
+- `background` is a **heuristic**: ends after 60 s without new content (heartbeats extend it for at most
+  10 min). It never changes `turn_state` (Stop/steer stay tied to real prompts).
+- `ready`, `background` and `background-settled` are **invisible to subagent-notify** (a parent is not
+  woken by them); `subagent-notice` is visible on purpose.
+- A daemon restart settles stale `working(background|subagent-notice)` rows to
+  `waiting_for_human(background-settled)` at boot.
+- No new values, colours or glyphs: the matrix below is unchanged.
+
 ## The matrix
 
 Dot colour resolved by `resolveStatusClass()` — `web-ui/src/lib/statusColor.ts`.

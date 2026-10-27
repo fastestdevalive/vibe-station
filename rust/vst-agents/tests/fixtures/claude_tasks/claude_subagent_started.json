@@ -1,0 +1,19 @@
+{
+  "_synthetic": true,
+  "_note": "SYNTHETIC: built from plan Findings F4/F9 shapes (tool_name = ACP title = description, input shape carries subagent_type); replace with a live capture when available",
+  "event": {
+    "id": "s1e",
+    "sessionId": "s1",
+    "ts": "2026-10-27T10:00:00.000Z",
+    "provider": "claude",
+    "kind": "tool_use",
+    "toolId": "toolu_sub1",
+    "toolName": "Review the diff",
+    "toolKind": "think",
+    "toolInput": {
+      "description": "Review the diff",
+      "prompt": "Look at the diff",
+      "subagent_type": "general-purpose"
+    }
+  }
+}

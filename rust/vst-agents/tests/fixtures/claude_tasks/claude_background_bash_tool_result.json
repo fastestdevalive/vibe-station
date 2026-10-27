@@ -1,0 +1,16 @@
+{
+  "_source": "plan Findings F2 (live row vibe-station-mobile-a-1583968d seq 36); text after 'completes.' is elided in the plan",
+  "event": {
+    "id": "r1",
+    "sessionId": "s1",
+    "ts": "2026-10-27T10:00:00.000Z",
+    "provider": "claude",
+    "kind": "tool_result",
+    "toolId": "toolu_bg1",
+    "toolStatus": "completed",
+    "toolResult": {
+      "content": "Command running in background with ID: be00epro0. Output is being written to: /tmp/claude-1000/-home-dev-vibe-station/9f2c1d34-5a6b-4c7d-8e9f-0a1b2c3d4e5f/tasks/be00epro0.output. You will be notified when it completes.",
+      "isError": false
+    }
+  }
+}

@@ -303,6 +303,10 @@ impl NotifyDeps for ProductionNotifyDeps {
     }
 }
 
+#[cfg(test)]
+mod notify_listener_tests;
+mod tasks_route;
+
 fn spawn_subagent_notify_listener(
     handle: SubagentNotifyHandle,
     broadcaster: Broadcaster,
@@ -323,9 +327,15 @@ fn spawn_subagent_notify_listener(
                     state,
                     reason,
                 } => {
-                    // A never-prompted json session settling into "ready" isn't a
+                    // A never-prompted json session settling into "ready", or an
+                    // out-of-band `background` window opening/settling, isn't a
                     // subagent finishing — record it, but don't wake the parent.
-                    if reason.as_deref() == Some(vst_agents::json_agent_chat::READY_REASON) {
+                    // (`subagent-notice` is NOT silent: its grandparent notice
+                    // is intended.)
+                    if reason
+                        .as_deref()
+                        .is_some_and(vst_agents::json_agent_chat::is_silent_state_reason)
+                    {
                         last_states.insert(session_id, state);
                         continue;
                     }
@@ -816,6 +826,10 @@ pub fn router_from_state(state: AppState) -> Router {
             get(handle_get_session_transcript),
         )
         .route("/sessions/:id/meta", get(handle_get_session_meta))
+        .route(
+            "/sessions/:id/tasks/:taskId/output",
+            get(tasks_route::handle_get_task_output),
+        )
         // Scheduled messages
         .route("/sessions/:id/schedule", post(handle_schedule_create))
         .route(

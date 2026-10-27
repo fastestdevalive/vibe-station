@@ -11,6 +11,7 @@ vst-types = { workspace = true }
 vst-store = { workspace = true }
 vst-git = { workspace = true }
 vst-agents = { workspace = true }
+vst-tasks = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
 vst-lsp = { workspace = true }

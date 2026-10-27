@@ -13,10 +13,19 @@ use tokio_util::sync::CancellationToken;
 use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, TurnState};
 
 use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn};
+use crate::json_agent_chat::{BACKGROUND_REASON, SUBAGENT_NOTICE_REASON};
 use crate::{
     plugin::{TurnContext, TurnInput},
     skill_resolution::{get_merged_skill_catalog, inject_attachments, resolve_skill_invocations},
 };
+
+/// R9: a child still counts as "waiting for the human" when it is
+/// `WaitingForHuman`, or `Working` only because of an out-of-band
+/// (`background`) window — that transition is invisible to parent notify.
+fn counts_as_waiting(l: &vst_types::SessionLifecycle) -> bool {
+    l.state == LifecycleState::WaitingForHuman
+        || (l.state == LifecycleState::Working && l.reason.as_deref() == Some(BACKGROUND_REASON))
+}
 
 impl JsonAgentSession {
     /// Outer drain loop: runs turns from the queue + notice slot in order.
@@ -142,9 +151,36 @@ impl JsonAgentSession {
         self.emit_meta();
 
         // Persist lifecycle → waiting_for_human (Decision 11). The lifecycle
-        // poller skips JSON sessions, so this is the only mechanism.
-        self.persist_lifecycle(LifecycleState::WaitingForHuman)
-            .await;
+        // poller skips JSON sessions, so this is the only mechanism. Written
+        // under `lifecycle_lock`: if a newer drain already started, it owns the
+        // final write; if out-of-band content arrived since `running=false`,
+        // write the plain waiting then re-enter `working(background)`, and let the
+        // quiet timer settle.
+        {
+            let _guard = self.0.lifecycle_lock.lock().await;
+            let (running, bg) = {
+                let s = self.0.state.lock().unwrap();
+                (s.running, s.bg_working)
+            };
+            if !running {
+                // The turn's real end is always written (reason `None`, visible
+                // to parent notify: "subagent finished"). If an out-of-band
+                // window opened in the tail, re-enter `working(background)`
+                // right after — both reasons `background*` are silent to the
+                // notify listener, so skipping the plain write would hide this
+                // turn end from the parent (R1F-12).
+                self.write_lifecycle_locked(LifecycleState::WaitingForHuman, None)
+                    .await;
+                // Re-read: `note_background_activity` does not take `lifecycle_lock`, so a chunk can land
+                // between the read above and the plain write (it would then see `last_written == Working`
+                // and skip its own write), leaving the session showing waiting while output flows.
+                let bg_now = bg || self.0.state.lock().unwrap().bg_working;
+                if bg_now {
+                    self.write_lifecycle_locked(LifecycleState::Working, Some(BACKGROUND_REASON))
+                        .await;
+                }
+            }
+        }
 
         // Signal idle — but only if no new drain started while we awaited the
         // persist above (`kick_drain` sets `running` and signals busy under this
@@ -374,6 +410,9 @@ impl JsonAgentSession {
             s.active_fork_from_chat_id = None;
             s.live_pids.clear();
         }
+        // A turn that ended (result, cancel, crash) can no longer finish its
+        // synchronous subagents.
+        self.0.tasks.turn_ended(&turn.turn_id);
         // Clear pid file on turn completion.
         super::pids::clear_pid_file(&self.0.data_dir);
     }
@@ -394,7 +433,7 @@ impl JsonAgentSession {
             'outer: for project in &projects {
                 for wt in &project.worktrees {
                     if let Some(s) = wt.sessions.iter().find(|s| s.id == *child_id) {
-                        if s.lifecycle.state == LifecycleState::WaitingForHuman {
+                        if counts_as_waiting(&s.lifecycle) {
                             pruned.children.push((child_id.clone(), child_name.clone()));
                         }
                         found = true;
@@ -402,7 +441,7 @@ impl JsonAgentSession {
                     }
                 }
                 if let Some(s) = project.direct_sessions.iter().find(|s| s.id == *child_id) {
-                    if s.lifecycle.state == LifecycleState::WaitingForHuman {
+                    if counts_as_waiting(&s.lifecycle) {
                         pruned.children.push((child_id.clone(), child_name.clone()));
                     }
                     found = true;
@@ -462,6 +501,11 @@ impl JsonAgentSession {
             s.active_notice = Some(pruned);
         }
         self.emit_meta();
+
+        // A: the daemon-started notice turn is real work — show `working`
+        // (the drain's final write is the bound).
+        self.write_lifecycle(LifecycleState::Working, Some(SUBAGENT_NOTICE_REASON))
+            .await;
 
         let synthetic_turn = QueuedTurn {
             turn_id: turn_id.clone(),
@@ -538,5 +582,234 @@ impl JsonAgentSession {
             s.live_pids.clear();
         }
         super::pids::clear_pid_file(&self.0.data_dir.join("turn.pids"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use agent_client_protocol::schema::v1::{
+        ContentBlock, ContentChunk, SessionUpdate, TextContent,
+    };
+    use tokio::sync::{broadcast, mpsc, Notify};
+    use tokio_util::sync::CancellationToken;
+    use vst_types::{
+        Broadcaster, Channel, LifecycleState, NormalizedEvent, NormalizedEventKind, ServerEvent,
+    };
+
+    use super::super::{JsonAgentSession, JsonAgentSessionOptions};
+    use crate::json_agent_chat::BACKGROUND_REASON;
+    use crate::plugin::{
+        AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
+        PromptDelivery, ReadySignal, TurnContext, TurnInput,
+    };
+
+    struct Gated(Arc<Notify>);
+
+    impl AgentPlugin for Gated {
+        fn name(&self) -> &str {
+            "gated"
+        }
+        fn default_model(&self) -> &str {
+            "m"
+        }
+        fn default_mode_icon(&self, _m: Option<&str>) -> &'static str {
+            "m"
+        }
+        fn prompt_delivery(&self) -> PromptDelivery {
+            PromptDelivery::Inline
+        }
+        fn get_launch_command(&self, _c: &LaunchConfig) -> Vec<String> {
+            vec![]
+        }
+        fn get_environment(&self, _c: &LaunchConfig) -> BTreeMap<String, String> {
+            BTreeMap::new()
+        }
+        fn get_ready_signal(&self) -> ReadySignal {
+            ReadySignal {
+                sentinel: None,
+                fallback_ms: 0,
+            }
+        }
+        fn compose_launch_prompt(&self, _i: ComposePromptInput) -> ComposePromptResult {
+            ComposePromptResult::default()
+        }
+        fn default_channel(&self) -> Channel {
+            Channel::Json
+        }
+        fn list_models(&self) -> crate::plugin::AsyncResult<ListModelsResult> {
+            Box::pin(async { ListModelsResult::default() })
+        }
+        fn supports_json(&self) -> bool {
+            true
+        }
+        fn supports_acp(&self) -> bool {
+            true
+        }
+        fn run_turn(
+            &self,
+            _i: TurnInput,
+            _c: TurnContext,
+            cancel: CancellationToken,
+        ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let gate = self.0.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = cancel.cancelled() => {}
+                    _ = gate.notified() => {
+                        let mut ev = NormalizedEvent::default();
+                        ev.kind = NormalizedEventKind::Result;
+                        let _ = tx.send(ev);
+                    }
+                }
+            });
+            rx
+        }
+    }
+
+    fn session_record() -> vst_types::SessionRecord {
+        vst_types::SessionRecord {
+            id: "s1".into(),
+            worktree_id: None,
+            project_id: "p1".into(),
+            is_main: false,
+            sort_order: 0.0,
+            r#type: vst_types::SessionType::Agent,
+            mode_id: None,
+            mode_icon: None,
+            name: None,
+            name_source: None,
+            tmux_name: "vst-s1".into(),
+            use_tmux: true,
+            channel: None,
+            lifecycle: vst_types::SessionLifecycle {
+                state: LifecycleState::WaitingForHuman,
+                reason: None,
+                last_transition_at: "2026-01-01T00:00:00.000Z".into(),
+            },
+            transcript_ref: None,
+            agent_chat_id: None,
+            acp_session_id: None,
+            model_override: None,
+            pinned_at: None,
+            initial_prompt: None,
+            draft_prompt: None,
+            draft_config: None,
+            archived_at: None,
+            handoff_summary: None,
+            carry_over: None,
+            parent_session_id: None,
+            superseded_by: None,
+            pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
+        }
+    }
+
+    fn project_record() -> vst_types::ProjectRecord {
+        vst_types::ProjectRecord {
+            id: "p1".into(),
+            absolute_path: "/repos/p1".into(),
+            prefix: "vs".into(),
+            is_git: true,
+            default_branch: Some("main".into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            hidden: None,
+            direct_sessions: vec![],
+            direct_session_seq: None,
+            worktrees: vec![],
+            next_worktree_num: None,
+            lsp_enabled: None,
+            open_files: vec![],
+        }
+    }
+
+    fn lifecycle_events(
+        rx: &mut broadcast::Receiver<ServerEvent>,
+    ) -> Vec<(LifecycleState, Option<String>)> {
+        let mut out = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if let ServerEvent::SessionState { state, reason, .. } = ev {
+                out.push((state, reason));
+            }
+        }
+        out
+    }
+
+    /// R1F-12 — an out-of-band window opening between `running=false` and the
+    /// drain's final write must still emit the turn's plain
+    /// `waiting_for_human` (None) BEFORE `working(background)`, so the parent
+    /// notify listener (which ignores `background*`) sees the turn end.
+    #[tokio::test]
+    async fn bg_in_drain_tail_emits_plain_waiting_before_background_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = crate::home::with_home(dir.path().to_path_buf());
+        let store = vst_store::StoreHandle::open(dir.path().join("t.db")).unwrap();
+        let (tx, mut rx) = broadcast::channel(64);
+        let gate = Arc::new(Notify::new());
+        let mut rec = session_record();
+        rec.lifecycle.state = LifecycleState::WaitingForHuman;
+        let s = JsonAgentSession::new(JsonAgentSessionOptions {
+            project: project_record(),
+            worktree: None,
+            session: rec,
+            plugin: Arc::new(Gated(gate.clone())),
+            daemon_port: 0,
+            cli: vst_types::NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle: store,
+            broadcaster: Broadcaster(tx),
+        });
+        s.enqueue("hi".into(), vec![], None, None);
+        s.kick_drain();
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(s.0.state.lock().unwrap().running, "turn must be in flight");
+        let _ = lifecycle_events(&mut rx);
+
+        // Hold the lifecycle lock so the drain parks right after running=false.
+        let guard = s.0.lifecycle_lock.lock().await;
+        gate.notify_one();
+        for _ in 0..400 {
+            if !s.0.state.lock().unwrap().running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            !s.0.state.lock().unwrap().running,
+            "drain must have finished its turn"
+        );
+        // OOB content lands in the tail window (running=false, final write pending).
+        s.ingest_out_of_band_update(
+            &SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("late"),
+            ))),
+            "acp",
+            None,
+        );
+        assert!(s.0.state.lock().unwrap().bg_working);
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let seen = lifecycle_events(&mut rx);
+        let pos_plain = seen
+            .iter()
+            .position(|e| *e == (LifecycleState::WaitingForHuman, None))
+            .unwrap_or_else(|| panic!("no plain waiting in {seen:?}"));
+        let pos_bg = seen
+            .iter()
+            .position(|e| *e == (LifecycleState::Working, Some(BACKGROUND_REASON.to_string())))
+            .unwrap_or_else(|| panic!("no background working in {seen:?}"));
+        assert!(pos_plain < pos_bg, "got {seen:?}");
+        assert_eq!(seen.last().unwrap().1.as_deref(), Some(BACKGROUND_REASON));
     }
 }

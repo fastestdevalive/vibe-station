@@ -1541,3 +1541,25 @@ fn count_since_last_break_with_break_last() {
     store.append(&mut break_ev("last"));
     assert_eq!(store.count_since_last_break(), 0);
 }
+
+#[test]
+fn read_last_returns_the_newest_rows_oldest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    for t in ["t1", "t2", "t3"] {
+        append_turn(&mut store, t);
+    }
+    let last = store.read_last(4);
+    assert_eq!(last.len(), 4);
+    assert_eq!(
+        last.iter().map(|e| e.log_seq).collect::<Vec<_>>(),
+        vec![Some(5), Some(6), Some(7), Some(8)],
+        "newest 4 rows, ascending"
+    );
+    assert_eq!(
+        store.read_last(100).len(),
+        9,
+        "limit above count returns all"
+    );
+    assert!(store.read_last(0).is_empty());
+}

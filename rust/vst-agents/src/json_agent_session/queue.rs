@@ -684,6 +684,10 @@ impl JsonAgentSession {
             // Atomically mark running=true BEFORE spawning (no race between check
             // and spawn where a second caller could also spawn).
             s.running = true;
+            // A real drain owns the lifecycle now: close any out-of-band
+            // window so its quiet timer can never write over the drain.
+            s.bg_working = false;
+            s.bg_gen += 1;
             // Signal not-idle while still holding the `state` lock, so a draining
             // loop's final idle signal (which checks `running` under the same lock)
             // can never overwrite this with a stale "idle". `send_replace`, not

@@ -1,0 +1,168 @@
+{
+  "variants": [
+    {
+      "name": "missing_path",
+      "event": {
+        "id": "v1",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t2",
+        "toolStatus": "completed",
+        "toolResult": {
+          "content": "Command running in background with ID: abc123. You will be notified when it completes."
+        }
+      }
+    },
+    {
+      "name": "punctuation_in_id",
+      "event": {
+        "id": "v2",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t3",
+        "toolStatus": "completed",
+        "toolResult": {
+          "content": "Command running in background with ID: b-1x_2, Output is being written to: `/tmp/claude-1000/p/u/tasks/b-1x_2.output`."
+        }
+      }
+    },
+    {
+      "name": "code_fenced",
+      "event": {
+        "id": "v3",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t4",
+        "toolStatus": "completed",
+        "toolResult": {
+          "content": "```\nCommand running in background with ID: fenced1\nOutput is being written to: \"/tmp/claude-1000/p/u/tasks/fenced1.output\"\n```"
+        }
+      }
+    },
+    {
+      "name": "two_ids",
+      "event": {
+        "id": "v4",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t5",
+        "toolStatus": "completed",
+        "toolResult": {
+          "content": "Command running in background with ID: aaa. Output is being written to: /tmp/claude-1000/p/u/tasks/aaa.output. Command running in background with ID: bbb."
+        }
+      }
+    },
+    {
+      "name": "error_result",
+      "event": {
+        "id": "v5",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t6",
+        "toolStatus": "failed",
+        "toolResult": {
+          "content": "Command running in background with ID: zzz. Output is being written to: /tmp/claude-1000/p/u/tasks/zzz.output",
+          "isError": true
+        }
+      }
+    },
+    {
+      "name": "no_marker",
+      "event": {
+        "id": "v6",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t7",
+        "toolStatus": "completed",
+        "toolResult": {
+          "content": "hello world"
+        }
+      }
+    },
+    {
+      "name": "launch_without_run_in_background",
+      "event": {
+        "id": "v7",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t8",
+        "toolKind": "execute",
+        "toolInput": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "name": "non_bash_with_flag",
+      "event": {
+        "id": "v8",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_use",
+        "toolId": "t9",
+        "toolKind": "read",
+        "toolInput": {
+          "command": "cat x",
+          "run_in_background": true
+        }
+      }
+    },
+    {
+      "name": "launch_flag_false",
+      "event": {
+        "id": "v9",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_use",
+        "toolId": "t10",
+        "toolKind": "execute",
+        "toolInput": {
+          "command": "ls",
+          "run_in_background": false
+        }
+      }
+    },
+    {
+      "name": "launch_kind_absent_on_refinement",
+      "event": {
+        "id": "v10",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "tool_result",
+        "toolId": "t11",
+        "toolInput": {
+          "command": "npm run dev",
+          "run_in_background": true
+        }
+      }
+    },
+    {
+      "name": "not_a_tool_event",
+      "event": {
+        "id": "v11",
+        "sessionId": "s1",
+        "ts": "2026-10-27T10:00:00.000Z",
+        "provider": "claude",
+        "kind": "text",
+        "text": "Command running in background with ID: abc."
+      }
+    }
+  ]
+}

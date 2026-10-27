@@ -525,6 +525,10 @@ pub struct NormalizedEvent {
     pub from_mode: Option<String>,
     /// session_break only: display name of the replacement mode.
     pub to_mode: Option<String>,
+    /// Tool events only: the originating tool call id of the subagent
+    /// (`Task`/`Agent`) this nested event ran under. Harness-specific
+    /// (Claude: `_meta.claudeCode.parentToolUseId`); absent for top-level calls.
+    pub parent_tool_use_id: Option<String>,
 }
 
 impl Default for NormalizedEvent {
@@ -571,8 +575,85 @@ impl Default for NormalizedEvent {
             carry_over: None,
             from_mode: None,
             to_mode: None,
+            parent_tool_use_id: None,
         }
     }
+}
+
+/// Kind of a background task shown in the task tray. `Monitor` is reserved:
+/// the vendored adapter emits nothing detectable for it yet (plan K2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskKind {
+    Command,
+    Monitor,
+    Subagent,
+}
+
+/// Lifecycle of a tracked background task. `Stale` = no end signal observed
+/// (ended or unknown); never a fake `Done`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskState {
+    Running,
+    Done,
+    Failed,
+    Stopped,
+    Stale,
+}
+
+/// Where a task's output comes from: a host file tail, the nested-event
+/// ring of a subagent, or nothing readable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TaskOutputKind {
+    File,
+    Events,
+    None,
+}
+
+/// One background task as pushed in a `session:tasks` snapshot.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSummary {
+    /// Command: background task id; Subagent: its `tool_use` id.
+    pub id: String,
+    /// Originating tool call id (dedupe only).
+    pub tool_id: String,
+    pub kind: TaskKind,
+    /// Display label, at most 200 chars.
+    pub label: String,
+    pub state: TaskState,
+    /// "Turn ended" | "Agent restarted" | "No end signal from the agent" | failure text.
+    pub reason: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub last_activity_at: Option<String>,
+    pub output_kind: TaskOutputKind,
+    pub output_rev: u64,
+    /// `File` output only.
+    pub output_path: Option<String>,
+    pub can_stop: bool,
+}
+
+/// Body of `GET /api/sessions/:id/tasks/:taskId/output`.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOutput {
+    /// Last <= 200 lines (lossy UTF-8) of a command's output file, or a
+    /// subagent's nested-call lines (oldest first).
+    pub lines: Vec<String>,
+    /// Older output exists that was not returned.
+    pub truncated: bool,
+    /// Size of the output file in bytes (`File` only).
+    pub total_bytes: Option<u64>,
+    pub output_kind: TaskOutputKind,
+    /// Host path of the output file (`File` only).
+    pub path: Option<String>,
+    /// Subagent only: the final message, once the subagent finished.
+    pub final_text: Option<String>,
 }
 
 /// `user` | `assistant`.

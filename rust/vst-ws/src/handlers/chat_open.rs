@@ -208,6 +208,7 @@ pub async fn handle_chat_open(
             session_id: session_id.clone(),
             meta: Box::new(meta),
         });
+        send_empty_tasks(conn, &session_id);
         send_schedule_state(conn, store, &session_id).await;
         return;
     }
@@ -217,6 +218,8 @@ pub async fn handle_chat_open(
         .ok();
 
     let Some(resolved) = resolved else {
+        // No task snapshot: resolution failing is not proof the session has no tasks, and an empty
+        // snapshot would wipe the client's tray (and bump its held rev past the real registry's).
         send_snapshot(conn, &ctx, registry, &session_id, since_seq);
         return;
     };
@@ -280,7 +283,32 @@ pub async fn handle_chat_open(
         session_id: session_id.clone(),
         meta: Box::new(meta),
     });
+    // Background tasks: full snapshot, no await between meta and here. A
+    // client drops any snapshot whose `rev` is not newer than the one it holds.
+    // `None` while the registry rebuilds: it broadcasts the first snapshot
+    // itself when done, and an empty one now would look like "no tasks".
+    if let Some((rev, tasks)) = resolved.agent.task_snapshot() {
+        conn.send(ServerMessage::SessionTasks {
+            session_id: session_id.clone(),
+            rev,
+            tasks,
+        });
+    }
     send_schedule_state(conn, store, &session_id).await;
+}
+
+/// Empty task snapshot for a session with no live agent (Done / unresolved):
+/// the client must still learn "nothing is tracked". `rev` is wall-clock ms so
+/// it is newer than any registry rev (`max(prev + 1, unix_ms)`) minted earlier.
+fn send_empty_tasks(conn: &WsConnection, session_id: &str) {
+    let rev = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    conn.send(ServerMessage::SessionTasks {
+        session_id: session_id.to_string(),
+        rev,
+        tasks: Vec::new(),
+    });
 }
 
 /// Send the session's scheduled-send state as a slim `session:scheduled` event

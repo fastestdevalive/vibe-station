@@ -68,6 +68,7 @@ impl JsonAgentSession {
         self.update_turn_state(ev.kind);
         self.note_activity(ev);
         self.emit_meta();
+        self.0.tasks.observe(ev);
     }
 
     /// Merge a usage-bearing event into `state.usage`, preserving the
@@ -109,7 +110,8 @@ impl JsonAgentSession {
     }
 
     /// Handle an out-of-band (subagent task-notification) event. Does NOT call
-    /// `update_turn_state` — no lifecycle transitions for notifications.
+    /// `update_turn_state`; the lifecycle axis is driven by
+    /// `note_background_activity` (background.rs), never `turn_state`.
     ///
     /// Content kinds (Text/Thinking/ToolUse/ToolResult/Status-from-Plan) land
     /// here; usage and commands updates are classified in
@@ -155,6 +157,8 @@ impl JsonAgentSession {
         cap_tool_result_content(&mut ev);
         self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
+        self.note_background_activity(&ev);
+        self.0.tasks.observe_out_of_band(&ev);
     }
 
     /// Create a new `NormalizedEvent` stamped with the session's id, cli, and

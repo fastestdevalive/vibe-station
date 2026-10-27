@@ -484,6 +484,26 @@ impl TranscriptStore {
             .collect()
     }
 
+    /// The newest `limit` live rows, oldest first (bounded reverse scan; used
+    /// to rebuild derived state such as the task tray after a restart).
+    pub fn read_last(&self, limit: usize) -> Vec<NormalizedEvent> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows: Vec<(i64, String)> = (|| -> rusqlite::Result<Vec<(i64, String)>> {
+            let mut stmt = self.conn.prepare(
+                "SELECT seq, payload FROM message WHERE session_id = ?1 AND superseded = 0 ORDER BY seq DESC LIMIT ?2",
+            )?;
+            let result = stmt
+                .query_map(params![self.session_id, limit], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(result)
+        })()
+        .unwrap_or_default();
+        rows.iter()
+            .rev()
+            .filter_map(|(seq, p)| self.parse_row(*seq, p))
+            .collect()
+    }
+
     /// Number of persisted live events for this session.
     pub fn count(&self) -> i64 {
         self.conn

@@ -201,6 +201,15 @@ pub enum ServerEvent {
         scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
         scheduled_turn_ids: Vec<String>,
     },
+    /// A session's background-task list changed. Full snapshot (replace, not
+    /// diff); `rev` is monotonic per session (`max(prev + 1, unix_ms)`) so a
+    /// client drops any snapshot with `rev <=` the one it holds.
+    #[serde(rename = "session:tasks-changed", rename_all = "camelCase")]
+    SessionTasksChanged {
+        session_id: String,
+        rev: u64,
+        tasks: Vec<crate::domain::TaskSummary>,
+    },
     /// Cached harness limits changed (or the pinned slots changed). Full
     /// snapshot, replace-not-diff.
     #[serde(rename = "limits:updated", rename_all = "camelCase")]

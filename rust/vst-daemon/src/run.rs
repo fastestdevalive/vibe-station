@@ -559,6 +559,18 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         limits: limits.clone(),
     });
 
+    // Settle `working(background|subagent-notice)` rows a previous daemon left
+    // behind (their in-memory settle state died with it). Before the server
+    // accepts connections.
+    let swept = vst_agents::json_agent_session::boot_sweep::sweep_stale_background_working(
+        &store,
+        &broadcaster,
+    )
+    .await;
+    if swept > 0 {
+        tracing::info!("[vst] settled {swept} stale background-working session(s) at boot");
+    }
+
     // Delete exited plain terminals: sweep stale ones now, then follow events.
     let terminal_reaper_handle =
         vst_routes::terminal_reaper::spawn_exited_terminal_reaper(state.session_routes.clone());

@@ -954,6 +954,15 @@ async fn do_initialize(
             // Parity with the TS daemon: advertise the fs + terminal client
             // handlers wired below. Without this the agent is told we support
             // none of them and the handlers are never called.
+            //
+            // Deliberately NOT advertising `_meta.jetbrains.air.asyncTasks`:
+            // the vendored adapter (0.70.0) has no async-task code, so it would
+            // do nothing, and bumping the adapter was evaluated and not taken
+            // (plan task-tray, Findings § Bump decision / gap K1). Background
+            // tasks are derived by `AgentPlugin::task_observations` instead.
+            // To adopt structured task events later: bump the pin in
+            // `vendor/claude-acp`, inject the capability per plugin here, add
+            // an `UntypedMessage` handler for `async_task_*` updates.
             InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
                 ClientCapabilities::new()
                     .fs(FileSystemCapabilities::new()

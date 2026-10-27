@@ -25,7 +25,7 @@ to refactor it in an unrelated PR.
 ### Backend (Rust)
 
 - **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
-  `vst-proc`/`vst-store`/`vst-rpc` ← `vst-git`/`vst-activity` (types, store) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity` (types, store) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
   `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. No library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
@@ -256,6 +256,7 @@ else if (mode.cli === "opencode") { ... }
 | `supportsChannelResume?()` | optional | Two-identity model: `false` (cursor only) declares that no bridge exists from this CLI's ACP session to its own resume flag, so a json→tty toggle starting a fresh conversation is expected, not a bug. Unimplemented ≡ `true` |
 | `acpSessionIdIsNative?()` | optional (default `false`) | Two-identity model: `true` (omp) declares the ACP `session/new` id IS the CLI's own resume id (`identical` strategy), so after a tty→json toggle refreshes `agent_chat_id` the daemon may drop a stale stored `acp_session_id` (which would otherwise win on reconnect). Decision 5 — see `rust/vst-agents/src/omp.rs` |
 | `native_history_importer?()` | optional (default `None`) | At-rest history importer for this harness's native store (`None` ⇒ toggle reports `historyImported:false` and the UI warns). Implement once the store is readable — importing terminal history into Rich Chat is preferred for every harness, so a plugin that omits it carries a comment saying why not |
+| `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id` |
 
 ### The two session identities (ACP)
 
