@@ -1,0 +1,145 @@
+/* Soft chip, no border, sits on the text line. The fill is a translucent fg tint
+   (not --bg-hover, which is ~identical to --bg-input / --bg-elevated in dark
+   themes), so it shows on the composer, user bubbles and the queued editor.
+   Mentions differ only by the leading kind icon (accent) and a neutral label,
+   since a mention is a reference, not a command. */
+.chat-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--fg-primary) 10%, transparent);
+  color: var(--fg-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-normal);
+  vertical-align: baseline;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.chat-mention-chip svg {
+  flex-shrink: 0;
+  color: var(--chat-accent);
+}
+
+.chat-mention-chip__label {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-mention-popover {
+  max-height: min(420px, 50vh);
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-mention-popover__scroll {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-mention-popover__option {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.chat-mention-popover__icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.chat-mention-popover__label {
+  flex-shrink: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+}
+
+.chat-mention-popover__secondary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+}
+
+.chat-mention-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+
+.chat-mention-popover__header-caption {
+  font-weight: var(--font-weight-normal);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg-muted);
+}
+
+.chat-mention-popover__scoped-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-subtle, var(--border-default));
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+/* Inline (not flex): the highlighted <b> match and the rest of the label must read
+   as one word ("files" with "fi" bold), not as separate flex items with a gap. */
+.chat-mention-popover__scope-pill {
+  display: inline;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--chat-accent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-normal);
+}
+
+.chat-mention-popover__status {
+  padding: var(--space-3) var(--space-2);
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  user-select: none;
+}
+
+.chat-mention-popover__footer {
+  padding: var(--space-2);
+  border-top: var(--border-width) solid var(--border-subtle, var(--border-default));
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  user-select: none;
+  background: var(--bg-card);
+}
+
+.chat-mention-popover b {
+  color: inherit;
+  font-weight: var(--font-weight-bold);
+}

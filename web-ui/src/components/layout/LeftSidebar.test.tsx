@@ -15,6 +15,7 @@ import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
+import { useGlobalDraftStore } from "@/store/globalDraftStore";
 
 /**
  * Capture the LAST `DndContext`'s `onDragStart`/`onDragEnd` LeftSidebar hands
@@ -3562,5 +3563,23 @@ describe("LeftSidebar doctor button label (R2F-02)", () => {
       { name: "git", status: "ok", group: "required" },
     ]);
     expect(await screen.findByRole("button", { name: "Doctor — All checks pass." })).toBeInTheDocument();
+  });
+
+  it("2.T7 — draft row shows plain text instead of raw mention token", async () => {
+    useGlobalDraftStore.setState({
+      draft: {
+        draftPrompt: 'fix {@agent ["s-target","Fix login"]} bug',
+        draftConfig: {} as never,
+      },
+    });
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={localApi}>
+          <LeftSidebar api={localApi} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('fix @agent:"Fix login" bug')).toBeInTheDocument();
   });
 });

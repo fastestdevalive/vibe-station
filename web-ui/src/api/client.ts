@@ -37,6 +37,7 @@ import type {
   LimitSlotRef,
   LimitsRefreshResult,
   LimitsSnapshot,
+  Mention,
   Mode,
   NetworkAccess,
   Project,
@@ -1139,17 +1140,17 @@ export function createClientApi() {
       return parseJson<SearchResult>(res);
     },
 
-    /** Query the daemon's server-owned, incrementally-updated filename index.
-     *  Worktree-scope only — there is no `/projects/:id/file-search` route. */
+    /** Query the daemon's server-owned, incrementally-updated filename index. */
     async fileSearch(
-      worktreeId: string,
+      id: string,
       q: string,
       limit: number | undefined,
       signal?: AbortSignal,
+      scope: FileScope = "worktree",
     ): Promise<FileSearchResult> {
       const params = new URLSearchParams({ q });
       if (limit != null) params.set("limit", String(limit));
-      const res = await apiFetch(`${fileBase("worktree", worktreeId)}/file-search?${params}`, {
+      const res = await apiFetch(`${fileBase(scope, id)}/file-search?${params}`, {
         signal,
       });
       return parseJson<FileSearchResult>(res);
@@ -1542,6 +1543,7 @@ export function createClientApi() {
       message: string,
       attachmentIds?: string[],
       queue?: boolean,
+      mentions?: Mention[],
     ): Promise<SendChatResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat`, {
@@ -1551,6 +1553,7 @@ export function createClientApi() {
           message,
           ...(attachmentIds?.length ? { attachmentIds } : {}),
           ...(queue ? { queue: true } : {}),
+          ...(mentions?.length ? { mentions } : {}),
         }),
       });
       return parseJson<SendChatResponse>(res);
@@ -1608,7 +1611,7 @@ export function createClientApi() {
     async resubmitQueuedTurn(
       sessionId: string,
       turnId: string,
-      body: { edited: boolean; message?: string; attachmentIds?: string[] },
+      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[] },
     ): Promise<{ ok: true; turnId: string }> {
       const root = baseUrl();
       const res = await apiFetch(

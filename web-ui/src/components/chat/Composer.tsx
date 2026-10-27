@@ -12,6 +12,7 @@ import { ComposerHint, ComposerShell, type HintItem } from "./ComposerShell";
 import { ModelSwitch, type ModelAction } from "./ModelSwitch";
 import { ScheduleSendPopover } from "./ScheduleSendPopover";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "./SkillEditor";
+import { useMentionConfig } from "@/components/mentions/useMentionConfig";
 
 /** How long the Send button is held (disabled) at its position after OUR OWN
  *  send emptied the box while a turn is still running — see `justSent`. */
@@ -104,6 +105,7 @@ export function Composer({
   queuedCount = 0,
   onScheduleSend,
 }: ComposerProps) {
+  const mentions = useMentionConfig(api, sessionId);
   const commandNames = (commands ?? []).map((c) => c.name);
   // Injected ONLY once the catalog has loaded: `undefined` must keep the
   // no-popover "skills loading" state (requirement 11), and the injected names
@@ -379,6 +381,7 @@ export function Composer({
         editorKey={sessionId}
         initialText={text}
         commands={editorCommands}
+        mentions={mentions}
         disabled={disabled}
         topRight={
           <>

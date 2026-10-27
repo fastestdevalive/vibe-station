@@ -196,4 +196,25 @@ describe("Enter/Escape/Ctrl+Enter never leak out of the arg input (spec §10)", 
     await keyAsync(argInput, "Enter", { ctrlKey: true });
     await waitFor(() => expect(onSave).toHaveBeenCalled());
   });
+
+  it("token seed renders one chip, Save passes the token unchanged (2.T7)", async () => {
+    const api = createMockApi();
+    const onSave = vi.fn();
+    const token = 'check {@file ["src/main.rs","main.rs"]} please';
+    render(
+      <QueuedTurnEditor
+        api={api}
+        sessionId="s1"
+        initialText={token}
+        initialAttachments={[]}
+        onSave={onSave}
+        onDiscard={vi.fn()}
+      />,
+    );
+    expect(screen.getByTitle("src/main.rs")).toBeTruthy();
+    const saveBtn = screen.getByText("Save");
+    expect(saveBtn).toHaveProperty("disabled", false);
+    fireEvent.click(saveBtn);
+    expect(onSave).toHaveBeenCalledWith(token, []);
+  });
 });

@@ -1,4 +1,5 @@
 import type { Session, Worktree } from "@/api/types";
+import { renderDraftText } from "./mentions";
 
 /**
  * The display label for a session's tab/sidebar row: the custom `name` when
@@ -24,8 +25,10 @@ export function sessionLabel(s: Pick<Session, "name" | "isMain" | "type">): stri
 
 /** Sidebar/tab label for a draft: first 5 words of prompt, or a placeholder. */
 export function draftLabel(prompt?: string | null): string {
-  if (!prompt || !prompt.trim()) return "New agent…";
-  return prompt.trim().split(/\s+/).slice(0, 5).join(" ");
+  if (!prompt) return "New agent…";
+  const text = renderDraftText(prompt).trim();
+  if (!text) return "New agent…";
+  return text.split(/\s+/).slice(0, 5).join(" ");
 }
 
 /**

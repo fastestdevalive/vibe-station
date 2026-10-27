@@ -50,7 +50,7 @@ describe("QuickOpen", () => {
     fireEvent.change(input(), { target: { value: "main" } });
 
     await waitFor(() => {
-      expect(fileSearch).toHaveBeenCalledWith("wt-1", "main", 50, expect.any(AbortSignal));
+      expect(fileSearch).toHaveBeenCalledWith("wt-1", "main", 50, expect.any(AbortSignal), "worktree");
     });
     expect(await screen.findByText("main.ts")).toBeInTheDocument();
     expect(screen.getByText("helper.ts")).toBeInTheDocument();
@@ -275,27 +275,21 @@ describe("QuickOpen", () => {
     expect(openFileTabNew).not.toHaveBeenCalled();
   });
 
-  it("5.T6: project-scope Quick Open still renders a file list via the fileList + client-scoring path", async () => {
+  it("5.T6: project-scope Quick Open queries fileSearch with project scope, never fileList", async () => {
     const api = createMockApi();
-    const fileList = vi
-      .spyOn(api, "fileList")
-      .mockResolvedValue({
-        files: ["src/main.rs", "src/main_test.rs", "src/other/zz.rs"],
-        truncated: false,
-        source: "node",
-      });
-    const fileSearch = vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false });
+    const fileSearch = vi.spyOn(api, "fileSearch").mockResolvedValue({
+      files: ["src/main.rs", "src/main_test.rs", "src/other/zz.rs"],
+      truncated: false,
+    });
+    const fileList = vi.spyOn(api, "fileList");
 
     await setup(api, { worktreeId: "proj-1", scope: "project" });
 
-    fireEvent.change(input(), { target: { value: "main" } });
-
     await waitFor(() => {
-      expect(fileList).toHaveBeenCalledWith("proj-1", expect.any(AbortSignal), "project");
+      expect(fileSearch).toHaveBeenCalledWith("proj-1", "", 50, expect.any(AbortSignal), "project");
     });
-    expect(fileSearch).not.toHaveBeenCalled();
+    expect(fileList).not.toHaveBeenCalled();
     expect(await screen.findByText("main.rs")).toBeInTheDocument();
-    expect(screen.getByText("main_test.rs")).toBeInTheDocument();
   });
 
   // Regression: the daemon's file-search index only stays fresh (and only
@@ -348,5 +342,33 @@ describe("QuickOpen", () => {
         scope: "project",
       }),
     );
+  });
+
+
+  it("says indexing is taking longer than usual after 30s, never 'No files found'", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false, indexing: true });
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+    await setup(api);
+    fireEvent.change(input(), { target: { value: "main" } });
+    expect(await screen.findByText("Indexing files…")).toBeInTheDocument();
+    skew = 31_000; // the next poll sees >30s of indexing
+    expect(
+      await screen.findByText("Indexing files… (taking longer than usual)", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No files found")).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it("shows 'Indexing files…' instead of 'No files found' while the daemon indexes", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false, indexing: true });
+    await setup(api);
+    fireEvent.change(input(), { target: { value: "main" } });
+    expect(await screen.findByText("Indexing files…")).toBeInTheDocument();
+    expect(screen.queryByText("No files found")).toBeNull();
+    vi.restoreAllMocks();
   });
 });

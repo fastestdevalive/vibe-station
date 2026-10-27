@@ -460,6 +460,36 @@ describe("project-scope URL routing (git-status / commits)", () => {
     expect(url).toContain("/api/worktrees/wt1/diff/a.rs");
   });
 
+  it("fileSearch project scope hits /api/projects/<id>/file-search", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ files: [], truncated: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.fileSearch("p1", "a b", 50, undefined, "project");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/projects/p1/file-search?q=a+b&limit=50");
+  });
+
+  it("fileSearch default scope (worktree) hits /api/worktrees/<id>/file-search", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ files: [], truncated: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.fileSearch("wt1", "a b", 50);
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/file-search?q=a+b&limit=50");
+  });
+
   it("submodule param is appended to getDiff/listChangedPaths/listCommits and omitted otherwise", async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn((url: RequestInfo | URL) => {

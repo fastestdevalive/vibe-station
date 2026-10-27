@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
-import type { NormalizedEvent, SendChatResponse, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
+import type { BeginEditResponse, NormalizedEvent, SendChatResponse, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
 import { useChat } from "./useChat";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
@@ -24,7 +24,7 @@ function makeApi(sendChatResult: SendChatResponse = { turnId: "t1", queuePositio
     sendChat: vi.fn(async () => sendChatResult),
     stopChat: vi.fn(async () => ({ ok: true as const })),
     cancelQueuedTurn: vi.fn(async () => ({ ok: true as const })),
-    beginEditQueuedTurn: vi.fn(async (_s: string, turnId: string) => ({
+    beginEditQueuedTurn: vi.fn(async (_s: string, turnId: string): Promise<BeginEditResponse> => ({
       turnId,
       message: "prefill",
       attachments: [],
@@ -925,5 +925,73 @@ describe("useChat session:scheduled (slim scheduled-state event)", () => {
       api.emit({ type: "session:scheduled", sessionId: "s1", scheduledSends: [], scheduledFailed: [], scheduledTurnIds: [] });
     });
     expect(result.current.meta?.scheduledSends).toEqual([]);
+  });
+});
+
+describe("useChat mentions (1.T8)", () => {
+  it('send("see {@file [\\"a.ts\\",\\"a.ts\\"]}") calls sendChat with text see @a.ts and a 1-item mentions 5th arg', async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    await act(async () => {
+      await result.current.send('see {@file ["a.ts","a.ts"]}');
+    });
+
+    expect(api.sendChat).toHaveBeenCalledWith(
+      "s1",
+      "see @a.ts",
+      undefined,
+      undefined,
+      [{ kind: "file", id: "a.ts", label: "a.ts" }],
+    );
+  });
+
+  it("send without mentions calls sendChat with exactly 4 args (regression)", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    await act(async () => {
+      await result.current.send("hello world");
+    });
+
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "hello world", undefined, undefined);
+    expect(api.sendChat.mock.calls[0]?.length).toBe(4);
+  });
+
+  it("saveEdit puts mentions in the resubmit body", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    await act(async () => {
+      await result.current.saveEdit("t1", 'fix {@agent ["s2","Fix login"]}', ["a1"]);
+    });
+
+    expect(api.resubmitQueuedTurn).toHaveBeenCalledWith("s1", "t1", {
+      edited: true,
+      message: 'fix @agent:"Fix login" (id=s2)',
+      attachmentIds: ["a1"],
+      mentions: [{ kind: "agent", id: "s2", label: "Fix login" }],
+    });
+  });
+
+  it("begin-edit hydrates editingDrafts using fromWire", async () => {
+    const api = makeApi();
+    api.beginEditQueuedTurn.mockResolvedValueOnce({
+      turnId: "t1",
+      message: 'check @agent:"Fix login" (id=s2)',
+      attachments: [],
+      mentions: [{ kind: "agent", id: "s2", label: "Fix login" }],
+      queueIndex: 0,
+    });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    await act(async () => {
+      await result.current.editQueued("t1");
+    });
+
+    expect(result.current.editingDrafts.t1).toEqual({
+      message: 'check {@agent ["s2","Fix login"]}',
+      attachments: [],
+    });
   });
 });

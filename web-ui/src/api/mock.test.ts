@@ -555,6 +555,39 @@ describe("mock api contract", () => {
       off();
     });
   });
+
+  describe("chat mentions in mock API", () => {
+    it("sendChat with mentions echoes them on the user event, and beginEditQueuedTurn returns them", async () => {
+      const api = createMockApi();
+      const mentions = [{ kind: "file" as const, id: "src/a.ts", label: "a.ts" }];
+      const msgHandler = vi.fn();
+      const off = api.on("session:message", msgHandler);
+
+      const res = await api.sendChat("sess-main", "see @src/a.ts", undefined, false, mentions);
+      expect(res.turnId).toBeDefined();
+
+      const userMsg = msgHandler.mock.calls.find(
+        (c) => c[0]?.type === "session:message" && c[0]?.event?.kind === "user",
+      )?.[0];
+      expect(userMsg).toBeDefined();
+      expect(userMsg.event.mentions).toEqual(mentions);
+
+      const editRes = await api.beginEditQueuedTurn("sess-main", res.turnId);
+      expect(editRes.turnId).toBe(res.turnId);
+      expect(editRes.message).toBe("see @src/a.ts");
+      expect(editRes.mentions).toEqual(mentions);
+
+      off();
+    });
+  });
+
+  it("fileSearch project scope returns the project's worktree files", async () => {
+    const api = createMockApi();
+    const wts = await api.listWorktrees();
+    const projectId = wts[0]!.projectId;
+    const res = await api.fileSearch(projectId, "app", 50, undefined, "project");
+    expect(res.files.length).toBeGreaterThan(0);
+  });
 });
 
 describe("mock reset carry modes / cancel (2.T6)", () => {

@@ -3,7 +3,8 @@ import { Clock } from "lucide-react";
 import type { Attachment } from "@/api/types";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
-import { parseSkillSegments } from "@/lib/skillInvocation";
+import { parseDraftSegments } from "@/lib/mentions";
+import { MentionChipView } from "@/components/mentions/MentionChipView";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { AttachmentChip } from "./AttachmentChip";
 
@@ -68,8 +69,10 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
           // lookup is involved: a token IS a token, so what is highlighted
           // here can never drift from what the composer produced.
           <div className="chat-bubble__text">
-            {parseSkillSegments(text).map((seg, i) =>
-              seg.type === "text" ? (
+            {parseDraftSegments(text).map((seg, i) =>
+              seg.type === "mention" ? (
+                <MentionChipView key={i} mention={seg.mention} />
+              ) : seg.type === "text" ? (
                 <span key={i}>{seg.text}</span>
               ) : (
                 <span key={i} className="chat-msg-skill">

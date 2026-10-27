@@ -1,4 +1,5 @@
 import type { ApiInstance } from "@/api";
+import { toWire } from "@/lib/mentions";
 
 /**
  * Run the first turn of a freshly-created JSON agent AFTER its session exists.
@@ -27,8 +28,12 @@ export async function sendJsonFirstTurn(
     const { attachments } = await api.uploadAttachments(sessionId, files);
     attachmentIds = attachments.map((a) => a.id);
   }
-  const trimmed = prompt.trim();
-  if (trimmed.length > 0 || attachmentIds.length > 0) {
-    await api.sendChat(sessionId, trimmed, attachmentIds);
+  const w = toWire(prompt.trim());
+  if (w.text.trim().length > 0 || attachmentIds.length > 0) {
+    if (w.mentions.length > 0) {
+      await api.sendChat(sessionId, w.text, attachmentIds, undefined, w.mentions);
+    } else {
+      await api.sendChat(sessionId, w.text, attachmentIds);
+    }
   }
 }

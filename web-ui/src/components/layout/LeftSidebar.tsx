@@ -42,6 +42,7 @@ import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
+import { renderDraftText } from "@/lib/mentions";
 import { pickNextDirectAgent, projectTabIds, isSupersededSession } from "@/lib/sessionVisibility";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
@@ -2126,7 +2127,7 @@ export function LeftSidebar({
         ) : null}
         {/* Tier 2 draft row (global new — no project chosen yet) — a top-level
             sibling to projects, rendered while a global draft is in the store. */}
-        {!collapsed && globalDraft && (!trimmedQuery || matchText(draftLabel(globalDraft.draftPrompt)) || matchText(globalDraft.draftPrompt)) ? (
+        {!collapsed && globalDraft && (!trimmedQuery || matchText(draftLabel(globalDraft.draftPrompt)) || matchText(renderDraftText(globalDraft.draftPrompt))) ? (
           <div
             className="tree-row tree-row--project draft-row"
             data-active={location.pathname === "/draft/new"}

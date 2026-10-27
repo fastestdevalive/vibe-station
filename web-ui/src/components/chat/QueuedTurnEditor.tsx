@@ -4,6 +4,7 @@ import type { Attachment, Command } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
 import { AttachmentChip } from "./AttachmentChip";
 import { SkillEditor, type SkillEditorHandle } from "./SkillEditor";
+import { useMentionConfig } from "@/components/mentions/useMentionConfig";
 
 interface QueuedTurnEditorProps {
   api: ApiInstance;
@@ -48,6 +49,7 @@ export function QueuedTurnEditor({
   onDiscard,
   commands,
 }: QueuedTurnEditorProps) {
+  const mentions = useMentionConfig(api, sessionId);
   const [text, setText] = useState(initialText);
   const [hasContent, setHasContent] = useState(() => initialText.trim().length > 0);
   const { drafts, readyAttachments, error, uploadFiles, removeDraft } = useAttachmentDrafts(
@@ -119,6 +121,7 @@ export function QueuedTurnEditor({
           editorKey={`${sessionId}-queued-edit-${turnId ?? "single"}`}
           initialText={initialText}
           commands={commands}
+          mentions={mentions}
           ariaLabel="Edit queued message"
           className="chat-queued-editor__textarea"
           onChangeText={(next, content) => {

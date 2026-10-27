@@ -79,7 +79,7 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
   const isCommandMode = query.startsWith(">");
   const effectiveWorktreeId = open && !isLineMode && !isCommandMode ? worktreeId : null;
 
-  const { files, loading, error, truncated } = useFileSearch(
+  const { files, loading, error, truncated, indexing, slowIndexing } = useFileSearch(
     api,
     effectiveWorktreeId,
     query,
@@ -88,12 +88,14 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
 
   // The daemon's file-search index only stays live (and only survives at
   // all — see FileSearchIndex::evict) while at least one tree:watch is held
-  // for this worktree. FileTreeSidebar/FilePreviewPane hold one, but only
+  // for this worktree or project. FileTreeSidebar/FilePreviewPane hold one, but only
   // while the Files tool-panel tab is the active one — Quick Open itself is
   // reachable from the top bar regardless of which tab is showing. Without
   // this, opening Quick Open while on e.g. the VCS tab queries against an
-  // index nothing is keeping fresh. `null` while closed lets useTreeWatch's
-  // own cleanup (tree:unwatch) run, same as any other consumer's lifecycle.
+  // index nothing is keeping fresh (the watch keeps the project index fresh
+  // too; unwatched callers rely on the server TTL). `null` while closed lets
+  // useTreeWatch's own cleanup (tree:unwatch) run, same as any other
+  // consumer's lifecycle.
   useTreeWatch(api, open ? worktreeId : null, scope);
 
   // Open files, active one first. The active file always counts as open even
@@ -332,6 +334,10 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
                   : `No open file has ${lineTarget} lines`
                 : error
                   ? error
+                  : indexing
+                    ? slowIndexing
+                      ? "Indexing files… (taking longer than usual)"
+                      : "Indexing files…"
                   : loading && files.length === 0
                     ? "Loading files…"
                     : "No files found"}

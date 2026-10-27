@@ -23,6 +23,18 @@ vi.mock("@/components/chat/MessageList", async (importOriginal) => {
   return { ...actual, MessageList: vi.fn(actual.MessageList) };
 });
 
+let latestComposerScheduleSend: ((message: string, ids: string[], fireAt: string) => Promise<void>) | null = null;
+vi.mock("@/components/chat/Composer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/chat/Composer")>();
+  return {
+    ...actual,
+    Composer: (props: Parameters<typeof actual.Composer>[0]) => {
+      latestComposerScheduleSend = props.onScheduleSend ?? null;
+      return <actual.Composer {...props} />;
+    },
+  };
+});
+
 function meta(sessionId: string, extra: Partial<SessionMeta> = {}): SessionMeta {
   return {
     sessionId,
@@ -668,6 +680,24 @@ describe("ChatPane empty state with predecessors (3.T5)", () => {
     await user.click(linkBtn);
 
     expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-prev");
+  });
+
+  it("onScheduleSend converts draft mentions to plain text with (id=…) suffix (1.T9)", async () => {
+    const api = createMockApi();
+    const scheduleSpy = vi.spyOn(api, "scheduleMessage").mockResolvedValue({ id: "sched-1", fireAt: "2026-10-26T05:39:00.000Z" });
+
+    render(<ChatPane api={api} session={jsonSession("js-sched")} visible />);
+
+    await act(async () => {
+      await latestComposerScheduleSend?.('ask {@agent ["s2","Helper Bot"]} for help', [], "2026-10-26T05:39:00.000Z");
+    });
+
+    expect(scheduleSpy).toHaveBeenCalledWith(
+      "js-sched",
+      'ask @agent:"Helper Bot" (id=s2) for help',
+      "2026-10-26T05:39:00.000Z",
+      [],
+    );
   });
 });
 

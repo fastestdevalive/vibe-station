@@ -8,6 +8,7 @@ import "./styles/themes.generated.css";
 import "./styles/global.css";
 import "./styles/workspace.css";
 import "./styles/chat.css";
+import "./styles/mentions.css";
 import "./styles/selection.css";
 
 const root = document.getElementById("root");

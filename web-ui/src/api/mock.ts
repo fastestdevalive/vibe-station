@@ -12,6 +12,7 @@ import type {
   LocalQrResponse,
   LspLanguageSurveyResponse,
   MarkdownStyle,
+  Mention,
   MobileQrResponse,
   NormalizedEvent,
   NormalizedEventProvider,
@@ -435,6 +436,22 @@ export function createMockApi(seed: MockSeed = {}) {
       "": [{ name: "pkg", path: "pkg", type: "dir" }],
       pkg: [{ name: "mod.go", path: "pkg/mod.go", type: "file" }],
     },
+  };
+
+  /** Flat list of file paths for a worktree, walked from the mock tree. */
+  const mockWorktreeFiles = (worktreeId: string): string[] => {
+    const out: string[] = [];
+    const visited = new Set<string>();
+    const walk = (dir: string) => {
+      if (visited.has(dir)) return;
+      visited.add(dir);
+      for (const e of treeStore[worktreeId]?.[dir] ?? []) {
+        if (e.type === "dir") walk(e.path);
+        else out.push(e.path);
+      }
+    };
+    walk("");
+    return out;
   };
 
   const fileContents: Record<string, string> = {
@@ -1460,21 +1477,18 @@ export function createMockApi(seed: MockSeed = {}) {
       _q: string,
       _limit?: number,
       _signal?: AbortSignal,
+      scope: FileScope = "worktree",
     ): Promise<FileSearchResult> {
-      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
-      const out: string[] = [];
-      const visited = new Set<string>();
-      const walk = (dir: string) => {
-        if (visited.has(dir)) return;
-        visited.add(dir);
-        const entries = treeStore[worktreeId]?.[dir] ?? [];
-        for (const e of entries) {
-          if (e.type === "dir") walk(e.path);
-          else out.push(e.path);
+      // For project scope the id is a project id: search the union of its worktrees' files.
+      if (scope === "project") {
+        const all = new Set<string>();
+        for (const w of worktrees.filter((w) => w.projectId === worktreeId)) {
+          for (const f of mockWorktreeFiles(w.id)) all.add(f);
         }
-      };
-      walk("");
-      return { files: out, truncated: false };
+        return { files: [...all], truncated: false };
+      }
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      return { files: mockWorktreeFiles(worktreeId), truncated: false };
     },
 
     async getGutter(
@@ -2189,6 +2203,7 @@ export function createMockApi(seed: MockSeed = {}) {
       message: string,
       attachmentIds?: string[],
       _queue?: boolean,
+      mentions?: Mention[],
     ): Promise<SendChatResponse> {
       const turnId = `turn-${++mockTurnSeq}`;
       const userEvent: NormalizedEvent = {
@@ -2203,6 +2218,7 @@ export function createMockApi(seed: MockSeed = {}) {
         ...(attachmentIds?.length
           ? { attachments: attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
           : {}),
+        ...(mentions?.length ? { mentions } : {}),
       };
       api.__test.pushChatEvent(sessionId, userEvent);
       emit({ type: "session:message", sessionId, event: userEvent });
@@ -2233,6 +2249,7 @@ export function createMockApi(seed: MockSeed = {}) {
         turnId,
         message: userEv?.text ?? "",
         attachments: userEv?.attachments ?? [],
+        mentions: userEv?.mentions,
         queueIndex: 0,
       };
     },
@@ -2240,7 +2257,7 @@ export function createMockApi(seed: MockSeed = {}) {
     async resubmitQueuedTurn(
       sessionId: string,
       turnId: string,
-      body: { edited: boolean; message?: string; attachmentIds?: string[] },
+      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[] },
     ): Promise<{ ok: true; turnId: string }> {
       if (body.edited) {
         const userEvent: NormalizedEvent = {
@@ -2256,6 +2273,7 @@ export function createMockApi(seed: MockSeed = {}) {
           ...(body.attachmentIds?.length
             ? { attachments: body.attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
             : {}),
+          ...(body.mentions?.length ? { mentions: body.mentions } : {}),
         };
         api.__test.pushChatEvent(sessionId, userEvent);
         emit({ type: "session:message", sessionId, event: userEvent });

@@ -60,6 +60,20 @@ describe("QueuedTray", () => {
     );
   });
 
+  it("renders a queued turn's mention tokens as @label, no braces (1.T9)", () => {
+    renderTray([
+      {
+        turnId: "t1",
+        text: 'See {@file ["src/a.ts","a.ts"]} and {@agent ["s2","Helper Bot"]}',
+        status: "queued",
+      },
+    ]);
+    const row = screen.getAllByRole("listitem")[0]!;
+    expect(row.textContent).toContain('See @src/a.ts and @agent:"Helper Bot"');
+    expect(row.textContent).not.toContain("{@");
+    expect(row.getAttribute("aria-label")).toContain('See @src/a.ts and @agent:"Helper Bot"');
+  });
+
   it("marks a queued turn that came from a scheduled send with a subtle clock (and only that one)", () => {
     renderTray([
       { turnId: "t1", text: "typed", status: "queued" },
