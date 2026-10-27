@@ -53,22 +53,23 @@ pub fn escape_skill_args(args: &str) -> String {
     out
 }
 
-/// Parse one `{/name[ args]}` token starting at `input[start] == "{"` (with
-/// `input[start + 1] == "/"` already confirmed by the caller). Returns `None`
+/// Parse one `{/name[ args]}` token starting at `input[start] == '{'` (with
+/// `input[start + 1] == '/'` already confirmed by the caller). Returns `None`
 /// when unterminated (no unescaped closing `}` before the end of the string) —
-/// the caller then treats the leading `{` as ordinary literal text.
-fn try_parse_token(input: &[u8], start: usize) -> Option<(String, String, usize)> {
+/// the caller then treats the leading `{` as ordinary literal text. Operates
+/// on `char`s so multi-byte UTF-8 survives intact.
+fn try_parse_token(input: &[char], start: usize) -> Option<(String, String, usize)> {
     let n = input.len();
     let mut j = start + 2; // skip "{/"
     let mut name = String::new();
-    while j < n && input[j] != b' ' && input[j] != b'}' {
-        name.push(input[j] as char);
+    while j < n && input[j] != ' ' && input[j] != '}' {
+        name.push(input[j]);
         j += 1;
     }
     if j >= n {
         return None; // unterminated — no closing '}' or ' ' found
     }
-    if input[j] == b'}' {
+    if input[j] == '}' {
         return Some((name, String::new(), j));
     }
     // input[j] == ' ' — the single separator between name and args.
@@ -76,21 +77,39 @@ fn try_parse_token(input: &[u8], start: usize) -> Option<(String, String, usize)
     let mut args = String::new();
     while j < n {
         let c = input[j];
-        if c == b'\\'
-            && j + 1 < n
-            && (input[j + 1] == b'\\' || input[j + 1] == b'{' || input[j + 1] == b'}')
-        {
-            args.push(input[j + 1] as char);
+        if c == '\\' && j + 1 < n && matches!(input[j + 1], '\\' | '{' | '}') {
+            args.push(input[j + 1]);
             j += 2;
             continue;
         }
-        if c == b'}' {
+        if c == '}' {
             return Some((name, args, j));
         }
-        args.push(c as char);
+        args.push(c);
         j += 1;
     }
     None // unterminated — no closing '}' found
+}
+
+/// Convert wire-form (skill-grammar) text to the plain text an agent should
+/// see: `\\` -> `\`, `\{` -> `{`, any other backslash stays literal. This has
+/// EXACTLY the text-run semantics of `parse_skill_segments` but does NOT detect
+/// tokens (`{/x}` is left as `{/x}`), so it is safe for text already known to
+/// carry no resolved skill invocation. Apply at most once per delivery.
+pub fn unescape_skill_text(raw: &str) -> String {
+    if !raw.contains('\\') {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && matches!(chars.peek(), Some('\\') | Some('{')) {
+            out.push(chars.next().unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Parse a flat message string into a `(text | token)*` segment list. Never
@@ -98,11 +117,11 @@ fn try_parse_token(input: &[u8], start: usize) -> Option<(String, String, usize)
 /// that doesn't match one of the defined targets is left as a literal
 /// backslash.
 pub fn parse_skill_segments(input: &str) -> Vec<SkillSegment> {
-    let bytes = input.as_bytes();
+    let chars: Vec<char> = input.chars().collect();
+    let n = chars.len();
     let mut segments: Vec<SkillSegment> = Vec::new();
     let mut buf = String::new();
     let mut i = 0;
-    let n = bytes.len();
 
     let flush = |segments: &mut Vec<SkillSegment>, buf: &mut String| {
         if !buf.is_empty() {
@@ -111,14 +130,14 @@ pub fn parse_skill_segments(input: &str) -> Vec<SkillSegment> {
     };
 
     while i < n {
-        let c = bytes[i];
-        if c == b'\\' && i + 1 < n && (bytes[i + 1] == b'\\' || bytes[i + 1] == b'{') {
-            buf.push(bytes[i + 1] as char);
+        let c = chars[i];
+        if c == '\\' && i + 1 < n && (chars[i + 1] == '\\' || chars[i + 1] == '{') {
+            buf.push(chars[i + 1]);
             i += 2;
             continue;
         }
-        if c == b'{' && bytes[i + 1] == b'/' {
-            if let Some((name, args, end)) = try_parse_token(bytes, i) {
+        if c == '{' && i + 1 < n && chars[i + 1] == '/' {
+            if let Some((name, args, end)) = try_parse_token(&chars, i) {
                 flush(&mut segments, &mut buf);
                 segments.push(SkillSegment::Token { name, args });
                 i = end + 1;
@@ -126,7 +145,7 @@ pub fn parse_skill_segments(input: &str) -> Vec<SkillSegment> {
             }
             // No matching unescaped '}' — not a token; fall through, '{' literal.
         }
-        buf.push(c as char);
+        buf.push(c);
         i += 1;
     }
     flush(&mut segments, &mut buf);

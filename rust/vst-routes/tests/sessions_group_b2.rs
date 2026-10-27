@@ -1831,6 +1831,44 @@ async fn worktree_draft_is_created_on_top_but_direct_draft_keeps_its_own_slot() 
     );
 }
 
+/// The new initial prompt is uniformly wire-form: the plain handoff summary is
+/// escaped, the client-supplied (already wire-form) prompt is left as is.
+#[tokio::test]
+async fn reset_combined_prompt_escapes_plain_handoff_only() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = ResetBody {
+        handoff: None,
+        prompt: Some(r"fix C:\\temp \{x}".into()),
+        handoff_text: Some(r"see C:\temp {/x y}".into()),
+        mode_id: None,
+        carry_over: Some(CarryOver::Summary),
+        ..Default::default()
+    };
+    let res = r.reset_session("s1", &body).await.unwrap();
+    let project = store.get_project("p1").await.unwrap();
+    let new = project
+        .direct_sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(
+        new.initial_prompt.as_deref(),
+        Some(
+            r"see C:\\temp \{/x y}
+
+---
+
+fix C:\\temp \{x}"
+        )
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — reset route wiring: transcript carry, break kind, channel handling
 // ---------------------------------------------------------------------------

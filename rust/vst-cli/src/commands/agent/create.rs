@@ -5,7 +5,7 @@ use crate::client::{daemon_post, DaemonResult};
 use crate::env::get_vst_session;
 use crate::output::warn;
 use crate::preflight::preflight;
-use crate::text_source::resolve_file_or_inline;
+use crate::text_source::{resolve_file_or_inline, to_wire_text};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AgentCreateOptions {
@@ -119,7 +119,8 @@ pub async fn run_agent_create(opts: AgentCreateOptions) -> Result<(), (String, i
         }
     };
 
-    let prompt = resolve_file_or_inline(opts.prompt, opts.prompt_file, "--prompt-file");
+    let prompt = resolve_file_or_inline(opts.prompt, opts.prompt_file, "--prompt-file")
+        .map(|p| to_wire_text(&p));
 
     preflight().await;
 

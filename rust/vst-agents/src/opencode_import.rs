@@ -157,7 +157,10 @@ pub fn import_opencode_history(
                     .collect();
                 let mut extra = Map::new();
                 extra.insert("role".into(), serde_json::json!("user"));
-                extra.insert("text".into(), Value::String(texts.join("\n")));
+                extra.insert(
+                    "text".into(),
+                    Value::String(crate::skill_tokens::escape_skill_text(&texts.join("\n"))),
+                );
                 events.push(mk_event(
                     session_id,
                     &ts,

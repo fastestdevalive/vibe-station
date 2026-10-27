@@ -1479,3 +1479,97 @@ async fn test_previous_walks_chain_over_http() {
 
     env::remove_var("VST_DAEMON_URL");
 }
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn test_mock_cli_escapes_prompt_and_send_text_to_skill_grammar() {
+    // Guards a global env var, see the sibling mock tests above.
+    let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
+    let create_body: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+    let send_body: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+
+    let app = Router::new()
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({ "ok": true, "version": "0.1.0", "port": 8888, "uptime": 1 }))
+            }),
+        )
+        .route(
+            "/api/sessions",
+            post({
+                let captured = create_body.clone();
+                move |Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        Json(json!({
+                            "id": "sess-1", "worktreeId": "wt-1", "projectId": "p1",
+                            "isMain": false, "type": "agent", "tmuxName": "vst_sess1",
+                            "useTmux": false, "channel": "json", "state": "idle",
+                            "lifecycleState": "idle", "createdAt": "2026-09-15T00:00:00Z",
+                            "sortOrder": 1.0
+                        }))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/api/sessions/s-1/send",
+            post({
+                let captured = send_body.clone();
+                move |Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        Json(json!({ "ok": true }))
+                    }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    env::set_var("VST_DAEMON_URL", &base_url);
+
+    // Shared test vector: raw `a\b {x}` -> wire `a\\b \{x}`.
+    let raw = r"a\b {x}";
+    let wire = r"a\\b \{x}";
+
+    let r = run_agent_create(AgentCreateOptions {
+        worktree_id: "wt-1".to_string(),
+        project_id: None,
+        mode: None,
+        prompt: Some(raw.to_string()),
+        prompt_file: None,
+        channel: None,
+        parent: None,
+        no_parent: true,
+    })
+    .await;
+    assert!(r.is_ok());
+    let body = create_body.lock().unwrap().clone().unwrap();
+    assert_eq!(body.get("prompt").and_then(|v| v.as_str()), Some(wire));
+
+    let r = vst_cli::send_message::run_send(
+        "s-1",
+        &[raw.to_string()],
+        &vst_cli::send_message::SendOptions {
+            file: None,
+            attach: vec![],
+            queue: false,
+            wait: false,
+            timeout: None,
+        },
+    )
+    .await;
+    assert!(r.is_ok());
+    let body = send_body.lock().unwrap().clone().unwrap();
+    assert_eq!(body.get("data").and_then(|v| v.as_str()), Some(wire));
+
+    env::remove_var("VST_DAEMON_URL");
+}

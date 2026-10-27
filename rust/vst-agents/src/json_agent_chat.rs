@@ -12,7 +12,7 @@ use std::sync::Arc;
 use vst_store::transcript::{SincePage, TranscriptMeta, TranscriptPage};
 use vst_store::StoreHandle;
 use vst_types::domain::{
-    Attachment, Channel, CliId, LifecycleState, NormalizedEventProvider, ProjectRecord,
+    Attachment, Channel, CliId, LifecycleState, Mention, NormalizedEventProvider, ProjectRecord,
     ScheduledFailedMeta, ScheduledMessageMeta, SessionLifecycle, SessionMeta, SessionRecord,
     WorktreeRecord,
 };
@@ -33,7 +33,6 @@ use crate::prompt_builder::{
     build_direct_prompt, build_prompt, BuildDirectPromptInput, BuildPromptInput,
 };
 use crate::registry::resolve_plugin;
-use crate::skill_resolution::inject_attachments;
 use crate::util::now_iso_8601;
 
 // ---------------------------------------------------------------------------
@@ -316,6 +315,7 @@ pub struct EnqueueChatTurnOpts {
     pub session_id: String,
     pub message: String,
     pub attachments: Vec<Attachment>,
+    pub mentions: Vec<Mention>,
     pub daemon_port: u16,
     /// `Some(false)` skips steering and always enqueues FIFO.
     pub steer: Option<bool>,
@@ -347,12 +347,16 @@ pub async fn enqueue_chat_turn(
         None
     };
 
-    let message = inject_attachments(&opts.message, &opts.attachments, false);
+    // `message` stays RAW wire-form: attachments are injected once, at run
+    // time in the drain (Decision 5 / A1), so stored/queued/edited text never
+    // carries the `[Attached files:]` header.
+    let message = opts.message;
 
     let result = if opts.steer == Some(false) || opts.silent {
         let r = agent.enqueue_ext(
             message,
             opts.attachments,
+            opts.mentions,
             system_prompt,
             None, // fork_from_chat_id
             opts.silent,
@@ -364,9 +368,10 @@ pub async fn enqueue_chat_turn(
         }
     } else {
         let r = agent
-            .submit(
+            .submit_with(
                 message,
                 opts.attachments,
+                opts.mentions,
                 system_prompt,
                 None, // fork_from_chat_id
             )
@@ -454,6 +459,7 @@ pub async fn start_json_create_turn(
             session_id: opts.session_id.clone(),
             message: prompt,
             attachments: vec![],
+            mentions: vec![],
             daemon_port: opts.daemon_port,
             steer: None,
             silent: opts.silent,
@@ -675,6 +681,7 @@ pub async fn deliver_scheduled_message(
             session_id: row.session_id.clone(),
             message: row.message.clone(),
             attachments: parse_attachments_json(row.attachments.as_deref()).unwrap_or_default(),
+            mentions: vec![],
             daemon_port,
             steer: Some(true),
             silent: false,

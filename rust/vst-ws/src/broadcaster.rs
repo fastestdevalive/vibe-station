@@ -86,7 +86,13 @@ impl WsHub {
 
     /// Broadcast an event to all connections watching a specific worktree.
     pub fn broadcast_worktree(&self, worktree_id: &str, msg: &ServerMessage) {
-        let prefix = format!("tree:{worktree_id}:");
+        let prefix = format!(
+            "tree:{}:",
+            crate::services::file_search::index_key(
+                vst_types::ws::WatchScope::Worktree,
+                worktree_id
+            )
+        );
         for conn in self.connections.read().unwrap().iter() {
             if conn
                 .tree_watch_keys()
@@ -471,5 +477,29 @@ mod tests {
 
         hub.unregister_connection(&conn2);
         assert_eq!(hub.connection_count(), 0);
+    }
+
+    #[test]
+    fn broadcast_worktree_delivers_to_matching_key() {
+        use vst_types::ws::ServerMessage;
+
+        let hub = WsHub::new();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        let watch_key = "tree:wt:mywt:".to_string();
+        conn.register_tree_watcher(&watch_key, watch_key.clone());
+        hub.register_connection(&conn);
+
+        let msg = ServerMessage::SystemError {
+            message: "test".into(),
+        };
+        hub.broadcast_worktree("mywt", &msg);
+
+        let sent_msgs = sent.lock().unwrap();
+        assert_eq!(sent_msgs.len(), 1);
     }
 }

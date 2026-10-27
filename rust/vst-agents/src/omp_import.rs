@@ -435,7 +435,7 @@ fn emit_turn(
                         if !text.trim().is_empty() {
                             out.push(mk(session_id, v, turn_id, model, Kind::User, |e| {
                                 e.role = Some(Role::User);
-                                e.text = Some(text);
+                                e.text = Some(crate::skill_tokens::escape_skill_text(&text));
                             }));
                         }
                     }

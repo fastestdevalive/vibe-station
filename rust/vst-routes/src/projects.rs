@@ -52,10 +52,12 @@ use vst_types::rest::projects::{
 };
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
-    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, GutterResult, SearchResult,
-    SubmodulesResult,
+    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, FileSearchResult, GutterResult,
+    SearchResult, SubmodulesResult,
 };
+use vst_types::ws::WatchScope;
 use vst_ws::services::file_list::FileList;
+use vst_ws::services::file_search::{index_key, FileSearchIndex};
 use vst_ws::services::ignore_filter::load_always_show;
 use vst_ws::services::tree_list::list_tree_dir;
 
@@ -154,6 +156,7 @@ pub struct ProjectRoutes {
     pub tmux: Tmux,
     pub daemon_port: u16,
     pub file_list: Arc<FileList>,
+    pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
 }
 
@@ -165,6 +168,7 @@ impl ProjectRoutes {
         tmux: Tmux,
         daemon_port: u16,
     ) -> Self {
+        let file_list = Arc::new(FileList::new());
         Self {
             store,
             broadcaster,
@@ -172,9 +176,15 @@ impl ProjectRoutes {
             direct_ptys: Arc::new(std::sync::RwLock::new(HashMap::new())),
             tmux,
             daemon_port,
-            file_list: Arc::new(FileList::new()),
+            file_list: file_list.clone(),
+            file_search: Arc::new(FileSearchIndex::new(file_list)),
             paths: Paths::default(),
         }
+    }
+
+    pub fn with_file_search(mut self, idx: Arc<FileSearchIndex>) -> Self {
+        self.file_search = idx;
+        self
     }
 
     pub fn with_paths(mut self, paths: Paths) -> Self {
@@ -1447,6 +1457,11 @@ impl ProjectRoutes {
             .purge_scheduled_messages_for_missing_sessions()
             .await;
 
+        // Free the file-search indexes of the project and all its worktrees.
+        self.file_search
+            .evict_project_tree(id, project.worktrees.iter().map(|w| w.id.clone()).collect())
+            .await;
+
         for session in &project.direct_sessions {
             self.broadcaster.send(ServerEvent::SessionDeleted {
                 session_id: session.id.clone(),
@@ -1506,6 +1521,31 @@ impl ProjectRoutes {
             truncated: res.truncated,
             source: res.source,
         })
+    }
+
+    // ── 8c. GET /projects/:projectId/file-search ──────────────────────────
+    pub async fn file_search(
+        &self,
+        project_id: &str,
+        q: &str,
+        limit: Option<usize>,
+    ) -> Result<FileSearchResult, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+        let root = PathBuf::from(&project.absolute_path);
+        if !tokio::fs::metadata(&root)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            return Err(ProjectRouteError::NotFound(format!(
+                "Project directory not found: {project_id}"
+            )));
+        }
+        let key = index_key(WatchScope::Project, project_id);
+        let limit = limit.unwrap_or(50);
+        Ok(self.file_search.search(&key, &root, q, limit).await)
     }
 
     // ── 8b. GET /projects/:projectId/search ──────────────────────────────

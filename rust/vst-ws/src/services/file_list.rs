@@ -14,6 +14,8 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tokio_util::sync::CancellationToken;
+
 /// The result of a file listing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileListResult {
@@ -75,53 +77,75 @@ impl FileList {
     /// List every file under `wt_path` (worktree-relative paths, POSIX
     /// separators).
     pub async fn list_files(&self, wt_path: PathBuf) -> FileListResult {
+        self.list_files_cancellable(wt_path, CancellationToken::new())
+            .await
+    }
+
+    /// Cancellable variant of [`list_files`]. When `cancel` is set, ripgrep or
+    /// walkdir execution terminates early.
+    pub async fn list_files_cancellable(
+        &self,
+        wt_path: PathBuf,
+        cancel: CancellationToken,
+    ) -> FileListResult {
         if self.has_rg() {
-            match self.list_files_with_ripgrep(&wt_path).await {
+            match self.list_files_with_ripgrep(&wt_path, cancel.clone()).await {
                 Ok(r) => r,
-                Err(_) => self.list_files_with_node(&wt_path).await,
+                Err(_) => self.list_files_with_node(&wt_path, cancel).await,
             }
         } else {
-            self.list_files_with_node(&wt_path).await
+            self.list_files_with_node(&wt_path, cancel).await
         }
     }
 
     async fn list_files_with_ripgrep(
         &self,
         wt_path: &PathBuf,
+        cancel: CancellationToken,
     ) -> Result<FileListResult, std::io::Error> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
         let max = self.effective_max();
-        let mut child = std::process::Command::new("rg")
+        // `kill_on_drop`: if this future is dropped mid-listing (e.g. the caller's
+        // timeout fires), the rg child dies with it instead of lingering.
+        let mut child = tokio::process::Command::new("rg")
             .args([
                 "--files", "--hidden", "--glob", "!.git", "--glob", "!.git/**",
             ])
             .current_dir(wt_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .kill_on_drop(true)
             .spawn()?;
 
+        let stdout = child.stdout.take().expect("stdout piped");
+        let mut lines = BufReader::new(stdout).lines();
         let mut files: Vec<String> = Vec::new();
         let mut truncated = false;
-        let mut buf = String::new();
-        let mut out = std::io::BufReader::new(child.stdout.take().expect("stdout piped"));
-        use std::io::BufRead;
         loop {
-            buf.clear();
-            let n = out.read_line(&mut buf)?;
-            if n == 0 {
-                break;
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    let _ = child.start_kill();
+                    break;
+                }
+                next = lines.next_line() => {
+                    let Some(raw) = next? else { break };
+                    let line = raw.trim_end();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if files.len() >= max {
+                        truncated = true;
+                        let _ = child.start_kill();
+                        break;
+                    }
+                    files.push(line.to_string());
+                }
             }
-            let line = buf.trim_end().to_string();
-            if line.is_empty() {
-                continue;
-            }
-            if files.len() >= max {
-                truncated = true;
-                let _ = child.kill();
-                break;
-            }
-            files.push(line);
         }
-        let _ = child.wait();
+        // Reap the (possibly just-killed) child.
+        let _ = child.wait().await;
         Ok(FileListResult {
             files,
             truncated,
@@ -129,7 +153,11 @@ impl FileList {
         })
     }
 
-    async fn list_files_with_node(&self, wt_path: &PathBuf) -> FileListResult {
+    async fn list_files_with_node(
+        &self,
+        wt_path: &PathBuf,
+        cancel: CancellationToken,
+    ) -> FileListResult {
         let wt_path = wt_path.clone();
         let max = self.effective_max();
 
@@ -165,8 +193,13 @@ impl FileList {
                 let file_count = Arc::clone(&file_count);
                 let truncated = Arc::clone(&truncated);
                 let wt_path = wt_path.clone();
+                let cancel = cancel.clone();
 
                 Box::new(move |entry| {
+                    if cancel.is_cancelled() {
+                        return ignore::WalkState::Quit;
+                    }
+
                     let entry = match entry {
                         Ok(e) => e,
                         Err(_) => return ignore::WalkState::Continue,

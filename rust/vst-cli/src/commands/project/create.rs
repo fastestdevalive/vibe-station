@@ -7,6 +7,7 @@ use vst_types::rest::projects::{CreateNewProjectBody, CreateNewProjectResult, St
 use crate::client::{daemon_post, DaemonResult};
 use crate::output::{die, success};
 use crate::preflight::preflight;
+use crate::text_source::to_wire_text;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectCreateOptions {
@@ -94,7 +95,7 @@ pub async fn run_project_create(opts: ProjectCreateOptions) -> Result<(), (Strin
     let start_agent = if opts.start_agent {
         opts.mode.map(|mode_id| StartAgent {
             mode_id,
-            prompt: opts.prompt,
+            prompt: opts.prompt.as_deref().map(to_wire_text),
             use_worktree: if opts.worktree { Some(true) } else { None },
             branch: None,
         })

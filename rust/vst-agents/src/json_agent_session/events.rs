@@ -6,7 +6,7 @@
 //! is a load-bearing check (per the TS doc comment on that function).
 
 use vst_store::transcript::cap_tool_result_content;
-use vst_types::{NormalizedEvent, NormalizedEventKind, Role, TurnState};
+use vst_types::{Mention, NormalizedEvent, NormalizedEventKind, Role, TurnState};
 
 use super::{now_ms, JsonAgentSession};
 
@@ -188,6 +188,9 @@ impl JsonAgentSession {
         if !attachments.is_empty() {
             ev.attachments = Some(attachments.to_vec());
         }
+        if !opts.mentions.is_empty() {
+            ev.mentions = Some(opts.mentions.clone());
+        }
         if opts.edited {
             ev.edited = Some(true);
         }
@@ -223,6 +226,7 @@ pub(super) struct EmitUserEventOpts {
     pub edited: bool,
     pub cancelled: bool,
     pub silent: bool,
+    pub mentions: Vec<Mention>,
 }
 
 /// True when a usage record reflects a real model call (not a slash-command

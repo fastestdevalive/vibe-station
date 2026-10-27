@@ -303,6 +303,28 @@ pub struct Attachment {
     pub mime: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MentionKind {
+    File,
+    Agent,
+    Worktree,
+    Project,
+    /// Any kind this build does not know (e.g. written by a newer daemon, then
+    /// rolled back). Never produced by us; lets stored history still load.
+    /// `validate_mentions` rejects it on the send path.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mention {
+    pub kind: MentionKind,
+    pub id: String,
+    pub label: String,
+}
+
 /// Live text/attachments for a queued or held (editing) turn — the daemon's
 /// source of truth while the turn hasn't run yet (its transcript event doesn't
 /// exist until it does). Surfaced on `SessionMeta.queued_turns`.
@@ -313,6 +335,7 @@ pub struct QueuedTurnMeta {
     pub turn_id: String,
     pub message: String,
     pub attachments: Option<Vec<Attachment>>,
+    pub mentions: Option<Vec<Mention>>,
 }
 
 /// Normalized non-text content block (acp-normalize-superset, Gap 1).
@@ -458,6 +481,8 @@ pub struct NormalizedEvent {
     pub log_seq: Option<i64>,
     /// on user events (echoed for replay)
     pub attachments: Option<Vec<Attachment>>,
+    /// Mentions on user events (echoed for replay).
+    pub mentions: Option<Vec<Mention>>,
     /// Marks a superseding `user` event (queue-edit).
     pub edited: Option<bool>,
     /// Marks a superseding `user` event (queue-cancel).
@@ -524,6 +549,7 @@ impl Default for NormalizedEvent {
             turn_id: None,
             log_seq: None,
             attachments: None,
+            mentions: None,
             edited: None,
             cancelled: None,
             superseded: None,

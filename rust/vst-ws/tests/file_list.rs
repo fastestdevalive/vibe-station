@@ -220,3 +220,49 @@ async fn phase6_t3_parallel_walk_benchmark_large_tree() {
     assert!(!result.files.is_empty(), "Should have collected files");
     // Do not assert performance thresholds; this is informational only
 }
+
+#[tokio::test]
+async fn test_2_t2_cancel_flag_pre_set() {
+    use tokio_util::sync::CancellationToken;
+
+    let tmp = TempDir::new().unwrap();
+    for i in 0..10 {
+        fs::write(tmp.path().join(format!("file_{i}.txt")), "content").unwrap();
+    }
+
+    // 1. Walkdir path
+    let fl_node = FileList::new();
+    fl_node.set_ripgrep_available(Some(false));
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let start = std::time::Instant::now();
+    let res = fl_node
+        .list_files_cancellable(tmp.path().to_path_buf(), cancel)
+        .await;
+    assert!(start.elapsed() < std::time::Duration::from_millis(500));
+    assert_eq!(res.source, "node");
+    assert!(res.files.is_empty());
+
+    // 2. Ripgrep path (if rg is available on PATH)
+    let fl_rg = FileList::new();
+    let rg_available = std::process::Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if rg_available {
+        fl_rg.set_ripgrep_available(Some(true));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let start = std::time::Instant::now();
+        let res = fl_rg
+            .list_files_cancellable(tmp.path().to_path_buf(), cancel)
+            .await;
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        assert_eq!(res.source, "ripgrep");
+        assert!(res.files.is_empty());
+    }
+}

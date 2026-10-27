@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 use crate::domain::{
-    Attachment, Channel, DraftConfig, NormalizedEvent, SessionBreakKind, SessionType,
+    Attachment, Channel, DraftConfig, Mention, NormalizedEvent, SessionBreakKind, SessionType,
 };
 
 /// Re-exported here because it appears in `ResetBody`/`ResetResult`.
@@ -306,6 +306,7 @@ pub struct ChatBody {
     pub message: String,
     pub attachment_ids: Option<Vec<String>>,
     pub queue: Option<bool>,
+    pub mentions: Option<Vec<Mention>>,
 }
 
 /// `POST /sessions/:id/chat` success (202) — `EnqueueChatResult`.
@@ -334,6 +335,8 @@ pub struct EditQueuedResult {
     pub message: String,
     pub attachments: Vec<Attachment>,
     pub queue_index: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<Mention>>,
 }
 
 /// `POST /sessions/:id/chat/queue/:turnId/resubmit` request body.
@@ -344,6 +347,7 @@ pub struct ResubmitBody {
     pub edited: bool,
     pub message: Option<String>,
     pub attachment_ids: Option<Vec<String>>,
+    pub mentions: Option<Vec<Mention>>,
 }
 
 /// `POST /sessions/:id/chat/queue/:turnId/resubmit|promote` success.

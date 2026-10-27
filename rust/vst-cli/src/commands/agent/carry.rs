@@ -12,7 +12,7 @@ use vst_types::rest::sessions::{CarryOver, QueuedPolicy, ResetBody, ResetResult,
 use crate::client::{daemon_post, DaemonResult};
 use crate::env::get_vst_session;
 use crate::preflight::preflight;
-use crate::text_source::try_resolve_file_or_inline;
+use crate::text_source::{to_wire_text, try_resolve_file_or_inline};
 
 /// Message shown when the daemon refused to write a summary (409).
 pub const SUMMARY_FAILED: &str =
@@ -251,7 +251,7 @@ pub fn reset_body(
         when_busy: Some(opts.when_busy),
         queued: Some(opts.queued),
         channel: opts.channel,
-        prompt: opts.prompt.clone(),
+        prompt: opts.prompt.as_deref().map(to_wire_text),
         mode_id,
         handoff_text,
         ..Default::default()

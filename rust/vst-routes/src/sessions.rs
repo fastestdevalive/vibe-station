@@ -460,6 +460,7 @@ struct WithdrawnTurn {
     turn_id: String,
     message: String,
     attachments: Vec<Attachment>,
+    mentions: Vec<vst_types::domain::Mention>,
 }
 
 /// Carried content produced by step 3 of a reset.
@@ -3658,21 +3659,28 @@ impl SessionRoutes {
         };
 
         let mut prompt_parts: Vec<String> = Vec::new();
+        // `marker_text` is daemon-made plain text (summary / instruction) but the
+        // prompt pipeline expects wire form, so escape it; `body.prompt` already is.
         if let Some(t) = &marker_text {
-            prompt_parts.push(t.clone());
+            prompt_parts.push(vst_agents::skill_tokens::escape_skill_text(t));
         }
         if let Some(p) = &body.prompt {
             prompt_parts.push(p.clone());
         }
-        let carried_messages: Vec<String> = if queued == QueuedPolicy::Carry {
-            withdrawn.iter().map(|t| t.message.clone()).collect()
-        } else {
-            Vec::new()
-        };
+        // (text, mentions): a Rich Chat target keeps each carried turn's sidecar.
+        let carried_messages: Vec<(String, Vec<vst_types::domain::Mention>)> =
+            if queued == QueuedPolicy::Carry {
+                withdrawn
+                    .iter()
+                    .map(|t| (t.message.clone(), t.mentions.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         // A terminal target cannot take separate queued turns, so its carried
         // queued text rides on the persisted initial prompt (and opts.prompt).
         if !is_json_channel {
-            prompt_parts.extend(carried_messages.iter().cloned());
+            prompt_parts.extend(carried_messages.iter().map(|(m, _)| m.clone()));
         }
         let new_initial_prompt = if prompt_parts.is_empty() {
             None
@@ -3972,7 +3980,11 @@ impl SessionRoutes {
         // the rows were carried (old and new channel both Rich Chat).
         let silent_marker =
             (carry_over != CarryOver::Nothing && old_channel == Channel::Json && is_json_channel)
-                .then(|| marker_text.clone())
+                .then(|| {
+                    marker_text
+                        .as_deref()
+                        .map(vst_agents::skill_tokens::escape_skill_text)
+                })
                 .flatten();
         let user_prompt = body.prompt.clone();
         tokio::spawn(async move {
@@ -4002,18 +4014,23 @@ impl SessionRoutes {
                 }
                 // The user's own prompt follows the silent marker as an
                 // ordinary (visible) turn, FIFO.
-                let mut later: Vec<String> = Vec::new();
+                let mut later: Vec<(String, Vec<vst_types::domain::Mention>)> = Vec::new();
                 if silent_marker.is_some() {
-                    later.extend(user_prompt.filter(|p| !p.trim().is_empty()));
+                    later.extend(
+                        user_prompt
+                            .filter(|p| !p.trim().is_empty())
+                            .map(|p| (p, Vec::new())),
+                    );
                 }
                 // Carried queued messages go FIFO strictly after turn 1.
                 later.extend(carried_messages);
-                for message in later {
+                for (message, mentions) in later {
                     let res = enqueue_chat_turn(
                         EnqueueChatTurnOpts {
                             session_id: opts.session.id.clone(),
                             message,
                             attachments: vec![],
+                            mentions,
                             daemon_port: opts.daemon_port,
                             steer: Some(false),
                             silent: false,
@@ -4186,11 +4203,13 @@ impl SessionRoutes {
             if held.contains(turn_id) {
                 continue;
             }
-            if let Some((message, attachments, _)) = agent.begin_edit_queued_turn(turn_id) {
+            if let Some((message, attachments, mentions, _)) = agent.begin_edit_queued_turn(turn_id)
+            {
                 out.push(WithdrawnTurn {
                     turn_id: turn_id.clone(),
                     message,
                     attachments,
+                    mentions,
                 });
             }
         }
@@ -4204,6 +4223,7 @@ impl SessionRoutes {
                 &turn.turn_id,
                 turn.message.clone(),
                 turn.attachments.clone(),
+                turn.mentions.clone(),
                 false,
             );
         }
@@ -4451,8 +4471,10 @@ impl SessionRoutes {
         let opts = EnqueueChatTurnOpts {
             silent: false,
             session_id: session.id.clone(),
-            message: instruction.to_string(),
+            // Daemon-made plain text; the chat pipeline expects wire form.
+            message: vst_agents::skill_tokens::escape_skill_text(instruction),
             attachments: vec![],
+            mentions: vec![],
             daemon_port: self.daemon_port,
             // FIFO, never steer: the instruction waits behind any running turn.
             // (A UI reset on a busy agent therefore waits for that turn, bounded
@@ -4572,6 +4594,7 @@ impl SessionRoutes {
                     session_id: id.to_string(),
                     message: body.data.clone(),
                     attachments,
+                    mentions: vec![],
                     daemon_port: self.daemon_port,
                     // D8 — steer a running turn by default; `queue: true` opts out.
                     steer: Some(!body.queue.unwrap_or(false)),
@@ -4600,6 +4623,17 @@ impl SessionRoutes {
             }
         }
 
+        // `data` is wire-form (skill grammar) like every user message;
+        // flatten (un-escape + tokens -> `/name args`) once here, the
+        // terminal-channel delivery seam.
+        let data = vst_agents::skill_resolution::flatten_skill_text(&body.data);
+        let send_enter = body.send_enter.unwrap_or(false);
+        if data.is_empty() && !send_enter {
+            return Err(ChatRouteError::BadRequest(
+                "data is empty: nothing to send".into(),
+            ));
+        }
+
         if !session.use_tmux {
             let stream = self.direct_ptys.read().unwrap().get(id).cloned();
             let Some(stream) = stream else {
@@ -4607,8 +4641,6 @@ impl SessionRoutes {
                     "Session not running".to_string(),
                 ));
             };
-            let data = body.data.clone();
-            let send_enter = body.send_enter.unwrap_or(false);
             // `PtyHandle::write` is a fast in-memory writer lock — no
             // spawn_blocking needed (matches the direct-pty spawn path).
             stream.write(&data);
@@ -4623,10 +4655,12 @@ impl SessionRoutes {
         // Paste-then-submit: pasteBuffer wraps in bracketed-paste markers, so a
         // trailing Enter is required as a separate send-keys (not a "\n" baked
         // into the data) — matches the spawn.ts convention.
-        self.tmux
-            .paste_buffer(&tmux_name, &buffer_id, &body.data)
-            .map_err(|e| ChatRouteError::Internal(format!("Failed to send input: {e}")))?;
-        if body.send_enter.unwrap_or(false) {
+        if !data.is_empty() {
+            self.tmux
+                .paste_buffer(&tmux_name, &buffer_id, &data)
+                .map_err(|e| ChatRouteError::Internal(format!("Failed to send input: {e}")))?;
+        }
+        if send_enter {
             self.tmux
                 .send_keys(&tmux_name, "", true)
                 .map_err(|e| ChatRouteError::Internal(format!("Failed to send input: {e}")))?;
@@ -4642,6 +4676,11 @@ impl SessionRoutes {
         id: &str,
         body: ChatBody,
     ) -> Result<EnqueueChatResult, ChatRouteError> {
+        if let Some(ref m) = body.mentions {
+            vst_agents::mention_context::validate_mentions(m)
+                .map_err(ChatRouteError::BadRequest)?;
+        }
+
         // Bug 4 fix: an archived session is displayed read-only — never let a
         // chat turn spawn/run a live agent process against it.
         let pre_ctx = find_session_context(&self.store, id)
@@ -4673,6 +4712,7 @@ impl SessionRoutes {
                 session_id: id.to_string(),
                 message: body.message.clone(),
                 attachments,
+                mentions: body.mentions.clone().unwrap_or_default(),
                 daemon_port: self.daemon_port,
                 steer: Some(!body.queue.unwrap_or(false)),
                 store: self.store.clone(),
@@ -4786,7 +4826,8 @@ impl SessionRoutes {
         let Some(agent) = self.json_registry.get(id) else {
             return Err(ChatRouteError::TurnNotQueued("not_queued".to_string()));
         };
-        let Some((message, attachments, queue_index)) = agent.begin_edit_queued_turn(turn_id)
+        let Some((message, attachments, mentions, queue_index)) =
+            agent.begin_edit_queued_turn(turn_id)
         else {
             return Err(ChatRouteError::TurnNotQueued("not_queued".to_string()));
         };
@@ -4795,6 +4836,11 @@ impl SessionRoutes {
             message,
             attachments,
             queue_index: queue_index as i64,
+            mentions: if mentions.is_empty() {
+                None
+            } else {
+                Some(mentions)
+            },
         })
     }
 
@@ -4808,6 +4854,11 @@ impl SessionRoutes {
         turn_id: &str,
         body: ResubmitBody,
     ) -> Result<TurnActionResult, ChatRouteError> {
+        if let Some(ref m) = body.mentions {
+            vst_agents::mention_context::validate_mentions(m)
+                .map_err(ChatRouteError::BadRequest)?;
+        }
+
         let ctx = find_json_session_context(&self.store, id)
             .await
             .ok_or_else(|| ChatRouteError::NotFound(format!("Session '{id}' not found")))?;
@@ -4828,7 +4879,8 @@ impl SessionRoutes {
         } else {
             String::new()
         };
-        let ok = agent.resubmit_queued_turn(turn_id, message, attachments, body.edited);
+        let mentions = body.mentions.unwrap_or_default();
+        let ok = agent.resubmit_queued_turn(turn_id, message, attachments, mentions, body.edited);
         if !ok {
             return Err(ChatRouteError::NotEditing("not_editing".to_string()));
         }
@@ -6156,11 +6208,17 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     let prompt_file = system_prompt_path_for(&ctx, &opts.session.id);
     std::fs::write(&prompt_file, &opts.system_prompt).map_err(|e| e.to_string())?;
 
+    // `task_prompt` is the user's create/replay prompt in skill-grammar wire
+    // form; terminal launches bypass the Rich Chat drain, so this is the one
+    // place it becomes plain text for the CLI.
     let composed = opts
         .plugin
         .compose_launch_prompt(vst_agents::plugin::ComposePromptInput {
             system_prompt: opts.system_prompt.clone(),
-            task_prompt: opts.task_prompt.clone(),
+            task_prompt: opts
+                .task_prompt
+                .as_deref()
+                .map(vst_agents::skill_resolution::flatten_skill_text),
             session_id: opts.session.id.clone(),
             system_prompt_file: prompt_file,
             launch_cfg: launch_cfg.clone(),

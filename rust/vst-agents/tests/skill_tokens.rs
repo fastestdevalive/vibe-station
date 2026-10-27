@@ -165,3 +165,65 @@ fn serialize_round_trips_literal_braces_in_args() {
 fn empty_input_is_no_segments() {
     assert_eq!(parse_skill_segments(""), Vec::<SkillSegment>::new());
 }
+
+#[test]
+fn unescape_text_run_semantics() {
+    use vst_agents::skill_tokens::{escape_skill_text, unescape_skill_text};
+    assert_eq!(unescape_skill_text(r"C:\\temp \{a}"), r"C:\temp {a}");
+    assert_eq!(unescape_skill_text(r"\d"), r"\d"); // lone backslash literal
+    assert_eq!(unescape_skill_text("end\\"), "end\\"); // trailing backslash
+    assert_eq!(unescape_skill_text(r"\\{"), r"\{"); // `\\` then literal `{`
+    assert_eq!(unescape_skill_text(r"\\\{"), r"\{");
+    assert_eq!(unescape_skill_text("{/x y}"), "{/x y}"); // never detects tokens
+    assert_eq!(
+        unescape_skill_text("héllo \\\\ 日本 🎉 \\{"),
+        "héllo \\ 日本 🎉 {"
+    );
+    assert_eq!(unescape_skill_text("plain"), "plain");
+    assert_eq!(unescape_skill_text(""), "");
+    // Round trip with the escaper.
+    for x in ["a\\b {x}", "\\", "{", "{/x y}", "\\\\{", "日本\\{🎉"] {
+        assert_eq!(unescape_skill_text(&escape_skill_text(x)), x, "{x}");
+    }
+}
+
+#[test]
+fn unescape_agrees_with_parser_text_runs() {
+    use vst_agents::skill_tokens::unescape_skill_text;
+    // For token-free input the parser's single Text segment equals unescape.
+    for x in [
+        "C:\\\\temp \\{a}",
+        "x\\",
+        "\\\\{",
+        "日本 \\\\ é",
+        "a { b",
+        "{",
+        "trail {",
+    ] {
+        let segs = parse_skill_segments(x);
+        let joined: String = segs
+            .iter()
+            .map(|s| match s {
+                SkillSegment::Text(t) => t.clone(),
+                SkillSegment::Token { .. } => panic!("unexpected token for {x}"),
+            })
+            .collect();
+        assert_eq!(joined, unescape_skill_text(x), "{x}");
+    }
+}
+
+#[test]
+fn parser_is_utf8_safe_and_trailing_brace_does_not_panic() {
+    let segs = parse_skill_segments("héllo 日本 {/x ünï} 🎉 {");
+    assert_eq!(
+        segs,
+        vec![
+            SkillSegment::Text("héllo 日本 ".into()),
+            SkillSegment::Token {
+                name: "x".into(),
+                args: "ünï".into()
+            },
+            SkillSegment::Text(" 🎉 {".into()),
+        ]
+    );
+}

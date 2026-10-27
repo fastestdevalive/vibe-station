@@ -70,6 +70,7 @@ pub mod json_agent_chat;
 pub mod json_agent_registry;
 pub mod json_agent_session;
 pub mod json_agent_stream;
+pub mod mention_context;
 pub mod native_chat_id;
 pub mod native_history_importer;
 pub mod normalize;

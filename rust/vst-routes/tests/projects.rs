@@ -1026,6 +1026,14 @@ async fn test_delete_project() {
     let err = routes.delete_project("missing").await.unwrap_err();
     assert!(matches!(err, ProjectRouteError::NotFound(_)));
 
+    // Populate the project's file-search index so deletion has something to evict.
+    std::fs::write(p_dir.join("cached.rs"), "x").unwrap();
+    let hit = routes
+        .file_search
+        .search("proj:del-proj", &p_dir, "cached", 10)
+        .await;
+    assert_eq!(hit.files, vec!["cached.rs".to_string()]);
+
     // Delete del-proj
     routes.delete_project("del-proj").await.unwrap();
 
@@ -1034,6 +1042,13 @@ async fn test_delete_project() {
 
     // Verify data dir removed
     assert!(!data_dir.exists());
+
+    // Verify the project's file-search index was evicted.
+    let after = routes
+        .file_search
+        .search("proj:del-proj", &p_dir.join("nowhere"), "", 10)
+        .await;
+    assert!(after.files.is_empty());
 
     // Verify ProjectDeleted broadcast
     let event = rx.try_recv().expect("broadcast expected");
@@ -1904,4 +1919,68 @@ async fn test_submodule_commit_scope_project() {
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
+}
+
+#[tokio::test]
+async fn test_project_file_search_missing_dir_404() {
+    let (_dir, store, _broadcaster, routes) = test_env();
+    let base = tempdir().unwrap();
+    let project = ProjectRecord {
+        id: "p1".to_string(),
+        prefix: "tp".to_string(),
+        absolute_path: base.path().join("gone").to_string_lossy().to_string(),
+        is_git: false,
+        default_branch: Some("main".to_string()),
+        created_at: "2026-01-01T00:00:00.000Z".to_string(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(project).await.unwrap();
+    let err = routes.file_search("p1", "main", None).await.unwrap_err();
+    assert!(matches!(err, ProjectRouteError::NotFound(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn test_project_file_search() {
+    let (_dir, store, _broadcaster, routes) = test_env();
+    let proj_dir = tempdir().unwrap();
+    std::fs::create_dir_all(proj_dir.path().join("src")).unwrap();
+    std::fs::write(proj_dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::write(proj_dir.path().join("README.md"), "# Project").unwrap();
+
+    let project = ProjectRecord {
+        id: "p1".to_string(),
+        prefix: "tp".to_string(),
+        absolute_path: proj_dir.path().to_string_lossy().to_string(),
+        is_git: false,
+        default_branch: Some("main".to_string()),
+        created_at: "2026-01-01T00:00:00.000Z".to_string(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(project).await.unwrap();
+
+    let res = routes.file_search("p1", "main", None).await.unwrap();
+    assert!(!res.files.is_empty());
+    assert_eq!(res.files[0], "src/main.rs");
+
+    let res_empty = routes.file_search("p1", "", None).await.unwrap();
+    assert!(res_empty.files.contains(&"src/main.rs".to_string()));
+    assert!(res_empty.files.contains(&"README.md".to_string()));
+
+    let err = routes
+        .file_search("unknown_p", "main", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::NotFound(_)));
 }

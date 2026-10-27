@@ -311,6 +311,14 @@ export interface Attachment {
   mime: string;
 }
 
+export type MentionKind = "file" | "agent" | "worktree" | "project";
+
+export interface Mention {
+  kind: MentionKind;
+  id: string;
+  label: string;
+}
+
 export type NormalizedEventProvider =
   | "claude"
   | "cursor"
@@ -407,6 +415,7 @@ export interface NormalizedEvent {
   model?: string;
   turnId?: string;
   attachments?: Attachment[];
+  mentions?: Mention[];
   /** Marks a superseding `user` event from editing a queued turn (last wins). */
   edited?: boolean;
   /** Marks a superseding `user` event for a queued turn cancelled before it ran —
@@ -496,6 +505,7 @@ export interface BeginEditResponse {
   attachments: Attachment[];
   /** Original queue index (informational). */
   queueIndex: number;
+  mentions?: Mention[];
 }
 
 /** Response from POST /sessions/:id/attachments (201). */
@@ -537,7 +547,7 @@ export interface SessionMeta {
    *  source of truth while the turn hasn't run yet (its transcript event doesn't
    *  exist until it does). Optional only because mock.ts / an older daemon may
    *  omit it — a real daemon always sends it. */
-  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[] }>;
+  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[]; mentions?: Mention[] }>;
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;
@@ -762,6 +772,9 @@ export interface SearchResult {
 export interface FileSearchResult {
   files: string[];
   truncated: boolean;
+  /** True while the daemon's first walk for this target is running (or in
+   *  backoff with no data); `files` is empty then. Absent on older daemons. */
+  indexing?: boolean;
 }
 
 export interface GutterResult {

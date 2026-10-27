@@ -18,7 +18,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
 use vst_types::{Attachment, Command, CommandGroup};
 
-use crate::skill_tokens::{parse_skill_segments, SkillSegment};
+use crate::skill_tokens::{parse_skill_segments, unescape_skill_text, SkillSegment};
 
 /// A single resolved `{/name args}` token, feeding `formatSkillDirective`'s
 /// `<skill-invocations>` block. `path` is omitted for an ACP-only catalog
@@ -34,7 +34,10 @@ pub struct ResolvedSkillInvocation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillResolutionResult {
     /// `rawMessage` with every token substituted inline for `/name args`
-    /// (RESOLVED or not). A message with no tokens passes through byte-identical.
+    /// (RESOLVED or not). Always PLAIN agent-facing text: the skill-grammar
+    /// escapes (`\\` -> `\`, `\{` -> `{`) are undone exactly once here. A
+    /// message with no tokens is the unescaped raw text; one containing neither
+    /// `\` nor `{` is byte-identical to the input.
     pub message: String,
     /// One entry per RESOLVED token, in document order. An unresolved token
     /// still substitutes into `message` but contributes no entry here.
@@ -88,8 +91,10 @@ fn resolve_leading_line_invocation(
 /// every token — resolved or not — is replaced by `/name args`. A RESOLVED token
 /// additionally contributes a `{name, args, path?}` entry. D7: when the FIRST
 /// segment is a RESOLVED token followed by same-line prose, the substitution
-/// forces a newline after it. v1 fallback: a message with NO tokens is handed
-/// to `resolve_leading_line_invocation`.
+/// forces a newline after it. v1 fallback: a message with NO tokens is
+/// UNESCAPED (wire form -> plain text; see `unescape_skill_text`) and the
+/// unescaped text is handed to `resolve_leading_line_invocation` and returned as
+/// `message`. Callers must pass wire-form text and must not unescape it again.
 pub fn resolve_skill_invocations(
     raw_message: &str,
     catalog: &[MergedSkillEntry],
@@ -98,9 +103,10 @@ pub fn resolve_skill_invocations(
     let has_token = segments.iter().any(|s| s.is_token());
 
     if !has_token {
-        let legacy = resolve_leading_line_invocation(raw_message, catalog);
+        let plain = unescape_skill_text(raw_message);
+        let legacy = resolve_leading_line_invocation(&plain, catalog);
         return SkillResolutionResult {
-            message: raw_message.to_string(),
+            message: plain,
             skill_invocations: legacy.into_iter().collect(),
         };
     }
@@ -158,6 +164,15 @@ pub fn resolve_skill_invocations(
         message: pieces.join(""),
         skill_invocations,
     }
+}
+
+/// Wire text (skill grammar) -> plain agent-facing text for deliveries that
+/// bypass the Rich Chat drain (terminal launch prompts, `/send` to a pty):
+/// text is un-escaped and every `{/name args}` token is flattened to
+/// `/name args`, exactly what Rich Chat delivers for an unresolved token (no
+/// catalog, so no D7 newline). Apply once, at the delivery seam.
+pub fn flatten_skill_text(raw: &str) -> String {
+    resolve_skill_invocations(raw, &[]).message
 }
 
 /// Skills are CLI-agnostic on the no-live-session rebuild path.

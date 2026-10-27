@@ -942,6 +942,38 @@ async fn test_worktree_done_and_delete() {
     assert!(list_after.is_empty());
 }
 
+/// Deleting a worktree frees its file-search index: the next query for the
+/// same key re-derives from disk instead of serving the cached paths.
+#[tokio::test]
+async fn test_delete_worktree_evicts_file_search_index() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let populated = tempdir().unwrap();
+    std::fs::write(populated.path().join("cached.rs"), "x").unwrap();
+    let key = "wt:wt-1";
+    let hit = routes
+        .file_search
+        .search(key, populated.path(), "", 10)
+        .await;
+    assert_eq!(hit.files, vec!["cached.rs".to_string()]);
+    // Still cached (fresh): a different root is not consulted.
+    let empty = tempdir().unwrap();
+    let cached = routes.file_search.search(key, empty.path(), "", 10).await;
+    assert_eq!(cached.files, vec!["cached.rs".to_string()]);
+
+    routes.worktree_done("wt-1").await.unwrap();
+    routes.delete_worktree("wt-1", true).await.unwrap();
+
+    let after = routes.file_search.search(key, empty.path(), "", 10).await;
+    assert!(
+        after.files.is_empty(),
+        "index entry must be evicted on delete"
+    );
+}
+
 #[tokio::test]
 async fn test_tree_and_disk_usage() {
     let (_dir, store, mut routes) = test_env();
@@ -1621,6 +1653,22 @@ async fn test_file_search_integration() {
         result.files
     );
     assert!(result.files.contains(&"src/other/zzmain.rs".to_string()));
+}
+
+#[tokio::test]
+async fn test_file_search_missing_checkout_dir_404() {
+    let (_dir, store, mut routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(wt_dir.path().to_path_buf());
+
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let err = routes.file_search("wt-1", "main", None).await.unwrap_err();
+    match err {
+        WorktreeRouteError::NotFound(m) => assert!(m.contains("checkout"), "{m}"),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
 }
 
 /// Phase 3, 3.T2: Integration test — `q=""` returns entries without error.

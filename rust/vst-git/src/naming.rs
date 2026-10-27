@@ -590,8 +590,82 @@ static VERSIONISH_TOKEN: &str = r"^v?\d[\d-]*$";
 /// Cap on how much of `prompt` we bother scrubbing (quadratic-regex guard).
 const MAX_SCRUB_LEN: usize = 4000;
 
+/// Reduces @-mention syntax to what the user sees (the label), so ids never leak
+/// into derived names. Grammar source: `serializeMentionToken` / `mentionWireText`
+/// / `parseDraftSegments` in `web-ui/src/lib/mentions.ts`. Read-only scrub for
+/// display slugs; nothing here identifies a mention.
+fn strip_mention_syntax(s: &str) -> String {
+    const KINDS: [&str; 4] = ["file", "agent", "worktree", "project"];
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && matches!(chars.get(i + 1), Some('\\') | Some('{')) {
+            out.push(c);
+            out.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if c == '{' && chars.get(i + 1) == Some(&'@') {
+            if let Some((label, next)) = parse_draft_token(&chars, i + 2, &KINDS) {
+                out.push(' ');
+                out.push_str(&label);
+                out.push(' ');
+                i = next;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    // Wire form: drop the `(id=...)` suffix and the `@kind:` prefix; keep the label.
+    let out = Regex::new(r"\s*\(id=[A-Za-z0-9._:/-]{1,128}\)")
+        .unwrap()
+        .replace_all(&out, "")
+        .into_owned();
+    Regex::new(r"@(?:agent|worktree|project):")
+        .unwrap()
+        .replace_all(&out, " ")
+        .into_owned()
+}
+
+/// Parses one draft token body starting just after `{@`. Returns the label and
+/// the index after the closing `}`, or `None` when it is not a well-formed token.
+fn parse_draft_token(chars: &[char], start: usize, kinds: &[&str]) -> Option<(String, usize)> {
+    let mut i = start;
+    let mut kind = String::new();
+    while i < chars.len() && chars[i] != ' ' && chars[i] != '}' {
+        kind.push(chars[i]);
+        i += 1;
+    }
+    if !kinds.contains(&kind.as_str()) || chars.get(i) != Some(&' ') {
+        return None;
+    }
+    i += 1;
+    let mut args = String::new();
+    loop {
+        match chars.get(i)? {
+            '\\' if matches!(chars.get(i + 1), Some('\\') | Some('{') | Some('}')) => {
+                args.push(chars[i + 1]);
+                i += 2;
+            }
+            '}' => {
+                i += 1;
+                break;
+            }
+            ch => {
+                args.push(*ch);
+                i += 1;
+            }
+        }
+    }
+    let (_id, label) = serde_json::from_str::<(String, String)>(&args).ok()?;
+    Some((label, i))
+}
+
 fn scrub(prompt: &str) -> String {
-    let mut s = prompt.to_string();
+    let mut s = strip_mention_syntax(prompt);
     // Fenced code blocks
     s = Regex::new(r"```[\s\S]*?```")
         .unwrap()

@@ -82,6 +82,7 @@ impl JsonAgentSession {
                     &turn.attachments,
                     EmitUserEventOpts {
                         silent: turn.silent,
+                        mentions: turn.mentions.clone(),
                         ..Default::default()
                     },
                 );
@@ -242,6 +243,13 @@ impl JsonAgentSession {
             &turn.attachments,
             !skill_invocations.is_empty(),
         );
+        let message = crate::mention_context::append_mention_block(
+            message,
+            &turn.mentions,
+            &self.0.store_handle,
+            &self.0.paths,
+        )
+        .await;
         let attachment_paths: Vec<String> =
             turn.attachments.iter().map(|a| a.path.clone()).collect();
         let input = TurnInput {
@@ -420,6 +428,11 @@ impl JsonAgentSession {
             format!("{child_list} are waiting for your reply")
         };
 
+        // Wire form (skill grammar) for BOTH the transcript row and the turn:
+        // `run_one_turn` un-escapes it, so the agent sees `notice_text`
+        // verbatim and a child name like `{/x y}` is never parsed as a token.
+        let wire_notice = crate::skill_tokens::escape_skill_text(&notice_text);
+
         // Emit notification pill(s) for the children when the notice turn is dequeued
         for (child_id, child_name) in &pruned.children {
             self.emit_system_event(super::EmitSystemEventPayload {
@@ -435,7 +448,7 @@ impl JsonAgentSession {
         // KD-4: emit the silent user event BEFORE run_one_turn.
         self.emit_user_event(
             &turn_id,
-            &notice_text,
+            &wire_notice,
             &[],
             super::events::EmitUserEventOpts {
                 silent: true,
@@ -458,10 +471,14 @@ impl JsonAgentSession {
                 s.enqueue_counter += 1;
                 o
             },
-            raw_message: notice_text,
+            // `run_one_turn` un-escapes wire-form text; escape the daemon-made
+            // notice (it embeds user-set child names, e.g. `{/x y}`) so it
+            // round-trips verbatim and can never parse as a skill token.
+            raw_message: wire_notice,
             attachments: vec![],
             silent: true,
             fork_from_chat_id: None,
+            mentions: vec![],
         };
 
         // Run the notice turn. A dismiss while running aborts it via stop_active_turn.

@@ -27,19 +27,63 @@ correctness the whole design depends on.
 
 ## 2. `FileSearchIndex` — what it is
 
-`rust/vst-ws/src/services/file_search.rs`. One in-memory `HashMap<worktree_id,
-HashSet<relative_path>>`, held for the daemon process's lifetime.
+`rust/vst-ws/src/services/file_search.rs`. One in-memory service mapping scope keys
+(`wt:<id>` or `proj:<id>`) to `Entry` structs, held for the daemon process's lifetime.
 
-- **Lazily populated.** `search()` calls `populate()` first, which does a full
-  disk walk (via `FileList`) *only* if the worktree has no entry yet
-  (`!idx.contains_key(worktree_id)`). Once populated, it is **never re-walked**
-  — freshness after that point comes entirely from `insert`/`remove`/
-  `merge_subtree` calls driven by `tree:watch` events (§3).
-- **`insert`/`remove` are no-ops on an unpopulated worktree** — by design, so a
-  stray event for a worktree nobody has queried yet can't create a partial,
-  wrong index.
-- **`evict(worktree_id)`** removes the entry *entirely* (not just clears its
-  contents) — see §4 for when this fires and why that distinction matters.
+- **Index shape:** `Entry` stores `files: HashMap<String, i64>` (relative POSIX path to created ms since epoch),
+  `walked_at: Instant`, `stale: bool`, `pending: Option<Vec<Op>>` (journal), `gen: u64` (from a global atomic generation counter),
+  `retry_after: Instant`, `loaded: bool` (a walk has produced data, even an empty listing) and `last_queried`
+  (idle eviction).
+- **Scope keys:** Both worktree and project routes share the same index via `index_key(WatchScope, id)` (`wt:<id>` or `proj:<id>`).
+- **Birth time + mtime fallback:** `created_ms` stats via `symlink_metadata` and uses birth time (`created()`),
+  falling back to modification time (`modified()`) or `0` if both fail. Eager stat runs off-lock in `spawn_blocking`,
+  reusing prior stats across re-walks. Modifications do not overwrite creation time.
+- **Age-bucket recency:** Ranked candidates sort by `(match_bucket desc, age_bucket asc, score desc, path asc)` where
+  `age_bucket = max(0, now_ms - created_ms) / 3_600_000` (hour granularity). Recent files outrank older files within the same
+  match bucket without near-simultaneous files overpowering fuzzy score relevance.
+- **Freshness & 30s TTL:** An entry is fresh if `!stale && (watched_keys.contains(key) || walked_at.elapsed() < 30s)`.
+  Unwatched callers are kept fresh by the 30s TTL. If `now < retry_after`, the entry is also treated as fresh (backoff).
+- **Walk lock & bounded, cancellable walk:** Walking is guarded by a per-key `Arc<tokio::sync::Mutex<()>>` walk lock.
+  Walks run under a 10s timeout (`with_walk_timeout`). If timed out, a shared `CancellationToken` terminates the
+  underlying ripgrep or walkdir traversal and stat loop, returning `None`, retaining previous files, clearing the journal,
+  leaving `stale = true`, and backing off with `retry_after = now + 30s`.
+- **rg cancellation:** `FileList::list_files_cancellable` takes a `tokio_util::sync::CancellationToken`. The ripgrep
+  backend is a `tokio::process::Command` (`kill_on_drop`) read line-by-line in a `select!` against
+  `cancel.cancelled()` — no polling task; cancelling (or dropping the future) kills the child immediately. The
+  walkdir fallback checks `token.is_cancelled()` per entry. 100k cap and `source` field unchanged.
+- **Serve stale, refresh in the background:** once an entry has data (`loaded`), an expired/stale entry never blocks
+  a query: `search` returns the old snapshot immediately and starts ONE background walk for the key
+  (`in_flight` single-flight registry; N concurrent expired queries => one walk). The walk uses the same timeout,
+  cancel, backoff, journal and generation guard as any other, so incremental updates arriving during the refresh are
+  replayed, not lost. The next query after it finishes sees the new data.
+- **First walk and `indexing`:** the FIRST query for a key has no snapshot to serve, so it waits up to
+  `first_walk_wait` (1.5s, `with_first_walk_wait`) for the walk. If it has not finished it returns
+  `{files: [], truncated: false, indexing: true}` promptly while the walk continues in the background
+  (single-flight). `indexing` is also `true` while a key has no data and is in listing-timeout backoff, and is
+  always `false` once data exists (an empty-but-walked tree is `indexing: false`). Wire field:
+  `FileSearchResult.indexing` (`#[serde(default)]`); clients should show "indexing" and re-query.
+- **Idle eviction:** each entry records `last_queried`. A lazy sweep piggybacked on `search` (at most once per 60s, no
+  timer task, no poll loop) drops UNWATCHED entries not queried for `idle_timeout` (10 min,
+  `with_idle_timeout`), freeing up to 100k paths per key. Watched entries are never idle-evicted; the key being
+  queried is never swept. The sweep is purely lazy: it only runs when some `search` call triggers it, so with no
+  searches at all nothing is swept (idle entries stay in memory until the next query of any key).
+- **Evict on delete:** deleting a worktree (`WorktreeRoutes::delete_worktree`) or project
+  (`ProjectRoutes::delete_project`, which also evicts every worktree of the project) calls
+  `FileSearchIndex::evict_scope` / `evict_project_tree`, which drop the entry, `watched_keys` membership, walk lock
+  and in-flight registration, **cancel the key's running walk** (its `CancellationToken` is stored in the in-flight
+  registration, so a doomed `rg` is killed rather than running out its 10s budget), and bump a per-key **eviction
+  epoch** (held with the in-flight registry under one lock, and bumped while holding the index write lock).
+  Every `search` captures the epoch when it begins; `first_walk` and the stale-serve `kick` refuse to start a walk if
+  it has moved, and a walk cancelled before `begin_walk` never inserts an entry. A request that was in flight across
+  an eviction therefore returns an empty, non-`indexing` result and does NOT resurrect the entry; only a request
+  that begins after the evict starts a fresh walk. The generation guard still discards a walk that finished anyway.
+- **Watch armed mid-walk:** if `watch_started` runs while a walk is in flight (`pending.is_some()`), the entry gets
+  `rewalk_after`. The completing walk then leaves `stale = true` (the listing may predate the watcher, so a file
+  created in that gap would otherwise never be indexed and a watched key would never TTL-expire); the next query
+  serves it stale and runs one more walk, after which the key is fresh for as long as it is watched.
+- **Journal & Generation guard:** While a walk is in progress, `pending` is armed (`Some(vec![])`). Incremental edits (`insert`,
+  `remove`, `merge_subtree`) update current files and push an `Op` into the journal. Upon walk completion, the journal is replayed
+  in order onto the walk results. If an eviction occurred during the walk (`e.gen != gen0`), the walk results are discarded.
 
 ## 3. How `tree:watch` keeps the index fresh (and how it's kept correct)
 
@@ -47,22 +91,23 @@ HashSet<relative_path>>`, held for the daemon process's lifetime.
 CONNECTION A: tree:watch("wt1", "")
     │
     ▼
-  registry.watchers["tree:wt1:"] absent → SPAWN
+  registry.watchers["tree:wt:wt1:"] absent → SPAWN
     │
     ├─ build callbacks (on_changed / on_deleted) that, when they fire, look
     │  up registry.watchers[key].subscribers FRESH each time — not a
     │  snapshot taken at spawn time
     ├─ FileWatcher::new(callbacks) — one inotify instance, walks the tree
     │  once to register per-directory watches, then just listens
-    └─ registry.watchers["tree:wt1:"] = SharedWatcher {
+    └─ registry.watchers["tree:wt:wt1:"] = SharedWatcher {
            watcher, ref_count: 1, subscribers: { A }
        }
-       registry.worktree_counts["wt1"] += 1
+       registry.index_watch_counts["wt:wt1"] += 1
+       if tree_path.is_empty() { file_search.watch_started("wt:wt1") }
 
 CONNECTION B: tree:watch("wt1", "")   (same key, watcher already hot)
     │
     ▼
-  registry.watchers["tree:wt1:"] found → JOIN, don't spawn
+  registry.watchers["tree:wt:wt1:"] found → JOIN, don't spawn
     │
     ├─ ref_count += 1                          → 2
     └─ subscribers.insert(B)                   → { A, B }
@@ -71,7 +116,8 @@ CONNECTION B: tree:watch("wt1", "")   (same key, watcher already hot)
 FILESYSTEM EVENT (any file under wt1 changes)
     │
     ├─ apply_tree_change() → FileSearchIndex.insert/remove/merge_subtree
-    │  (unconditional — happens once per event, regardless of subscriber count)
+    │  (unconditional — happens once per event, regardless of subscriber count;
+    │   applies to files and journals Op if walk is in flight)
     │
     └─ for c in subscribers.values(): c.send(TreeChanged{...})
        (both A and B get the live-refresh push)
@@ -86,52 +132,54 @@ RELEASE (graceful tree:unwatch, OR connection disconnects)
     │
     └─ ref_count == 0 → close the FileWatcher (spawn_blocking; tearing down
        thousands of inotify watches is blocking work), remove the registry
-       entry, decrement worktree_counts["wt1"]
+       entry, decrement index_watch_counts["wt:wt1"]
            │
-           └─ worktree_counts["wt1"] == 0 (the LAST watcher for this
-              worktree — root or any subdir key) → FileSearchIndex.evict("wt1")
+           └─ index_watch_counts["wt:wt1"] == 0 (the LAST watcher for this
+              index key — root or any subdir key):
+                 · UNDER the registry lock: FileSearchIndex.unwatch("wt:wt1")
+                 · after the lock: FileSearchIndex.evict_if_unwatched("wt:wt1")
 ```
 
-**Why the registry is keyed globally, not per-connection:** the earlier
-version deduped per-connection only, so a second connection watching an
-already-watched worktree spawned and orphaned a *duplicate* `FileWatcher` —
-its background task kept its own inotify fd alive forever with no reachable
-handle to close it. Confirmed live via `/proc/<pid>/fdinfo`: a single
-worktree accumulated 9 leaked fds under normal use. See
-`.vibekit/feature-plans/wip/tree-watch-leak-fix/plan-tree-watch-leak-fix.md`
-for the full root-cause writeup.
+**evict vs `watch_started` race (fixed):** the eviction used to run after the registry lock was dropped, so a
+`tree:watch` landing in between registered `watch_started` and the late `evict` then removed the key from
+`watched_keys` while its watcher was live (index silently degraded to TTL-only). Now the "last watcher gone" decision and
+the `watched_keys` removal happen together under the registry lock, and `evict_if_unwatched` re-checks `watched_keys`
+under the index write lock (`watch_started` inserts before it takes that lock), so a watcher that started in between
+is never undone. Test seam: `release_registry_ref` / `finish_release` in `tree_watch.rs`.
 
-**Why the subscriber set matters, not just the refcount:** without it, the
-shared watcher's callbacks would only ever push to whichever connection
-happened to create it — every *other* connection sharing the watcher would
-have its `FileSearchIndex` correctly kept fresh (that part doesn't depend on
-subscribers, see above) but would never get its own `tree:changed` push, so
-its file-tree sidebar / open-file live-reload would silently stop updating.
+**New watch-key format:** Watch keys are scoped globally as `tree:{index_key}:{path}` (e.g. `tree:wt:wt1:`, `tree:proj:p1:src`).
+Counts in `reg.index_watch_counts` are keyed by `index_key`.
 
-**Why release must drop exactly one ref per connection, not one per local
-subscriber:** `handle_tree_watch` only ever takes ONE global ref per
-connection per key (a second local caller on the same connection
-short-circuits at the connection's own local refcount and never touches the
-shared registry). A release path that decremented once per local subscriber
-instead would over-release whenever a connection had more than one local
-subscriber on the same key — a second, unrelated connection's still-live
-watcher would get wrongly closed and its index evicted out from under it.
+**`watch_started` on root watches:** When a root watch (`tree_path.is_empty()`) is spawned, `watch_started(index_key)` is called.
+This marks the key in `watched_keys` and sets `stale = true` on any existing entry so that subsequent queries re-verify freshness
+and remain continuously fresh without being subject to TTL expiry while watched.
+
+**Journal replay:** Changes occurring while an initial or re-triggered walk is in progress are buffered in `Entry.pending` and
+replayed on top of the completed walk before publishing.
+
+**The root-closed-while-subdir-open hole:** If a client closes its root watch while a subdirectory watch remains open, `index_watch_counts > 0`
+so `evict` does not fire, but `watched_keys` remains set. Root-level file changes outside the watched subdirectory would not be seen until
+the last watcher closes and evicts the index. In practice, all client watches (Quick Open, file tree) are root watches.
 
 ## 4. The eviction trick — how staleness is avoided without a resync
 
 The index is **never actively resynced**. There is no "diff against disk and
 patch the index" logic anywhere. Instead:
 
-> The index only exists while at least one `tree:watch` is holding it live.
-> The moment the last one closes, the entry is deleted outright
-> (`evict`, not `clear`).
+> The index only exists while at least one `tree:watch` is holding it live, or until it has been idle for 10 minutes
+> (unwatched). An expired (>30s) unwatched snapshot is served once while it refreshes in the background.
+> When the last watcher closes, `tree_watch` calls `unwatch(index_key)` (drops it from `watched_keys`) while still
+> holding the watcher-registry lock, then `evict_if_unwatched(index_key)`, which re-checks `watched_keys` under the
+> index write lock and, if no watcher was re-armed, deletes the entry, removes its walk lock, cancels any running
+> walk and bumps the eviction epoch. Idle eviction (unwatched, 10 min) is separate and only runs lazily when a
+> `search` triggers the sweep.
 
-So the very next `search()` call for that worktree — whether that's a fresh
-`tree:watch` remounting, or just a Quick Open query — finds no entry
-(`!idx.contains_key`) and re-triggers `populate()`'s full disk walk, exactly
-as if the worktree had never been seen before. Any file created, edited, or
-deleted while nobody was watching is picked up for free, because the walk
-reads current disk state, not anything cached.
+Both worktree and project routes (`GET /api/worktrees/:id/file-search` and `GET /api/projects/:id/file-search`)
+route to this shared service. So the very next `search()` call for that scope — whether that's a fresh
+`tree:watch` remounting, or an unwatched caller querying via REST — finds no entry or an expired TTL and re-triggers
+a full disk walk, picking up any files created, edited, or deleted while nobody was watching. If the root directory does not
+exist (worktree checkout or project path missing), the route returns 404 instead of an empty result, and no index
+entry is created.
 
 This is why: *"if I disconnect, and the agent creates a file, will I find it
 when I reconnect?"* is always **yes** — regardless of how long the gap was —
@@ -230,7 +278,7 @@ are open-but-not-active have no live watch at all.
 - `FileSearchIndex.search()`'s empty-query path (used by Quick Open's
   changed-files-first listing to fill out the rest of the list) iterates a
   `HashSet`, so its ordering is arbitrary and can change between queries.
-- No TTL / idle eviction for a worktree that's watched continuously for a
-  very long time without ever going to zero watchers — not a correctness
-  issue today, just noted here since it's the kind of thing this doc should
-  track as the mechanism grows.
+- A worktree that is watched continuously for a very long time without ever going to zero watchers is never
+  idle-evicted (watched entries are exempt by design; they stay live via the watcher).
+- Deleting a project/worktree evicts its index but does not tear down any `tree:watch` watcher a client still
+  holds for it; those are released when the client unwatches or disconnects.
