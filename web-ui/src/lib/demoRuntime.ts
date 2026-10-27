@@ -5,6 +5,7 @@
  */
 import { useWorkspaceStore, __resetForDemo as resetWorkspaceModule } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useTaskStore } from "@/hooks/useTaskStore";
 import { useModesStore, __resetForDemo as resetModes } from "@/store/modesStore";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { useThemeStore, DEFAULT_FONT } from "@/hooks/useThemeStore";
@@ -36,6 +37,7 @@ export const APP_STORES = [
   usePaneDialogs,
   useLimitsStore,
   useBulkWorktrees,
+  useTaskStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

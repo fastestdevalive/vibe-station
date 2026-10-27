@@ -1,0 +1,563 @@
+/* Task tray + full-window task view (task-tray feature). Neutral greys only; the single accent is the
+   small spinner while a task is live. No status, PR, success, warning or danger colour tokens here
+   (a vitest grep enforces it). */
+
+/* Keeps the viewport's children (notably the z-index:5 jump-to-bottom button) under .task-view. */
+.chat-pane__viewport {
+  isolation: isolate;
+}
+
+/* ── Spinner / icons ───────────────────────────────────────────────────────── */
+.task-spin {
+  flex: none;
+  animation: task-spin 0.9s linear infinite;
+}
+.task-spin__track {
+  stroke: color-mix(in srgb, var(--fg-muted) 30%, transparent);
+}
+.task-spin__arc {
+  stroke: var(--accent);
+}
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-spin {
+    animation: none;
+  }
+}
+.task-icon {
+  flex: none;
+  stroke: var(--fg-secondary);
+}
+
+/* ── Tray ──────────────────────────────────────────────────────────────────── */
+.task-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--border-width) solid var(--border-subtle);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+}
+.chat-pane__footer > .task-tray:first-child {
+  border-top: none;
+}
+.task-tray__chip,
+.task-tray__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.task-tray__head {
+  border: 0;
+  background: transparent;
+  min-height: 28px;
+  padding: 0 var(--space-1);
+}
+.task-tray__chip-count,
+.task-tray__head-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.task-tray__head-title {
+  flex: 1;
+}
+.task-tray__chip-labels {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+}
+.task-tray--open {
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-2);
+}
+.chat-pane__footer > .task-tray--open:first-child {
+  margin-top: var(--space-2);
+}
+.task-tray__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* ~6 rows, never more than 40% of the pane. */
+  max-height: min(calc(6 * 36px + 40px), calc(var(--chat-pane-h, 100vh) * 0.4));
+  overflow-y: auto;
+}
+.task-tray__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  min-height: 36px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.task-tray__row:hover {
+  background: var(--bg-tertiary);
+}
+.task-tray__row--finished {
+  color: var(--fg-secondary);
+}
+.task-tray__chip:focus-visible,
+.task-tray__head:focus-visible,
+.task-tray__row:focus-visible,
+.task-view__btn:focus-visible,
+.task-view__back:focus-visible,
+.task-log__resume:focus-visible,
+.task-view:focus-visible {
+  outline: 2px solid var(--fg-secondary);
+  outline-offset: 1px;
+}
+.task-tray__row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-tray__row-label--mono {
+  font-family: var(--font-mono);
+}
+.task-tray__row-kind,
+.task-tray__row-reason {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.task-tray__row-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-tray__row-meta {
+  margin-left: auto;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.task-tray__row > svg:last-child,
+.task-tray__chip > svg:last-child {
+  flex: none;
+  color: var(--fg-secondary);
+}
+.task-tray__group {
+  padding: var(--space-2) var(--space-2) 2px;
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* ── Passive background line ───────────────────────────────────────────────── */
+.task-bg-line {
+  padding: 0 var(--space-3) var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* ── Task view (covers .chat-pane; chat + footer stay mounted underneath, inert) ── */
+.task-view {
+  position: absolute;
+  inset: 0;
+  /* Above chat content, below OfflineOverlay (z 5). */
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  color: var(--fg-primary);
+}
+/* The chat font/channel overlay (z 10, positioned against .chat-pane) must not paint over the view. */
+.chat-pane__footer[inert] .chat-font-overlay {
+  visibility: hidden;
+}
+.task-view__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+.task-view__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+.task-view__label {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-view__label--mono {
+  font-family: var(--font-mono);
+}
+.task-view__state {
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-view__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.task-view__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+}
+.task-view__spacer {
+  flex: 1;
+}
+.task-view__btn {
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.task-view__btn[aria-disabled="true"] {
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+.task-view__hint {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.task-view__crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 var(--space-4);
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-bottom: 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: var(--bg-secondary);
+  font-size: var(--font-size-sm);
+}
+.task-view__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-view__back kbd {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  padding: 1px 6px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+.task-view__sep {
+  color: var(--fg-muted);
+}
+.task-view__crumb {
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.task-view__crumb--trunc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Session crumb: stays legible, but yields to the task crumb. */
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 30%;
+}
+.task-view__crumb--mono {
+  font-family: var(--font-mono);
+}
+.task-view__crumb--current {
+  color: var(--fg-primary);
+  flex: 1 1 auto;
+  min-width: 8ch;
+  max-width: none;
+}
+.task-view__counts {
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.task-view__composer {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  margin: 0 var(--space-4) var(--space-4);
+  padding: 0 var(--space-4);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ── Output log ────────────────────────────────────────────────────────────── */
+.task-log {
+  flex: 1;
+  /* A short pane scrolls the view instead of squeezing the log to nothing. */
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--space-4) var(--space-4) 0;
+}
+.task-log__toolbar,
+.task-log__footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+.task-log__footer {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  min-height: 24px;
+  gap: var(--space-3);
+  flex-wrap: nowrap;
+}
+.task-log__footer > :not(.task-log__path) {
+  white-space: nowrap;
+  flex: none;
+}
+.task-log__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-log__title {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+.task-log__spacer {
+  flex: 1;
+}
+.task-log__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.task-log__resume {
+  height: 24px;
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.task-log__scroll,
+.task-log__events {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) 14px;
+}
+.task-log__pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-code);
+  line-height: 1.5;
+  color: var(--fg-primary);
+  white-space: pre;
+}
+.task-log__pre--wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-log__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-code);
+  line-height: 1.5;
+}
+.task-log__final {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+.task-log__final-title {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin-bottom: var(--space-2);
+}
+.task-log__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+.task-log__scroll > .task-log__empty,
+.task-log__events > .task-log__empty {
+  border: 0;
+  background: transparent;
+}
+
+/* ── Narrow widths ─────────────────────────────────────────────────────────── */
+@container (max-width: 480px) {
+  .task-view__header {
+    padding: var(--space-3);
+  }
+  .task-view__crumbs,
+  .task-view__composer {
+    margin-left: var(--space-3);
+    margin-right: var(--space-3);
+  }
+  .task-view__started {
+    display: none;
+  }
+  .task-view__title {
+    flex-basis: calc(100% - 30px);
+  }
+  .task-view__spacer {
+    display: none;
+  }
+  .task-view__actions {
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+  }
+  .task-view__hint {
+    flex: 1 1 auto;
+    flex-basis: auto;
+    min-width: 0;
+    text-align: left;
+  }
+  .task-tray__row-kind {
+    display: none;
+  }
+}
+
+@container (max-width: 600px) {
+  .task-view__counts {
+    display: none;
+  }
+}
+
+/* ── Touch: comfortable targets ────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  .task-view__back,
+  .task-view__btn,
+  .task-tray__head,
+  .task-tray__chip,
+  .task-log__resume,
+  .task-log__check {
+    min-height: 40px;
+  }
+}
+
+/* ── Output toolbar icon buttons, full-log path line ───────────────────────── */
+.task-log__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.task-view__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+.task-view__icon-btn[aria-disabled="true"] {
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+.task-view__icon-btn:focus-visible {
+  outline: 2px solid var(--border-focus, var(--fg-secondary));
+  outline-offset: 1px;
+}
+.task-view__path {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (pointer: coarse) {
+  .task-view__icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+}

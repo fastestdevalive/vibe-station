@@ -27,6 +27,11 @@ import { SpawningPlaceholder } from "./SpawningPlaceholder";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { fromWire, toPlainText, toWire } from "@/lib/mentions";
+import { useSessionTasks } from "@/hooks/useSessionTasks";
+import { TaskTray } from "@/components/tasks/TaskTray";
+import { TaskView } from "@/components/tasks/TaskView";
+import { BackgroundLine } from "@/components/tasks/BackgroundLine";
+import { useTaskFocusReturn } from "@/components/tasks/useTaskFocusReturn";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -148,7 +153,9 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // pane must not be outgrown by its input. Set straight on the element (not via
   // React style) so the `chatFontVars` re-renders don't fight it.
   const paneObserverRef = useRef<ResizeObserver | null>(null);
+  const paneElRef = useRef<HTMLDivElement | null>(null);
   const setPaneRef = useCallback((el: HTMLDivElement | null) => {
+    paneElRef.current = el;
     paneObserverRef.current?.disconnect();
     paneObserverRef.current = null;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -192,6 +199,17 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   const [salvage, setSalvage] = useState<{ text: string; attachments: Attachment[] } | null>(null);
   const [composerKey, setComposerKey] = useState(0);
   const composerRef = useRef<SkillEditorHandle>(null);
+
+  // Background tasks (task tray / full-window task view). Mount-only here; logic lives in components/tasks.
+  const tasks = useSessionTasks(sessionId);
+  useTaskFocusReturn({
+    paneRef: paneElRef,
+    sessionId,
+    openTaskId: tasks.openTaskId,
+    enabled: focusOnMount && !isTouch,
+    focusComposer: () => composerRef.current?.focus(),
+  });
+  const taskViewOpen = tasks.openTask !== undefined;
 
   const turnActive = useMemo(() => {
     const s = meta?.turnState;
@@ -237,6 +255,12 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   useEffect(() => {
     setSteerNotice(null);
   }, [sessionId]);
+  const { lostNotice, ackLostNotice } = tasks;
+  useEffect(() => {
+    if (!lostNotice) return;
+    setSteerNotice(lostNotice);
+    ackLostNotice();
+  }, [lostNotice, ackLostNotice]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
   const [editingScheduled, setEditingScheduled] = useState<{ id: string; row: ScheduledRow } | null>(null);
   const editScheduledAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -452,7 +476,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           jump-to-bottom button, so the button clears the footer (queued tray +
           status bar + auto-growing composer) at any footer height instead of
           relying on a fixed offset that a tall footer overlaps. */}
-      <div className="chat-pane__viewport">
+      <div className="chat-pane__viewport" inert={taskViewOpen} aria-hidden={taskViewOpen || undefined}>
         <div className="chat-pane__body" ref={setBodyRef}>
           {loading ? (
             <div className="chat-pane__state">
@@ -506,7 +530,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           )}
         </div>
       </div>
-      <div className="chat-pane__footer">
+      <div className="chat-pane__footer" inert={taskViewOpen} aria-hidden={taskViewOpen || undefined}>
         {sessionId ? (
           <QueuedTray
             api={api}
@@ -539,6 +563,16 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             }}
           />
         ) : null}
+        {sessionId ? (
+          <TaskTray
+            groups={tasks}
+            total={tasks.tasks?.length ?? 0}
+            expanded={tasks.expanded}
+            onExpandedChange={tasks.setExpanded}
+            onOpenTask={tasks.open}
+            focusComposer={() => composerRef.current?.focus()}
+          />
+        ) : null}
         <ScheduleSendPopover
           open={editingScheduled !== null}
           anchorRef={editScheduledAnchorRef}
@@ -561,6 +595,12 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             setEditingScheduled(null);
             setEditScheduleError(null);
           }}
+        />
+        <BackgroundLine
+          liveState={liveState}
+          turnActive={turnActive}
+          turnState={meta?.turnState}
+          queueDepth={meta?.queueDepth ?? 0}
         />
         <StatusBar
           meta={meta}
@@ -677,6 +717,17 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           </div>
         ) : null}
       </div>
+      {tasks.openTask && sessionId ? (
+        <TaskView
+          api={api}
+          sessionId={sessionId}
+          sessionName={session?.name ?? "Agent"}
+          task={tasks.openTask}
+          groups={tasks}
+          onClose={tasks.close}
+          focusOnMount={focusOnMount}
+        />
+      ) : null}
     </div>
   );
 }

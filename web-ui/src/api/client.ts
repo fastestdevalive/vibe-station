@@ -54,6 +54,7 @@ import type {
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
+  TaskOutput,
   TranscriptPage,
   TreeEntry,
   TailscaleQrResponse,
@@ -1718,6 +1719,15 @@ export function createClientApi() {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript`);
       return parseJson<TranscriptResponse>(res);
+    },
+
+    /** Tail of a background task's output. 404 `TASK_NOT_FOUND` / 409 `OUTPUT_UNAVAILABLE` surface as `ApiError`. */
+    async getTaskOutput(sessionId: string, taskId: string, tail = 200): Promise<TaskOutput> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/tasks/${encodeURIComponent(taskId)}/output?tail=${tail}`,
+      );
+      return parseJson<TaskOutput>(res);
     },
 
     /** Keyset "load earlier" page — events before `beforeSeq`, turn-aligned (R2.2). */
