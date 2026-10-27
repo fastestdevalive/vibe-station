@@ -1,0 +1,2 @@
+{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"create hello.txt"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"write_file","args":{"Content":"\"lots of te\"","Path":"\"/tmp/x/big.txt\""}}],"truncated_fields":["tool_calls"]}

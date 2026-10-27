@@ -1,0 +1,5 @@
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":0,"state":"DONE","step_type":"user_input","duration_seconds":0.01}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello"}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":" wor"}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"ld!","duration_seconds":1.4,"usage":{"input_tokens":7541,"output_tokens":11,"thinking_tokens":10,"cache_read_tokens":0,"total_tokens":7552}}}
+{"event":"result","result":{"conversation_id":"__CONV__","status":"SUCCESS","response":"Hello world!","duration_seconds":1.5,"num_turns":1,"usage":{"input_tokens":7541,"output_tokens":11,"thinking_tokens":10,"cache_read_tokens":0,"total_tokens":7552}}}

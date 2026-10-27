@@ -3078,6 +3078,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "vst-agy-stream-acp"
+version = "0.0.3-beta"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "vst-cli"
 version = "0.0.3-beta"
 dependencies = [

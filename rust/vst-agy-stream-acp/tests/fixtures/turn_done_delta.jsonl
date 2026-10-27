@@ -1,0 +1,5 @@
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"The quick brown "}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"fox jumps "}}
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"over the lazy dog.","duration_seconds":2.1,"usage":{"input_tokens":100,"output_tokens":9,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":109}}}
+{"event":"result","result":{"conversation_id":"__CONV__","status":"SUCCESS","response":"The quick brown fox jumps over the lazy dog.","duration_seconds":2.2,"num_turns":1,"usage":{"input_tokens":100,"output_tokens":9,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":109}}}

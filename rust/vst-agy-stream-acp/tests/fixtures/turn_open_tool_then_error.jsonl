@@ -1,0 +1,2 @@
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"AbsolutePath":"/tmp/a.rs"}}}}
+{"event":"result","result":{"conversation_id":"__CONV__","status":"ERROR","response":"","error":"boom","duration_seconds":0.3,"num_turns":1,"usage":{"input_tokens":10,"output_tokens":2,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":12}}}

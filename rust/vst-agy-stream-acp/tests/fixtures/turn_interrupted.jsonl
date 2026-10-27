@@ -1,0 +1,2 @@
+{"event":"step_update","step_update":{"conversation_id":"__CONV__","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"Rivers are the lifeblood of our planet, winding "}}
+{"event":"result","result":{"conversation_id":"__CONV__","status":"ERROR","response":"Rivers are the lifeblood of our planet, winding ","error":"interrupted","duration_seconds":9.1,"num_turns":1,"usage":{"input_tokens":7554,"output_tokens":955,"thinking_tokens":940,"cache_read_tokens":0,"total_tokens":8509}}}

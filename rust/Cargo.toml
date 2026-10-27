@@ -11,6 +11,7 @@ members = [
     "vst-git",
     "vst-rpc",
     "vst-agents",
+    "vst-agy-stream-acp",
     "vst-agy-acp",
     "vst-lifecycle",
     "vst-harness-limits",
@@ -59,6 +60,7 @@ vst-proc = { path = "vst-proc" }
 vst-git = { path = "vst-git" }
 vst-rpc = { path = "vst-rpc" }
 vst-agents = { path = "vst-agents" }
+vst-agy-stream-acp = { path = "vst-agy-stream-acp" }
 vst-agy-acp = { path = "vst-agy-acp" }
 vst-lifecycle = { path = "vst-lifecycle" }
 vst-harness-limits = { path = "vst-harness-limits" }

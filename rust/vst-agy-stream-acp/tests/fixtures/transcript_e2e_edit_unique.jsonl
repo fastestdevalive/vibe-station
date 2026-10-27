@@ -1,0 +1,2 @@
+{"step_index":0,"source":"MODEL","type":"USER_INPUT","status":"DONE","content":"edit files"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"edit_file","args":{"Path":"__HOME__/work/dup.txt","Replacement":"baz","Target":"foo"}}]}
