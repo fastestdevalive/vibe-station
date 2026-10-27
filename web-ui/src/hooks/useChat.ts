@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
 import { createChatRepository } from "@/api/repositories/chatRepository";
+import { ensureTaskSubscription } from "@/hooks/useTaskStore";
 import { fromWire, toWire } from "@/lib/mentions";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
@@ -458,6 +459,7 @@ export function useChat(
     );
 
     // ── Open the chat (AFTER listeners are registered) ───────────────────────
+    ensureTaskSubscription(api);
     void chatRepo.openChat(sessionId, openChatSinceSeq);
 
     // ── Cleanup ──────────────────────────────────────────────────────────────

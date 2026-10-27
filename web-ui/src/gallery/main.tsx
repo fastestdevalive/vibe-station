@@ -27,6 +27,7 @@ import "@/styles/tokens.css";
 import "@/styles/global.css";
 import "@/styles/workspace.css";
 import "@/styles/chat.css";
+import "@/styles/tasks.css";
 import "@/styles/mentions.css";
 
 type MockApi = ReturnType<typeof createMockApi>;

@@ -83,7 +83,7 @@ export function stableActivityOrder<T>(
   // chain of small gaps strand a much newer item at the bottom).
   for (let i = 1; i < arr.length; i++) {
     const cur = arr[i] as T;
-    let k = arr.slice(0, i).findIndex((o) => ms(cur) - ms(o) > thresholdMs);
+    const k = arr.slice(0, i).findIndex((o) => ms(cur) - ms(o) > thresholdMs);
     if (k < 0) continue;
     for (let j = i; j > k; j--) arr[j] = arr[j - 1] as T;
     arr[k] = cur;

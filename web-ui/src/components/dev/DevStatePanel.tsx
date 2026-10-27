@@ -3,6 +3,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import type { PrStatus, SessionState } from "@/api/types";
+import { useTaskStore } from "@/hooks/useTaskStore";
+import { buildSeedTasks, SEED_SCENARIOS, type SeedScenario } from "@/components/tasks/seedTasks";
 
 /**
  * Dev-only floating popup for faking `session:state` transitions on real
@@ -44,6 +46,25 @@ export function DevStatePanel(): ReactNode {
   const [state, setState] = useState<SessionState>("working");
   const [prState, setPrState] = useState<PrChoice>("(unset)");
 
+  const [seedScenario, setSeedScenario] = useState<SeedScenario>(SEED_SCENARIOS[0]);
+  const [alternating, setAlternating] = useState(false);
+
+  // "Alternate Working/Waiting": flips the selected session every 3s (CUJ 8 visuals: dot, dashboard reorder,
+  // background line). Local fake only, like the rest of this panel.
+  useEffect(() => {
+    if (!alternating || !sessionId) return;
+    let working = true;
+    const flip = () => {
+      const st: SessionState = working ? "working" : "waiting_for_human";
+      working = !working;
+      useServerStore.getState().applySessionUpdated(sessionId, { state: st, lifecycleState: st });
+      useWorkspaceStore.getState().patchSessionState(sessionId, st);
+    };
+    flip();
+    const id = setInterval(flip, 3000);
+    return () => clearInterval(id);
+  }, [alternating, sessionId]);
+
   const sessions = useServerStore((s) => s.sessions);
   const worktrees = useServerStore((s) => s.worktrees);
 
@@ -82,6 +103,16 @@ export function DevStatePanel(): ReactNode {
   }, [devEnabled]);
 
   if (!devEnabled || !open) return null;
+
+  function seedTasks() {
+    if (!sessionId) return;
+    const rev = Date.now();
+    useTaskStore.getState().applySnapshot(sessionId, rev, buildSeedTasks(seedScenario, rev));
+  }
+  function clearTasks() {
+    if (!sessionId) return;
+    useTaskStore.getState().applySnapshot(sessionId, Date.now(), []);
+  }
 
   function handleApply() {
     if (!sessionId) return;
@@ -248,6 +279,32 @@ export function DevStatePanel(): ReactNode {
         >
           Apply
         </button>
+
+        <div style={{ borderTop: "1px solid #444", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          <select
+            aria-label="Task seed scenario"
+            value={seedScenario}
+            onChange={(e) => setSeedScenario(e.target.value as SeedScenario)}
+            style={{ background: "#111", color: "#e0e0e0", border: "1px solid #444", borderRadius: 4, padding: "4px 6px" }}
+          >
+            {SEED_SCENARIOS.map((sc) => (
+              <option key={sc} value={sc}>
+                {sc}
+              </option>
+            ))}
+          </select>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={seedTasks} disabled={!sessionId} style={{ flex: 1, padding: "4px 6px" }}>
+              Seed tasks
+            </button>
+            <button onClick={clearTasks} disabled={!sessionId} style={{ flex: 1, padding: "4px 6px" }}>
+              Clear tasks
+            </button>
+          </div>
+          <button onClick={() => setAlternating((a) => !a)} disabled={!sessionId} style={{ padding: "4px 6px" }}>
+            {alternating ? "Stop alternating" : "Alternate Working/Waiting"}
+          </button>
+        </div>
 
         <p style={{ margin: 0, color: "#888", fontSize: 10, lineHeight: 1.4 }}>
           Local-only fake — a real `session:state` event or a page reload

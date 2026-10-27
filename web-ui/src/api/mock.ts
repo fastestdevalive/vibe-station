@@ -56,6 +56,7 @@ import type {
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
+  TaskOutput,
   TranscriptPage,
   TreeEntry,
   TailscaleQrResponse,
@@ -521,6 +522,7 @@ export function createMockApi(seed: MockSeed = {}) {
     }
   }
   let mockTurnSeq = 0;
+  let mockTaskRev = 0;
 
   const api = {
     __test: {
@@ -2170,6 +2172,9 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
       const events = chatTranscripts.get(sessionId) ?? [];
+      // The daemon sends a `session:tasks` snapshot on every chat:open branch (empty here: the mock tracks no tasks).
+      mockTaskRev += 1;
+      emit({ type: "session:tasks", sessionId, rev: mockTaskRev, tasks: [] });
       if (sinceSeq !== undefined) {
         const delta = events.filter((e) => (e.logSeq ?? -1) > sinceSeq);
         // Mirror the bounded forward page + cursor (socket-cycling fix): the
@@ -2429,6 +2434,18 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async getTranscript(sessionId: string): Promise<TranscriptResponse> {
       return { events: structuredClone(chatTranscripts.get(sessionId) ?? []) };
+    },
+
+    /** Canned task output (the mock tracks no real tasks; the dev simulator seeds the store directly). */
+    async getTaskOutput(_sessionId: string, taskId: string, _tail = 200): Promise<TaskOutput> {
+      if (taskId.startsWith("missing")) throw new ApiError("task not found", 404, "TASK_NOT_FOUND");
+      if (taskId.startsWith("unavailable")) throw new ApiError("output unavailable", 409, "OUTPUT_UNAVAILABLE");
+      return {
+        lines: ["   Compiling vst-types v0.1.0", "   Compiling vst-daemon v0.1.0", "    Finished release [optimized] target(s)"],
+        truncated: false,
+        outputKind: "file",
+        path: `/tmp/claude-1000/mock/tasks/${taskId}.output`,
+      };
     },
 
     async getTranscriptPage(
