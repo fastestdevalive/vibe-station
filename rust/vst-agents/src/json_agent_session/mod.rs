@@ -31,7 +31,7 @@ use vst_store::transcript::{
     TranscriptPage, TranscriptStore,
 };
 use vst_types::{
-    Attachment, Broadcaster, CarryOver, Command, LifecycleState, NormalizedEvent,
+    Attachment, Broadcaster, CarryOver, Command, LifecycleState, Mention, NormalizedEvent,
     NormalizedEventKind, NormalizedEventProvider, ProjectRecord, ServerEvent, SessionBreakKind,
     SessionLifecycle, SessionMeta, SessionRecord, TurnState, UsageInfo, WorktreeRecord,
 };
@@ -68,6 +68,7 @@ pub struct QueuedTurn {
     /// bubble) while the agent still receives `raw_message` — used for the
     /// carried summary / transcript instruction behind the break card.
     pub silent: bool,
+    pub mentions: Vec<Mention>,
 }
 
 /// A turn withdrawn into the editing hold.
@@ -263,6 +264,9 @@ pub(super) struct Inner {
     pub(super) cli: NormalizedEventProvider,
     pub(super) cwd: PathBuf,
     pub(super) data_dir: PathBuf,
+    /// Data-home path provider (same one that derived `cwd`/`data_dir`); used for
+    /// worktree paths in the `[Mentions:]` block.
+    pub(super) paths: crate::paths::Paths,
     pub(super) system_prompt_file: PathBuf,
     pub(super) daemon_port: u16,
     /// `true` = idle (drain complete). Written by drain loop; read by `settled()`.
@@ -297,6 +301,7 @@ impl JsonAgentSession {
     /// Create a new session from `opts`. Opens the per-session SQLite transcript
     /// store, seeds meta from the transcript tail, and primes `first_turn_done`.
     pub fn new(opts: JsonAgentSessionOptions) -> Self {
+        let session_paths = crate::paths::Paths::default();
         let cwd: PathBuf = match &opts.worktree {
             Some(wt) => {
                 let paths = crate::paths::Paths::default();
@@ -400,6 +405,7 @@ impl JsonAgentSession {
             cli: opts.cli,
             cwd,
             data_dir,
+            paths: session_paths,
             system_prompt_file,
             daemon_port: opts.daemon_port,
             drain_tx,
@@ -485,6 +491,11 @@ impl JsonAgentSession {
                         None
                     } else {
                         Some(t.attachments.clone())
+                    },
+                    mentions: if t.mentions.is_empty() {
+                        None
+                    } else {
+                        Some(t.mentions.clone())
                     },
                 })
                 .collect(),
@@ -1457,6 +1468,7 @@ mod tests {
                 attachments: vec![],
                 fork_from_chat_id: None,
                 silent: false,
+                mentions: vec![],
             });
         }
 
@@ -1496,7 +1508,7 @@ mod tests {
         let held = s.begin_edit_queued_turn(&res.turn_id);
         assert!(held.is_some(), "turn should be withdrawable into the hold");
 
-        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], true);
+        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], vec![], true);
         assert!(ok, "resubmit should succeed");
 
         let events = s.read_transcript();
@@ -1530,7 +1542,7 @@ mod tests {
         let held = s.begin_edit_queued_turn(&res.turn_id);
         assert!(held.is_some(), "turn should be withdrawable into the hold");
 
-        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], false);
+        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], vec![], false);
         assert!(ok, "resubmit should succeed");
 
         let events = s.read_transcript();

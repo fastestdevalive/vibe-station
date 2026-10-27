@@ -333,11 +333,16 @@ pub struct SearchResult {
 }
 
 /// `GET /worktrees/:id/file-search` response.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResult {
     pub files: Vec<String>,
     pub truncated: bool,
+    /// `true` while the key's first index walk has not produced data yet (the
+    /// walk continues in the background); `files` is then empty and the client
+    /// should show "indexing" and retry. Always `false` once data exists.
+    #[serde(default)]
+    pub indexing: bool,
 }
 
 /// `GET /worktrees/:id/gutter/*path` response — line-level git diff annotations.

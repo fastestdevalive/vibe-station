@@ -145,3 +145,61 @@ async fn merge_sets_group_from_path_presence() {
 
     reset_skill_catalog_for_tests();
 }
+
+#[test]
+fn no_tokens_unescapes_wire_text_once() {
+    let r = resolve_skill_invocations(r"C:\\temp \{a}", &[]);
+    assert_eq!(r.message, r"C:\temp {a}");
+    assert!(r.skill_invocations.is_empty());
+}
+
+#[test]
+fn no_tokens_legacy_resolution_uses_unescaped_args() {
+    let catalog = vec![entry("code-review", None)];
+    let r = resolve_skill_invocations(r"/code-review a\\b", &catalog);
+    assert_eq!(r.message, r"/code-review a\b");
+    assert_eq!(r.skill_invocations.len(), 1);
+    assert_eq!(r.skill_invocations[0].args, r"a\b");
+}
+
+#[test]
+fn lone_backslash_and_plain_messages_unchanged() {
+    assert_eq!(
+        resolve_skill_invocations(r"look at \d+", &[]).message,
+        r"look at \d+"
+    );
+    for m in ["hello", "héllo 日本 🎉", "multi\nline", "", "a { b", "x}"] {
+        assert_eq!(resolve_skill_invocations(m, &[]).message, m);
+    }
+}
+
+#[test]
+fn escaped_slash_brace_is_text_not_token() {
+    // A literal `{/foo bar}` serialized by a client must reach the agent verbatim.
+    let catalog = vec![entry("foo", None)];
+    let r = resolve_skill_invocations(r"\{/foo bar}", &catalog);
+    assert_eq!(r.message, "{/foo bar}");
+    assert!(r.skill_invocations.is_empty());
+}
+
+#[test]
+fn flatten_skill_text_unescapes_text_and_flattens_tokens() {
+    use vst_agents::skill_resolution::flatten_skill_text;
+    // Token with an escaped `}` in its args -> `/name args`, args un-escaped.
+    assert_eq!(flatten_skill_text(r"{/review a\}b}"), "/review a}b");
+    // No D7 newline: prose after a leading token stays on the same line.
+    assert_eq!(
+        flatten_skill_text("{/review x} then go"),
+        "/review x then go"
+    );
+    assert_eq!(flatten_skill_text(r"C:\\temp \{a}"), r"C:\temp {a}");
+    assert_eq!(flatten_skill_text(r"\{/foo bar}"), "{/foo bar}");
+    assert_eq!(flatten_skill_text("plain"), "plain");
+    assert_eq!(
+        flatten_skill_text("héllo 日本 {/x ü} 🎉"),
+        "héllo 日本 /x ü 🎉"
+    );
+    assert_eq!(flatten_skill_text("trailing {"), "trailing {");
+    assert_eq!(flatten_skill_text("end\\"), "end\\");
+    assert_eq!(flatten_skill_text(""), "");
+}

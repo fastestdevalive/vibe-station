@@ -213,7 +213,12 @@ pub fn import_codex_history(
                                     .unwrap_or_default();
                                 let mut extra = Map::new();
                                 extra.insert("role".into(), serde_json::json!("user"));
-                                extra.insert("text".into(), Value::String(texts.join("\n")));
+                                extra.insert(
+                                    "text".into(),
+                                    Value::String(crate::skill_tokens::escape_skill_text(
+                                        &texts.join("\n"),
+                                    )),
+                                );
                                 buffered.push(mk_event(
                                     session_id,
                                     &ts,

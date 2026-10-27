@@ -44,7 +44,7 @@ pub struct SharedWatcher {
 #[derive(Default)]
 pub struct WatcherRegistryInner {
     pub watchers: HashMap<String, SharedWatcher>,
-    pub worktree_counts: HashMap<String, usize>,
+    pub index_watch_counts: HashMap<String, usize>,
 }
 
 /// Registry of live watchers keyed by watch key (owned by the server).

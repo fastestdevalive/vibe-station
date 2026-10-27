@@ -50,6 +50,13 @@ impl Paths {
         self.vst_home.join("projects").join(project_id)
     }
 
+    /// `~/.vibe-station/projects/<p>/worktrees/<w>`
+    pub fn worktree_path(&self, project_id: &str, worktree_id: &str) -> PathBuf {
+        self.project_dir(project_id)
+            .join("worktrees")
+            .join(worktree_id)
+    }
+
     /// `~/.vibe-station/projects/<p>/session-data/<w>/<s>`
     pub fn session_data_dir(
         &self,

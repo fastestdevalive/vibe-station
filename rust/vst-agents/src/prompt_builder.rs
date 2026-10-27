@@ -225,7 +225,7 @@ fn session_type_str(t: SessionType) -> &'static str {
     }
 }
 
-fn lifecycle_state_str(s: LifecycleState) -> &'static str {
+pub(crate) fn lifecycle_state_str(s: LifecycleState) -> &'static str {
     match s {
         LifecycleState::NotStarted => "not_started",
         LifecycleState::Working => "working",
@@ -234,5 +234,29 @@ fn lifecycle_state_str(s: LifecycleState) -> &'static str {
         LifecycleState::Done => "done",
         LifecycleState::Exited => "exited",
         LifecycleState::Drafting => "drafting",
+    }
+}
+
+#[cfg(test)]
+mod mention_docs_tests {
+    use super::SKILL_MD;
+
+    /// The prompt asset must keep documenting every mention form the web-ui emits.
+    #[test]
+    fn asset_documents_all_mention_forms() {
+        for needle in [
+            "@agent:Fix",
+            "@agent:\"Fix login\"",
+            "@worktree:\"",
+            "@project:\"",
+            "@\"my dir/a b.ts\"",
+            "\\\\",
+            "\\\"",
+            "(id=",
+            "[Mentions:",
+            "MAY be appended",
+        ] {
+            assert!(SKILL_MD.contains(needle), "asset missing `{needle}`");
+        }
     }
 }

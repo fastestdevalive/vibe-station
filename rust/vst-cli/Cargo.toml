@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 vst-types = { workspace = true }
+vst-agents = { workspace = true }
 vst-daemon = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-proc = { workspace = true }

@@ -89,7 +89,11 @@ fn render_markdown(events: &[NormalizedEvent]) -> (usize, String) {
             NormalizedEventKind::User => {
                 turn += 1;
                 let rel_line = body.lines().count() + 1;
-                let text = ev.text.as_deref().unwrap_or("").trim();
+                // Stored user text is wire form (skill grammar); the reader
+                // is an agent, so hand it the plain text.
+                let flat =
+                    crate::skill_resolution::flatten_skill_text(ev.text.as_deref().unwrap_or(""));
+                let text = flat.trim();
                 let preview = preview(text);
                 user_turns.push((turn, rel_line, preview));
                 body.push_str(&format!("## Turn {turn} — User\n\n"));
@@ -279,6 +283,17 @@ mod tests {
             let mode = std::fs::metadata(&out).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "owner-only permissions");
         }
+    }
+
+    #[test]
+    fn user_rows_are_exported_as_plain_text_not_wire_form() {
+        let events = [ev(
+            NormalizedEventKind::User,
+            "t1",
+            r"look at C:\\temp \{a} and {/review x}",
+        )];
+        let (_, md) = render_markdown(&events);
+        assert!(md.contains(r"look at C:\temp {a} and /review x"), "{md}");
     }
 
     #[test]

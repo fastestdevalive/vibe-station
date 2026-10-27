@@ -225,7 +225,10 @@ pub fn parse_claude_native_history(
                         .or_else(|| Some(new_uuid_v4()));
                     let mut extra = Map::new();
                     extra.insert("role".into(), serde_json::json!("user"));
-                    extra.insert("text".into(), Value::String(s));
+                    extra.insert(
+                        "text".into(),
+                        Value::String(crate::skill_tokens::escape_skill_text(&s)),
+                    );
                     events.push(mk_event(
                         session_id,
                         &ts,
@@ -260,7 +263,9 @@ pub fn parse_claude_native_history(
                         extra.insert("role".into(), serde_json::json!("user"));
                         extra.insert(
                             "text".into(),
-                            Value::String(user_prompt_text(&text_parts).clone()),
+                            Value::String(crate::skill_tokens::escape_skill_text(
+                                user_prompt_text(&text_parts),
+                            )),
                         );
                         events.push(mk_event(
                             session_id,

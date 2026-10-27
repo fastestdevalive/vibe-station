@@ -264,6 +264,98 @@ async fn send_attachments_require_json_400() {
 }
 
 #[tokio::test]
+async fn send_tmux_empty_no_enter_400() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r
+        .send_session(
+            "s1",
+            InputBody {
+                data: "".into(),
+                send_enter: None,
+                attachment_ids: None,
+                queue: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChatRouteError::BadRequest(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn send_tmux_empty_with_enter_skips_paste() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let res = r
+        .send_session(
+            "s1",
+            InputBody {
+                data: "".into(),
+                send_enter: Some(true),
+                attachment_ids: None,
+                queue: None,
+            },
+        )
+        .await;
+    if let Err(e) = res {
+        assert!(!matches!(e, ChatRouteError::BadRequest(_)), "{e:?}");
+        let msg = format!("{e:?}");
+        assert!(
+            !msg.contains("paste-buffer") && !msg.contains("no buffer"),
+            "{msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn send_direct_pty_empty_with_enter_ok() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(pty_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let pty = vst_proc::pty::spawn_child(vst_proc::pty::SpawnChildOptions {
+        command: "/bin/cat".into(),
+        args: vec![],
+        cwd: std::env::temp_dir(),
+        env: Default::default(),
+        cols: 120,
+        rows: 24,
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        worktree_id: None,
+    })
+    .expect("spawn cat");
+    r.direct_ptys
+        .write()
+        .unwrap()
+        .insert("s1".into(), pty.clone());
+
+    let res = r
+        .send_session(
+            "s1",
+            InputBody {
+                data: "".into(),
+                send_enter: Some(true),
+                attachment_ids: None,
+                queue: None,
+            },
+        )
+        .await;
+    pty.kill();
+    assert!(res.is_ok(), "{res:?}");
+}
+
+#[tokio::test]
 async fn send_direct_pty_not_running_409() {
     let (_d, store) = store();
     let mut p = make_project("p1");
@@ -301,6 +393,7 @@ async fn chat_missing_session_404() {
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
+                mentions: None,
             },
         )
         .await
@@ -320,6 +413,7 @@ async fn chat_global_draft_404() {
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
+                mentions: None,
             },
         )
         .await
@@ -344,6 +438,7 @@ async fn chat_archived_400() {
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
+                mentions: None,
             },
         )
         .await
@@ -366,11 +461,86 @@ async fn chat_attachment_not_found_400() {
                 message: "hi".into(),
                 attachment_ids: Some(vec!["a1".into()]),
                 queue: None,
+                mentions: None,
             },
         )
         .await
         .unwrap_err();
     assert!(matches!(err, ChatRouteError::AttachmentNotFound(_)));
+}
+
+#[tokio::test]
+async fn chat_with_51_mentions_bad_request() {
+    let (_d, store) = store();
+    let r = routes(store.clone());
+    let mentions: Vec<_> = (0..51)
+        .map(|i| vst_types::Mention {
+            kind: vst_types::MentionKind::File,
+            id: format!("f{i}.ts"),
+            label: format!("f{i}.ts"),
+        })
+        .collect();
+    let err = r
+        .chat_session(
+            "any",
+            ChatBody {
+                message: "hi".into(),
+                attachment_ids: None,
+                queue: None,
+                mentions: Some(mentions),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChatRouteError::BadRequest(_)));
+}
+
+#[tokio::test]
+async fn chat_with_control_char_label_bad_request() {
+    let (_d, store) = store();
+    let r = routes(store.clone());
+    let mentions = vec![vst_types::Mention {
+        kind: vst_types::MentionKind::File,
+        id: "a.ts".into(),
+        label: "bad\nlabel".into(),
+    }];
+    let err = r
+        .chat_session(
+            "any",
+            ChatBody {
+                message: "hi".into(),
+                attachment_ids: None,
+                queue: None,
+                mentions: Some(mentions),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChatRouteError::BadRequest(_)));
+}
+
+#[tokio::test]
+async fn chat_with_valid_mention_behaves_like_without() {
+    let (_d, store) = store();
+    let r = routes(store.clone());
+    let mentions = vec![vst_types::Mention {
+        kind: vst_types::MentionKind::File,
+        id: "a.ts".into(),
+        label: "a.ts".into(),
+    }];
+    let err = r
+        .chat_session(
+            "nope",
+            ChatBody {
+                message: "hi".into(),
+                attachment_ids: None,
+                queue: None,
+                mentions: Some(mentions),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(not_found(&err));
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +721,108 @@ async fn edit_turn_not_queued_404() {
 // POST .../chat/queue/:turnId/resubmit
 // ---------------------------------------------------------------------------
 
+fn agent_mention(id: &str, label: &str) -> vst_types::Mention {
+    vst_types::Mention {
+        kind: vst_types::MentionKind::Agent,
+        id: id.into(),
+        label: label.into(),
+    }
+}
+
+#[tokio::test]
+async fn resubmit_bad_mention_label_400() {
+    let (_d, store) = store();
+    let r = routes(store.clone());
+    let err = r
+        .resubmit_queued_turn(
+            "nope",
+            "t1",
+            ResubmitBody {
+                edited: true,
+                message: Some("x".into()),
+                attachment_ids: None,
+                mentions: Some(vec![agent_mention("s2", "bad\nlabel")]),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChatRouteError::BadRequest(_)));
+}
+
+#[tokio::test]
+async fn edit_and_resubmit_carry_mentions() {
+    let dir = tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let plugin = Arc::from(vst_agents::resolve_plugin(vst_types::CliId::Claude));
+    let session = Arc::new(vst_agents::json_agent_session::JsonAgentSession::new(
+        vst_agents::json_agent_session::JsonAgentSessionOptions {
+            project: make_project("p1"),
+            worktree: None,
+            session: json_session("s1", "p1"),
+            plugin,
+            daemon_port: 0,
+            cli: vst_types::NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle: store.clone(),
+            broadcaster: vst_types::Broadcaster(tokio::sync::broadcast::channel(16).0),
+        },
+    ));
+    r.json_registry.set("s1".to_string(), session.clone());
+
+    let queued = session.enqueue_with(
+        "orig".into(),
+        vec![],
+        vec![agent_mention("s2", "Agent 2")],
+        None,
+        None,
+    );
+
+    // edit echoes the queued record's mentions
+    let edited = r.edit_queued_turn("s1", &queued.turn_id).await.unwrap();
+    assert_eq!(edited.mentions, Some(vec![agent_mention("s2", "Agent 2")]));
+
+    // an invalid resubmit is rejected and leaves the hold intact
+    let err = r
+        .resubmit_queued_turn(
+            "s1",
+            &queued.turn_id,
+            ResubmitBody {
+                edited: true,
+                message: Some("new".into()),
+                attachment_ids: None,
+                mentions: Some(vec![agent_mention("s3", "bad\nlabel")]),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ChatRouteError::BadRequest(_)));
+
+    // a valid resubmit succeeds (hold survived the rejected one); the re-enqueued
+    // turn is drained immediately so it can't be re-read from the queue
+    let ok = r
+        .resubmit_queued_turn(
+            "s1",
+            &queued.turn_id,
+            ResubmitBody {
+                edited: true,
+                message: Some("new".into()),
+                attachment_ids: None,
+                mentions: Some(vec![agent_mention("s3", "Agent 3")]),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(ok.ok);
+}
+
 #[tokio::test]
 async fn resubmit_missing_session_404() {
     let (_d, store) = store();
@@ -563,6 +835,7 @@ async fn resubmit_missing_session_404() {
                 edited: true,
                 message: Some("x".into()),
                 attachment_ids: None,
+                mentions: None,
             },
         )
         .await
@@ -586,6 +859,7 @@ async fn resubmit_not_editing_404() {
                 edited: false,
                 message: None,
                 attachment_ids: None,
+                mentions: None,
             },
         )
         .await
@@ -690,11 +964,158 @@ async fn chat_json_returns_202_turn_id() {
                 message: "hello".into(),
                 attachment_ids: None,
                 queue: Some(true),
+                mentions: None,
             },
         )
         .await
         .unwrap();
     assert!(!res.turn_id.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Skill-grammar wire text on the terminal delivery paths
+// ---------------------------------------------------------------------------
+
+/// `/send` to a direct pty flattens wire text once: text un-escaped, skill
+/// tokens flattened to `/name args` (same as Rich Chat), then written to the pty.
+#[tokio::test]
+async fn send_direct_pty_unescapes_wire_text_once() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(pty_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let pty = vst_proc::pty::spawn_child(vst_proc::pty::SpawnChildOptions {
+        command: "/bin/cat".into(),
+        args: vec![],
+        cwd: std::env::temp_dir(),
+        env: Default::default(),
+        cols: 120,
+        rows: 24,
+        session_id: "s1".into(),
+        project_id: "p1".into(),
+        worktree_id: None,
+    })
+    .expect("spawn cat");
+    r.direct_ptys
+        .write()
+        .unwrap()
+        .insert("s1".into(), pty.clone());
+
+    r.send_session(
+        "s1",
+        InputBody {
+            data: r"C:\\temp \{a} {/review a\}b}".into(),
+            send_enter: None,
+            attachment_ids: None,
+            queue: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let seen = pty
+        .wait_for_output(
+            r"C:\temp {a} /review a}b",
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+    let out = pty.get_recent_output(4096);
+    pty.kill();
+    assert!(seen, "pty should echo the plain text once, got: {out:?}");
+    assert!(
+        !out.contains(r"\\temp"),
+        "escaped text must not reach the pty: {out:?}"
+    );
+}
+
+/// Records the `task_prompt` handed to `compose_launch_prompt` and launches
+/// `/bin/cat` so `spawn_session` can complete on a direct pty.
+struct ComposeRecorder {
+    task_prompts: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+impl vst_agents::AgentPlugin for ComposeRecorder {
+    fn name(&self) -> &str {
+        "recorder"
+    }
+    fn default_model(&self) -> &str {
+        "m"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> vst_agents::plugin::PromptDelivery {
+        vst_agents::plugin::PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &vst_agents::LaunchConfig) -> Vec<String> {
+        vec!["/bin/cat".into()]
+    }
+    fn get_environment(
+        &self,
+        _cfg: &vst_agents::LaunchConfig,
+    ) -> std::collections::BTreeMap<String, String> {
+        Default::default()
+    }
+    fn get_ready_signal(&self) -> vst_agents::plugin::ReadySignal {
+        vst_agents::plugin::ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(
+        &self,
+        input: vst_agents::plugin::ComposePromptInput,
+    ) -> vst_agents::plugin::ComposePromptResult {
+        self.task_prompts.lock().unwrap().push(input.task_prompt);
+        Default::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Pty
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<vst_agents::plugin::ListModelsResult> {
+        Box::pin(async { Default::default() })
+    }
+}
+
+/// The terminal launch seam (`spawn_session`) hands the plugin plain text: the
+/// wire-form create prompt is un-escaped and its skill tokens flattened.
+#[tokio::test]
+async fn spawn_session_flattens_wire_task_prompt_for_terminal_launch() {
+    let home = tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    let proj_dir = tempdir().unwrap();
+    let mut project = make_project("p1");
+    project.absolute_path = proj_dir.path().display().to_string();
+    project.is_git = false;
+    let session = pty_session("s1", "p1");
+    let plugin = ComposeRecorder {
+        task_prompts: Default::default(),
+    };
+    let ptys = std::sync::RwLock::new(std::collections::HashMap::new());
+    let tmux = vst_proc::tmux::Tmux::new();
+
+    let _ = vst_routes::sessions::spawn_session(&vst_routes::sessions::SpawnSessionOpts {
+        project: &project,
+        worktree: None,
+        session: &session,
+        plugin: &plugin,
+        daemon_port: 3999,
+        system_prompt: "sys".into(),
+        task_prompt: Some(r"C:\\temp \{a} {/review a\}b}".into()),
+        model: None,
+        tmux: &tmux,
+        direct_ptys: &ptys,
+    })
+    .await;
+    if let Some(h) = ptys.read().unwrap().get("s1") {
+        h.kill();
+    }
+    assert_eq!(
+        plugin.task_prompts.lock().unwrap().as_slice(),
+        [Some(r"C:\temp {a} /review a}b".to_string())]
+    );
 }
 
 // ---------------------------------------------------------------------------

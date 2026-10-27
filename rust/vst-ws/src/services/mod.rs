@@ -2,6 +2,8 @@
 
 pub mod file_list;
 pub mod file_search;
+pub mod file_search_rank;
+pub mod file_search_walk;
 pub mod ignore_filter;
 pub mod pending_file_opens;
 pub mod tree_list;

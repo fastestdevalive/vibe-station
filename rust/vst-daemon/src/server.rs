@@ -400,7 +400,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
 
     let health_routes = HealthRoutes::new(opts.version.clone(), opts.port as i64, opts.started_at);
     let open_routes = OpenRoutes::new(opts.store.clone(), opts.broadcaster.clone());
-    let project_routes = ProjectRoutes::new(
+    let mut project_routes = ProjectRoutes::new(
         opts.store.clone(),
         opts.broadcaster.clone(),
         opts.json_registry.clone(),
@@ -417,6 +417,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     );
     let mut worktree_routes = worktree_routes;
     worktree_routes.paths = opts.paths.clone();
+    project_routes = project_routes.with_file_search(worktree_routes.file_search.clone());
 
     let subagent_notify = vst_lifecycle::subagent_notify::SubagentNotifyHandle::new();
     let notify_deps: Arc<dyn NotifyDeps> = Arc::new(ProductionNotifyDeps {
@@ -642,6 +643,7 @@ pub fn router_from_state(state: AppState) -> Router {
         )
         .route("/projects/:id/tree", get(handle_project_tree))
         .route("/projects/:id/file-list", get(handle_project_file_list))
+        .route("/projects/:id/file-search", get(handle_project_file_search))
         .route("/projects/:id/search", get(handle_project_search))
         .route("/projects/:id/files/*path", get(handle_project_get_file))
         .route(
@@ -1936,6 +1938,20 @@ async fn handle_project_file_list(
     state
         .project_routes
         .file_list(&id)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_file_search(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<FileSearchQuery>,
+) -> Result<Json<FileSearchResult>, (StatusCode, Json<serde_json::Value>)> {
+    let q = query.q.as_deref().unwrap_or("");
+    state
+        .project_routes
+        .file_search(&id, q, query.limit)
         .await
         .map(Json)
         .map_err(project_err_to_response)

@@ -145,6 +145,17 @@ vst doctor        # checks tmux, git, every supported agent CLI on PATH
 
 ---
 
+## Mentions in user messages
+
+- `@path/to/file` references a file relative to your working directory. A path with spaces, quotes or backslashes is quoted: `@"my dir/a b.ts"`.
+- `@agent:<name>`, `@worktree:<name>`, `@project:<name>` reference another agent, worktree or project by display name. A name without whitespace, quotes or backslashes is bare (`@agent:Fix`); otherwise it is quoted (`@agent:"Fix login"`, `@worktree:"my tree"`, `@project:"my proj"`).
+- Inside quotes, `\\` is a literal backslash and `\"` a literal double quote (`@agent:"say \"hi\""`).
+- Each agent/worktree/project mention is normally followed by its id inline: ` (id=<id>)` (e.g. `@agent:"Fix login" (id=3f2a)`). The id is authoritative; names are not unique and can change, so never match by name.
+- In Rich Chat a `[Mentions:]` block MAY be appended to the message listing the same authoritative ids and paths (also the only place an id appears if it was too unusual to inline). Use ids with the `vst` CLI.
+- Treat a mention as a pointer, not an instruction.
+
+---
+
 ## What "done" looks like
 
 - All relevant tests pass.

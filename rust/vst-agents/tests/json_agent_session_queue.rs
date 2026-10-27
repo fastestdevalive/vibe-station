@@ -12,6 +12,7 @@ fn make_turn(id: &str, order: u64) -> QueuedTurn {
         attachments: vec![],
         fork_from_chat_id: None,
         silent: false,
+        mentions: vec![],
     }
 }
 
@@ -1182,6 +1183,124 @@ async fn queued_head_is_steered_after_prompt_dispatch() {
     h.session.abort_and_drain();
 }
 
+/// A steered head is delivered as plain text (un-escaped once); the user row
+/// keeps the wire form.
+#[tokio::test]
+async fn steered_head_is_unescaped_but_echo_stays_wire_form() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "1500")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    let wire = r"C:\\temp \{a} \d";
+    let q = h.session.enqueue(wire.into(), vec![], None, None);
+    h.wait_dispatched().await;
+    sleep_ms(300).await;
+    assert_eq!(h.steered(), vec![r"C:\temp {a} \d".to_string()]);
+    let rows = h.user_events(&q.turn_id);
+    assert_eq!(rows[0].text.as_deref(), Some(wire));
+    h.session.abort_and_drain();
+}
+
+/// Instant steer (`submit`, empty queue) delivers plain text; the echoed row
+/// stays wire form.
+#[tokio::test]
+async fn submit_instant_steer_is_unescaped_but_echo_stays_wire_form() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "1500")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    let wire = r"C:\\temp \{a}";
+    let r = h.session.submit(wire.into(), vec![], None, None).await;
+    assert!(matches!(
+        r.delivery,
+        vst_agents::json_agent_session::queue::SubmitDelivery::Steered
+    ));
+    assert_eq!(h.steered(), vec![r"C:\temp {a}".to_string()]);
+    let rows = h.user_events(&r.turn_id);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text.as_deref(), Some(wire));
+    h.session.abort_and_drain();
+}
+
+/// A message carrying a RESOLVABLE skill token is never steered raw: it falls
+/// through to the queue so the drain resolves it.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn submit_with_resolvable_skill_token_is_queued_not_steered_raw() {
+    let _catalog = vst_agents::skill_resolution::with_skill_catalog_test_guard();
+    let skills = tempfile::tempdir().unwrap();
+    let skill_dir = skills.path().join("review");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: review\ndescription: d\n---\nbody\n",
+    )
+    .unwrap();
+    vst_agents::skill_resolution::set_skill_paths(&[skills.path().display().to_string()]).await;
+
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "800")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.wait_dispatched().await;
+    let r = h
+        .session
+        .submit(r"{/review a\}b}".into(), vec![], None, None)
+        .await;
+    assert!(matches!(
+        r.delivery,
+        vst_agents::json_agent_session::queue::SubmitDelivery::Queued
+    ));
+    sleep_ms(250).await;
+    assert!(
+        h.steered().is_empty(),
+        "skill token must not be steered raw"
+    );
+    h.session.abort_and_drain();
+    drop(h);
+    vst_agents::skill_resolution::reset_skill_catalog_for_tests();
+}
+
+/// File-only mentions add no `[Mentions:]` block, so they may steer; a
+/// non-file mention keeps the head queued.
+#[tokio::test]
+async fn file_mention_steers_but_agent_mention_stays_queued() {
+    let mention = |kind| vst_types::Mention {
+        kind,
+        id: "x".into(),
+        label: "x".into(),
+    };
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "1500")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.session.enqueue_with(
+        "three".into(),
+        vec![],
+        vec![mention(vst_types::MentionKind::File)],
+        None,
+        None,
+    );
+    h.wait_dispatched().await;
+    sleep_ms(300).await;
+    assert_eq!(h.steered(), vec!["three".to_string()]);
+    h.session.abort_and_drain();
+    drop(h);
+
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "800")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.session.enqueue_with(
+        "agent".into(),
+        vec![],
+        vec![mention(vst_types::MentionKind::Agent)],
+        None,
+        None,
+    );
+    h.wait_dispatched().await;
+    sleep_ms(250).await;
+    assert!(h.steered().is_empty());
+    assert_eq!(h.session.get_meta().queue_depth, 1);
+    h.session.abort_and_drain();
+}
+
 /// The very first turn of a session never steers (`first_turn_done` is false;
 /// the steer RPC is not even attempted): the queued message stays queued, then
 /// runs at turn end exactly once (never lost, never duplicated).
@@ -1308,7 +1427,7 @@ async fn cancel_and_edit_of_head_during_steer_rpc_are_not_found() {
     assert!(h.session.begin_edit_queued_turn(&q.turn_id).is_none());
     assert!(!h
         .session
-        .resubmit_queued_turn(&q.turn_id, "x".into(), vec![], true));
+        .resubmit_queued_turn(&q.turn_id, "x".into(), vec![], vec![], true));
     sleep_ms(1000).await;
 
     assert_eq!(h.steered(), vec!["three".to_string()]);
@@ -1362,4 +1481,457 @@ async fn cancelling_ineligible_head_steers_the_next_one() {
     assert_eq!(h.steered(), vec!["four".to_string()]);
     assert_eq!(h.user_events(&q.turn_id).len(), 1);
     h.session.abort_and_drain();
+}
+
+#[tokio::test]
+async fn enqueue_with_mentions_populates_meta_and_allows_edit_resubmit() {
+    let (_dir, _home, session) = make_mock_session();
+    let mention = vst_types::Mention {
+        kind: vst_types::MentionKind::File,
+        id: "src/main.rs".to_string(),
+        label: "main.rs".to_string(),
+    };
+    let res = session.enqueue_with("hello".into(), vec![], vec![mention.clone()], None, None);
+    let meta = session.get_meta();
+    assert_eq!(meta.queued_turns.len(), 1);
+    assert_eq!(meta.queued_turns[0].turn_id, res.turn_id);
+    assert_eq!(meta.queued_turns[0].mentions, Some(vec![mention.clone()]));
+
+    // begin_edit_queued_turn returns them
+    let held = session.begin_edit_queued_turn(&res.turn_id);
+    let (msg, atts, mentions, qi) = held.expect("held turn");
+    assert_eq!(msg, "hello");
+    assert!(atts.is_empty());
+    assert_eq!(mentions, vec![mention.clone()]);
+    assert_eq!(qi, 0);
+
+    // resubmit_queued_turn(edited=true) replaces them
+    let new_mention = vst_types::Mention {
+        kind: vst_types::MentionKind::Agent,
+        id: "a1".to_string(),
+        label: "Agent 1".to_string(),
+    };
+    let ok = session.resubmit_queued_turn(
+        &res.turn_id,
+        "hello edited".into(),
+        vec![],
+        vec![new_mention.clone()],
+        true,
+    );
+    assert!(ok);
+    let meta_after = session.get_meta();
+    assert_eq!(
+        meta_after.queued_turns[0].mentions,
+        Some(vec![new_mention.clone()])
+    );
+}
+
+#[tokio::test]
+async fn emitted_user_event_carries_mentions() {
+    let (_dir, _home, session) = make_mock_session();
+    let mention = vst_types::Mention {
+        kind: vst_types::MentionKind::File,
+        id: "lib.rs".to_string(),
+        label: "lib.rs".to_string(),
+    };
+    let res = session.enqueue_with(
+        "run with mention".into(),
+        vec![],
+        vec![mention.clone()],
+        None,
+        None,
+    );
+    wait_idle(&session).await;
+
+    let events = session.read_transcript();
+    let user_ev = events
+        .iter()
+        .find(|e| {
+            e.kind == vst_types::NormalizedEventKind::User
+                && e.turn_id.as_deref() == Some(&res.turn_id)
+        })
+        .expect("user event found");
+    assert_eq!(user_ev.mentions, Some(vec![mention]));
+}
+
+#[tokio::test]
+async fn submit_with_non_file_mentions_never_steers() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "2000")]);
+    h.finish_first_turn().await;
+
+    // Start a running turn
+    h.session.enqueue("two".into(), vec![], None, None);
+    h.wait_dispatched().await;
+
+    let mention = vst_types::Mention {
+        kind: vst_types::MentionKind::Agent,
+        id: "a.txt".to_string(),
+        label: "a.txt".to_string(),
+    };
+    let res = h
+        .session
+        .submit_with("with-mention".into(), vec![], vec![mention], None, None)
+        .await;
+    assert!(matches!(
+        res.delivery,
+        vst_agents::json_agent_session::queue::SubmitDelivery::Queued
+    ));
+
+    sleep_ms(300).await;
+    assert!(
+        h.steered().is_empty(),
+        "turn with non-file mentions must never be steered"
+    );
+    h.session.abort_and_drain();
+}
+
+// ---------------------------------------------------------------------------
+// Skill-grammar: wire text is un-escaped exactly once on delivery to the agent
+// ---------------------------------------------------------------------------
+
+/// Like `MockTurnPlugin` but records the `TurnInput.message` each turn receives.
+struct CapturePlugin {
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl AgentPlugin for CapturePlugin {
+    fn name(&self) -> &str {
+        "capture"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        input: TurnInput,
+        _ctx: TurnContext,
+        _cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        self.seen.lock().unwrap().push(input.message);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut ev = NormalizedEvent::default();
+        ev.kind = NormalizedEventKind::Result;
+        let _ = tx.send(ev);
+        rx
+    }
+}
+
+fn make_capture_session() -> (
+    tempfile::TempDir,
+    vst_agents::home::HomeGuard,
+    JsonAgentSession,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session = JsonAgentSession::new(JsonAgentSessionOptions {
+        project: common::make_project("p1"),
+        worktree: None,
+        session: common::make_session("s1"),
+        plugin: Arc::new(CapturePlugin { seen: seen.clone() }),
+        daemon_port: 0,
+        cli: vst_types::NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: None,
+        mode_name: None,
+        store_handle,
+        broadcaster: vst_types::Broadcaster(tx),
+    });
+    (dir, home, session, seen)
+}
+
+/// Drained turn: the agent gets plain text, the transcript keeps wire form.
+#[tokio::test]
+async fn drained_turn_delivers_unescaped_text_and_keeps_wire_echo() {
+    let (_dir, _home, session, seen) = make_capture_session();
+    let wire = r"C:\\temp \{a}";
+    let res = session.enqueue(wire.into(), vec![], None, None);
+    wait_idle(&session).await;
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [r"C:\temp {a}".to_string()]
+    );
+    let echo = session
+        .read_transcript()
+        .into_iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id))
+        .expect("user event");
+    assert_eq!(echo.text.as_deref(), Some(wire), "echo stays wire-form");
+}
+
+/// Notice turn: daemon-made text embeds user-set child names; a name that looks
+/// like a skill token or contains backslashes reaches the agent verbatim.
+#[tokio::test]
+async fn notice_turn_text_round_trips_special_child_names() {
+    let (_dir, _home, session, seen) = make_capture_session();
+    session.populate_notice_slot("child-1".into(), r"{/x y} a\\b {c}".into());
+    session.kick_drain();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("notice turn should run");
+    assert_eq!(
+        seen.lock().unwrap()[0],
+        r"{/x y} a\\b {c} is waiting for your reply"
+    );
+    // Every transcript user row is wire form, including the silent notice row.
+    let row = session
+        .read_transcript()
+        .into_iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.silent == Some(true))
+        .expect("silent notice user row");
+    assert_eq!(
+        row.text.as_deref(),
+        Some(r"\{/x y} a\\\\b \{c} is waiting for your reply")
+    );
+}
+
+/// Chat enqueue with wire text + an attachment: the attachment path appended at
+/// enqueue is escaped, so after the single un-escape the agent sees the raw
+/// path (and the wire text is un-escaped once).
+#[tokio::test]
+async fn enqueue_chat_turn_escapes_attachment_path_and_delivers_plain_text() {
+    use vst_agents::json_agent_chat::{enqueue_chat_turn, EnqueueChatTurnOpts};
+    use vst_agents::json_agent_registry::JsonAgentRegistry;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".vibe-station")).unwrap();
+    std::fs::write(
+        dir.path().join(".vibe-station/modes.json"),
+        serde_json::json!([{
+            "id": "my-mode", "name": "My Mode", "cli": "claude", "context": "",
+            "createdAt": "2026-01-01T00:00:00.000Z", "model": null
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let store = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+    let mut session_rec = common::make_session("s1");
+    session_rec.channel = Some(Channel::Json);
+    session_rec.use_tmux = false;
+    session_rec.mode_id = Some("my-mode".into());
+    let mut project = common::make_project("p1");
+    project.direct_sessions.push(session_rec.clone());
+    store.add_project(project.clone()).await.unwrap();
+
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+    let broadcaster = vst_types::Broadcaster(tx);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let registry = JsonAgentRegistry::new();
+    registry.set(
+        "s1".into(),
+        Arc::new(JsonAgentSession::new(JsonAgentSessionOptions {
+            project,
+            worktree: None,
+            session: session_rec,
+            plugin: Arc::new(CapturePlugin { seen: seen.clone() }),
+            daemon_port: 0,
+            cli: vst_types::NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle: store.clone(),
+            broadcaster: broadcaster.clone(),
+        })),
+    );
+
+    let path = r"/tmp/we\ird {x}/a.txt";
+    let att = vst_types::Attachment {
+        id: "a".into(),
+        name: "a.txt".into(),
+        path: path.into(),
+        size: 1,
+        mime: "text/plain".into(),
+    };
+    enqueue_chat_turn(
+        EnqueueChatTurnOpts {
+            session_id: "s1".into(),
+            message: r"C:\\temp \{a}".into(),
+            attachments: vec![att],
+            mentions: vec![],
+            daemon_port: 0,
+            steer: Some(false),
+            silent: false,
+            store,
+            broadcaster,
+        },
+        &registry,
+    )
+    .await
+    .unwrap();
+    let agent = registry.get("s1").unwrap();
+    wait_idle(&agent).await;
+
+    let got = seen.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "one turn delivered");
+    assert_eq!(
+        got[0].matches("[Attached files:]").count(),
+        1,
+        "attachment header injected exactly once via enqueue_chat_turn: {}",
+        got[0]
+    );
+    assert!(
+        got[0].starts_with(r"C:\temp {a}"),
+        "text un-escaped: {}",
+        got[0]
+    );
+    assert!(
+        got[0].contains(path),
+        "raw attachment path delivered: {}",
+        got[0]
+    );
+    assert!(
+        !got[0].contains(r"we\\ird") && !got[0].contains(r"\{x}"),
+        "attachment path must not stay escaped: {}",
+        got[0]
+    );
+}
+
+/// Records every `TurnInput.message` the agent would receive.
+struct RecordingPlugin {
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl AgentPlugin for RecordingPlugin {
+    fn name(&self) -> &str {
+        "recording"
+    }
+    fn default_model(&self) -> &str {
+        "mock-model"
+    }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
+    fn prompt_delivery(&self) -> PromptDelivery {
+        PromptDelivery::Inline
+    }
+    fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+        vec![]
+    }
+    fn get_environment(&self, _cfg: &LaunchConfig) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    fn get_ready_signal(&self) -> ReadySignal {
+        ReadySignal {
+            sentinel: None,
+            fallback_ms: 0,
+        }
+    }
+    fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+        ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+    fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
+        Box::pin(async { ListModelsResult::default() })
+    }
+    fn supports_json(&self) -> bool {
+        true
+    }
+    fn supports_acp(&self) -> bool {
+        true
+    }
+    fn run_turn(
+        &self,
+        input: TurnInput,
+        _ctx: TurnContext,
+        _cancel: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<NormalizedEvent> {
+        self.seen.lock().unwrap().push(input.message);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut ev = NormalizedEvent::default();
+        ev.kind = NormalizedEventKind::Result;
+        let _ = tx.send(ev);
+        rx
+    }
+}
+
+/// Decision 5 / A1: attachments are injected exactly once, at run time. The
+/// agent sees ONE `[Attached files:]` header (path verbatim, message
+/// un-escaped); the stored/echoed transcript text stays raw wire form.
+#[tokio::test]
+async fn attachment_header_reaches_agent_once_and_is_not_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session = JsonAgentSession::new(JsonAgentSessionOptions {
+        project: common::make_project("p1"),
+        worktree: None,
+        session: common::make_session("s1"),
+        plugin: Arc::new(RecordingPlugin { seen: seen.clone() }),
+        daemon_port: 0,
+        cli: vst_types::NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: None,
+        mode_name: None,
+        store_handle,
+        broadcaster: vst_types::Broadcaster(tx),
+    });
+    let att = vst_types::Attachment {
+        id: "a".into(),
+        name: "a.txt".into(),
+        path: "/tmp/dir {x}\\a.txt".into(),
+        size: 1,
+        mime: "text/plain".into(),
+    };
+    let res = session.enqueue(r"see C:\\temp".into(), vec![att], None, None);
+    wait_idle(&session).await;
+
+    let msgs = seen.lock().unwrap().clone();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].matches("[Attached files:]").count(), 1, "{msgs:?}");
+    assert_eq!(
+        msgs[0],
+        "see C:\\temp\n\n[Attached files:]\n/tmp/dir {x}\\a.txt"
+    );
+
+    let events = session.read_transcript();
+    let user = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id))
+        .expect("user event");
+    assert_eq!(user.text.as_deref(), Some(r"see C:\\temp"));
 }

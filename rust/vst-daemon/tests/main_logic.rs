@@ -227,6 +227,13 @@ async fn build_state_shares_one_file_search_index() {
         ),
         "DispatchContext and WorktreeRoutes must share the same Arc<FileSearchIndex>"
     );
+    assert!(
+        Arc::ptr_eq(
+            &state.project_routes.file_search,
+            &state.worktree_routes.file_search
+        ),
+        "ProjectRoutes and WorktreeRoutes must share the same Arc<FileSearchIndex>"
+    );
 }
 
 #[test]

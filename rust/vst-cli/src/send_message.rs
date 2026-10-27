@@ -12,6 +12,7 @@ use vst_types::rest::sessions::{InputBody, SessionOrDraft, SessionOutput};
 use crate::client::{daemon_get, daemon_post, DaemonResult};
 use crate::daemon_url::{get_daemon_token, get_daemon_url_or_throw};
 use crate::output::{die, warn};
+use crate::text_source::to_wire_text;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SendOptions {
@@ -161,7 +162,8 @@ pub async fn run_send(
     }
 
     let input_body = InputBody {
-        data: content,
+        // The daemon expects skill-grammar wire text for every user message.
+        data: to_wire_text(&content),
         send_enter: Some(true),
         attachment_ids: if attachment_ids.is_empty() {
             None

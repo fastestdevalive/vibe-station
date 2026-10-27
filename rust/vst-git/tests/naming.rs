@@ -169,3 +169,31 @@ fn does_not_hang_on_a_long_whitespace_sparse_prompt() {
     slugify_prompt(&pathological);
     assert!(start.elapsed().as_millis() < 500);
 }
+
+#[test]
+fn draft_mention_token_contributes_only_its_label() {
+    assert_eq!(
+        slugify_prompt_with(r#"{@agent ["northstar-api-a-e8fe2a7e","main"]} "#, 5, 60),
+        "main"
+    );
+}
+
+#[test]
+fn wire_mention_drops_id_suffix_and_kind_prefix() {
+    let slug = slugify_prompt(r#"see @agent:"Agent 2" (id=zzqid-1-a2) and @tsconfig.json"#);
+    assert!(!slug.contains("zzqid"), "{slug}");
+    assert!(!slug.contains("id"), "{slug}");
+}
+
+#[test]
+fn escaped_draft_label_keeps_label_not_id() {
+    let slug = slugify_prompt(r#"{@agent ["zzqid-9","fix \\"auth\\" bug"]}"#);
+    assert!(slug.contains("auth"), "{slug}");
+    assert!(!slug.contains("zzqid"), "{slug}");
+}
+
+#[test]
+fn malformed_draft_token_is_literal_and_does_not_panic() {
+    let slug = slugify_prompt("{@agent [broken} refactor parser");
+    assert!(slug.contains("refactor"), "{slug}");
+}

@@ -6,7 +6,7 @@
 //! **Invariant:** turn ordering must survive cancel/promote/edit races — always
 //! re-derive insert position from `ahead_ids`, never trust a cached index.
 
-use vst_types::{Attachment, TurnState};
+use vst_types::{Attachment, Mention, MentionKind, TurnState};
 
 use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn, State};
 use crate::{acp_transport::AcpTransport, util::new_uuid_v4};
@@ -59,22 +59,42 @@ impl JsonAgentSession {
         system_prompt: Option<String>,
         fork_from_chat_id: Option<String>,
     ) -> EnqueueResult {
+        self.enqueue_with(
+            message,
+            attachments,
+            vec![],
+            system_prompt,
+            fork_from_chat_id,
+        )
+    }
+
+    /// `enqueue` carrying the turn's `@`-mention sidecar.
+    pub fn enqueue_with(
+        &self,
+        message: String,
+        attachments: Vec<Attachment>,
+        mentions: Vec<Mention>,
+        system_prompt: Option<String>,
+        fork_from_chat_id: Option<String>,
+    ) -> EnqueueResult {
         self.enqueue_ext(
             message,
             attachments,
+            mentions,
             system_prompt,
             fork_from_chat_id,
             false,
         )
     }
 
-    /// `enqueue` with a `silent` flag: the turn's `user` row is persisted
+    /// `enqueue_with` plus a `silent` flag: the turn's `user` row is persisted
     /// silent (hidden from the chat as a human bubble) but the agent still
     /// receives the message.
     pub fn enqueue_ext(
         &self,
         message: String,
         attachments: Vec<Attachment>,
+        mentions: Vec<Mention>,
         system_prompt: Option<String>,
         fork_from_chat_id: Option<String>,
         silent: bool,
@@ -101,6 +121,7 @@ impl JsonAgentSession {
                 raw_message: message,
                 attachments,
                 fork_from_chat_id,
+                mentions,
                 silent,
             });
             // Only flip to Queued when nothing is running. While a turn is
@@ -153,22 +174,60 @@ impl JsonAgentSession {
         system_prompt: Option<String>,
         fork_from_chat_id: Option<String>,
     ) -> SubmitResult {
+        self.submit_with(
+            message,
+            attachments,
+            vec![],
+            system_prompt,
+            fork_from_chat_id,
+        )
+        .await
+    }
+
+    pub async fn submit_with(
+        &self,
+        message: String,
+        attachments: Vec<Attachment>,
+        mentions: Vec<Mention>,
+        system_prompt: Option<String>,
+        fork_from_chat_id: Option<String>,
+    ) -> SubmitResult {
         let can_attempt_steer = {
             let s = self.0.state.lock().unwrap();
-            self.can_steer_now(&s) && s.queue.is_empty() && attachments.is_empty()
+            self.can_steer_now(&s)
+                && s.queue.is_empty()
+                && attachments.is_empty()
+                && !mentions_block_steer(&mentions)
         };
 
         if can_attempt_steer {
             // Read the connection handle without holding the lock across .await.
-            let conn = self.0.state.lock().unwrap().connection.clone();
-            if let Some(conn) = conn {
+            let (conn, cmds) = {
+                let s = self.0.state.lock().unwrap();
+                (s.connection.clone(), s.commands.clone().unwrap_or_default())
+            };
+            // `message` is wire-form (skill grammar): resolve it like the drain
+            // does. A resolved skill invocation needs the full turn pipeline, so
+            // fall through to the queue; otherwise steer the plain text. The
+            // echoed/stored text below stays wire-form.
+            let merged = crate::skill_resolution::get_merged_skill_catalog(&cmds);
+            let resolved = crate::skill_resolution::resolve_skill_invocations(&message, &merged);
+            if let Some(conn) = conn.filter(|_| resolved.skill_invocations.is_empty()) {
                 use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
-                let blocks = vec![ContentBlock::Text(TextContent::new(message.clone()))];
+                let blocks = vec![ContentBlock::Text(TextContent::new(resolved.message))];
                 use crate::acp_transport::SteerOutcome;
                 let outcome = conn.steer(blocks).await;
                 if matches!(outcome, SteerOutcome::Injected) {
                     let turn_id = new_uuid_v4();
-                    self.emit_user_event(&turn_id, &message, &[], EmitUserEventOpts::default());
+                    self.emit_user_event(
+                        &turn_id,
+                        &message,
+                        &[],
+                        EmitUserEventOpts {
+                            mentions: mentions.clone(),
+                            ..Default::default()
+                        },
+                    );
                     return SubmitResult {
                         turn_id,
                         queue_position: 0,
@@ -178,7 +237,13 @@ impl JsonAgentSession {
             }
         }
 
-        let result = self.enqueue(message, attachments, system_prompt, fork_from_chat_id);
+        let result = self.enqueue_with(
+            message,
+            attachments,
+            mentions,
+            system_prompt,
+            fork_from_chat_id,
+        );
         SubmitResult {
             turn_id: result.turn_id,
             queue_position: result.queue_position,
@@ -207,8 +272,9 @@ impl JsonAgentSession {
     /// queued and runs at turn end.
     ///
     /// Head-only exclusions: attachments (steer carries text blocks only),
-    /// fork turns (need a fresh harness session) and skill invocations (raw
-    /// text bypasses `resolve_skill_invocations`).
+    /// fork turns (need a fresh harness session) and heads whose text resolves
+    /// a skill invocation (the head is resolved first, and only a head with no
+    /// resolved invocation is steered, as plain text).
     pub(super) async fn steer_queued_head(&self, cancel: &tokio_util::sync::CancellationToken) {
         use crate::acp_transport::SteerOutcome;
         use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
@@ -224,7 +290,8 @@ impl JsonAgentSession {
                     Some(h)
                         if self.can_steer_now(&s)
                             && h.attachments.is_empty()
-                            && h.fork_from_chat_id.is_none() =>
+                            && h.fork_from_chat_id.is_none()
+                            && !mentions_block_steer(&h.mentions) =>
                     {
                         let cmds = s.commands.clone().unwrap_or_default();
                         let conn = s.connection.clone();
@@ -251,9 +318,13 @@ impl JsonAgentSession {
                 return;
             }
 
-            let blocks = vec![ContentBlock::Text(TextContent::new(
-                head.raw_message.clone(),
-            ))];
+            // `head.raw_message` is wire-form (skill grammar). Steering bypasses
+            // the drain, so convert to plain agent-facing text here, exactly
+            // once. No invocation resolved, so `resolved.message` is just the
+            // unescaped text (unresolved tokens degrade to `/name args`,
+            // matching what a normal turn delivers). Stored/echoed text stays
+            // wire-form.
+            let blocks = vec![ContentBlock::Text(TextContent::new(resolved.message))];
             let outcome = tokio::time::timeout(STEER_RPC_TIMEOUT, conn.steer(blocks))
                 .await
                 .unwrap_or(SteerOutcome::Unsupported);
@@ -277,6 +348,7 @@ impl JsonAgentSession {
                         &[],
                         EmitUserEventOpts {
                             silent: head.silent,
+                            mentions: head.mentions.clone(),
                             ..Default::default()
                         },
                     );
@@ -393,6 +465,7 @@ impl JsonAgentSession {
                 &turn.attachments,
                 EmitUserEventOpts {
                     cancelled: true,
+                    mentions: turn.mentions.clone(),
                     ..Default::default()
                 },
             );
@@ -429,6 +502,7 @@ impl JsonAgentSession {
                 &t.attachments,
                 EmitUserEventOpts {
                     cancelled: true,
+                    mentions: t.mentions.clone(),
                     ..Default::default()
                 },
             );
@@ -441,7 +515,7 @@ impl JsonAgentSession {
     pub fn begin_edit_queued_turn(
         &self,
         turn_id: &str,
-    ) -> Option<(String, Vec<Attachment>, usize)> {
+    ) -> Option<(String, Vec<Attachment>, Vec<Mention>, usize)> {
         let mut s = self.0.state.lock().unwrap();
         if s.steering_turn_id.as_deref() == Some(turn_id) {
             return None; // being delivered to the agent right now
@@ -450,8 +524,9 @@ impl JsonAgentSession {
         if let Some(held) = s.holds.get(turn_id) {
             let msg = held.turn.raw_message.clone();
             let att = held.turn.attachments.clone();
+            let mentions = held.turn.mentions.clone();
             let qi = held.ahead_ids.len();
-            return Some((msg, att, qi));
+            return Some((msg, att, mentions, qi));
         }
         let idx = s.queue.iter().position(|t| t.turn_id == turn_id)?;
         let ahead_ids: Vec<String> = s
@@ -463,13 +538,14 @@ impl JsonAgentSession {
         let turn = s.queue.remove(idx).unwrap();
         let msg = turn.raw_message.clone();
         let att = turn.attachments.clone();
+        let mentions = turn.mentions.clone();
         let qi = idx;
         s.holds
             .insert(turn_id.to_string(), super::HeldTurn { turn, ahead_ids });
         Self::sync_idle_state_inner(&mut s);
         drop(s);
         self.emit_meta();
-        Some((msg, att, qi))
+        Some((msg, att, mentions, qi))
     }
 
     /// Re-enqueue a held turn after editing. Re-derives insert position from
@@ -479,6 +555,7 @@ impl JsonAgentSession {
         turn_id: &str,
         message: String,
         attachments: Vec<Attachment>,
+        mentions: Vec<Mention>,
         edited: bool,
     ) -> bool {
         let mut s = self.0.state.lock().unwrap();
@@ -493,6 +570,7 @@ impl JsonAgentSession {
         if edited {
             turn.raw_message = message.clone();
             turn.attachments = attachments.clone();
+            turn.mentions = mentions;
         }
 
         let insert_at = Self::insert_position_after_ahead_ids(&s.queue, &held.ahead_ids);
@@ -660,3 +738,9 @@ impl JsonAgentSession {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// File mentions add no `[Mentions:]` block, so only non-file (incl. unknown)
+/// mentions prevent a steer.
+fn mentions_block_steer(mentions: &[Mention]) -> bool {
+    mentions.iter().any(|m| m.kind != MentionKind::File)
+}

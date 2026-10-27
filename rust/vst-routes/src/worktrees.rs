@@ -70,8 +70,9 @@ use vst_types::rest::worktrees::{
     ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
     WorktreeDoneResult, WorktreeOrderBody, WorktreeOrderResult, WorktreeUsage,
 };
+use vst_types::ws::WatchScope;
 use vst_ws::services::file_list::FileList;
-use vst_ws::services::file_search::FileSearchIndex;
+use vst_ws::services::file_search::{index_key, FileSearchIndex};
 use vst_ws::services::ignore_filter::load_always_show;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 use vst_ws::services::tree_list::list_tree_dir;
@@ -1402,6 +1403,11 @@ impl WorktreeRoutes {
             .purge_scheduled_messages_for_missing_sessions()
             .await;
 
+        // Free the worktree's file-search index (up to 100k paths).
+        self.file_search
+            .evict_scope(WatchScope::Worktree, wt_id)
+            .await;
+
         for session in &worktree.sessions {
             self.broadcaster.send(ServerEvent::SessionDeleted {
                 session_id: session.id.clone(),
@@ -1521,8 +1527,18 @@ impl WorktreeRoutes {
     ) -> Result<FileSearchResult, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        if !tokio::fs::metadata(&wt_path)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            return Err(WorktreeRouteError::NotFound(format!(
+                "Worktree checkout directory not found: {wt_id}"
+            )));
+        }
         let limit = limit.unwrap_or(50);
-        Ok(self.file_search.search(wt_id, &wt_path, q, limit).await)
+        let key = index_key(WatchScope::Worktree, wt_id);
+        Ok(self.file_search.search(&key, &wt_path, q, limit).await)
     }
 
     // --- 12. GET /worktrees/:id/files/* ---
