@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use vst_types::activity::ActivitySink;
+use vst_types::artifacts::ArtifactSink;
 
 /// Interior-mutable `sessionId → Arc<T>` map, safe to share across routes.
 pub struct JsonAgentRegistry<T> {
@@ -25,6 +26,9 @@ pub struct JsonAgentRegistry<T> {
     /// Daemon-wide activity sink, set once from `run.rs`. Sessions created via
     /// `get_or_create_json_agent_session` attach it so they report activity.
     activity: OnceLock<Arc<dyn ActivitySink>>,
+    /// Daemon-wide artifact sink (file effects of finished tool calls), set once
+    /// from `run.rs`. Optional: with none installed capture is a no-op.
+    artifact: OnceLock<Arc<dyn ArtifactSink>>,
 }
 
 impl<T> Default for JsonAgentRegistry<T> {
@@ -32,6 +36,7 @@ impl<T> Default for JsonAgentRegistry<T> {
         Self {
             inner: Mutex::new(HashMap::new()),
             activity: OnceLock::new(),
+            artifact: OnceLock::new(),
         }
     }
 }
@@ -50,6 +55,16 @@ impl<T> JsonAgentRegistry<T> {
     /// The installed activity sink, if any.
     pub fn activity_sink(&self) -> Option<Arc<dyn ActivitySink>> {
         self.activity.get().cloned()
+    }
+
+    /// Install the artifact sink (first call wins; later calls are ignored).
+    pub fn set_artifact_sink(&self, sink: Arc<dyn ArtifactSink>) {
+        let _ = self.artifact.set(sink);
+    }
+
+    /// The installed artifact sink, if any.
+    pub fn artifact_sink(&self) -> Option<Arc<dyn ArtifactSink>> {
+        self.artifact.get().cloned()
     }
 
     /// The live session registered for `session_id`, if any.

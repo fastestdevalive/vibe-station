@@ -316,6 +316,30 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             tasks,
         },
         ServerEvent::LimitsUpdated { limits } => ServerMessage::LimitsUpdated { limits },
+        ServerEvent::ArtifactUpserted {
+            scope_kind,
+            scope_id,
+            rev,
+            rows,
+        } => ServerMessage::ArtifactUpserted {
+            scope_kind,
+            scope_id,
+            rev,
+            rows,
+        },
+        ServerEvent::ArtifactRemoved {
+            scope_kind,
+            scope_id,
+            rev,
+            ids,
+            reason,
+        } => ServerMessage::ArtifactRemoved {
+            scope_kind,
+            scope_id,
+            rev,
+            ids,
+            reason,
+        },
     }
 }
 
@@ -348,7 +372,13 @@ pub fn spawn_event_fanout(
         loop {
             let event = match rx.recv().await {
                 Ok(e) => e,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                // Dropped events are invisible to clients (a lost LAST event
+                // leaves no later `rev` to reveal the gap): tell every
+                // connection to refetch what it has loaded.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    hub.broadcast_all(&ServerMessage::WsResync);
+                    continue;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             let msg: ServerMessage = server_event_to_message(event);

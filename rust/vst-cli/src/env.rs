@@ -19,3 +19,9 @@ pub fn get_vst_session() -> Option<String> {
 pub fn get_vst_daemon_url() -> Option<String> {
     env::var("VST_DAEMON_URL").ok()
 }
+
+/// Read `VST_SPAWN_TOKEN` (the spawning session's id; an identity, not a
+/// secret) — set only inside a vst agent session.
+pub fn get_vst_spawn_token() -> Option<String> {
+    env::var("VST_SPAWN_TOKEN").ok().filter(|v| !v.is_empty())
+}

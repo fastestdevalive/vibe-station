@@ -199,7 +199,7 @@ const WRITE_TOOL_NAMES: &[&str] = &[
 /// True iff `name` (lowercased, non-alphanumeric stripped) names a
 /// "write a whole file" tool — either an exact match in [`WRITE_TOOL_NAMES`]
 /// or a `write_*`/`*_write` shape.
-fn is_write_tool_name(name: &str) -> bool {
+pub(crate) fn is_write_tool_name(name: &str) -> bool {
     let lower: String = name
         .chars()
         .filter_map(|c| {

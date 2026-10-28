@@ -462,3 +462,57 @@ fn supported_cli_without_supports_terminal_delivery_defaults_to_false() {
     let out = serde_json::to_value(&cli).unwrap();
     assert_eq!(out["supportsTerminalDelivery"], serde_json::json!(false));
 }
+
+// ── artifacts (plan 03, Phase 1) ─────────────────────────────────────────
+
+#[test]
+fn artifact_row_fixture_roundtrips() {
+    assert_roundtrip::<vst_types::artifacts::ArtifactRow>("artifact-row.json");
+}
+
+#[test]
+fn artifact_events_and_resync_roundtrip() {
+    assert_roundtrip::<ServerMessage>("server-message-artifact-upserted.json");
+    assert_roundtrip::<ServerMessage>("server-message-artifact-removed.json");
+    assert_roundtrip::<ServerMessage>("server-message-ws-resync.json");
+}
+
+#[test]
+fn artifact_rest_bodies_roundtrip() {
+    use vst_types::rest::artifacts::{
+        AddArtifactsRequest, AddArtifactsResponse, ArtifactContentError, ArtifactListResponse,
+    };
+    assert_roundtrip::<ArtifactListResponse>("artifact-list-response.json");
+    assert_roundtrip::<AddArtifactsRequest>("artifact-add-request.json");
+    assert_roundtrip::<AddArtifactsResponse>("artifact-add-response.json");
+    assert_roundtrip::<ArtifactContentError>("artifact-content-error.json");
+}
+
+#[test]
+fn artifact_events_map_one_to_one_to_server_messages_shape() {
+    // The internal ServerEvent and the wire ServerMessage serialize identically.
+    use vst_types::events::ServerEvent;
+    let v = load_fixture("server-message-artifact-removed.json");
+    let ev: ServerEvent = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(serde_json::to_value(ev).unwrap(), v);
+    let v = load_fixture("server-message-artifact-upserted.json");
+    let ev: ServerEvent = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(serde_json::to_value(ev).unwrap(), v);
+}
+
+#[test]
+fn artifact_wire_ignores_unknown_fields_and_defaults_optionals() {
+    use vst_types::artifacts::{ArtifactRow, ArtifactState};
+    let mut v = load_fixture("artifact-row.json");
+    let obj = v.as_object_mut().unwrap();
+    obj.insert("futureField".into(), serde_json::json!({"x": 1}));
+    obj.remove("size");
+    let row: ArtifactRow = serde_json::from_value(v).unwrap();
+    assert_eq!(row.size, None);
+    assert_eq!(row.state, ArtifactState::Ok);
+
+    // Optional per-path fields default when absent.
+    let r: vst_types::rest::artifacts::AddArtifactResult =
+        serde_json::from_value(serde_json::json!({"path": "/a", "extra": 1})).unwrap();
+    assert!(r.artifact.is_none() && r.outside_worktree.is_none() && r.error.is_none());
+}

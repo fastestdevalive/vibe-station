@@ -25,7 +25,7 @@ to refactor it in an unrelated PR.
 ### Backend (Rust)
 
 - **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
-  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity`/`vst-review` (types, store, proc) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity`/`vst-review`/`vst-artifacts` (types, store, proc) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
   `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by `vst-daemon` (hidden `agy-stream-acp` subcommand). No library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
@@ -298,6 +298,7 @@ else if (mode.cli === "opencode") { ... }
 | `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id`, returns `TurnSettled` from a `Result` row (its adapter holds a turn open until background subagents settle), and maps `task_signal` rows (see `acp_ext_notification_event`) to `Confirmed`/`Ended` — structured state that beats the OS liveness probe |
 | `terminal_delivery()` | optional (default `None`) | `Some(TerminalDeliveryCaps)` once this CLI's terminal readiness probe is proven: enables Terminal scheduling / sends to a tmux agent (`settle_ms`, `multiline_ok`, `raw_lf`). `None` ⇒ "Scheduling isn't supported for this agent yet" (`rust/vst-agents/src/plugin.rs`) |
 | `terminal_readiness(pane)` | optional (default `Unknown`) | Classify a captured `PaneSnapshot` as `Ready` / `AwaitingApproval` / `Unknown`; the delivery job pastes only after two consecutive `Ready` reads and never answers an approval dialog |
+| `extract_file_effects(call)` | optional (default `default_acp_effects`) | Path-bearing file effects (`Write`/`Delete`/`Move`) of a finished tool call, for artifact capture; pure, no I/O, `[]` for anything else; the default also parses a finished (completed or failed) shell (`execute`) call's `command` via `vst-agents/src/shell_effects.rs` (redirects, `tee`, `cp`/`mv`/`install`, `touch`, `dd of=`, `curl -o`, `wget -O`, literal-variable paths only, never guessed; bounded: values >4096 B unresolved; stderr/`.log` ignored; `mv` -> `Move`); override only where a fixture proves the ACP-generic default wrong, and fall back to the default for non-edit calls |
 
 ### The two session identities (ACP)
 
@@ -566,6 +567,27 @@ There are three different "skill" concepts in this repo, two of which share a fi
 - **A second path from HTML text to a rendered view.** Every new render site for untrusted HTML must go through `buildHtmlSrcdoc` — never `dangerouslySetInnerHTML`, never injecting into app DOM (a sanitizer bypass then becomes app XSS), never adding `allow-same-origin` to measure iframe height (Decision 2's rejected option D).
 - **Editing the prompt section without the sanitizer/caps, or vice versa.** The UI lets an agent render exactly what the prompt promises (inline CSS, `data:` images, ≤256 KiB, http(s)/mailto links); they must not drift apart.
 - **Size caps have one owner:** `HtmlView.isOverHtmlCap` — callers (`FilePreviewPane`, `HtmlBlock`) only call it to pick Source vs Rendered, never re-implement thresholds.
+
+---
+
+## Artifacts — outside-the-root reads go through the artifact allowlist
+
+**Files:** `rust/vst-artifacts/src/paths.rs` (`is_denied`, `is_denied_prefix`) · `rust/vst-artifacts/src/service.rs` (`read_content`, `authorize_read`) · `rust/vst-routes/src/worktrees.rs` (`get_file`) · `rust/vst-lsp/src/manager.rs` (`is_sensitive_path`)
+
+### The invariant
+
+Content outside a worktree root is readable through **exactly two gates**: (1) an artifact row, authorized by
+`is_denied` (name patterns plus prefix denylist) when the row is read via `read_content`; (2) an expiring LSP
+external-peek token, authorized by `is_denied_prefix`. Nothing else may read a path outside the root.
+
+### What to watch for
+
+- **Never add a third outside-root read path.** A new route/WS handler that serves absolute paths must go through
+  `ArtifactsHandle::read_content`/`authorize_read`.
+- **`resolve_inside_*` alone is not a content gate** for artifact paths; gutter, tree and watchers stay confined to
+  the root and reject absolute / `..` paths.
+- **The denylist is canonical and case-folded:** compare canonicalized paths (symlinks resolved) with folding, never the
+  user-typed spelling.
 
 ---
 

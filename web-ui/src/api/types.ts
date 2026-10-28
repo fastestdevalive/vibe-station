@@ -1089,6 +1089,7 @@ export type WSEvent =
       type: "openFiles:changed";
       worktreeId?: string;
       projectId?: string;
+      /** Open file tabs: repo-relative, or ABSOLUTE for an out-of-repo artifact. */
       paths: string[];
     }
   | {
@@ -1173,6 +1174,27 @@ export type WSEvent =
       limits: LimitsSnapshot;
     }
   | {
+      /** Artifact rows added/changed/moved/missing in a scope (<= 200 per event). */
+      type: "artifact:upserted";
+      scopeKind: ArtifactScopeKind;
+      scopeId: string;
+      /** Per-scope counter (resets on daemon restart); client ignores `rev <= last`, refetches when `rev > last + 1`. */
+      rev: number;
+      rows: ArtifactUpsert[];
+    }
+  | {
+      type: "artifact:removed";
+      scopeKind: ArtifactScopeKind;
+      scopeId: string;
+      rev: number;
+      ids: string[];
+      reason: ArtifactRemoveReason;
+    }
+  | {
+      /** The daemon's event fan-out dropped events: refetch everything loaded. */
+      type: "ws:resync";
+    }
+  | {
       type: "pong";
     }
   | {
@@ -1203,6 +1225,96 @@ export type WSEvent =
        *  3-second replay (so a newly-spawned window doesn't re-spawn). */
       newWindow: boolean;
     };
+
+// ── Artifacts (mirrors rust/vst-types/src/artifacts.rs + rest/artifacts.rs) ──
+
+export type ArtifactScopeKind = "worktree" | "project";
+export type ArtifactKind = "doc" | "image" | "other";
+export type ArtifactState = "ok" | "missing";
+export type ArtifactAddedVia = "capture" | "cli";
+export type ArtifactRemoveReason = "cap" | "removed" | "merged";
+
+export interface ArtifactRow {
+  id: string;
+  scopeKind: ArtifactScopeKind;
+  scopeId: string;
+  /** Canonical absolute path. */
+  path: string;
+  /** Repo-relative, or absolute when `!inRepo`. */
+  displayPath: string;
+  inRepo: boolean;
+  kind: ArtifactKind;
+  size: number | null;
+  state: ArtifactState;
+  pinned: boolean;
+  editCount: number;
+  /** Session ids, newest first, at most 5; an unknown id renders as "deleted agent". */
+  writers: string[];
+  addedVia: ArtifactAddedVia;
+  createdAt: string;
+  lastWrittenAt: string;
+}
+
+/** A row as carried by `artifact:upserted`: `created` is true when new to the list. */
+export type ArtifactUpsert = ArtifactRow & { created: boolean };
+
+/** `GET /worktrees/:id/artifacts` and `GET /projects/:id/artifacts`. */
+export interface ArtifactListResponse {
+  /** Read BEFORE the rows; events with `rev <= rev` are already reflected. */
+  rev: number;
+  cap: number;
+  /** All rows counting toward the cap, hidden included. */
+  total: number;
+  items: ArtifactRow[];
+}
+
+export type ArtifactErrorCode =
+  | "ARTIFACT_DENIED"
+  | "ARTIFACT_INELIGIBLE"
+  | "ARTIFACT_NOT_FOUND"
+  | "ARTIFACT_MISSING"
+  | "ARTIFACT_UNREADABLE"
+  | "ARTIFACT_BINARY"
+  | "ARTIFACT_TOO_LARGE"
+  | "NOT_FOUND"
+  | "VALIDATION_ERROR"
+  | "PIN_LIMIT"
+  | "RATE_LIMITED"
+  | "SESSION_ARCHIVED";
+
+/** `POST /artifacts` (CLI). */
+export interface AddArtifactsRequest {
+  spawnToken: string;
+  paths: string[];
+}
+
+export interface AddArtifactResult {
+  path: string;
+  artifact?: ArtifactRow;
+  outsideWorktree?: boolean;
+  error?: { code: ArtifactErrorCode; message: string };
+}
+
+export interface AddArtifactsResponse {
+  results: AddArtifactResult[];
+}
+
+export interface PinArtifactRequest {
+  pinned: boolean;
+}
+
+export interface PinArtifactResponse {
+  artifact: ArtifactRow;
+}
+
+/** JSON body of a failed `GET /artifacts/:id/content`. */
+export interface ArtifactContentError {
+  error: ArtifactErrorCode;
+  message: string;
+  size?: number;
+  mime?: string;
+  detail?: string;
+}
 
 export interface AuthSession {
   tokenId: string;

@@ -217,6 +217,24 @@ pub enum ServerEvent {
     /// snapshot, replace-not-diff.
     #[serde(rename = "limits:updated", rename_all = "camelCase")]
     LimitsUpdated { limits: LimitsSnapshot },
+    /// Artifact rows were added or changed in a scope (batched by
+    /// `vst-artifacts`, at most 200 rows per event).
+    #[serde(rename = "artifact:upserted", rename_all = "camelCase")]
+    ArtifactUpserted {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        rev: u64,
+        rows: Vec<crate::artifacts::ArtifactUpsert>,
+    },
+    /// Artifact rows left a scope's list.
+    #[serde(rename = "artifact:removed", rename_all = "camelCase")]
+    ArtifactRemoved {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        rev: u64,
+        ids: Vec<String>,
+        reason: crate::artifacts::ArtifactRemoveReason,
+    },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

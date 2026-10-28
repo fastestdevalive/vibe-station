@@ -52,6 +52,14 @@ A session is always one of two kinds — an **agent** (`vst agent ...`) or a pla
 | `vst mode add` | `--name=<n> --cli=<claude\|cursor\|opencode> (--context=<text> \| --context-file=<path>) [--preset=<id>]` | Create a mode. |
 | `vst mode rm` | `<id>` | Delete a mode. |
 
+### Artifacts
+
+| Command | Args / Flags | Description |
+|---|---|---|
+| `vst artifact add` | `<path>... [--json]` | Adds files (max 50, one `POST /artifacts`) to the calling agent session's scope; scope comes from `$VST_SPAWN_TOKEN` (agent sessions only). Relative paths resolve against cwd. Exit `0` ok · `2` every path not found · `1` any other failure. |
+| `vst artifact list` (alias `ls`) | `[--worktree=<id> \| --project=<id>] [--json]` | Lists artifacts; scope defaults to `$VST_WORKTREE`, then `$VST_PROJECT`. |
+| `vst artifact pin` | `<id\|path> [--unpin] [--worktree=<id> \| --project=<id>] [--json]` | Pins/unpins an artifact (id or path); exit `2` when nothing matches. |
+
 ### Daemon
 
 | Command | Args / Flags | Description |
@@ -129,6 +137,17 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | GET | `/worktrees/:id/file-list` | — | `{ files: string[], truncated: boolean, source: "ripgrep" \| "node" }` | Flat file list for Quick Open / fuzzy search. Uses `rg --files` when available (respects nested `.gitignore`); falls back to a Node walker that reads only the root `.gitignore`. Caps at 100k entries; sets `truncated: true` on overflow. |
 | GET | `/worktrees/:id/files/*path` | — | file content | 422 if too large or refused binary. |
 | GET | `/worktrees/:id/diff/*path` | `?scope=local\|branch` | unified diff text | `local` = working tree vs HEAD; `branch` = vs configured base branch. |
+
+### Artifacts
+
+| Method | Path | Query / Body | Returns | Notes |
+|---|---|---|---|---|
+| GET | `/worktrees/:id/artifacts` | — | `{ rev, cap, total, items: ArtifactRow[] }` | 404 `NOT_FOUND` for an unknown worktree. `cap` = 500 per scope; `total` counts hidden rows too. |
+| GET | `/projects/:id/artifacts` | — | same | Project scope (direct sessions). |
+| POST | `/artifacts` | `{ spawnToken, paths: string[] }` | `{ results: [{ path, artifact?, outsideWorktree?, error?: { code, message } }] }` | Scope from the spawn token (an identity, not a secret; CLI auth authorizes the call). 400 `VALIDATION_ERROR`, 404 `NOT_FOUND` (unknown session), 403 `SESSION_ARCHIVED`, 429 `RATE_LIMITED`. Per-path errors: `ARTIFACT_DENIED`, `ARTIFACT_INELIGIBLE`, `NOT_FOUND`. |
+| POST | `/artifacts/:id/pin` | `{ pinned }` | `{ artifact }` | 409 `PIN_LIMIT` (50 per scope), 404 `ARTIFACT_NOT_FOUND`. |
+| DELETE | `/artifacts/:id` | — | `{ ok }` | Also clears the pin. 404 `ARTIFACT_NOT_FOUND`. |
+| GET | `/artifacts/:id/content` | — | text (`text/plain`, may carry `X-Vst-Truncated-Total`) or image bytes | The only way to read artifact content outside the worktree root. 404 `ARTIFACT_NOT_FOUND` · 410 `ARTIFACT_MISSING` · 403 `ARTIFACT_DENIED`/`ARTIFACT_UNREADABLE` · 415 `ARTIFACT_BINARY` · 422 `ARTIFACT_TOO_LARGE`. Error bodies are `{ error: <CODE>, message }`. |
 
 ### Sessions (= Tabs)
 
@@ -292,6 +311,9 @@ Coalescing: server debounces rapid changes (~200ms) so 5 saves in a burst → 1 
 | `mode:updated` | `{ mode }` |
 | `mode:deleted` | `{ modeId }` |
 | `limits:updated` | `{ limits: LimitsSnapshot }` |
+| `artifact:upserted` | `{ scopeKind, scopeId, rev, rows: (ArtifactRow & { created })[] }` (batched) |
+| `artifact:removed` | `{ scopeKind, scopeId, rev, ids, reason: "cap" \| "removed" \| "merged" }` |
+| `ws:resync` | — (event fan-out lagged: refetch every loaded artifact scope) |
 | `pong` | — |
 
 ---

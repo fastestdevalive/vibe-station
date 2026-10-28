@@ -346,3 +346,31 @@ fn build_direct_prompt_rich_chat() {
     assert!(with.system_prompt.contains("Subagents (Rich Chat only)"));
     assert!(!without.system_prompt.contains("Subagents (Rich Chat only)"));
 }
+
+#[test]
+fn artifacts_hint_depends_on_channel() {
+    reset_skill_cache_for_test();
+    let tmp = tempfile::tempdir().unwrap();
+    let build = |rich_chat: bool| {
+        build_prompt(&BuildPromptInput {
+            project: make_project(tmp.path().to_str().unwrap()),
+            worktree: make_worktree(),
+            mode_context: None,
+            user_prompt: None,
+            rich_chat,
+        })
+        .system_prompt
+    };
+    let terminal = build(false);
+    assert!(terminal.contains("vst artifact add <path> [<path>...]"));
+    assert!(terminal.contains("outside the project"));
+    assert!(terminal.contains("what the user asked for or will want to open"));
+    assert!(terminal.contains("Do not register scratch, intermediate, temp or log files"));
+    assert!(!terminal.contains("must be registered"));
+    assert!(!terminal.contains("added to the Artifacts tab automatically"));
+    let rich = build(true);
+    assert!(rich.contains("vst artifact add"));
+    assert!(rich.contains("added to the Artifacts tab automatically"));
+    assert!(rich.contains("Only deliverables, never scratch or log files"));
+    assert!(rich.contains("Do not register scratch, intermediate, temp or log files"));
+}

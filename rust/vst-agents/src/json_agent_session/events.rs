@@ -69,6 +69,7 @@ impl JsonAgentSession {
         self.0.stream.emit_message(ev);
         self.update_turn_state(ev.kind);
         self.note_activity(ev);
+        self.note_artifacts(ev);
         self.emit_meta();
         self.0.tasks.observe(ev);
     }
@@ -161,6 +162,7 @@ impl JsonAgentSession {
         self.0.stream.emit_message(&ev);
         self.note_background_activity(&ev);
         self.0.tasks.observe_out_of_band(&ev);
+        self.note_artifacts(&ev);
     }
 
     /// Create a new `NormalizedEvent` stamped with the session's id, cli, and

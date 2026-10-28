@@ -13,6 +13,7 @@
 //! § vst-types owns the wire, all of it.
 
 pub mod activity;
+pub mod artifacts;
 pub mod domain;
 pub mod events;
 pub mod limits;

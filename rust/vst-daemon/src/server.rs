@@ -162,6 +162,9 @@ pub struct AppState {
     pub paths: Paths,
     pub ws_hub: Arc<WsHub>,
     pub code_store: OneTimeCodeStore,
+    /// Artifacts owner (`vst-artifacts`); `run.rs` starts it and installs it as
+    /// the Rich Chat capture sink.
+    pub artifacts: vst_artifacts::ArtifactsHandle,
 
     // Routes
     pub health_routes: HealthRoutes,
@@ -418,6 +421,15 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.port,
     )
     .with_paths(opts.paths.clone());
+    let artifacts = vst_artifacts::ArtifactsHandle::new(
+        opts.store.clone(),
+        opts.broadcaster.clone(),
+        Arc::new(vst_artifacts::StoreResolver::new(
+            opts.store.clone(),
+            opts.paths.vst_home().clone(),
+        )),
+    );
+    project_routes = project_routes.with_artifacts(artifacts.clone());
     let worktree_routes = WorktreeRoutes::new(
         opts.store.clone(),
         opts.broadcaster.clone(),
@@ -425,7 +437,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.tmux.clone(),
         opts.port,
     );
-    let mut worktree_routes = worktree_routes;
+    let mut worktree_routes = worktree_routes.with_artifacts(artifacts.clone());
     worktree_routes.paths = opts.paths.clone();
     project_routes = project_routes.with_file_search(worktree_routes.file_search.clone());
 
@@ -577,6 +589,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         paths: opts.paths,
         ws_hub,
         code_store,
+        artifacts,
         health_routes,
         open_routes,
         project_routes,
@@ -958,7 +971,9 @@ pub fn router_from_state(state: AppState) -> Router {
             post(handle_tailscale_serve_disable),
         )
         .route("/tailscale/up", post(handle_tailscale_up))
-        .route("/tailscale/qr", get(handle_tailscale_qr));
+        .route("/tailscale/qr", get(handle_tailscale_qr))
+        // Artifacts (thin handlers in artifact_routes.rs)
+        .merge(crate::artifact_routes::routes());
 
     Router::new()
         // Utility & protocol routes stay at root (not under /api)
@@ -2028,6 +2043,9 @@ async fn handle_project_get_file(
         FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
             ([(header::CONTENT_TYPE, mime)], content).into_response(),
         )),
+        FileResponse::Artifact(outcome) => {
+            Ok(vst_routes::artifact_response::outcome_response(outcome))
+        }
     }
 }
 
@@ -2472,6 +2490,9 @@ async fn handle_worktree_get_file(
         FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
             ([(header::CONTENT_TYPE, mime)], content).into_response(),
         )),
+        FileResponse::Artifact(outcome) => {
+            Ok(vst_routes::artifact_response::outcome_response(outcome))
+        }
     }
 }
 
@@ -2941,6 +2962,9 @@ async fn handle_worktree_lsp_external_file(
         FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
             ([(header::CONTENT_TYPE, mime)], content).into_response(),
         )),
+        FileResponse::Artifact(outcome) => {
+            Ok(vst_routes::artifact_response::outcome_response(outcome))
+        }
     }
 }
 
@@ -2971,6 +2995,9 @@ async fn handle_project_lsp_external_file(
         FileResponse::Image { mime, content } => Ok(harden_raw_file_response(
             ([(header::CONTENT_TYPE, mime)], content).into_response(),
         )),
+        FileResponse::Artifact(outcome) => {
+            Ok(vst_routes::artifact_response::outcome_response(outcome))
+        }
     }
 }
 

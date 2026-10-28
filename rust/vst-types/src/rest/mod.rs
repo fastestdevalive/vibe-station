@@ -6,6 +6,7 @@
 //! follow the `vst-types` amendment rule (addition-only + a wire-fixture
 //! update). See arch doc § API Contracts.
 
+pub mod artifacts;
 pub mod attachments;
 pub mod auth;
 pub mod doctor;

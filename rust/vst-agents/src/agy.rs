@@ -1,5 +1,9 @@
 //! Antigravity CLI plugin (`agy`).
 //!
+//! Artifact capture: `extract_file_effects` is NOT overridden — the ACP write shapes of this
+//! harness are UNMEASURED (spike C3 had no usable model/binary/adapter), so the
+//! generic default stays until a fixture under `tests/fixtures/acp_writes/` is recorded.
+//!
 //! Terminal launch: `agy --dangerously-skip-permissions --log-file <path>`; task
 //! prompt delivered inline via `-i`. The chat id is captured by tailing a
 //! PER-SESSION `--log-file` for "Created/Streaming conversation <id>" lines

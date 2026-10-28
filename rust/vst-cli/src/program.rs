@@ -20,6 +20,7 @@ Commands:
   mode       ls | add | rm
   file       open
   files      ls | open | close
+  artifact   add | list | pin
   open       open a path in the UI
   status     daemon and session status
   summary    summarize sessions
@@ -42,6 +43,7 @@ pub enum Command {
     Mode(ModeCommand),
     File(FileCommand),
     Files(FilesCommand),
+    Artifact(ArtifactCommand),
     Open(OpenArgs),
     Status(StatusArgs),
     Summary(SummaryArgs),
@@ -169,6 +171,14 @@ pub enum FilesCommand {
     Ls { args: Vec<String> },
     Open { args: Vec<String> },
     Close { args: Vec<String> },
+    Unknown(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArtifactCommand {
+    Add { args: Vec<String> },
+    List { args: Vec<String> },
+    Pin { args: Vec<String> },
     Unknown(Vec<String>),
 }
 
@@ -352,6 +362,21 @@ where
                     Command::Files(FilesCommand::Unknown(r))
                 }
                 None => Command::Files(FilesCommand::Unknown(vec![])),
+            }
+        }
+        "artifact" => {
+            let sub = iter.next();
+            let rest: Vec<String> = iter.collect();
+            match sub.as_deref() {
+                Some("add") => Command::Artifact(ArtifactCommand::Add { args: rest }),
+                Some("list" | "ls") => Command::Artifact(ArtifactCommand::List { args: rest }),
+                Some("pin") => Command::Artifact(ArtifactCommand::Pin { args: rest }),
+                Some(other) => {
+                    let mut r = vec![other.to_string()];
+                    r.extend(rest);
+                    Command::Artifact(ArtifactCommand::Unknown(r))
+                }
+                None => Command::Artifact(ArtifactCommand::Unknown(vec![])),
             }
         }
         "open" => Command::Open(OpenArgs {

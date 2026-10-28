@@ -10,6 +10,7 @@
 //! The no-live-session meta assembly free functions live in [`meta`].
 
 mod activity;
+mod artifacts;
 pub mod background;
 pub mod boot_sweep;
 pub mod connection;
@@ -258,6 +259,8 @@ pub(super) struct State {
 pub(super) struct Inner {
     /// Daemon-wide activity sink; attached by `get_or_create_json_agent_session`.
     pub(super) activity: std::sync::OnceLock<Arc<dyn vst_types::activity::ActivitySink>>,
+    /// Artifact capture: sink slot + tool-call merge state (see `artifacts.rs`).
+    pub(super) artifacts: artifacts::ArtifactCapture,
     pub(super) state: Mutex<State>,
     /// Serialises EVERY lifecycle write of this session (see
     /// `write_lifecycle`). Async mutex: held across the store write. Lock
@@ -451,6 +454,7 @@ impl JsonAgentSession {
         );
         let inner = Inner {
             activity: std::sync::OnceLock::new(),
+            artifacts: Default::default(),
             state: Mutex::new(state),
             lifecycle_lock: tokio::sync::Mutex::new(()),
             tasks,
@@ -1037,6 +1041,9 @@ pub fn get_or_create_json_agent_session(
         }
         // Buffer live task observations until the rebuild below finishes.
         s.0.tasks.begin_rebuild();
+        if let Some(sink) = registry.artifact_sink() {
+            s.attach_artifact_sink(sink);
+        }
         s
     });
     let session = (*session).clone();

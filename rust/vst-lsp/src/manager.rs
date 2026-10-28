@@ -21,32 +21,22 @@ use crate::failure::{self, ServerLog, MESSAGE_CAP};
 use crate::registry::{self, LanguageServerConfig};
 use crate::uri::{path_to_uri, uri_to_path};
 
+/// Paths the daemon must never serve from outside a workspace root (system
+/// directories, credential directories, the whole data home).
+///
+/// The rule set lives in `vst_artifacts::paths::is_denied_prefix` (one audited
+/// denylist); no registered roots are exempt here and the artifact-only file
+/// name patterns do not apply, so dependency files such as `id_arena` stay
+/// readable.
 pub fn is_sensitive_path(path: &Path, vst_home: Option<&Path>) -> bool {
-    let mut prefixes: Vec<PathBuf> = vec![PathBuf::from("/etc"), PathBuf::from("/root")];
-
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    if let Some(h) = &home {
-        prefixes.push(h.join(".ssh"));
-        prefixes.push(h.join(".aws"));
-        prefixes.push(h.join(".vibe-station"));
-    }
-
-    if let Some(vh) = vst_home {
-        prefixes.push(vh.to_path_buf());
-    }
-
-    for prefix in prefixes {
-        if path.starts_with(&prefix) {
-            return true;
-        }
-        if let Ok(canon_prefix) = prefix.canonicalize() {
-            if path.starts_with(&canon_prefix) {
-                return true;
-            }
-        }
-    }
-
-    false
+    let home: PathBuf = match vst_home {
+        Some(vh) => vh.to_path_buf(),
+        None => match std::env::var_os("HOME") {
+            Some(h) if !h.is_empty() => PathBuf::from(h).join(".vibe-station"),
+            _ => PathBuf::from("/.vibe-station-unset"),
+        },
+    };
+    vst_artifacts::paths::is_denied_prefix(path, &home, &[])
 }
 
 /// Resolves a `LspFileRef::Workspace` relative path against the worktree root,

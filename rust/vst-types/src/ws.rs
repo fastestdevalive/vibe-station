@@ -322,6 +322,25 @@ pub enum ServerMessage {
         project_id: Option<String>,
         paths: Vec<String>,
     },
+    #[serde(rename = "artifact:upserted", rename_all = "camelCase")]
+    ArtifactUpserted {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        rev: u64,
+        rows: Vec<crate::artifacts::ArtifactUpsert>,
+    },
+    #[serde(rename = "artifact:removed", rename_all = "camelCase")]
+    ArtifactRemoved {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        rev: u64,
+        ids: Vec<String>,
+        reason: crate::artifacts::ArtifactRemoveReason,
+    },
+    /// The event fan-out dropped events (receiver lagged): every client must
+    /// refetch whatever it has loaded.
+    #[serde(rename = "ws:resync")]
+    WsResync,
     #[serde(rename = "pong")]
     Pong,
     #[serde(rename = "system:error")]
