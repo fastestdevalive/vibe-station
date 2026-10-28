@@ -168,6 +168,14 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 
 ---
 
+## Artifacts
+
+Register what the user asked for or will want to open: deliverables (reports, plans, data, images), files they
+requested, and anything outside the project they will look at. Use `vst artifact add <path> [<path>...]`
+(several paths per call; harmless to repeat). Do not register scratch, intermediate, temp or log files.
+
+---
+
 ## Ending your session
 
 - `vst agent terminate` — ends **this** session (defaults to `$VST_SESSION` when no id is given); deletes the session record and its data dir. Use this when asked to end/finish/stop yourself, or when you spawned a sibling/child agent session that's no longer needed (use `vst terminal terminate <id>` for a terminal session instead).

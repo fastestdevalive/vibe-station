@@ -34,7 +34,7 @@ pub enum AcpFsError {
 /// Resolve a request path against `cwd`, allowing it outside when it is an
 /// absolute path (defense in depth against a rogue/buggy adapter — a courtesy
 /// check, not a security boundary).
-fn resolve_scoped(cwd: &Path, path: &str) -> PathBuf {
+pub(crate) fn resolve_scoped(cwd: &Path, path: &str) -> PathBuf {
     let candidate = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {

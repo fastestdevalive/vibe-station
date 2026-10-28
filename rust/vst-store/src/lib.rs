@@ -20,6 +20,7 @@ pub mod row_mappers;
 pub mod schema;
 pub mod transcript;
 
+pub mod artifacts;
 pub mod ordered_lists;
 pub mod tunnel;
 

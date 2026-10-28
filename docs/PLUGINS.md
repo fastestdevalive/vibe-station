@@ -66,6 +66,18 @@ message time), native chat-id capture, and ACP (ACP) support for Rich Chat —
 for structured, per-turn output instead of a one-shot terminal spawn per
 turn.
 
+Also optional: `extract_file_effects(&MergedToolCall) -> Vec<FileEffect>` —
+maps a completed tool call to file effects (`Write`/`Delete`/`Move`) so written
+files become artifacts. The default handles ACP-generic shapes (kind +
+locations + diffs) and also parses a finished (completed or failed) shell
+(`execute`) call's `command` through `vst-agents/src/shell_effects.rs`:
+redirects, `tee`, `cp`/`mv`/`install`, `touch`, `dd of=`, `curl -o`, `wget -O`,
+literal-variable paths only, never guessed; stderr redirects and
+`.log`/`.pid`/`.lock` targets are ignored. Override only where a recorded
+fixture proves the default wrong (`codex.rs` overrides Edit calls only and
+falls back to the default for every other call, so Codex shell writes are
+captured too). Anything written another way still needs `vst artifact add`.
+
 ## History import
 
 When a session's terminal phase is toggled to Rich Chat, the daemon imports

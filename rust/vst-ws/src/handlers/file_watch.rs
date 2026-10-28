@@ -81,6 +81,12 @@ pub fn handle_file_watch(
     else {
         return;
     };
+    if !super::is_confined_watch_path(path) {
+        conn.send(ServerMessage::SystemError {
+            message: super::UNCONFINED_WATCH_MESSAGE.to_string(),
+        });
+        return;
+    }
     let watch_key = format!("file:{worktree_id}:{path}");
 
     // If another consumer already watches this key on THIS connection, just add
@@ -90,6 +96,9 @@ pub fn handle_file_watch(
         return;
     }
 
+    // The dedup join below runs before `resolve_root`; that is fine because a
+    // key only exists in the registry if it passed the outside-root check when
+    // it was created.
     // Global shared dedup (mirrors tree:watch's cause-B fix). If another
     // connection already holds a live watcher for this key, just increment the
     // shared count, register THIS connection as a subscriber so it keeps
@@ -115,6 +124,18 @@ pub fn handle_file_watch(
         });
         return;
     };
+    // A checkout that does not exist yet is not an escape: register nothing and
+    // stay quiet instead of mislabelling it as an outside-root refusal.
+    if std::fs::metadata(&root).is_err() {
+        tracing::debug!(worktree_id = %worktree_id, "watch skipped: checkout missing");
+        return;
+    }
+    if !super::resolves_inside_root(&root, path) {
+        conn.send(ServerMessage::SystemError {
+            message: super::OUTSIDE_ROOT_WATCH_MESSAGE.to_string(),
+        });
+        return;
+    }
     let abs_path = root.join(path);
 
     let callbacks = {
@@ -270,6 +291,136 @@ mod tests {
 
     use crate::connection::{WsConnection, WsSinkHandle};
     use std::sync::Mutex;
+
+    // S22 / 4.T2c: an absolute or `..` path is refused with a `system:error`
+    // and nothing is registered; a relative path is still watched.
+    #[tokio::test]
+    async fn unconfined_paths_are_rejected_and_register_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("ok.rs"), "x").unwrap();
+        let registry = registry();
+        let resolve_root = resolve_root(root.path().to_path_buf());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let sink = WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        );
+        let conn = WsConnection::new(sink);
+
+        for bad in ["/etc/passwd", "../x", "a/../../x", "a/../.."] {
+            handle_file_watch(
+                &conn,
+                &registry,
+                &resolve_root,
+                &ClientMessage::FileWatch {
+                    worktree_id: "wt1".into(),
+                    path: bad.into(),
+                    scope: vst_types::ws::WatchScope::Worktree,
+                },
+            );
+        }
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 4);
+        assert!(frames.iter().all(|f| f["type"] == "system:error"));
+
+        handle_file_watch(
+            &conn,
+            &registry,
+            &resolve_root,
+            &ClientMessage::FileWatch {
+                worktree_id: "wt1".into(),
+                path: "ok.rs".into(),
+                scope: vst_types::ws::WatchScope::Worktree,
+            },
+        );
+        let key = "file:wt1:ok.rs";
+        let sw = registry.lock().unwrap().watchers.remove(key);
+        let sw = sw.expect("relative path is still watched");
+        sw.watcher.close();
+    }
+
+    #[cfg(unix)]
+    fn watch_file(
+        conn: &WsConnection,
+        registry: &WatcherRegistry,
+        resolver: &WorktreePathResolver,
+        path: &str,
+    ) {
+        handle_file_watch(
+            conn,
+            registry,
+            resolver,
+            &ClientMessage::FileWatch {
+                worktree_id: "wt1".into(),
+                path: path.into(),
+                scope: vst_types::ws::WatchScope::Worktree,
+            },
+        );
+    }
+
+    // R1F-02: in-root symlinks that resolve outside the root are refused and
+    // register nothing; in-root aliases and missing in-root files still watch.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_resolving_outside_root_are_refused() {
+        use std::os::unix::fs::symlink;
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        let outside = base.path().join("outside");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret"), "s").unwrap();
+        fs::write(root.join("sub/x.rs"), "x").unwrap();
+        symlink(&outside, root.join("leak")).unwrap();
+        symlink(outside.join("secret"), root.join("leakfile")).unwrap();
+        symlink(outside.join("nope"), root.join("dangle")).unwrap();
+        symlink(root.join("sub"), root.join("alias")).unwrap();
+
+        let registry = registry();
+        let resolver = resolve_root(root.clone());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        for bad in ["leak/secret", "leakfile", "dangle"] {
+            watch_file(&conn, &registry, &resolver, bad);
+        }
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 3);
+        assert!(frames.iter().all(|f| f["type"] == "system:error"));
+
+        for ok in ["alias/x.rs", "new.md"] {
+            watch_file(&conn, &registry, &resolver, ok);
+            let key = format!("file:wt1:{ok}");
+            let sw = registry.lock().unwrap().watchers.remove(&key);
+            sw.unwrap_or_else(|| panic!("{ok} should be watched"))
+                .watcher
+                .close();
+        }
+    }
+
+    // A resolver root that does not exist is not an escape: no error, no watcher.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_checkout_sends_no_error_and_registers_nothing() {
+        let base = tempfile::tempdir().unwrap();
+        let registry = registry();
+        let resolver = resolve_root(base.path().join("absent"));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        watch_file(&conn, &registry, &resolver, "a.rs");
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
 
     fn registry() -> WatcherRegistry {
         Arc::new(Mutex::new(WatcherRegistryInner::default()))

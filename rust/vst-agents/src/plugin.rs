@@ -36,8 +36,11 @@ use vst_types::{
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_transport::AcpTransportError;
+use crate::file_effects::default_acp_effects;
 use crate::native_history_importer::NativeHistoryImporter;
 use crate::normalize::AcpEnrichHook;
+use crate::tool_call_tracker::MergedToolCall;
+use vst_types::artifacts::FileEffect;
 
 /// How a plugin delivers its system/task prompts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,6 +390,21 @@ pub trait AgentPlugin: Send + Sync {
     /// is `04b`'s territory.
     fn supports_acp(&self) -> bool {
         false
+    }
+
+    /// Path-bearing file effects of a FINISHED (completed or failed) tool call,
+    /// for artifact capture. A failed call yields effects only if it is a shell
+    /// call (see `file_effects::ignores_failed`, applied by the session too).
+    ///
+    /// Contract: pure, no I/O; return paths exactly as the agent reported them
+    /// (the daemon resolves relative paths against the session cwd, R16); one
+    /// `Write` per file written or edited, `Delete` for a removed file,
+    /// `Move` for a rename; `[]` for anything else. Shell commands are read
+    /// by the tolerant `shell_effects` parser (artifacts plan, Decision 4). The default covers ACP-generic
+    /// shapes (kind + locations + diffs); override only where a recorded
+    /// fixture proves the default wrong.
+    fn extract_file_effects(&self, call: &MergedToolCall) -> Vec<FileEffect> {
+        default_acp_effects(call)
     }
 
     /// Run ONE JSON-channel turn (Decision 2). The plugin spawns its CLI (own

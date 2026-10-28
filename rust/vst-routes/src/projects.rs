@@ -41,6 +41,7 @@ use vst_git::DirectPtyRegistry;
 use vst_proc::pty::PtyHandle;
 use vst_proc::tmux::Tmux;
 use vst_store::{StoreError, StoreHandle};
+use vst_types::artifacts::ScopeKey;
 use vst_types::domain::{
     Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
     WorktreeRecord,
@@ -61,6 +62,9 @@ use vst_ws::services::file_search::{index_key, FileSearchIndex};
 use vst_ws::services::ignore_filter::load_always_show;
 use vst_ws::services::tree_list::list_tree_dir;
 
+use crate::artifact_gate::{
+    artifact_open_path, confine_only, gate_read, lexical_or_absolute, GateError, Gated,
+};
 use crate::file_serving::{read_file_response, FileServingError};
 use crate::modes::{
     find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
@@ -158,6 +162,9 @@ pub struct ProjectRoutes {
     pub file_list: Arc<FileList>,
     pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
+    /// Artifact allowlist (plan Decision 6); `None` keeps confinement, drops
+    /// the artifact exception.
+    pub artifacts: Option<vst_artifacts::ArtifactsHandle>,
     /// The Terminal delivery owner: a delete tells it which sessions are going
     /// so jobs stop and held comments are restored (`None` in tests that never
     /// schedule into a Terminal agent).
@@ -183,12 +190,18 @@ impl ProjectRoutes {
             file_list: file_list.clone(),
             file_search: Arc::new(FileSearchIndex::new(file_list)),
             paths: Paths::default(),
+            artifacts: None,
             terminal_delivery: None,
         }
     }
 
     pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
         self.terminal_delivery = Some(td);
+        self
+    }
+
+    pub fn with_artifacts(mut self, artifacts: vst_artifacts::ArtifactsHandle) -> Self {
+        self.artifacts = Some(artifacts);
         self
     }
 
@@ -346,12 +359,7 @@ impl ProjectRoutes {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
         })?;
         let root = Path::new(&project.absolute_path);
-        let abs = resolve_inside_dir(root, path_str)?;
-        let rel = abs
-            .strip_prefix(root)
-            .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
-            .to_string_lossy()
-            .to_string();
+        let rel = self.open_key(project_id, root, path_str).await?;
 
         let rel_owned = rel.clone();
         let id_owned = project_id.to_string();
@@ -395,12 +403,18 @@ impl ProjectRoutes {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
         })?;
         let root = Path::new(&project.absolute_path);
-        let abs = resolve_inside_dir(root, path_str)?;
-        let rel = abs
-            .strip_prefix(root)
-            .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
-            .to_string_lossy()
-            .to_string();
+        let rel = match resolve_inside_dir(root, path_str) {
+            Ok(_) => self.open_key(project_id, root, path_str).await?,
+            // An out-of-repo artifact tab stays closable once stored, even
+            // after its row was evicted or removed (Decision 6).
+            Err(_)
+                if Path::new(path_str).is_absolute()
+                    && project.open_files.iter().any(|f| f == path_str) =>
+            {
+                path_str.to_string()
+            }
+            Err(e) => return Err(e),
+        };
 
         let id_owned = project_id.to_string();
         let mutated = self
@@ -425,6 +439,32 @@ impl ProjectRoutes {
         });
 
         Ok(OpenFilesResult { paths })
+    }
+
+    /// Persisted `openFiles` entry for `path_str`: project-relative inside the
+    /// root; for an absolute path outside it, the canonical path of a LIVE
+    /// artifact row of this project (anything else is 403).
+    async fn open_key(
+        &self,
+        project_id: &str,
+        root: &Path,
+        path_str: &str,
+    ) -> Result<String, ProjectRouteError> {
+        match resolve_inside_dir(root, path_str) {
+            Ok(abs) => Ok(abs
+                .strip_prefix(root)
+                .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
+                .to_string_lossy()
+                .to_string()),
+            Err(_) if Path::new(path_str).is_absolute() => artifact_open_path(
+                self.artifacts.as_ref(),
+                &ScopeKey::project(project_id),
+                path_str,
+            )
+            .await
+            .map_err(gate_to_route_error),
+            Err(e) => Err(e),
+        }
     }
 
     // ── 3. POST /projects ─────────────────────────────────────────────────
@@ -1474,6 +1514,19 @@ impl ProjectRoutes {
             .store
             .purge_scheduled_messages_for_missing_sessions()
             .await;
+        // Same for the artifact rows of the project and its worktrees (no FK).
+        let mut scopes = vec![ScopeKey::project(id)];
+        scopes.extend(project.worktrees.iter().map(|w| ScopeKey::worktree(&w.id)));
+        for scope in &scopes {
+            match &self.artifacts {
+                Some(a) => {
+                    let _ = a.purge_scope(scope).await;
+                }
+                None => {
+                    let _ = self.store.purge_scope(scope).await;
+                }
+            }
+        }
 
         // Free the file-search indexes of the project and all its worktrees.
         self.file_search
@@ -1516,6 +1569,9 @@ impl ProjectRoutes {
         let root = Path::new(&project.absolute_path);
         let sub = sub_path.unwrap_or("");
         let target_path = resolve_inside_dir(root, sub)?;
+        confine_only(root, &target_path)
+            .await
+            .map_err(gate_to_route_error)?;
 
         let hide_dotfiles = show_hidden == Some(false);
         let always_show = load_always_show(self.paths.vst_home()).await;
@@ -1612,7 +1668,26 @@ impl ProjectRoutes {
         })?;
 
         let root = Path::new(&project.absolute_path);
-        let abs_path = resolve_inside_dir(root, file_path)?;
+        let lexical = lexical_or_absolute(resolve_inside_dir(root, file_path), file_path)?;
+        let scope = ScopeKey::project(project_id);
+        let abs_path = match gate_read(self.artifacts.as_ref(), &scope, root, file_path, lexical)
+            .await
+            .map_err(|e| match e {
+                GateError::NotFound => {
+                    ProjectRouteError::NotFound(format!("File not found: {file_path}"))
+                }
+                other => gate_to_route_error(other),
+            })? {
+            Gated::InRoot(canonical) => canonical,
+            Gated::Artifact(id) => {
+                // The ONLY outside-root bytes: the hardened artifact reader.
+                let outcome = match &self.artifacts {
+                    Some(a) => a.read_content(&id).await,
+                    None => vst_artifacts::ReadOutcome::NotFound,
+                };
+                return Ok(FileResponse::Artifact(outcome));
+            }
+        };
 
         read_file_response(&abs_path).await.map_err(|e| match e {
             FileServingError::NotFound(_) => {
@@ -1797,6 +1872,14 @@ impl ProjectRoutes {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
         })?;
 
+        // Confine first: a non-git project answers an empty gutter, but a
+        // path escaping the root is refused the same way for every project.
+        let root = PathBuf::from(&project.absolute_path);
+        let abs_path = resolve_inside_dir(&root, file_path)?;
+        confine_only(&root, &abs_path)
+            .await
+            .map_err(gate_to_route_error)?;
+
         if !project.is_git {
             return Ok(GutterResult {
                 added: vec![],
@@ -1804,9 +1887,6 @@ impl ProjectRoutes {
                 modified: vec![],
             });
         }
-
-        let root = PathBuf::from(&project.absolute_path);
-        let abs_path = resolve_inside_dir(&root, file_path)?;
 
         // Compute relative path for git commands
         let rel_path = abs_path
@@ -2091,6 +2171,14 @@ fn numstat_args<'a>(is_subdir: bool, diff_args: &[&'a str]) -> Vec<&'a str> {
         args
     } else {
         diff_args.to_vec()
+    }
+}
+
+/// Gate failure -> route error (`NotFound` keeps the 404 of a missing path).
+fn gate_to_route_error(e: GateError) -> ProjectRouteError {
+    match e {
+        GateError::NotFound => ProjectRouteError::NotFound("Path not found".to_string()),
+        GateError::Denied(m) => ProjectRouteError::AccessDenied(m),
     }
 }
 

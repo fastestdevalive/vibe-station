@@ -1094,6 +1094,68 @@ async fn test_git_surface_routes_on_real_repo() {
     assert_eq!(pr_res, PrLookupResult::NotGithub);
 }
 
+#[tokio::test]
+async fn diff_refuses_traversal_and_hides_root() {
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+
+    let proj = ProjectRecord {
+        id: "proj-git".into(),
+        absolute_path: git_repo_dir.path().to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: true,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(proj).await.unwrap();
+
+    let wt = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-git".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/git-test".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let wt_path = routes.paths.worktree_path("proj-git", &wt.id);
+    let wt_str = wt_path.to_string_lossy().to_string();
+
+    for bad in ["../README.md", "/etc/passwd"] {
+        let err = routes
+            .diff(&wt.id, bad, Some("local"), None, None)
+            .await
+            .expect_err("traversal must be refused");
+        assert!(
+            matches!(err, WorktreeRouteError::AccessDenied(_)),
+            "{err:?}"
+        );
+        assert!(!err.to_string().contains(&wt_str));
+    }
+}
+
 /// Build a main repo containing a single submodule `vendor/widget` (its own
 /// repo `sub_dir`) pinned at the submodule's initial commit `c1`. Returns c1's
 /// sha. The caller is expected to add a later commit `c2` to the submodule and

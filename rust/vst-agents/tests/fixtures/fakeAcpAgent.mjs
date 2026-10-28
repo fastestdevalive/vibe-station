@@ -97,6 +97,15 @@
 //     is still active is rejected with "Session already has an active ACP prompt". The
 //     first prompt hangs until session/cancel, then takes CANCEL_UNWIND_MS (default 300)
 //     to unwind before resolving "cancelled"; later prompts resolve end_turn at once.
+//   FAKE_ACP_MODE=artifact_writes — session/prompt replays claude-shaped tool calls
+//     (artifact capture, plan 03 phase 3): a `Write` of the relative path
+//     `docs/plan.md` (empty pending tool_call, a mid-call update carrying the
+//     location, a final `completed` update with none), a `Write` of `docs/failed.md`
+//     that ends `failed`, and a kind=read call; then end_turn.
+//   FAKE_ACP_MODE=fs_write — session/prompt sends an agent->client
+//     `fs/write_text_file` request for FAKE_FS_WRITE_PATH (absolute), waits for the
+//     response and, when FAKE_FS_WRITE_TOOLCALL=1, ALSO reports the same path as a
+//     completed kind=edit tool call, then end_turn.
 import { createInterface } from "node:readline";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -204,6 +213,12 @@ rl.on("line", (line) => {
             params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `replay ${i}` } } },
           });
         }
+        // The history also contains a finished write: replay must not capture it.
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: msg.params.sessionId, update: { sessionUpdate: "tool_call", toolCallId: "replayed-write", title: "Write", kind: "edit", status: "completed", locations: [{ path: "/replayed/old.md" }] } },
+        });
       }
       write({ jsonrpc: "2.0", id: msg.id, result: { configOptions: modelConfigOptions() } });
     }
@@ -282,6 +297,43 @@ rl.on("line", (line) => {
           write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "cancelled" } });
         }
       }, 20);
+      return;
+    }
+    if (mode === "artifact_writes") {
+      const upd = (update) =>
+        write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: sid, update } });
+      const toolSeq = (id, title, kind, path, finalStatus) => {
+        upd({ sessionUpdate: "tool_call", toolCallId: id, title: "Preparing file…", kind, status: "pending", rawInput: {}, content: [], locations: [] });
+        if (path) {
+          upd({ sessionUpdate: "tool_call_update", toolCallId: id, title, kind, rawInput: { file_path: path }, locations: [{ path }] });
+        }
+        upd({ sessionUpdate: "tool_call_update", toolCallId: id, status: finalStatus });
+      };
+      toolSeq("tc-write", "Write plan.md", "edit", "docs/plan.md", "completed");
+      toolSeq("tc-failed", "Write failed.md", "edit", "docs/failed.md", "failed");
+      toolSeq("tc-read", "Read notes.md", "read", "docs/notes.md", "completed");
+      setTimeout(() => {
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+      }, 100);
+      return;
+    }
+    if (mode === "fs_write") {
+      const reqId = nextClientReqId++;
+      const path = process.env.FAKE_FS_WRITE_PATH;
+      pendingClientRequests.set(reqId, () => {
+        if (process.env.FAKE_FS_WRITE_TOOLCALL === "1") {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: sid,
+              update: { sessionUpdate: "tool_call", toolCallId: "tc-fs", title: "Write", kind: "edit", status: "completed", rawInput: { file_path: path }, locations: [{ path }] },
+            },
+          });
+        }
+        setTimeout(() => write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } }), 50);
+      });
+      write({ jsonrpc: "2.0", id: reqId, method: "fs/write_text_file", params: { sessionId: sid, path, content: "hello fs\n" } });
       return;
     }
     if (mode === "permission_request" || mode === "permission_request_reject_only") {

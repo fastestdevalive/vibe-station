@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod agy_stream_acp_cmd;
+pub mod artifact_boot;
+pub mod artifact_routes;
 pub mod doctor;
 pub mod env_setup;
 pub mod limits_wiring;

@@ -55,6 +55,7 @@ use vst_proc::pty::PtyHandle;
 use vst_proc::resolve_use_tmux::resolve_use_tmux;
 use vst_proc::tmux::Tmux;
 use vst_store::{StoreError, StoreHandle};
+use vst_types::artifacts::ScopeKey;
 use vst_types::domain::{
     Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
     WorktreeRecord,
@@ -77,6 +78,9 @@ use vst_ws::services::ignore_filter::load_always_show;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 use vst_ws::services::tree_list::list_tree_dir;
 
+use crate::artifact_gate::{
+    artifact_open_path, confine_only, gate_read, lexical_or_absolute, GateError, Gated,
+};
 use crate::modes::{
     find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode,
 };
@@ -120,6 +124,28 @@ pub fn serialize_worktree(project_id: &str, w: &WorktreeRecord) -> Worktree {
         main_session_id,
         lsp_enabled: w.lsp_enabled.unwrap_or(false),
     }
+}
+
+/// Replace host checkout paths in an error message with `<worktree>` so route
+/// bodies never leak absolute paths. The unredacted text is logged once.
+fn redact_paths(msg: &str, roots: &[&Path]) -> String {
+    tracing::warn!(error = %msg, "git route error (unredacted)");
+    let mut out = msg.to_string();
+    for root in roots {
+        let mut forms = vec![root.to_string_lossy().to_string()];
+        if let Ok(canon) = std::fs::canonicalize(root) {
+            let c = canon.to_string_lossy().to_string();
+            if !forms.contains(&c) {
+                forms.push(c);
+            }
+        }
+        // Longest first so a canonical prefix is not half-replaced.
+        forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+        for f in forms.into_iter().filter(|f| !f.is_empty()) {
+            out = out.replace(&f, "<worktree>");
+        }
+    }
+    out
 }
 
 /// Resolve a relative or absolute path inside a worktree root, asserting it stays inside.
@@ -167,6 +193,21 @@ pub fn resolve_inside_worktree(
     }
 
     Ok(normalized)
+}
+
+/// Gate failure -> route error (`NotFound` keeps the 404 of a missing path).
+fn gate_to_route_error(e: GateError) -> WorktreeRouteError {
+    match e {
+        GateError::NotFound => WorktreeRouteError::NotFound("Path not found".to_string()),
+        GateError::Denied(m) => WorktreeRouteError::AccessDenied(m),
+    }
+}
+
+fn gate_not_found(e: GateError, file_path: &str) -> WorktreeRouteError {
+    match e {
+        GateError::NotFound => WorktreeRouteError::NotFound(format!("File not found: {file_path}")),
+        other => gate_to_route_error(other),
+    }
 }
 
 /// Parse `git status -z --porcelain=v1` stdout.
@@ -456,6 +497,9 @@ pub struct WorktreeRoutes {
     pub file_list: Arc<FileList>,
     pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
+    /// Artifact allowlist (plan Decision 6). `None`: confinement still applies,
+    /// the artifact exception is off.
+    pub artifacts: Option<vst_artifacts::ArtifactsHandle>,
     /// The Terminal delivery owner: a delete tells it which sessions are going
     /// so jobs stop and held comments are restored (`None` in tests that never
     /// schedule into a Terminal agent).
@@ -482,12 +526,18 @@ impl WorktreeRoutes {
             file_list: file_list.clone(),
             file_search: Arc::new(FileSearchIndex::new(file_list.clone())),
             paths: Paths::default(),
+            artifacts: None,
             terminal_delivery: None,
         }
     }
 
     pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
         self.terminal_delivery = Some(td);
+        self
+    }
+
+    pub fn with_artifacts(mut self, artifacts: vst_artifacts::ArtifactsHandle) -> Self {
+        self.artifacts = Some(artifacts);
         self
     }
 
@@ -1417,6 +1467,16 @@ impl WorktreeRoutes {
             .store
             .purge_scheduled_messages_for_missing_sessions()
             .await;
+        // Same for the worktree's artifact rows (no FK; `hide` never purges).
+        let artifact_scope = ScopeKey::worktree(wt_id);
+        match &self.artifacts {
+            Some(a) => {
+                let _ = a.purge_scope(&artifact_scope).await;
+            }
+            None => {
+                let _ = self.store.purge_scope(&artifact_scope).await;
+            }
+        }
 
         // Free the worktree's file-search index (up to 100k paths).
         self.file_search
@@ -1481,6 +1541,9 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let sub = sub_path.unwrap_or("");
         let target_path = resolve_inside_worktree(&wt_path, sub)?;
+        confine_only(&wt_path, &target_path)
+            .await
+            .map_err(gate_to_route_error)?;
 
         let hide_dotfiles = show_hidden == Some(false);
         let always_show = load_always_show(self.paths.vst_home()).await;
@@ -1564,7 +1627,28 @@ impl WorktreeRoutes {
     ) -> Result<FileResponse, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
-        let abs_path = resolve_inside_worktree(&wt_path, file_path)?;
+        let lexical = lexical_or_absolute(resolve_inside_worktree(&wt_path, file_path), file_path)?;
+        let scope = ScopeKey::worktree(wt_id);
+        let abs_path = match gate_read(
+            self.artifacts.as_ref(),
+            &scope,
+            &wt_path,
+            file_path,
+            lexical,
+        )
+        .await
+        .map_err(|e| gate_not_found(e, file_path))?
+        {
+            Gated::InRoot(canonical) => canonical,
+            Gated::Artifact(id) => {
+                // The ONLY outside-root bytes: the hardened artifact reader.
+                let outcome = match &self.artifacts {
+                    Some(a) => a.read_content(&id).await,
+                    None => vst_artifacts::ReadOutcome::NotFound,
+                };
+                return Ok(FileResponse::Artifact(outcome));
+            }
+        };
 
         read_file_response(&abs_path).await.map_err(|e| match e {
             FileServingError::NotFound(_) => {
@@ -1615,6 +1699,7 @@ impl WorktreeRoutes {
             Err(msg) => return Err(WorktreeRouteError::Unprocessable(msg)),
         };
         let git_dir_str = git_dir.to_string_lossy().to_string();
+        resolve_inside_worktree(&git_dir, file_path)?;
 
         let mut cmd = Command::new("git");
         cmd.arg("-c")
@@ -1631,7 +1716,12 @@ impl WorktreeRoutes {
                     Some(&worktree.base_sha),
                 )
                 .await
-                .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?
+                .map_err(|e| {
+                    WorktreeRouteError::Internal(redact_paths(
+                        &e.to_string(),
+                        &[&wt_path, &git_dir],
+                    ))
+                })?
                 .ok_or_else(|| {
                     WorktreeRouteError::Unprocessable(
                         "Could not resolve base branch fork point".to_string(),
@@ -1683,7 +1773,7 @@ impl WorktreeRoutes {
             return Err(WorktreeRouteError::Internal(if stderr.is_empty() {
                 format!("git diff exited with status {:?}", output.status.code())
             } else {
-                stderr
+                redact_paths(&stderr, &[&wt_path, &git_dir])
             }));
         }
 
@@ -1792,7 +1882,9 @@ impl WorktreeRoutes {
                 Some(&worktree.base_sha),
             )
             .await
-            .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?
+            .map_err(|e| {
+                WorktreeRouteError::Internal(redact_paths(&e.to_string(), &[&wt_path, &git_dir]))
+            })?
             .ok_or_else(|| {
                 WorktreeRouteError::Unprocessable(
                     "Could not resolve base branch fork point".to_string(),
@@ -1893,7 +1985,7 @@ impl WorktreeRoutes {
             Some(&worktree.base_sha),
         )
         .await
-        .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?
+        .map_err(|e| WorktreeRouteError::Internal(redact_paths(&e.to_string(), &[&wt_path])))?
         .ok_or_else(|| {
             WorktreeRouteError::Unprocessable(
                 "Could not resolve base branch fork point".to_string(),
@@ -1902,7 +1994,7 @@ impl WorktreeRoutes {
 
         let stat: GitDiffStat = get_diff_stat(&wt_str, &base_sha)
             .await
-            .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?;
+            .map_err(|e| WorktreeRouteError::Internal(redact_paths(&e.to_string(), &[&wt_path])))?;
 
         Ok(DiffStat {
             insertions: stat.insertions as i64,
@@ -1985,7 +2077,9 @@ impl WorktreeRoutes {
 
         let commits = list_commits(&git_dir_str, limit, base_for_filter.as_deref())
             .await
-            .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?;
+            .map_err(|e| {
+                WorktreeRouteError::Internal(redact_paths(&e.to_string(), &[&wt_path, &git_dir]))
+            })?;
 
         let mapped = commits
             .into_iter()
@@ -2085,15 +2179,7 @@ impl WorktreeRoutes {
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
-        let abs = resolve_inside_worktree(&wt_path, path_str)?;
-
-        let rel = abs
-            .strip_prefix(&wt_path)
-            .map_err(|_| {
-                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
-            })?
-            .to_string_lossy()
-            .to_string();
+        let rel = self.open_key(wt_id, &wt_path, path_str).await?;
 
         self.pending_file_opens.append(wt_id, &rel);
         self.broadcaster.send(ServerEvent::FileOpen {
@@ -2150,14 +2236,7 @@ impl WorktreeRoutes {
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
-        let abs = resolve_inside_worktree(&wt_path, path_str)?;
-        let rel = abs
-            .strip_prefix(&wt_path)
-            .map_err(|_| {
-                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
-            })?
-            .to_string_lossy()
-            .to_string();
+        let rel = self.open_key(wt_id, &wt_path, path_str).await?;
 
         let wt_id_owned = wt_id.to_string();
         let rel_owned = rel.clone();
@@ -2205,14 +2284,21 @@ impl WorktreeRoutes {
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
-        let abs = resolve_inside_worktree(&wt_path, path_str)?;
-        let rel = abs
-            .strip_prefix(&wt_path)
-            .map_err(|_| {
-                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
-            })?
-            .to_string_lossy()
-            .to_string();
+        let rel = match resolve_inside_worktree(&wt_path, path_str) {
+            Ok(_) => self.open_key(wt_id, &wt_path, path_str).await?,
+            // An out-of-repo artifact tab: closable whenever it is stored, even
+            // after its row was evicted or removed (Decision 6).
+            Err(_)
+                if Path::new(path_str).is_absolute()
+                    && project
+                        .worktrees
+                        .iter()
+                        .any(|w| w.id == wt_id && w.open_files.iter().any(|f| f == path_str)) =>
+            {
+                path_str.to_string()
+            }
+            Err(e) => return Err(e),
+        };
 
         let wt_id_owned = wt_id.to_string();
         let updated = self
@@ -2254,6 +2340,9 @@ impl WorktreeRoutes {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let abs_path = resolve_inside_worktree(&wt_path, file_path)?;
+        confine_only(&wt_path, &abs_path)
+            .await
+            .map_err(gate_to_route_error)?;
 
         // Compute relative path for git commands
         let rel_path = abs_path
@@ -2302,6 +2391,34 @@ impl WorktreeRoutes {
                 GutterError::Unprocessable(msg) => WorktreeRouteError::Unprocessable(msg),
                 GutterError::Internal(msg) => WorktreeRouteError::Internal(msg),
             })
+    }
+
+    /// Persisted `openFiles` entry for `path_str`: repo-relative inside the
+    /// worktree; for an absolute path outside it, the canonical path of a LIVE
+    /// artifact row of this worktree (anything else is 403).
+    async fn open_key(
+        &self,
+        wt_id: &str,
+        wt_path: &Path,
+        path_str: &str,
+    ) -> Result<String, WorktreeRouteError> {
+        match resolve_inside_worktree(wt_path, path_str) {
+            Ok(abs) => Ok(abs
+                .strip_prefix(wt_path)
+                .map_err(|_| {
+                    WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
+                })?
+                .to_string_lossy()
+                .to_string()),
+            Err(_) if Path::new(path_str).is_absolute() => artifact_open_path(
+                self.artifacts.as_ref(),
+                &ScopeKey::worktree(wt_id),
+                path_str,
+            )
+            .await
+            .map_err(gate_to_route_error),
+            Err(e) => Err(e),
+        }
     }
 
     // Helper: locate project containing worktree
@@ -2800,4 +2917,17 @@ pub fn map_submodules(subs: Vec<vst_git::git::SubmoduleInfo>) -> Vec<SubmoduleIn
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn redact_paths_replaces_root() {
+        assert_eq!(
+            redact_paths("fatal: /a/b/wt/x: bad", &[Path::new("/a/b/wt")]),
+            "fatal: <worktree>/x: bad"
+        );
+    }
 }

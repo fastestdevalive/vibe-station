@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "path": "/tmp/a.md",
+      "artifact": {
+        "id": "a",
+        "scopeKind": "worktree",
+        "scopeId": "wt-1",
+        "path": "/tmp/a.md",
+        "displayPath": "/tmp/a.md",
+        "inRepo": false,
+        "kind": "doc",
+        "size": 4,
+        "state": "ok",
+        "pinned": false,
+        "editCount": 1,
+        "writers": ["sess-1"],
+        "addedVia": "cli",
+        "createdAt": "2026-10-27T10:00:00.000Z",
+        "lastWrittenAt": "2026-10-27T10:00:00.000Z"
+      },
+      "outsideWorktree": true
+    },
+    {
+      "path": "/home/u/.ssh/id_rsa",
+      "error": { "code": "ARTIFACT_DENIED", "message": "path is denied" }
+    }
+  ]
+}

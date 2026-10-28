@@ -21,8 +21,17 @@ pub enum FileServingError {
 
 #[derive(Debug)]
 pub enum FileResponse {
-    Text { etag: String, content: String },
-    Image { mime: String, content: Vec<u8> },
+    Text {
+        etag: String,
+        content: String,
+    },
+    Image {
+        mime: String,
+        content: Vec<u8>,
+    },
+    /// An out-of-root artifact read by the hardened artifact reader; render
+    /// with `artifact_response::outcome_response`.
+    Artifact(vst_artifacts::ReadOutcome),
 }
 
 /// Compute ETag header string: `"\"hex\""`
@@ -33,20 +42,44 @@ pub fn compute_etag(content: &[u8]) -> String {
     format!("\"{hex}\"")
 }
 
-pub async fn read_file_response(abs_path: &Path) -> Result<FileResponse, FileServingError> {
-    let meta = tokio::fs::metadata(abs_path).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            FileServingError::NotFound(abs_path.to_string_lossy().to_string())
-        } else {
-            FileServingError::Io(e)
-        }
-    })?;
-
+/// Open without blocking (a FIFO returns at once), require a regular file on
+/// the open fd, and read at most `HARD_LIMIT + 1` bytes however the file grows.
+fn read_bounded(abs_path: &Path) -> Result<(Vec<u8>, u64), FileServingError> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(abs_path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                FileServingError::NotFound(abs_path.to_string_lossy().to_string())
+            } else {
+                FileServingError::Io(e)
+            }
+        })?;
+    let meta = file.metadata()?;
+    if !meta.file_type().is_file() {
+        return Err(FileServingError::Unprocessable("Not a regular file".into()));
+    }
     if meta.len() > HARD_LIMIT {
         return Err(FileServingError::TooLarge);
     }
+    let mut buf = Vec::new();
+    file.take(HARD_LIMIT + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > HARD_LIMIT {
+        return Err(FileServingError::TooLarge);
+    }
+    let len = meta.len();
+    Ok((buf, len))
+}
 
-    let buf = tokio::fs::read(abs_path).await?;
+pub async fn read_file_response(abs_path: &Path) -> Result<FileResponse, FileServingError> {
+    let owned = abs_path.to_path_buf();
+    let (buf, len) = tokio::task::spawn_blocking(move || read_bounded(&owned))
+        .await
+        .map_err(|e| FileServingError::Io(std::io::Error::other(e)))??;
+    let meta_len = len;
 
     let ext = abs_path
         .extension()
@@ -76,7 +109,7 @@ pub async fn read_file_response(abs_path: &Path) -> Result<FileResponse, FileSer
     // Binary detection: check null byte in first 8KB
     let sample_len = buf.len().min(8192);
     let is_binary = buf[..sample_len].contains(&0);
-    if is_binary && meta.len() > BINARY_LIMIT {
+    if is_binary && meta_len > BINARY_LIMIT {
         return Err(FileServingError::BinaryTooLarge);
     }
 

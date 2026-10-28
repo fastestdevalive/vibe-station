@@ -402,9 +402,13 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let db_path = vst_home.join("vibe-station.db");
     let store = StoreHandle::open(&db_path).context("open vibe-station.db")?;
     let projects_dir = vst_home.join("projects");
-    if let Err(e) = store.migrate_manifests(&projects_dir).await {
+    let migration = store.migrate_manifests(&projects_dir).await;
+    if let Err(e) = &migration {
         tracing::warn!("[vst] manifest migration failed (non-fatal): {e}");
     }
+    // Sweep artifact rows of deleted worktrees/projects; skipped (with a warn)
+    // unless the migration above succeeded on THIS boot.
+    crate::artifact_boot::purge_orphan_artifacts_after_migration(&store, &migration).await;
 
     // Snapshot each existing session's mode icon so deleting a mode can't
     // change it (idempotent; new sessions are stamped at creation).
@@ -570,6 +574,13 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     if swept > 0 {
         tracing::info!("[vst] settled {swept} stale background-working session(s) at boot");
     }
+    // Artifacts: `build_state` built the owner; install it as the Rich Chat
+    // capture sink BEFORE serving (sessions attach it at creation) and start
+    // its intake drain + 250 ms event flusher. The orphan purge already ran
+    // above, gated on this boot's manifest migration (`artifact_boot`).
+    let artifacts = state.artifacts.clone();
+    json_registry.set_artifact_sink(Arc::new(artifacts.clone()));
+    let artifacts_task = artifacts.start();
 
     // Delete exited plain terminals: sweep stale ones now, then follow events.
     let terminal_reaper_handle =
@@ -634,6 +645,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
                 tracing::info!("[vst] Stop requested via API; shutting down…");
             }
         }
+        // Write what the artifact intake still holds (bounded), then stop it.
+        artifacts.shutdown(std::time::Duration::from_secs(1)).await;
+        artifacts_task.abort();
         // Abort pollers and any still-running post-bind boot work.
         lifecycle_handle.abort();
         pr_handle.abort();

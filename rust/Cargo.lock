@@ -1204,6 +1204,9 @@ dependencies = [
  "icu_properties",
  "icu_provider",
  "smallvec",
+ "utf16_iter",
+ "utf8_iter",
+ "write16",
  "zerovec",
 ]
 
@@ -2998,6 +3001,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
+name = "utf16_iter"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3048,6 +3057,7 @@ name = "vst-agents"
 version = "0.0.3-beta"
 dependencies = [
  "agent-client-protocol",
+ "async-trait",
  "chrono",
  "notify",
  "rusqlite",
@@ -3059,6 +3069,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "vst-artifacts",
  "vst-diff",
  "vst-git",
  "vst-proc",
@@ -3079,6 +3090,24 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "vst-artifacts"
+version = "0.0.3-beta"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "icu_normalizer",
+ "libc",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vst-store",
+ "vst-types",
 ]
 
 [[package]]
@@ -3124,6 +3153,7 @@ dependencies = [
  "vst-activity",
  "vst-agents",
  "vst-agy-stream-acp",
+ "vst-artifacts",
  "vst-git",
  "vst-harness-limits",
  "vst-lifecycle",
@@ -3209,6 +3239,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "vst-artifacts",
  "vst-types",
  "vst-ws",
 ]
@@ -3249,6 +3280,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "libc",
  "ring",
  "serde",
  "serde_json",
@@ -3261,6 +3293,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vst-agents",
+ "vst-artifacts",
  "vst-git",
  "vst-harness-limits",
  "vst-lifecycle",
@@ -3716,6 +3749,12 @@ checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
 ]
+
+[[package]]
+name = "write16"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936"
 
 [[package]]
 name = "writeable"

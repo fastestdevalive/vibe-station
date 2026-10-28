@@ -1,5 +1,9 @@
 //! OpenCode CLI plugin — ports `agent-plugins/opencode.ts`.
 //!
+//! Artifact capture: `extract_file_effects` is NOT overridden — the ACP write shapes of this
+//! harness are UNMEASURED (spike C3 had no usable model/binary/adapter), so the
+//! generic default stays until a fixture under `tests/fixtures/acp_writes/` is recorded.
+//!
 //! System-prompt delivery: `OPENCODE_CONFIG` env (a JSON config whose
 //! `instructions` point at the system-prompt file, and whose `model` key is how
 //! v2 selects a model — v2 removed the top-level `-m/--model` flag). Task-prompt

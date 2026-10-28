@@ -57,6 +57,7 @@ via tmux (session processes) + SQLite (metadata).
 | `rust/vst-review` | Terminal scheduled-message delivery owner (same tier as `vst-git`/`vst-activity`; depends only on `vst-types`, `vst-store`, `vst-proc`). `TerminalDeliveryHandle` runs one in-memory job per scheduled tmux row (per-session FIFO): claim by the poller sets `deliveryPhase='waiting'`, a 500 ms plugin readiness probe (Ready twice; approvals are never answered; 10 min limit from heading the queue) gates one hardened stdin-buffer bracketed paste plus Enter (`pasting`), then the row is marked sent. Failures carry a `failureKind`. Every terminal transition of a `channel='tmux'` row (sent, failed, cancelled, re-armed, gone) calls the injected `OutcomeObserver` exactly once. CLI-specific probes are injected from `vst-agents` plugins. `scheduled_messages` gained `channel`, `deliveryPhase`, `failureKind`, `commentsSnapshot`, `origin` (`schedule` default, `immediate` for part 04's sends, excluded from the strip/badge/cap). Boot recovery re-arms `waiting` schedule rows and fails `pasting` ones. |
 | `rust/vst-lifecycle` | 1s lifecycle poller (`session.lifecycle.state` — busy?) and 30s PR poller (`session.pr` — what happened to the branch?); deliberately separate axes, see `docs/STATUS-INDICATORS.md`. |
 | `rust/vst-harness-limits` | Claude/Codex/Agy subscription-limit scheduler + cache: probes each vendor's own binary via `AgentPlugin::get_limits()` (injected from `vst-daemon`), pushes `limits:updated` over WS. CLI-agnostic. |
+| `rust/vst-artifacts` | Artifacts (files agents write, listed in the UI): capture intake from agent file effects and `vst artifact add`, rev counters, rate limiter, missing/moved revalidation, and the outside-root read allowlist (`is_denied`). Flow: plugin `extract_file_effects` → `ArtifactSink` (in `vst-agents`) → `vst-artifacts` → `vst-store` rows → `artifact:upserted`/`artifact:removed` WS events; REST in `vst-daemon/src/artifact_routes.rs`, content via `GET /artifacts/:id/content`. |
 | `rust/vst-lsp`, `rust/vst-proc`, `rust/vst-ws`, `rust/vst-rpc`, `rust/vst-types` | Language-server integration, process/tmux control, WebSocket plumbing, internal RPC, shared types. |
 | `rust/vst-cli` | The `vst` CLI binary — full scripting surface, drives the same REST API the UI uses. |
 | `web-ui/` | React 19 + Vite frontend (`@vibestation/web`). Served by the daemon; renders identically in the desktop shell and the browser. |
@@ -160,5 +161,7 @@ toolchain (now required unconditionally — the daemon and CLI are Rust),
   serialized.
 - Per-CLI logic lives only in the agent plugins (`rust/vst-agents`), never in
   a `match cli { ... }` at a call site — see `docs/PLUGINS.md`.
+- Outside-root reads go through exactly two gates (artifact rows, expiring LSP
+  tokens); see `AGENTS.md` "Artifacts".
 - Lifecycle and PR are two separate status axes, written by two separate
   pollers.

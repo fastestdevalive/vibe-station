@@ -149,6 +149,42 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages(status, fireAt);",
     )?;
 
+    // Artifacts: files agents wrote, per worktree/project scope. NO foreign
+    // keys on purpose (same reason as `scheduled_messages`: a project save
+    // re-inserts worktrees/sessions, so a cascade would wipe every row);
+    // `scopeId` / `writers` are soft references, purged explicitly
+    // (`purge_scope`, `purge_orphan_artifacts`). `CURRENT_SCHEMA_VERSION` stays
+    // 1 (additive). Later columns MUST go through `add_column_if_missing`
+    // below, never only into this `CREATE TABLE`.
+    db.execute_batch(
+        "
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id            TEXT PRIMARY KEY,
+      scopeKind     TEXT NOT NULL CHECK (scopeKind IN ('worktree','project')),
+      scopeId       TEXT NOT NULL,
+      path          TEXT NOT NULL,
+      pathKey       TEXT NOT NULL,
+      inRepo        INTEGER NOT NULL,
+      hash          TEXT,
+      size          INTEGER,
+      mtimeMs       INTEGER,
+      pinned        INTEGER NOT NULL DEFAULT 0,
+      pinnedAt      TEXT,
+      hidden        INTEGER NOT NULL DEFAULT 0,
+      missing       INTEGER NOT NULL DEFAULT 0,
+      editCount     INTEGER NOT NULL DEFAULT 1,
+      writers       TEXT NOT NULL DEFAULT '[]',
+      addedVia      TEXT NOT NULL DEFAULT 'capture',
+      createdAt     TEXT NOT NULL,
+      lastWrittenAt TEXT NOT NULL,
+      checkedAt     TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_scope_pathkey ON artifacts(scopeKind, scopeId, pathKey);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_scope_written ON artifacts(scopeKind, scopeId, lastWrittenAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_scope_hash ON artifacts(scopeKind, scopeId, hash);
+  ",
+    )?;
+
     add_column_if_missing(db, "global_drafts", "name", "TEXT")?;
     add_column_if_missing(db, "global_drafts", "nameSource", "TEXT")?;
     add_column_if_missing(db, "global_drafts", "sortOrder", "REAL")?;

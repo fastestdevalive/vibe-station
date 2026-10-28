@@ -486,4 +486,27 @@ something; for a clean agent on another mode use `vst agent create`.
 
 ---
 
+## 18. Artifacts (deliverables shown in the UI)
+
+Plans, docs and images an agent writes are listed in the UI's Artifacts tab. Rich Chat agents are captured
+automatically from their file-write tool calls and from common shell write forms with literal paths (`> x.md`,
+`tee`, `cp`, `mv`; stderr redirects and `.log`/`.pid`/`.lock` files are ignored). **Terminal agents, and any
+deliverable written another way (scripts, computed paths, programs), must be added explicitly.** Register what the
+user asked for or will want to open, not scratch, intermediate or log files:
+
+```bash
+vst artifact add <path>... [--json]        # one request for all paths (max 50); relative paths resolve against cwd
+vst artifact list [--worktree <id> | --project <id>] [--json]   # defaults to $VST_WORKTREE, then $VST_PROJECT
+vst artifact pin <id|path> [--unpin] [--worktree <id> | --project <id>] [--json]
+```
+
+- `add` only works inside a vst agent session: the scope comes from `$VST_SPAWN_TOKEN`. The token is an identity,
+  not a secret; the daemon's CLI auth authorizes the call.
+- Paths outside the repo (`/tmp`, `~/.claude/plans`) are allowed and flagged "outside repo"; credential-like or
+  vst-internal paths are refused (`ARTIFACT_DENIED`).
+- Exit codes: `0` ok, `2` every path not found, `1` any other failure. Per-path errors print to stderr.
+- Pin limit is 50 per scope; 500 artifacts per scope (oldest unpinned dropped).
+
+---
+
 *This skill covers external and cross-session integration patterns. Agents spawned by vst receive their full task context from the daemon at launch — this file supplements that with spawn, inspect, message, rename, and teardown patterns.*

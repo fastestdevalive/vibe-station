@@ -1,0 +1,8 @@
+{
+  "type": "artifact:removed",
+  "scopeKind": "project",
+  "scopeId": "proj-1",
+  "rev": 8,
+  "ids": ["a", "b"],
+  "reason": "merged"
+}

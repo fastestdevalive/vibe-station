@@ -3,8 +3,8 @@
 use vst_cli::commands;
 use vst_cli::output::die;
 use vst_cli::program::{
-    self, AgentCommand, Command, DaemonCommand, FileCommand, FilesCommand, ModeCommand,
-    ProjectCommand, TerminalCommand, WorktreeCommand,
+    self, AgentCommand, ArtifactCommand, Command, DaemonCommand, FileCommand, FilesCommand,
+    ModeCommand, ProjectCommand, TerminalCommand, WorktreeCommand,
 };
 #[tokio::main]
 async fn main() {
@@ -540,6 +540,35 @@ async fn main() {
                 }
             }
         }
+        Command::Artifact(artifact_cmd) => match artifact_cmd {
+            ArtifactCommand::Add { args } => {
+                let opts = match commands::artifact::add::parse_artifact_add_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                finish_artifact(commands::artifact::add::run_artifact_add(opts).await);
+            }
+            ArtifactCommand::List { args } => {
+                let opts = match commands::artifact::list::parse_artifact_list_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                finish_artifact(commands::artifact::list::run_artifact_list(opts).await);
+            }
+            ArtifactCommand::Pin { args } => {
+                let opts = match commands::artifact::pin::parse_artifact_pin_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                finish_artifact(commands::artifact::pin::run_artifact_pin(opts).await);
+            }
+            ArtifactCommand::Unknown(args) => {
+                die(
+                    &format!("Unknown artifact command: {}", args.join(" ")),
+                    Some(1),
+                );
+            }
+        },
         Command::Daemon(daemon_cmd) => {
             if let Some(hint) = program::hint_if_dir_collision("daemon") {
                 eprintln!("{hint}");
@@ -619,5 +648,16 @@ async fn main() {
         _ => {
             eprintln!("Command not yet implemented in Rust port");
         }
+    }
+}
+
+/// Exit like `die`, except an empty message means the per-path errors were
+/// already printed and only the exit code remains.
+fn finish_artifact(result: Result<(), (String, i32)>) {
+    if let Err((msg, code)) = result {
+        if msg.is_empty() {
+            std::process::exit(code);
+        }
+        die(&msg, Some(code));
     }
 }

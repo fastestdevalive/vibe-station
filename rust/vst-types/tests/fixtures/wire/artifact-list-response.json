@@ -1,0 +1,24 @@
+{
+  "rev": 12,
+  "cap": 500,
+  "total": 2,
+  "items": [
+    {
+      "id": "a",
+      "scopeKind": "project",
+      "scopeId": "proj-1",
+      "path": "/tmp/shots/login.png",
+      "displayPath": "/tmp/shots/login.png",
+      "inRepo": false,
+      "kind": "image",
+      "size": 10,
+      "state": "ok",
+      "pinned": false,
+      "editCount": 1,
+      "writers": ["s"],
+      "addedVia": "cli",
+      "createdAt": "2026-10-27T10:00:00.000Z",
+      "lastWrittenAt": "2026-10-27T10:00:00.000Z"
+    }
+  ]
+}

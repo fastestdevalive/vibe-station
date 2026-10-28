@@ -84,8 +84,14 @@ pub async fn handle_tree_watch(
     else {
         return;
     };
-    let idx_key = index_key(*scope, worktree_id);
     let tree_path = path.clone().unwrap_or_default();
+    if !super::is_confined_watch_path(&tree_path) {
+        conn.send(ServerMessage::SystemError {
+            message: super::UNCONFINED_WATCH_MESSAGE.to_string(),
+        });
+        return;
+    }
+    let idx_key = index_key(*scope, worktree_id);
     let watch_key = format!("tree:{idx_key}:{tree_path}");
 
     // Same connection sending the same watch twice (redundant) — bump its own
@@ -119,6 +125,18 @@ pub async fn handle_tree_watch(
         });
         return;
     };
+    // A checkout that does not exist yet is not an escape: register nothing and
+    // stay quiet instead of mislabelling it as an outside-root refusal.
+    if std::fs::metadata(&root).is_err() {
+        tracing::debug!(worktree_id = %worktree_id, "watch skipped: checkout missing");
+        return;
+    }
+    if !super::resolves_inside_root(&root, &tree_path) {
+        conn.send(ServerMessage::SystemError {
+            message: super::OUTSIDE_ROOT_WATCH_MESSAGE.to_string(),
+        });
+        return;
+    }
     let abs_path: PathBuf = if tree_path.is_empty() {
         root.clone()
     } else {
@@ -427,6 +445,136 @@ mod tests {
     use crate::services::file_list::FileList;
     use crate::streams::file_watcher::WatcherHandle;
     use std::sync::Mutex;
+
+    // S22 / 4.T2c: an absolute or `..` tree path is refused and nothing is
+    // registered; the empty root path stays valid.
+    #[tokio::test]
+    async fn unconfined_tree_paths_are_rejected_and_register_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("sub")).unwrap();
+        let file_search = index();
+        let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
+        let resolve_root: WorktreePathResolver = {
+            let root = root.path().to_path_buf();
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
+        };
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        for bad in ["/etc", "../x", "a/../../x"] {
+            handle_tree_watch(
+                &conn,
+                &registry,
+                &resolve_root,
+                &file_search,
+                &ClientMessage::TreeWatch {
+                    worktree_id: "wt1".into(),
+                    path: Some(bad.into()),
+                    scope: vst_types::ws::WatchScope::Worktree,
+                },
+            )
+            .await;
+        }
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 3);
+        assert!(frames.iter().all(|f| f["type"] == "system:error"));
+
+        handle_tree_watch(
+            &conn,
+            &registry,
+            &resolve_root,
+            &file_search,
+            &ClientMessage::TreeWatch {
+                worktree_id: "wt1".into(),
+                path: Some("sub".into()),
+                scope: vst_types::ws::WatchScope::Worktree,
+            },
+        )
+        .await;
+        let key = format!("tree:{}:sub", wt1());
+        let sw = registry.lock().unwrap().watchers.remove(&key);
+        sw.expect("relative path is still watched").watcher.close();
+    }
+
+    // R1F-02: a dir symlink resolving outside the root is refused; an in-root
+    // alias is watched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tree_symlink_outside_root_is_refused() {
+        use std::os::unix::fs::symlink;
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("root");
+        let outside = base.path().join("outside");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("leak")).unwrap();
+        symlink(root.join("sub"), root.join("alias")).unwrap();
+        let file_search = index();
+        let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
+        let resolve_root: WorktreePathResolver =
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        let watch = |p: &'static str| {
+            let msg = ClientMessage::TreeWatch {
+                worktree_id: "wt1".into(),
+                path: Some(p.into()),
+                scope: vst_types::ws::WatchScope::Worktree,
+            };
+            let (conn, registry, resolve_root, file_search) =
+                (&conn, &registry, &resolve_root, &file_search);
+            async move { handle_tree_watch(conn, registry, resolve_root, file_search, &msg).await }
+        };
+        watch("leak").await;
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        let frames = sent.lock().unwrap().clone();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "system:error");
+
+        watch("alias").await;
+        let key = format!("tree:{}:alias", wt1());
+        let sw = registry.lock().unwrap().watchers.remove(&key);
+        sw.expect("in-root alias is watched").watcher.close();
+    }
+
+    // A resolver root that does not exist is not an escape: no error, no watcher.
+    #[tokio::test]
+    async fn tree_missing_checkout_sends_no_error_and_registers_nothing() {
+        let base = tempfile::tempdir().unwrap();
+        let absent = base.path().join("absent");
+        let file_search = index();
+        let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
+        let resolve_root: WorktreePathResolver =
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(absent.clone()));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+        handle_tree_watch(
+            &conn,
+            &registry,
+            &resolve_root,
+            &file_search,
+            &ClientMessage::TreeWatch {
+                worktree_id: "wt1".into(),
+                path: Some("sub".into()),
+                scope: vst_types::ws::WatchScope::Worktree,
+            },
+        )
+        .await;
+        assert!(registry.lock().unwrap().watchers.is_empty());
+        assert!(sent.lock().unwrap().is_empty());
+    }
 
     fn index() -> Arc<FileSearchIndex> {
         Arc::new(FileSearchIndex::new(Arc::new(FileList::new())))

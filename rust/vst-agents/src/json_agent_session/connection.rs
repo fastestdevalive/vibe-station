@@ -287,6 +287,7 @@ impl JsonAgentSession {
             self.attach_out_of_band_sink(&conn, enrich);
             // Same ordering rule for the vendor ext-notification sink (task signals).
             self.attach_ext_notification_sink(&conn);
+            self.attach_fs_write_observer(&conn);
 
             return Ok(conn);
         }

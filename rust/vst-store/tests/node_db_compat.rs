@@ -17,11 +17,12 @@ fn fixture_dir() -> std::path::PathBuf {
 }
 
 /// Dump `.schema` the same way the fixture generator did (tables+indexes,
-/// ordered by name) so the comparison is deterministic.
+/// ordered by name) so the comparison is deterministic. Rust-only additive
+/// tables (`artifacts` and its indexes; Node never had them) are excluded.
 fn dump_schema(conn: &Connection) -> String {
     let mut stmt = conn
         .prepare(
-            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('table','index') ORDER BY name",
+            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('table','index') AND name NOT LIKE '%artifacts%' ORDER BY name",
         )
         .unwrap();
     let mut out = String::new();

@@ -35,7 +35,7 @@
 //!   implemented here via the crate's derive macros (not a built-in schema
 //!   type).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -196,6 +196,10 @@ struct SteeringResponse {
     outcome: Option<String>,
 }
 
+/// Observer of agent-initiated `fs/write_text_file` writes; receives the
+/// resolved absolute path after the write succeeded.
+pub type FsWriteObserver = Arc<dyn Fn(PathBuf) + Send + Sync>;
+
 /// Shared, interior-mutable state accessible from both the handle and the
 /// actor task.
 struct Shared {
@@ -208,6 +212,9 @@ struct Shared {
     /// Routes vendor ext notifications for the current session (prompt open or
     /// not) to the session layer. Leaf lock; cleared with `out_of_band`.
     ext_notification: Mutex<Option<mpsc::UnboundedSender<AcpExtNotification>>>,
+    /// Told the absolute path after every successful `fs/write_text_file`
+    /// (artifact capture's secondary path). Cleared on dispose.
+    fs_write_observer: Mutex<Option<FsWriteObserver>>,
     session_id: Mutex<Option<String>>,
     load_session_supported: AtomicBool,
     /// True iff the `initialize` response's `_meta.steering.supported === true`.
@@ -247,6 +254,7 @@ impl Shared {
             active_update: Mutex::new(None),
             out_of_band: Mutex::new(None),
             ext_notification: Mutex::new(None),
+            fs_write_observer: Mutex::new(None),
             session_id: Mutex::new(None),
             load_session_supported: AtomicBool::new(false),
             steering_supported: AtomicBool::new(false),
@@ -364,6 +372,12 @@ impl AcpConnection {
     /// out-of-band sink so history replay is never ingested.
     pub fn set_ext_notification_sink(&self, tx: Option<mpsc::UnboundedSender<AcpExtNotification>>) {
         *self.0.shared.ext_notification.lock().unwrap() = tx;
+    }
+
+    /// Set (or clear) the `fs/write_text_file` observer. Stored in `shared`
+    /// (like the out-of-band sink), not in the `Debug`-derived launch spec.
+    pub fn set_fs_write_observer(&self, observer: Option<FsWriteObserver>) {
+        *self.0.shared.fs_write_observer.lock().unwrap() = observer;
     }
 }
 
@@ -541,6 +555,7 @@ impl AcpTransport for AcpConnection {
         self.0.shared.open_tools.lock().unwrap().clear();
         self.0.shared.out_of_band.lock().unwrap().take();
         self.0.shared.ext_notification.lock().unwrap().take();
+        self.0.shared.fs_write_observer.lock().unwrap().take();
         // Ask the actor to stop its loop, which lets the `connect_with` closure
         // return, closing the connection and terminating the child process.
         let (tx, _rx) = oneshot::channel::<()>();
@@ -711,6 +726,7 @@ fn spawn_actor(
         };
 
         let fs_cwd = cwd.clone();
+        let fs_shared = Arc::clone(&shared);
         let fs_write_handler = async move |request: WriteTextFileRequest,
                                            responder: Responder<WriteTextFileResponse>,
                                            _cx| {
@@ -722,6 +738,14 @@ fn spawn_actor(
             .await;
             match result {
                 Ok(()) => {
+                    // Clone out of the lock: the observer must never run under it.
+                    let observer = fs_shared.fs_write_observer.lock().unwrap().clone();
+                    if let Some(observe) = observer {
+                        observe(acp_file_system::resolve_scoped(
+                            &fs_cwd,
+                            &request.path.to_string_lossy(),
+                        ));
+                    }
                     let _ = responder.respond(WriteTextFileResponse::new());
                 }
                 Err(e) => {
@@ -838,6 +862,7 @@ fn spawn_actor(
         shared_after.open_tools.lock().unwrap().clear();
         shared_after.out_of_band.lock().unwrap().take();
         shared_after.ext_notification.lock().unwrap().take();
+        shared_after.fs_write_observer.lock().unwrap().take();
 
         // `AcpAgent` has already SIGKILLed the child's process group. Finish
         // the job for descendants that left it (snapshotted at close).

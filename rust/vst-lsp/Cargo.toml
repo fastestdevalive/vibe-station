@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 vst-types = { workspace = true }
 vst-ws = { workspace = true }
+vst-artifacts = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

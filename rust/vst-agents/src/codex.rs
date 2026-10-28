@@ -467,6 +467,30 @@ impl AgentPlugin for CodexPlugin {
         true
     }
 
+    /// Spike C3 (`tests/fixtures/acp_writes/codex.jsonl`): codex writes files
+    /// either through `apply_patch` (ONE initial `tool_call`, kind `edit`, whose
+    /// `content[]` holds an absolute-path diff per file and no `rawInput` or
+    /// `locations`) or through the shell (kind `execute`, `rawInput.command`
+    /// only). Only the diffs are reported: a patch `Move to` arrives as an add
+    /// of the NEW path (the artifact hash-match merge completes the move), and
+    /// shell writes go through the generic shell parser (the default), `rm` stays out of scope.
+    fn extract_file_effects(
+        &self,
+        call: &crate::tool_call_tracker::MergedToolCall,
+    ) -> Vec<vst_types::artifacts::FileEffect> {
+        if call.kind != Some(vst_types::AcpToolKind::Edit) {
+            return crate::file_effects::default_acp_effects(call);
+        }
+        // Any other shape (no diffs: locations or rawInput only, e.g. from an
+        // adapter version the fixture does not cover) fails open to the default
+        // parser instead of dropping the capture.
+        if call.diffs.is_empty() || crate::file_effects::ignores_failed(call) {
+            return crate::file_effects::default_acp_effects(call);
+        }
+        let paths = call.diffs.iter().map(|d| d.path.clone()).collect();
+        crate::file_effects::writes(crate::file_effects::unique_paths(paths))
+    }
+
     fn native_history_importer(
         &self,
     ) -> Option<&'static dyn crate::native_history_importer::NativeHistoryImporter> {

@@ -95,3 +95,10 @@ mid-turn steering (messages sent mid-turn are queued).
 ```html
 <h1>Hello</h1>
 ```
+
+## Artifacts
+
+In this session files you write with your file-edit tools are added to the Artifacts tab automatically;
+common shell writes (`> file`, `>> file`, `tee`, `cp`, `mv`, `install`, `touch`, `dd of=`, `curl -o`, `wget -O`)
+with plain paths are captured too (not stderr, nor `.log`/`.pid`/`.lock` files). Still run `vst artifact add <path>...` for a deliverable written any other way (scripts, computed paths,
+files written by a program). Only deliverables, never scratch or log files.
