@@ -15,15 +15,23 @@ import { createPortal } from "react-dom";
 import { useLayout } from "@/hooks/useLayout";
 import { useDemoEnv, useEventTargets, usePortalRoot, useViewportWidth } from "@/context/DemoEnv";
 import { shortcutHints } from "@/lib/shortcutHints";
+import { CommentCountChip } from "@/components/comments/CommentsRailBadge";
 
 /**
  * Last button of the actions group: classic = tools pane toggle; canvas = Add/Remove Tools tile.
  * Rendered inline: the group is never re-parented, so the toggle keeps its DOM node (and keyboard focus).
  */
-function ToolsToggleButton({ canvas, vertical }: { canvas: boolean; vertical: boolean }) {
+function ToolsToggleButton({ canvas, vertical, badgeCount = 0 }: { canvas: boolean; vertical: boolean; badgeCount?: number }) {
   const { toolPanelVisible, toggleToolPanel, hasWorktreeToolsTile, toggleWorktreeToolsTile } = useLayout();
   const on = canvas ? hasWorktreeToolsTile : toolPanelVisible;
-  const label = canvas ? (on ? "Remove Tools tile from canvas" : "Add Tools tile to canvas") : "Toggle tool panel";
+  const unsent = !canvas && !on && badgeCount > 0 ? badgeCount : 0;
+  const label = canvas
+    ? on
+      ? "Remove Tools tile from canvas"
+      : "Add Tools tile to canvas"
+    : unsent
+      ? `Toggle tool panel, ${unsent} unsent ${unsent === 1 ? "comment" : "comments"}`
+      : "Toggle tool panel";
   return (
     <button
       type="button"
@@ -34,6 +42,11 @@ function ToolsToggleButton({ canvas, vertical }: { canvas: boolean; vertical: bo
       onClick={() => (canvas ? toggleWorktreeToolsTile() : toggleToolPanel())}
     >
       {vertical ? <PanelTop size={17} /> : <PanelRight size={17} />}
+      {unsent ? (
+        <span className="top-bar__pane-badge">
+          <CommentCountChip count={unsent} />
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -43,13 +56,15 @@ interface WorkspaceActionsProps {
   onOpenQuickOpen: () => void;
   /** Worktree whose canvas-mode chip the "…" menu and the toggle act on (`null` = project route: no canvas items). */
   canvasWorktreeId: string | null;
+  /** Unsent comments count shown on (and announced by) the tools toggle while the pane is hidden. */
+  toggleBadgeCount?: number;
 }
 
 /**
  * The workspace actions group: Search, the "…" menu, then the tools toggle (always last). The one markup shared by
  * every `TopBar` variant that carries it; add a button to the group HERE, and bump the count in `--top-actions-w` (workspace.css). The toggle is the last button, inline.
  */
-export function WorkspaceActions({ isMobile, onOpenQuickOpen, canvasWorktreeId }: WorkspaceActionsProps) {
+export function WorkspaceActions({ isMobile, onOpenQuickOpen, canvasWorktreeId, toggleBadgeCount }: WorkspaceActionsProps) {
   const {
     terminalDockVisible,
     toggleTerminalDock,
@@ -226,6 +241,7 @@ export function WorkspaceActions({ isMobile, onOpenQuickOpen, canvasWorktreeId }
       <ToolsToggleButton
         canvas={inCanvasMode && canvasWorktreeId != null}
         vertical={effectiveSplitOrientation === "vertical"}
+        badgeCount={toggleBadgeCount}
       />
     </>
   );

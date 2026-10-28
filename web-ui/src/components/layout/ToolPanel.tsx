@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Columns2, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
@@ -16,6 +16,7 @@ import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
 import { useActionsHost } from "@/context/TopActionsContext";
 import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 import { handleToolsEsc } from "@/lib/toolsEsc";
+import { CommentsTray } from "@/components/comments/CommentsTray";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 interface ToolPanelProps {
@@ -31,7 +32,8 @@ interface ToolPanelProps {
   /**
    * True when this same ToolPanel instance is currently portaled into a
    * workspace-canvas tile (WorkspaceCanvas.tsx) rather than the classic
-   * docked tool-panel region.
+   * docked tool-panel region. A tile has its own in-pane rail and never hosts
+   * the global actions chip (so, despite the name, it is "in a canvas tile").
    */
   hidePanelControls?: boolean;
   /** Called when the user clicks the "+" tab or presses Ctrl+P to open the file quick-open dialog. */
@@ -42,16 +44,6 @@ interface ToolPanelProps {
    */
   onClose?: () => void;
 }
-
-export const FILES_LEFT_PANE_DEFAULT_WIDTH = 240;
-export const FILES_LEFT_PANE_MIN_WIDTH = 160;
-export const FILES_LEFT_PANE_MAX_WIDTH = 600;
-/** Desktop floor: the open list's header reserves the actions chip (105px - 36px rail + the offline pill's 76px = 145px),
- *  so below 145px + room for the header's own items the chip would cover them. Phones have no chip: they keep 160. */
-export const FILES_LEFT_PANE_MIN_WIDTH_DESKTOP = 224;
-export const FILES_LEFT_PANE_DEFAULT_HEIGHT = 240;
-export const FILES_LEFT_PANE_MIN_HEIGHT = 100;
-export const FILES_LEFT_PANE_MAX_HEIGHT = 600;
 
 /**
  * Right-side tool panel (R1–R7, R14, R16):
@@ -88,17 +80,6 @@ export function ToolPanel({
     (s) => !!(s.layoutByWorktree[filesWt] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
   const setMasterDetailVertical = useWorkspaceStore((s) => s.setMasterDetailVertical);
-  const storedWidth = useWorkspaceStore(
-    (s) => s.filesLeftPaneWidthByWorktree[filesWt] ?? FILES_LEFT_PANE_DEFAULT_WIDTH,
-  );
-  const storedHeight = useWorkspaceStore(
-    (s) => s.filesLeftPaneHeightByWorktree[filesWt] ?? FILES_LEFT_PANE_DEFAULT_HEIGHT,
-  );
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
-  const [dragHeight, setDragHeight] = useState<number | null>(null);
-  const activePanelWidth = isMobile ? (dragWidth ?? storedWidth) : Math.max(FILES_LEFT_PANE_MIN_WIDTH_DESKTOP, dragWidth ?? storedWidth);
-  const activePanelHeight = dragHeight ?? storedHeight;
-
   // Decision 9 migration: persisted `toolPanelTab === "search"` seeds Files rail into search mode.
   // Persisted "devices"/"artifacts" (from before they were disabled, or via direct state
   // manipulation) are folded into "files" too — Artifacts is now a Files list MODE (not a tab)
@@ -192,6 +173,18 @@ export function ToolPanel({
   const toolsFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen === "tools");
   // Fullscreen row (board Layouts D) shows only Exit fullscreen; Ctrl+/ still toggles layout.
   const showLayoutToggle = (effectiveTab === "files" || vcsCommitOpen) && !(hostsGlobal && toolsFullscreen);
+  // The layout toggle moves the pane controls to another host (the Files bar <-> the list header), which remounts
+  // the very button that was clicked. Remember that the toggle had focus and hand it to the new host's toggle.
+  // One-shot: armed by the toggle's click, consumed by the next host change (found a button or not). It only moves
+  // focus when it fell to <body> (the clicked button was unmounted), so a stale arm can never steal focus.
+  const refocusToggleRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!paneHost || !refocusToggleRef.current) return;
+    refocusToggleRef.current = false;
+    const btn = paneHost.paneEl.querySelector<HTMLElement>("[data-pane-control='layout-toggle']");
+    const active = document.activeElement;
+    if (btn && (!active || active === document.body)) btn.focus({ preventScroll: true });
+  }, [paneHost]);
   const paneControls = (
     <>
       {showLayoutToggle ? (
@@ -200,7 +193,12 @@ export function ToolPanel({
           className="tab tab--icon tool-bar-btn"
           aria-label={masterDetailVertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
           title={masterDetailVertical ? "Side-by-side layout" : "Stacked layout"}
-          onClick={() => setMasterDetailVertical(filesWt, !masterDetailVertical)}
+          data-pane-control="layout-toggle"
+          onClick={(e) => {
+            // Only a keyboard/focused activation needs focus carried over (a pointer click leaves it on the button too).
+            refocusToggleRef.current = e.currentTarget === document.activeElement;
+            setMasterDetailVertical(filesWt, !masterDetailVertical);
+          }}
         >
           {masterDetailVertical ? (
             <Rows2 size={13} strokeWidth={2} aria-hidden />
@@ -240,8 +238,6 @@ export function ToolPanel({
             height: "100%",
             display: "flex",
             flexDirection: "row",
-            "--tools-rail-panel-w": `${activePanelWidth}px`,
-            "--tools-rail-panel-h": `${activePanelHeight}px`,
           } as React.CSSProperties
         }
       >
@@ -281,10 +277,6 @@ export function ToolPanel({
                   worktreeId={worktreeId}
                   scope={scope}
                   onOpenQuickOpen={onOpenQuickOpen}
-                  currentWidth={activePanelWidth}
-                  currentHeight={activePanelHeight}
-                  onWidthDrag={setDragWidth}
-                  onHeightDrag={setDragHeight}
                 />
               ) : null}
               {effectiveTab === "devices" ? <DevicesPanel /> : null}
@@ -296,15 +288,16 @@ export function ToolPanel({
                   branch={branch}
                   scope={scope}
                   prStatus={prStatus}
-                  currentWidth={activePanelWidth}
-                  currentHeight={activePanelHeight}
-                  onWidthDrag={setDragWidth}
-                  onHeightDrag={setDragHeight}
                 />
               ) : null}
             </>
           )}
         </div>
+
+        {/* Comments tray (R56): a sibling AFTER the body, so it never changes the agent panel's tree path. */}
+        {worktreeId != null ? (
+          <CommentsTray api={api} scopeId={worktreeId} scopeKind={scope === "project" ? "project" : "worktree"} />
+        ) : null}
         </div>
 
         {/* In-pane rail on the right edge: canvas tiles (board C) and phones (no window rail at

@@ -72,6 +72,15 @@ const GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: "Review",
+    shortcuts: [
+      { keys: ["C"], action: "Comment on the selection or the focused gutter +" },
+      { keys: ["Ctrl+Enter"], action: "Add the comment" },
+      { keys: ["Esc"], action: "Cancel the comment (asks before discarding text)" },
+      { keys: ["Esc"], action: "Close the send picker, then the expanded comments tray" },
+    ],
+  },
+  {
     title: "Artifacts list",
     shortcuts: [
       { keys: ["Enter"], action: "Open the focused artifact" },

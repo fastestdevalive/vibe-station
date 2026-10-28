@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command } from "@/api/types";
+import type { Attachment, Command, ReviewSummary } from "@/api/types";
 import type { EditingDraft } from "@/hooks/useChat";
+import { plural } from "@/lib/plural";
 import { renderDraftText } from "@/lib/mentions";
+import { QueuedReviewLine } from "@/components/comments/ReviewFooter";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
 
 export type QueuedTrayStatus = "queued" | "editing" | "pending";
@@ -18,6 +20,8 @@ export interface QueuedTrayRow {
   scheduled?: boolean;
   /** Present when THIS tab is editing the row (prefill for the inline editor). */
   draft?: EditingDraft;
+  /** Review comments the turn carries (summary line, and the editor's Keep / Detach chip). */
+  review?: ReviewSummary;
 }
 
 /** Notice slot info (subagent-ux-v2) — displayed as a muted row above human queue rows. */
@@ -34,7 +38,7 @@ export interface QueuedTrayProps {
   onEdit: (turnId: string) => void;
   onSendNow: (turnId: string) => void;
   onCancel: (turnId: string) => void;
-  onSave: (turnId: string, message: string, attachmentIds: string[]) => Promise<void>;
+  onSave: (turnId: string, message: string, attachmentIds: string[], keepReview?: boolean) => Promise<void>;
   onDiscard: (turnId: string) => void;
   /** Salvage edited content into the composer when a Save fails (A9). */
   onSalvage: (message: string, attachments: Attachment[]) => void;
@@ -174,7 +178,7 @@ export function QueuedTray({
             className={`chat-queued-tray__row chat-queued-tray__row--${row.status}`}
             role="listitem"
             tabIndex={i === focusedIndex ? 0 : -1}
-            aria-label={`Queued message: ${displayText || "(attachments only)"}`}
+            aria-label={`Queued message: ${displayText || (row.review ? plural(row.review.count, "review comment", "review comments") : "(attachments only)")}`}
           >
             {localEdit ? (
               <QueuedTurnEditor
@@ -184,9 +188,11 @@ export function QueuedTray({
                 initialText={row.draft!.message}
                 initialAttachments={row.draft!.attachments}
                 commands={commands}
-                onSave={async (message, attachments) => {
+                {...(row.review ? { review: row.review } : {})}
+                onSave={async (message, attachments, keepReview) => {
                   try {
-                    await onSave(row.turnId, message, attachments.map((a) => a.id));
+                    if (keepReview === false) await onSave(row.turnId, message, attachments.map((a) => a.id), false);
+                    else await onSave(row.turnId, message, attachments.map((a) => a.id));
                   } catch {
                     // Save lost the race (turn started / another tab won) — salvage
                     // the edited content into the composer so no input is dropped (A9).
@@ -207,7 +213,8 @@ export function QueuedTray({
                   </span>
                 ) : null}
                 <div className="chat-queued-tray__text" title={displayText}>
-                  {displayText || "(attachments only)"}
+                  {displayText ? displayText : row.review ? null : "(attachments only)"}
+                  {row.review ? <QueuedReviewLine summary={row.review} queued={!editing} /> : null}
                 </div>
                 {editing ? (
                   <div className="chat-queued-tray__badge">editing…</div>

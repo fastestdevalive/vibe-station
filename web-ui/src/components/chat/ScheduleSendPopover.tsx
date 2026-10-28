@@ -30,7 +30,7 @@ interface ScheduleSendPopoverProps {
   targetLabel?: string;
   /** Warning shown above the actions. */
   note?: string;
-  /** Slot for part 04's "N comments attached" chip; when given an empty message is allowed. */
+  /** Slot for the "N comments attached" chip (both variants); in the compose variant an empty message is then allowed. */
   commentChip?: ReactNode;
 }
 
@@ -42,7 +42,7 @@ const SCREEN_MARGIN = 8;
 /** The picker's starting value: the next whole minute, i.e. "now". The picker
  *  has minute precision and the daemon only accepts a future time, so the
  *  current (already partly elapsed) minute would be rejected as past. */
-function defaultFireAt(): string {
+export function defaultFireAt(): string {
   return toLocalInput(new Date((Math.floor(Date.now() / 60_000) + 1) * 60_000));
 }
 
@@ -170,13 +170,13 @@ export function ScheduleSendPopover({
       setLocalError("Write a message to schedule.");
       return;
     }
-    const when = new Date(value);
-    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
-      setLocalError("Pick a time in the future.");
+    const checked = checkFireAt(value);
+    if ("error" in checked) {
+      setLocalError(checked.error);
       return;
     }
     setLocalError(null);
-    onSchedule(when.toISOString());
+    onSchedule(checked.iso);
   }
 
   const errorText = localError ?? error;
@@ -272,6 +272,7 @@ export function ScheduleSendPopover({
     >
       <div className="chat-schedule-popover__label">{title ?? "Send at"}</div>
       {timeInput}
+      {commentChip ? <div className="chat-schedule-popover__chip-slot">{commentChip}</div> : null}
       {errorText ? (
         <div className="chat-schedule-popover__error" role="alert">
           {errorText}
@@ -283,7 +284,25 @@ export function ScheduleSendPopover({
   );
 }
 
-function toLocalInput(d: Date): string {
+/** The one validation rule for a `datetime-local` value: a real, future instant (the daemon rejects the past). */
+export function checkFireAt(value: string): { iso: string } | { error: string } {
+  if (!value) return { error: "Pick a date and time." };
+  const when = new Date(value);
+  // Unparsable, or a year outside the 4-digit range the daemon/picker accept (5-6 digit years parse fine in JS).
+  if (Number.isNaN(when.getTime()) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) || when.getFullYear() > 9999) {
+    return { error: "Pick a valid date and time." };
+  }
+  if (when.getTime() > Date.now()) return { iso: when.toISOString() };
+  // A wall time inside a repeated DST hour parses as its FIRST occurrence; if that is already past, the second
+  // occurrence (30/60 min later, same wall string) may still be in the future and is what the user means.
+  for (const delta of [3_600_000, 1_800_000]) {
+    const later = new Date(when.getTime() + delta);
+    if (later.getTime() > Date.now() && toLocalInput(later) === value) return { iso: later.toISOString() };
+  }
+  return { error: "Pick a time in the future." };
+}
+
+export function toLocalInput(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

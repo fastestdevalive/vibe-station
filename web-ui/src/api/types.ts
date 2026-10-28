@@ -429,6 +429,8 @@ export interface NormalizedEvent {
   turnId?: string;
   attachments?: Attachment[];
   mentions?: Mention[];
+  /** `user` only — the review comments this turn carried (snapshot; absent on cancelled rows). */
+  review?: ReviewRecord;
   /** Marks a superseding `user` event from editing a queued turn (last wins). */
   edited?: boolean;
   /** Marks a superseding `user` event for a queued turn cancelled before it ran —
@@ -558,6 +560,8 @@ export interface BeginEditResponse {
   /** Original queue index (informational). */
   queueIndex: number;
   mentions?: Mention[];
+  /** Summary of the review comments the queued turn carries. */
+  review?: ReviewSummary;
 }
 
 /** Response from POST /sessions/:id/attachments (201). */
@@ -599,7 +603,7 @@ export interface SessionMeta {
    *  source of truth while the turn hasn't run yet (its transcript event doesn't
    *  exist until it does). Optional only because mock.ts / an older daemon may
    *  omit it — a real daemon always sends it. */
-  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[]; mentions?: Mention[] }>;
+  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[]; mentions?: Mention[]; review?: ReviewSummary }>;
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;
@@ -669,6 +673,8 @@ export interface ScheduledFailedMessage {
   failureKind?: ScheduledFailureKind;
   channel?: ScheduledChannel;
   origin?: ScheduledOrigin;
+  /** Review comments the row carried; restored to the panel when it failed. */
+  commentCount?: number;
 }
 
 /** A Terminal scheduled message pasted recently ("pasted at 3:00 PM"). */
@@ -699,6 +705,9 @@ export interface SupportedCli {
   /** Whether a scheduled message can be delivered into this CLI's Terminal (tmux)
    *  pane (its plugin's `terminal_delivery()` is set). */
   supportsTerminalDelivery: boolean;
+  /** Review comments can be sent to a Terminal agent of this CLI (`terminal_delivery()` is
+   *  set and its paste is multi-line safe). */
+  supportsTerminalComments: boolean;
   /**
    * Whether this CLI ships a native-history importer — i.e. a terminal→JSON
    * switch can backfill the terminal-phase turns into the JSON view. When
@@ -1191,6 +1200,19 @@ export type WSEvent =
       reason: ArtifactRemoveReason;
     }
   | {
+      /** Review comments of a scope changed (coalesced ~250 ms per scope); refetch on `ws:open` / `ws:resync`. */
+      type: "comments:changed";
+      scopeKind: ArtifactScopeKind;
+      scopeId: string;
+      upserted: ReviewComment[];
+      deleted: Array<{ id: string; reason: DeletedReason }>;
+    }
+  | {
+      /** A Terminal comment delivery changed state (global, not subscription-gated). */
+      type: "terminal-delivery:updated";
+      delivery: TerminalDelivery;
+    }
+  | {
       /** The daemon's event fan-out dropped events: refetch everything loaded. */
       type: "ws:resync";
     }
@@ -1315,6 +1337,274 @@ export interface ArtifactContentError {
   mime?: string;
   detail?: string;
 }
+
+// ── Review comments (mirrors rust/vst-types/src/review.rs + rest/review.rs) ──
+
+export type CommentSurface = "diff" | "file" | "markdown" | "html-source";
+export type CommentPathKind = "repo" | "artifact";
+/** Commit scope is not allowed (R41); distinct from the diff view's `DiffScope`. */
+export type CommentDiffScope = "local" | "branch";
+export type CommentSide = "old" | "new";
+export type CommentAnchorState = "anchored" | "outdated" | "file_missing" | "cant_check";
+export type CommentAnchorReason = "file_too_large" | "watch_limit";
+export type CommentRestoreReason =
+  | "turn_cancelled"
+  | "send_failed"
+  | "timed_out"
+  | "agent_exited"
+  | "restart"
+  | "session_removed"
+  | "channel_changed"
+  | "schedule_cancelled"
+  | "schedule_failed"
+  | "send_cancelled";
+export type DeletedReason = "deleted" | "sent" | "scheduled";
+export type TerminalDeliveryState =
+  | "waiting"
+  | "pasting"
+  | "sent"
+  | "timed_out"
+  | "failed"
+  | "cancelled";
+
+/** Inclusive 1-based line span. */
+export interface LineSpan {
+  start: number;
+  end: number;
+}
+
+/** One review comment as the daemon serves it. */
+export interface ReviewComment {
+  id: string;
+  scopeKind: ArtifactScopeKind;
+  scopeId: string;
+  /** Highest pin among the scope's existing comments + 1 (1 when none; restarts after a send). */
+  pin: number;
+  /** Repo-relative, or absolute for an artifact. */
+  path: string;
+  pathKind: CommentPathKind;
+  surface: CommentSurface;
+  diffScope?: CommentDiffScope;
+  baseSha?: string;
+  side?: CommentSide;
+  lineStart?: number;
+  lineEnd?: number;
+  oldStart?: number;
+  oldEnd?: number;
+  newStart?: number;
+  newEnd?: number;
+  quote: string;
+  prefix: string;
+  suffix: string;
+  occurrence: number;
+  text: string;
+  anchor: CommentAnchorState;
+  anchorReason?: CommentAnchorReason;
+  /** Re-anchored span when it differs from the stored one. */
+  current?: LineSpan;
+  /** The path before a followed move. */
+  movedFrom?: string;
+  /** `session:<id>` of the composer the comment is attached to. */
+  attachedTo?: string;
+  restoredReason?: CommentRestoreReason;
+  /** Size of this comment's rendered block (limit pre-check). */
+  blockBytes: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A sent / scheduled comment (rendering + restore unit). */
+export interface ReviewCommentSnapshot {
+  id: string;
+  pin: number;
+  path: string;
+  pathKind: CommentPathKind;
+  surface: CommentSurface;
+  diffScope?: CommentDiffScope;
+  side?: CommentSide;
+  lines?: LineSpan;
+  quote: string;
+  text: string;
+  anchor: CommentAnchorState;
+  anchorReason?: CommentAnchorReason;
+  baseSha?: string;
+  oldStart?: number;
+  oldEnd?: number;
+  newStart?: number;
+  newEnd?: number;
+  lineStart?: number;
+  lineEnd?: number;
+  prefix?: string;
+  suffix?: string;
+  occurrence?: number;
+  movedFrom?: string;
+  createdAt?: string;
+}
+
+/** The comments of one turn (`NormalizedEvent.review`). */
+export interface ReviewRecord {
+  /** Branch name (or project name for direct sessions). */
+  name: string;
+  comments: ReviewCommentSnapshot[];
+}
+
+/** What a queued turn's card shows. */
+export interface ReviewSummary {
+  count: number;
+  files: number;
+}
+
+/** A Terminal comment send in flight or just finished. */
+export interface TerminalDelivery {
+  id: string;
+  scopeKind: ArtifactScopeKind;
+  scopeId: string;
+  sessionId: string;
+  state: TerminalDeliveryState;
+  commentIds: string[];
+  commentCount: number;
+  bytes: number;
+  message?: string;
+  reason?: string;
+  waitsBehind?: number;
+  updatedAt: string;
+}
+
+/** `POST /worktrees/:id/comments` (and the `/projects/:id` twin). */
+export interface CreateCommentRequest {
+  id: string;
+  path: string;
+  pathKind: CommentPathKind;
+  surface: CommentSurface;
+  diffScope?: CommentDiffScope;
+  baseSha?: string;
+  side?: CommentSide;
+  lineStart?: number;
+  lineEnd?: number;
+  oldStart?: number;
+  oldEnd?: number;
+  newStart?: number;
+  newEnd?: number;
+  quote: string;
+  prefix: string;
+  suffix: string;
+  occurrence: number;
+  text: string;
+  /** Re-create a comment deleted elsewhere under its old pin when that pin is free. */
+  restorePin?: number;
+}
+
+/** `PATCH /comments/:id` (last writer wins; `version` is informational). */
+export interface PatchCommentRequest {
+  text: string;
+  version?: number;
+}
+
+/** Body of a create (201 / 200 when the id exists), `GET /comments/:id` and a patch. */
+export interface CommentResponse {
+  comment: ReviewComment;
+}
+
+/** `GET /worktrees/:id/comments?path=&delivery=unsent`. */
+export interface CommentListResponse {
+  comments: ReviewComment[];
+  nextPin: number;
+  /** In-flight immediate Terminal deliveries of the scope. */
+  terminalDeliveries: TerminalDelivery[];
+}
+
+/** `POST /worktrees/:id/comments/attach`. */
+export interface AttachCommentsRequest {
+  /** `session:<id>`. */
+  composerKey: string;
+  /** Omitted = every comment in the scope. */
+  commentIds?: string[];
+  /** Refresh the lease only; never attaches anything new. */
+  refreshOnly?: boolean;
+}
+
+export interface AttachCommentsResponse {
+  attached: string[];
+}
+
+/** `POST /worktrees/:id/comments/detach`. */
+export interface DetachCommentsRequest {
+  composerKey?: string;
+  commentIds?: string[];
+}
+
+export interface DetachCommentsResponse {
+  detached: string[];
+}
+
+/** `POST /worktrees/:id/comments/render` (Copy as text; never size-limited). */
+export interface RenderCommentsRequest {
+  commentIds?: string[];
+  message?: string;
+}
+
+export interface RenderCommentsResponse {
+  text: string;
+  bytes: number;
+  count: number;
+}
+
+/** `POST /worktrees/:id/comments/dismiss-restored`. */
+export interface DismissRestoredResponse {
+  cleared: number;
+}
+
+/** `POST /worktrees/:id/terminal-deliveries` (and the `/projects/:id` twin). */
+export interface CreateTerminalDeliveryRequest {
+  /** Client UUID; becomes the immediate row's id. */
+  terminalDeliveryId: string;
+  sessionId: string;
+  commentIds: string[];
+  message?: string;
+  /** `session:<id>` the comments are attached to, when sent from an attached composer. */
+  composerKey?: string;
+}
+
+export interface CreateTerminalDeliveryResponse {
+  delivery: TerminalDelivery;
+}
+
+/** `POST /sessions/:id/chat/turns/:turnId/restore-review`. */
+export interface RestoreReviewResponse {
+  restored: number;
+  /** Pins already back in the panel. */
+  skipped: number;
+}
+
+/** `GET /sessions/:id/terminal-readiness` (a bounded pane probe, nothing is pasted). */
+export type TerminalReadiness = "ready" | "awaiting_approval" | "unknown";
+export interface TerminalReadinessResponse {
+  readiness: TerminalReadiness;
+}
+
+/** Machine-readable `error` codes of the comment routes. */
+export type CommentErrorCode =
+  | "not_found"
+  | "invalid_anchor"
+  | "invalid_composer"
+  | "invalid_path"
+  | "invalid_delivery"
+  | "cap_reached"
+  | "text_too_long"
+  | "quote_too_long"
+  | "scope_mismatch"
+  | "id_taken"
+  | "comments_changed"
+  | "review_too_large"
+  | "not_attached"
+  | "delivery_in_flight"
+  | "delivery_pasting"
+  | "scope_changed"
+  | "turn_not_restorable"
+  | "TERMINAL_DELIVERY_UNSUPPORTED"
+  | "duplicate"
+  | "internal";
 
 export interface AuthSession {
   tokenId: string;

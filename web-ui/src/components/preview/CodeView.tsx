@@ -1,4 +1,5 @@
 import {
+  Fragment,
   forwardRef,
   useCallback,
   useEffect,
@@ -18,6 +19,8 @@ import { pickShikiLang } from "./previewLang";
 import { highlightDocumentLines } from "./shikiHighlighter";
 import { CodeLine } from "./CodeLine";
 import { useCodeVirtualizer } from "./useCodeVirtualizer";
+import { useCodeComments } from "@/components/comments/useCodeComments";
+import { CommentRowStack } from "@/components/comments/CommentRows";
 import { useChunkedHighlight } from "./useChunkedHighlight";
 import {
   getDefinition,
@@ -293,11 +296,15 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
   // same commit — avoiding the first-mount range-null race.
   const scroller = scrollElRef?.current ?? containerRef.current?.parentElement ?? null;
 
+  // Review comments (null outside a comment surface and for chat code blocks): gutter `+`, pins, marks, rows.
+  const comments = useCodeComments(filePath, !noGutter);
+
   const { virtualizer, scrollMargin, sizerRef, measureRef } = useCodeVirtualizer({
     lines,
     scrollEl: scroller,
     enabled: virtualized,
     highlightLine: highlightLine ?? null,
+    pinnedLines: comments?.pinnedLines,
     tabSize: 4,
   });
 
@@ -1485,7 +1492,9 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
                     markEnd={span?.end}
                     noGutter={noGutter}
                     gutterWidth={gutterWidth}
+                    {...comments?.lineProps(lineNum)}
                   />
+                  {comments ? <CommentRowStack surface={comments.surface} view={comments.view} side="new" n={lineNum} /> : null}
                 </div>
               );
             })}
@@ -1497,18 +1506,21 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
             const isTarget = highlightLine === lineNum;
             const span = isTarget ? targetSpanFor(line) : null;
             return (
-              <CodeLine
-                key={i}
-                line={line}
-                lineNum={lineNum}
-                html={highlightedLines?.[i]}
-                gutterMark={gutterMark}
-                isTarget={isTarget}
-                markStart={span?.start}
-                markEnd={span?.end}
-                noGutter={noGutter}
-                gutterWidth={gutterWidth}
-              />
+              <Fragment key={i}>
+                <CodeLine
+                  line={line}
+                  lineNum={lineNum}
+                  html={highlightedLines?.[i]}
+                  gutterMark={gutterMark}
+                  isTarget={isTarget}
+                  markStart={span?.start}
+                  markEnd={span?.end}
+                  noGutter={noGutter}
+                  gutterWidth={gutterWidth}
+                  {...comments?.lineProps(lineNum)}
+                />
+                {comments ? <CommentRowStack surface={comments.surface} view={comments.view} side="new" n={lineNum} /> : null}
+              </Fragment>
             );
           })
         )}

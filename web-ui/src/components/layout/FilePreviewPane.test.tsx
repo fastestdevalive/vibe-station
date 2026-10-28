@@ -26,6 +26,25 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     });
   });
 
+  it("R1F-01 — the font controls are the last child of the preview strip (in flow)", async () => {
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Diff line counts")).toBeInTheDocument();
+    });
+    const strip = container.querySelector(".preview-diffinfo")!;
+    expect(strip.lastElementChild).toHaveClass("preview-font-overlay");
+    expect(container.querySelectorAll(".preview-font-overlay")).toHaveLength(1);
+  });
+
+  it("R1F-01 — the error path renders the strip without font controls", async () => {
+    const spy = vi.spyOn(api, "getFile").mockRejectedValue(new Error("boom"));
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(screen.getByText("boom")).toBeInTheDocument());
+    expect(container.querySelector(".preview-diffinfo")).toBeTruthy();
+    expect(container.querySelector(".preview-font-overlay")).toBeNull();
+    spy.mockRestore();
+  });
+
   it("9.T2 — scope 'branch' on a .md file populates fileBody (not null) after the fetch effect resolves", async () => {
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",

@@ -33,6 +33,11 @@ const FILE_MAX = HTML_FILE_MAX_BYTES;
 /** Last gray-zone answer, so re-renders of the same large body skip re-encoding. */
 let gray = { source: "", max: 0, over: false };
 
+/** Byte-count form of the cap, for a caller that only knows a total (e.g. a daemon-truncated artifact). */
+export function isOverHtmlCapBytes(bytes: number, variant: "file" | "chat"): boolean {
+  return bytes > (variant === "chat" ? CHAT_MAX : FILE_MAX);
+}
+
 /** Single owner of the size caps — callers pick Source vs Rendered off this. */
 export function isOverHtmlCap(source: string, variant: "file" | "chat"): boolean {
   const max = variant === "chat" ? CHAT_MAX : FILE_MAX;

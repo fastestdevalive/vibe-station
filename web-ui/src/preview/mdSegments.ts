@@ -116,13 +116,11 @@ function htmlAwareMatcher(source: string, scanner: ReturnType<typeof makeFenceSc
   };
 }
 
-export function segmentMarkdown(
-  source: string,
-  opts?: { html?: boolean },
-): MdSegment[] {
+/** A segment plus the raw-source offset it starts at (fence and all for mermaid / html). */
+function scanSegments(source: string, opts?: { html?: boolean }): Array<{ seg: MdSegment; start: number }> {
   const scanner = opts?.html === true ? makeFenceScanner(source) : null;
   const next = scanner ? htmlAwareMatcher(source, scanner) : mermaidOnlyMatcher(source);
-  const segments: MdSegment[] = [];
+  const out: Array<{ seg: MdSegment; start: number }> = [];
   let last = 0;
   for (let m = next(); m !== null; m = next()) {
     if (scanner) {
@@ -130,24 +128,52 @@ export function segmentMarkdown(
       else scanner.consumeMermaid(m.start, m.end);
     }
     if (m.start > last) {
-      segments.push({ type: "markdown", content: source.slice(last, m.start) });
+      out.push({ seg: { type: "markdown", content: source.slice(last, m.start) }, start: last });
     }
-    segments.push(
-      m.lang === "mermaid"
-        ? { type: "mermaid", content: m.content.trim() }
-        : { type: "html", content: m.content },
-    );
+    out.push({
+      seg:
+        m.lang === "mermaid"
+          ? { type: "mermaid", content: m.content.trim() }
+          : { type: "html", content: m.content },
+      start: m.start,
+    });
     last = m.end;
   }
   if (last < source.length) {
-    segments.push({ type: "markdown", content: source.slice(last) });
+    out.push({ seg: { type: "markdown", content: source.slice(last) }, start: last });
   }
-  if (segments.length === 0) {
-    segments.push({ type: "markdown", content: source });
+  if (out.length === 0) {
+    out.push({ seg: { type: "markdown", content: source }, start: 0 });
   }
-  return segments;
+  return out;
 }
 
-export function segmentMarkdownWithMermaid(source: string): MdSegment[] {
-  return segmentMarkdown(source, { html: false });
+export function segmentMarkdown(
+  source: string,
+  opts?: { html?: boolean },
+): MdSegment[] {
+  return scanSegments(source, opts).map((x) => x.seg);
+}
+
+/** `MdSegment` plus the 1-based line of the ORIGINAL source its first line sits on. */
+export type MdSegmentWithLine = MdSegment & { startLine: number };
+
+/**
+ * Same split as `segmentMarkdown`, each segment tagged with its absolute `startLine`, counted from RAW source
+ * offsets (newlines before the segment start). Never derive it by summing segment `content` lines: mermaid
+ * segments are trimmed with their fences dropped, and a segment may start mid-line (a fence matched
+ * anywhere in a line), so the following segment's first line is the line the fence closed on. Comments on
+ * rendered markdown need it because react-markdown positions are relative to the segment it is given.
+ */
+export function segmentMarkdownWithLines(source: string, opts?: { html?: boolean }): MdSegmentWithLine[] {
+  const scanned = scanSegments(source, opts);
+  const out: MdSegmentWithLine[] = [];
+  let pos = 0;
+  let line = 1;
+  for (const { seg, start } of scanned) {
+    for (let i = source.indexOf("\n", pos); i !== -1 && i < start; i = source.indexOf("\n", i + 1)) line += 1;
+    pos = Math.max(pos, start);
+    out.push({ ...seg, startLine: line });
+  }
+  return out;
 }

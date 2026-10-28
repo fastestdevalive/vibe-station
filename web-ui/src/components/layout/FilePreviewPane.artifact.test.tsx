@@ -1,7 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { ArtifactReadError } from "@/api/errors";
+import { ApiError, ArtifactReadError } from "@/api/errors";
 import type { ApiInstance } from "@/api";
 import type { ArtifactRow, WSEvent } from "@/api/types";
 import { useOpenFilesChanged } from "@/hooks/usePendingFileOpens";
@@ -206,6 +206,19 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     expect(await screen.findByText("No longer an artifact")).toBeInTheDocument();
   });
 
+  it("a failed Remove (500) says so and keeps the panel; the row is not hidden", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getArtifactContent").mockRejectedValue(new ArtifactReadError("gone", 410, "ARTIFACT_MISSING"));
+    vi.spyOn(api, "removeArtifact").mockRejectedValue(new ApiError("boom", 500));
+    seed([outsideRow({ state: "missing" })]);
+    openTab(OUT);
+    render(<FilePreviewPane api={api} worktreeId={WT} />);
+    await screen.findByText("File not found");
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Couldn’t remove this artifact")).toBeInTheDocument();
+    expect(screen.getByText("File not found")).toBeInTheDocument();
+  });
+
   it("a row flipped to missing by artifact:upserted swaps the panel in without a refetch round-trip", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getArtifactContent").mockResolvedValue({ kind: "text", body: "# Here" });
@@ -369,6 +382,9 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     const root = container.querySelector(".preview-pane")!;
     expect(root).toHaveClass("preview-pane--font-overlay");
     expect(root.querySelector(".artifact-strip__pin")).toBeTruthy();
+    // R1F-01 (round 1): the font controls are the strip's last in-flow child, not an absolute sibling.
+    const strip = root.querySelector(".preview-diffinfo.artifact-strip")!;
+    expect(strip.lastElementChild).toHaveClass("preview-font-overlay");
   });
 
   it("a PIN_LIMIT failure from the strip pin shows the limit notice", async () => {

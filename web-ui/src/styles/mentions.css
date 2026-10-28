@@ -33,7 +33,7 @@
 }
 
 .chat-mention-popover {
-  max-height: min(420px, 50vh);
+  max-height: min(420px, 50vh, var(--chat-popover-room, 420px));
   display: flex;
   flex-direction: column;
 }

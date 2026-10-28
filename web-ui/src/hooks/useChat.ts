@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
+import type { Attachment, NormalizedEvent, ReviewSummary, SessionMeta } from "@/api/types";
 import { createChatRepository } from "@/api/repositories/chatRepository";
 import { ensureTaskSubscription } from "@/hooks/useTaskStore";
 import { fromWire, toWire } from "@/lib/mentions";
@@ -22,12 +22,22 @@ export interface PendingTurn {
   queued: boolean;
   /** How the message was delivered — "steered" means it was injected mid-turn. */
   delivery?: "queued" | "steered";
+  /** Review comments riding on this turn (summary for the queued card until the daemon echoes it). */
+  review?: ReviewSummary;
 }
 
 /** Local prefill for a queued turn this tab is actively editing. */
 export interface EditingDraft {
   message: string;
   attachments: Attachment[];
+  /** Comments the held turn carries (the editor offers Keep / Detach). */
+  review?: ReviewSummary;
+}
+
+/** Review comments to send with a turn: the ids and the summary the optimistic queued card shows. */
+export interface SendReview {
+  ids: string[];
+  summary: ReviewSummary;
 }
 
 export interface UseChatResult {
@@ -55,7 +65,12 @@ export interface UseChatResult {
   editingDrafts: Record<string, EditingDraft>;
   /** Enqueue a user turn. Returns the delivery mode ("queued" | "steered" | undefined).
    *  `queue: true` forces a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. */
-  send: (message: string, attachmentIds?: string[], queue?: boolean) => Promise<"queued" | "steered" | undefined>;
+  send: (
+    message: string,
+    attachmentIds?: string[],
+    queue?: boolean,
+    review?: SendReview,
+  ) => Promise<"queued" | "steered" | undefined>;
   /** Abort the active turn (keeps queued turns). */
   stop: () => Promise<void>;
   /** True while a stop request is in flight for the active turn. */
@@ -65,7 +80,7 @@ export interface UseChatResult {
   /** Withdraw a queued turn for editing (opens the inline editor). */
   editQueued: (turnId: string) => Promise<void>;
   /** Save an edit → resubmit `{edited:true}`. Throws on failure (caller salvages, A9). */
-  saveEdit: (turnId: string, message: string, attachmentIds: string[]) => Promise<void>;
+  saveEdit: (turnId: string, message: string, attachmentIds: string[], keepReview?: boolean) => Promise<void>;
   /** Discard an edit → resubmit `{edited:false}` (restore unchanged). */
   discardEdit: (turnId: string) => Promise<void>;
   /** "Send now" — preempt: jump a queued turn to the front AND interrupt the
@@ -502,11 +517,18 @@ export function useChat(
   }, [api, chatRepo, sessionId, active, cacheEnabled]);
 
   const send = useCallback(
-    async (message: string, attachmentIds?: string[], queue?: boolean): Promise<"queued" | "steered" | undefined> => {
+    async (
+      message: string,
+      attachmentIds?: string[],
+      queue?: boolean,
+      review?: SendReview,
+    ): Promise<"queued" | "steered" | undefined> => {
       if (!sessionId) return;
       const w = toWire(message);
-      const res =
-        w.mentions.length === 0
+      // A turn carrying comments always queues (the daemon never steers it); the ids ride as the last argument.
+      const res = review
+        ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, true, w.mentions.length ? w.mentions : undefined, review.ids)
+        : w.mentions.length === 0
           ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue)
           : await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue, w.mentions);
       // Dedupe: only add the optimistic bubble if the authoritative `user` event
@@ -522,6 +544,7 @@ export function useChat(
             attachments: [],
             queued: res.queuePosition > 0,
             ...(res.delivery ? { delivery: res.delivery } : {}),
+            ...(review ? { review: review.summary } : {}),
           },
         ];
       });
@@ -576,14 +599,18 @@ export function useChat(
       const res = await chatRepo.beginEditQueuedTurn(sessionId, turnId);
       setEditingDrafts((prev) => ({
         ...prev,
-        [turnId]: { message: fromWire(res.message, res.mentions), attachments: res.attachments },
+        [turnId]: {
+          message: fromWire(res.message, res.mentions),
+          attachments: res.attachments,
+          ...(res.review ? { review: res.review } : {}),
+        },
       }));
     },
     [chatRepo, sessionId],
   );
 
   const saveEdit = useCallback(
-    async (turnId: string, message: string, attachmentIds: string[]) => {
+    async (turnId: string, message: string, attachmentIds: string[], keepReview?: boolean) => {
       if (!sessionId) return;
       const w = toWire(message);
       try {
@@ -592,6 +619,8 @@ export function useChat(
           message: w.text,
           attachmentIds,
           ...(w.mentions.length ? { mentions: w.mentions } : {}),
+          // `false` = the comments go back to the panel; omitted keeps them (the daemon default).
+          ...(keepReview === false ? { keepReview: false } : {}),
         });
       } finally {
         // Close the editor whether it succeeded or not — on failure the caller

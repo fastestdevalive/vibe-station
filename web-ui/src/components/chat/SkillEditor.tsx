@@ -17,6 +17,7 @@ import {
   $isRangeSelection,
   $isTextNode,
   $isLineBreakNode,
+  $isParagraphNode,
   COMMAND_PRIORITY_CRITICAL,
   COMMAND_PRIORITY_HIGH,
   COPY_COMMAND,
@@ -35,6 +36,7 @@ import {
   type LexicalEditor,
   type LexicalNode,
   type NodeKey,
+  type ParagraphNode,
   type RangeSelection,
   type TextNode,
 } from "lexical";
@@ -68,6 +70,7 @@ import { MentionChipKeysPlugin } from "@/lexical/MentionChipKeysPlugin";
 import { MentionPlugin } from "@/components/mentions/MentionPlugin";
 import type { MentionEditorConfig } from "@/components/mentions/types";
 import { SkillPopover } from "./SkillPopover";
+import { usePopoverRoom } from "./usePopoverRoom";
 import { useEventTargets } from "@/context/DemoEnv";
 
 /** Grow the editor up to this many lines of content, then scroll internally
@@ -96,6 +99,8 @@ export interface SkillEditorHandle {
   /** Reset to empty and refocus — called after a successful send. */
   clear: () => void;
   focus: () => void;
+  /** Append brace-token text at the end (on a new line when the editor is not empty) without remounting. */
+  appendText: (text: string) => void;
   getWire: () => { text: string; mentions: Mention[] };
 }
 
@@ -135,8 +140,13 @@ interface SkillEditorProps {
    *  steer. */
   onCtrlEnter?: () => void;
   /** Escape with no popover open — QueuedTurnEditor's discard; Composer
-   *  passes nothing. */
-  onEscape?: () => void;
+   *  passes nothing. Receives the native key event so a caller inside a
+   *  bubble-phase Esc listener (the comment box under the tools pane) can stop
+   *  it from also reaching that listener. */
+  onEscape?: (event?: KeyboardEvent) => void;
+  /** What a plain Enter does: `"submit"` (default, the composer) or `"newline"`
+   *  (the comment box: Enter inserts a line break, only Ctrl/Cmd+Enter submits). */
+  enterBehavior?: "submit" | "newline";
   /** Whether a chip's arg input currently has focus — swaps the hint line. */
   onArgFocusChange?: (focused: boolean) => void;
   /** A `"vibe-station"` entry was selected (or typed + Enter): open the pane
@@ -150,6 +160,25 @@ function onLexicalError(error: Error): void {
   console.error("[SkillEditor]", error);
 }
 
+/** Append the nodes of a brace-token string to `paragraph` (chips for tokens / mentions, line breaks for `\n`). */
+function appendDraftSegments(paragraph: ParagraphNode, text: string) {
+  for (const seg of parseDraftSegments(text)) {
+    if (seg.type === "token") {
+      paragraph.append($createSkillChipNode(seg.name, seg.args));
+      continue;
+    }
+    if (seg.type === "mention") {
+      paragraph.append($createMentionChipNode(seg.mention));
+      continue;
+    }
+    const lines = seg.text.split("\n");
+    lines.forEach((line, i) => {
+      if (i > 0) paragraph.append($createLineBreakNode());
+      if (line.length > 0) paragraph.append($createTextNode(line));
+    });
+  }
+}
+
 /** Build the initial single-paragraph node tree from a brace-token string. */
 function seedEditorState(initialText: string) {
   return (editor: LexicalEditor) => {
@@ -158,22 +187,7 @@ function seedEditorState(initialText: string) {
         const root = $getRoot();
         if (root.getChildrenSize() > 0) return;
         const paragraph = $createParagraphNode();
-        const segments = parseDraftSegments(initialText);
-        for (const seg of segments) {
-          if (seg.type === "token") {
-            paragraph.append($createSkillChipNode(seg.name, seg.args));
-            continue;
-          }
-          if (seg.type === "mention") {
-            paragraph.append($createMentionChipNode(seg.mention));
-            continue;
-          }
-          const lines = seg.text.split("\n");
-          lines.forEach((line, i) => {
-            if (i > 0) paragraph.append($createLineBreakNode());
-            if (line.length > 0) paragraph.append($createTextNode(line));
-          });
-        }
+        appendDraftSegments(paragraph, initialText);
         root.append(paragraph);
       },
       { tag: "skill-editor-seed" },
@@ -446,6 +460,7 @@ function SkillEditorPlugin({
   onSubmit,
   onCtrlEnter,
   onEscape,
+  enterBehavior,
   popoverStateRef,
   selectActivePopoverItem,
   closePopover,
@@ -458,7 +473,8 @@ function SkillEditorPlugin({
   inputRefs: Map<NodeKey, HTMLInputElement>;
   onSubmit: () => void;
   onCtrlEnter?: () => void;
-  onEscape?: () => void;
+  onEscape?: (event?: KeyboardEvent) => void;
+  enterBehavior?: "submit" | "newline";
   popoverStateRef: React.MutableRefObject<boolean>;
   selectActivePopoverItem: () => void;
   closePopover: () => void;
@@ -478,6 +494,8 @@ function SkillEditorPlugin({
   onCtrlEnterRef.current = onCtrlEnter ?? onSubmit;
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
+  const enterBehaviorRef = useRef(enterBehavior ?? "submit");
+  enterBehaviorRef.current = enterBehavior ?? "submit";
 
   useEffect(() => {
     function focusChipInput(nodeKey: NodeKey, atStart: boolean) {
@@ -560,7 +578,7 @@ function SkillEditorPlugin({
           }
           if (onEscapeRef.current) {
             event?.preventDefault();
-            onEscapeRef.current();
+            onEscapeRef.current(event ?? undefined);
             return true;
           }
           return false;
@@ -617,7 +635,7 @@ function SkillEditorPlugin({
           const isNewlineCombo = !!event && (event.shiftKey || event.altKey);
           // On a showing soft keyboard, plain Enter adds a newline (there's no
           // Shift+Enter combo on most touch keyboards); Ctrl/Cmd+Enter still sends.
-          if (isNewlineCombo || (softKeyboardRef.current && !isModifiedEnter)) {
+          if (isNewlineCombo || ((softKeyboardRef.current || enterBehaviorRef.current === "newline") && !isModifiedEnter)) {
             event?.preventDefault();
             editor.dispatchCommand(INSERT_LINE_BREAK_COMMAND, false);
             return true;
@@ -711,6 +729,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     onSubmit,
     onCtrlEnter,
     onEscape,
+    enterBehavior,
     onArgFocusChange,
     onVibeCommand,
   },
@@ -750,6 +769,13 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
 
   const popoverOpenRef = useRef(popoverOpen);
   popoverOpenRef.current = popoverOpen;
+  // The `/` and `@` popovers open upward: keep them inside the nearest clipping ancestor (see usePopoverRoom).
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  // Active while the editor has focus (not only while a popover is open): the cap must already exist when the popover
+  // mounts, because its option's scrollIntoView would otherwise scroll a clipping ancestor first and push the shell
+  // under a sticky bar.
+  const [editorFocused, setEditorFocused] = useState(false);
+  usePopoverRoom(shellRef, editorFocused || popoverOpen || mentionAria != null);
   // Stable-sort by group rank (vibe-station, skill, agent) so the keyboard
   // index (`activeIndex`) always matches the rendered/visual order.
   const popoverItems = commands
@@ -836,6 +862,19 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
         editor.focus();
       },
       focus: () => editorRef.current?.focus(),
+      appendText: (text) => {
+        const editor = editorRef.current;
+        if (!editor || text.length === 0) return;
+        editor.update(() => {
+          const root = $getRoot();
+          const last = root.getLastChild();
+          const paragraph = $isParagraphNode(last) ? last : $createParagraphNode();
+          if (paragraph !== last) root.append(paragraph);
+          if (paragraph.getChildrenSize() > 0) paragraph.append($createLineBreakNode());
+          appendDraftSegments(paragraph, text);
+          paragraph.selectEnd();
+        });
+      },
     }),
     [closePopover],
   );
@@ -873,14 +912,17 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
          *  popover INSIDE that box clipped it to the editor's own height
          *  (~1 line), so it was in the DOM, sized, and simply not painted. */}
         <div
+          ref={shellRef}
           className="chat-skill-editor-shell"
           style={{ position: "relative" }}
           onFocusCapture={(e) => {
+            setEditorFocused(true);
             if (e.target instanceof HTMLInputElement && e.target.closest(".chat-skill-chip")) {
               onArgFocusChange?.(true);
             }
           }}
           onBlurCapture={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setEditorFocused(false);
             if (e.target instanceof HTMLInputElement && e.target.closest(".chat-skill-chip")) {
               onArgFocusChange?.(false);
             }
@@ -988,6 +1030,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
               onSubmit={onSubmit}
               onCtrlEnter={onCtrlEnter}
               onEscape={onEscape}
+              enterBehavior={enterBehavior}
               popoverStateRef={popoverOpenRef}
               selectActivePopoverItem={selectActivePopoverItem}
               closePopover={closePopover}

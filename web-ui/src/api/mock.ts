@@ -15,6 +15,7 @@ import type {
   Mention,
   MobileQrResponse,
   NormalizedEvent,
+  ReviewRecord,
   NormalizedEventProvider,
   PrInfo,
   CreateDirectSessionBody,
@@ -71,8 +72,9 @@ import type {
   Worktree,
   WorktreeOrderResult,
 } from "./types";
-import { ApiError } from "./errors";
+import { ApiError, ReviewApiError } from "./errors";
 import { createMockArtifacts } from "./mockArtifacts";
+import { createMockComments } from "./mockComments";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
 import type { ConnectionState } from "./client";
 
@@ -558,10 +560,16 @@ export function createMockApi(seed: MockSeed = {}) {
   let mockTurnSeq = 0;
   let mockTaskRev = 0;
 
+  const mockComments = createMockComments(emit, (scopeId) => {
+    const wt = worktrees.find((w) => w.id === scopeId);
+    return wt?.branch ?? projects.find((p) => p.id === scopeId)?.name ?? scopeId;
+  });
+
   const api = {
     ...createMockArtifacts(emit, (scopeId) =>
       sessions.filter((x) => x.worktreeId === scopeId && x.type === "agent").map((x) => x.id),
     ),
+    ...mockComments,
 
     __test: {
       simulateExit,
@@ -1025,11 +1033,11 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async startDraft(
       id: string,
-      body: { draftPrompt: string; draftConfig: DraftConfig },
+      body: { draftPrompt: string; draftConfig: DraftConfig; reviewCommentIds?: string[] },
     ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("Session not found", 404);
-      if (!body.draftPrompt.trim()) throw new ApiError("Draft prompt is empty", 400);
+      if (!body.draftPrompt.trim() && !body.reviewCommentIds?.length) throw new ApiError("Draft prompt is empty", 400);
       if (s.lifecycleState !== "drafting") throw new ApiError("Session not in drafting state", 403);
       s.lifecycleState = "not_started";
       s.state = "not_started";
@@ -1689,6 +1697,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "",
           supportsJson: true,
           supportsTerminalDelivery: true,
+          supportsTerminalComments: true,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: true,
@@ -1702,6 +1711,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "auto",
           supportsJson: true,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: false,
           detected: true,
@@ -1715,6 +1725,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "opencode/big-pickle",
           supportsJson: true,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1737,6 +1748,7 @@ export function createMockApi(seed: MockSeed = {}) {
           // ACP agent); agy still defaults to Terminal.
           supportsJson: true,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1750,6 +1762,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "",
           supportsJson: true,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1770,6 +1783,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "",
           supportsJson: false,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: false,
           detected: false,
@@ -1790,6 +1804,7 @@ export function createMockApi(seed: MockSeed = {}) {
           defaultModel: "",
           supportsJson: true,
           supportsTerminalDelivery: false,
+          supportsTerminalComments: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -2255,8 +2270,15 @@ export function createMockApi(seed: MockSeed = {}) {
       attachmentIds?: string[],
       _queue?: boolean,
       mentions?: Mention[],
+      reviewCommentIds?: string[],
     ): Promise<SendChatResponse> {
       const turnId = `turn-${++mockTurnSeq}`;
+      let review: ReviewRecord | undefined;
+      if (reviewCommentIds?.length) {
+        const scopeId = mockComments.__comments.scopeOfComment(reviewCommentIds[0]!);
+        if (!scopeId) throw new ReviewApiError("Some comments changed", 409, "comments_changed", { remaining: 0 });
+        review = mockComments.__comments.takeForTurn(scopeId, reviewCommentIds, sessionId, turnId);
+      }
       const userEvent: NormalizedEvent = {
         id: `evt-${Date.now()}-${mockTurnSeq}`,
         sessionId,
@@ -2270,6 +2292,7 @@ export function createMockApi(seed: MockSeed = {}) {
           ? { attachments: attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
           : {}),
         ...(mentions?.length ? { mentions } : {}),
+        ...(review ? { review } : {}),
       };
       api.__test.pushChatEvent(sessionId, userEvent);
       emit({ type: "session:message", sessionId, event: userEvent });
@@ -2308,7 +2331,7 @@ export function createMockApi(seed: MockSeed = {}) {
     async resubmitQueuedTurn(
       sessionId: string,
       turnId: string,
-      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[] },
+      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[]; keepReview?: boolean },
     ): Promise<{ ok: true; turnId: string }> {
       if (body.edited) {
         const userEvent: NormalizedEvent = {
@@ -2534,6 +2557,7 @@ export function createMockApi(seed: MockSeed = {}) {
       message: string,
       fireAt: string,
       _attachmentIds?: string[],
+      reviewCommentIds?: string[],
     ): Promise<{ id: string; fireAt: string }> {
       const session = sessions.find((x) => x.id === sessionId);
       const channel = scheduleChannelOf(sessionId);
@@ -2559,13 +2583,32 @@ export function createMockApi(seed: MockSeed = {}) {
         throw mockScheduleError("Pick a time in the future.", 400, "BAD_REQUEST");
       }
       const id = `sched-${Date.now()}-${scheduleOf(sessionId).scheduledSends.length}`;
-      scheduleOf(sessionId).scheduledSends.push({ id, message, fireAt, channel, phase: "scheduled", origin: "schedule" });
+      let commentCount: number | undefined;
+      if (reviewCommentIds?.length) {
+        const scopeId = mockComments.__comments.scopeOfComment(reviewCommentIds[0]!);
+        if (!scopeId) throw new ReviewApiError("Some comments changed", 409, "comments_changed", { remaining: 0 });
+        mockComments.__comments.takeForTurn(scopeId, reviewCommentIds, sessionId, id, "scheduled");
+        commentCount = reviewCommentIds.length;
+      }
+      scheduleOf(sessionId).scheduledSends.push({
+        id,
+        message,
+        fireAt,
+        channel,
+        phase: "scheduled",
+        origin: "schedule",
+        ...(commentCount ? { commentCount } : {}),
+      });
       pushSchedule(sessionId);
       return { id, fireAt };
     },
 
     async cancelScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
       const snap = scheduleOf(sessionId);
+      if (snap.scheduledSends.some((r) => r.id === scheduleId && r.commentCount)) {
+        // Cancelling a schedule that carried comments puts them back in the panel (R72/R124).
+        mockComments.__comments.restoreSent(sessionId, scheduleId, "schedule_cancelled");
+      }
       snap.scheduledSends = snap.scheduledSends.filter((r) => r.id !== scheduleId);
       pushSchedule(sessionId);
       return { ok: true };

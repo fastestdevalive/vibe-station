@@ -2,15 +2,22 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
 import { ImageZoomOverlay } from "./ImageZoomOverlay";
 import { resolveImagePath } from "@/lib/imageFile";
 import type { ApiInstance } from "@/api";
-import type { FileScope } from "@/api/types";
+import type { ArtifactRow, FileScope } from "@/api/types";
 import { useMarkdownStyle } from "@/hooks/useMarkdownStyle";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import "@/components/artifacts/artifacts.css";
+import { useCommentSurface } from "@/components/comments/CommentSurfaceContext";
+import { rehypeCommentMarks, type MarkComment } from "@/components/comments/rehypeCommentMarks";
+import { PinGutter } from "@/components/comments/CommentPins";
+import type { PinTarget } from "@/components/comments/pinMeasurer";
+import { usePinHost } from "@/components/comments/usePinHost";
+import { asRehypePlugin, rehypeSourceLines } from "@/components/comments/rehypeSourceLines";
 
 interface MarkdownImageProps {
   src?: string;
@@ -43,17 +50,40 @@ interface ExternalLinkProps {
   children?: ReactNode;
   worktreeId: string | null;
   fileDir: string | null;
+  /** One path -> row lookup per artifacts-store change (shared by every link). */
+  rowsByPath: ReadonlyMap<string, ArtifactRow>;
+}
+
+/** `normalizeUri` percent-encodes spaces / non-ASCII in link targets; compare the decoded segments. */
+function decodeSegments(path: string): string {
+  return path
+    .split("/")
+    .map((seg) => {
+      try {
+        return decodeURIComponent(seg);
+      } catch {
+        return seg;
+      }
+    })
+    .join("/");
+}
+
+const NO_ROW_MAP: ReadonlyMap<string, ArtifactRow> = new Map();
+
+/** The scope's artifact rows keyed by canonical path, rebuilt only when the rows change. */
+function useRowsByPath(worktreeId: string | null, enabled: boolean): ReadonlyMap<string, ArtifactRow> {
+  const rows = useArtifactsStore((s) => (enabled && worktreeId ? s.byScope[worktreeId]?.rows : undefined));
+  return useMemo(() => (rows ? new Map(rows.map((r) => [r.path, r])) : NO_ROW_MAP), [rows]);
 }
 
 /**
  * Link inside an outside-repo markdown file (R98, R111): http(s)/mailto behave as usual; a local path is inert
  * unless its resolved absolute path is an artifact row of this scope, in which case it opens that row's tab.
  */
-function ExternalLink({ href, children, worktreeId, fileDir }: ExternalLinkProps) {
-  const target = href && !REMOTE_HREF.test(href) && !href.startsWith("#") ? joinPath(fileDir, href.split(/[?#]/)[0] ?? "") : null;
-  const row = useArtifactsStore((s) =>
-    target && worktreeId ? s.byScope[worktreeId]?.rows.find((r) => r.path === target) : undefined,
-  );
+function ExternalLink({ href, children, worktreeId, fileDir, rowsByPath }: ExternalLinkProps) {
+  const target =
+    href && !REMOTE_HREF.test(href) && !href.startsWith("#") ? joinPath(fileDir, decodeSegments(href.split(/[?#]/)[0] ?? "")) : null;
+  const row = target ? rowsByPath.get(target) : undefined;
   const open = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -141,9 +171,47 @@ interface MarkdownViewProps {
   filePath?: string | null;
   /** The file lives outside the repo (an artifact): relative images show "blocked", local links are inert unless they name an artifact. */
   external?: boolean;
+  /**
+   * Opt-in review-comment support (default OFF: chat bubbles share this component and stay clean): block
+   * elements get `data-sl` / `data-el` source lines, and the surrounding comment surface's comments are
+   * highlighted with pins. `startLine` is the 1-based line of the ORIGINAL file this `source` starts on
+   * (`segmentMarkdownWithLines`), since react-markdown positions are relative to the segment it renders.
+   */
+  commentSource?: { startLine: number };
 }
 
-export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null, external = false }: MarkdownViewProps) {
+export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null, external = false, commentSource }: MarkdownViewProps) {
+  const cs = useCommentSurface();
+  const startLine = commentSource?.startLine;
+  const commentsOn = startLine != null && !!cs && cs.enabled && (filePath === cs.path || filePath?.endsWith(`/${cs.path}`) === true);
+  const markList = commentsOn ? cs.forSurface("markdown").list : null;
+  const pinLabel = cs?.pinLabel;
+  const draft = commentsOn && cs.draft?.surface === "markdown" ? cs.draft : null;
+  const activeId = commentsOn ? cs.activeId : null;
+  const rehypePlugins = useMemo(() => {
+    if (startLine == null) return [rehypeHighlight];
+    const marks: MarkComment[] = [...(markList ?? []), ...(draft ? [draft] : [])].map((comment) => ({ comment }));
+    return [
+      rehypeHighlight,
+      asRehypePlugin(rehypeSourceLines({ startLine })),
+      ...(marks.length ? [asRehypePlugin(rehypeCommentMarks({ comments: marks, startLine }))] : []),
+    ];
+  }, [startLine, markList, draft]);
+  // Pins live OUTSIDE the rendered hast, in a right gutter of the container, lined up with each comment's last mark.
+  const hostRef = useRef<HTMLDivElement>(null);
+  const targets = useMemo<PinTarget[]>(() => {
+    if (!commentsOn) return [];
+    const out: PinTarget[] = (markList ?? []).map((c) => ({
+      id: c.id,
+      pin: c.pin,
+      outdated: c.anchor === "outdated",
+      active: c.id === activeId,
+      label: pinLabel ? pinLabel(c) : `Comment ${c.pin}`,
+    }));
+    if (draft) out.push({ id: draft.id, pin: 0, draft: true });
+    return out;
+  }, [commentsOn, markList, draft, activeId, pinLabel]);
+  const placements = usePinHost(commentsOn ? cs.pinMeasurer : null, hostRef, null, targets, rehypePlugins);
   const fileDir = filePath ? filePath.split("/").slice(0, -1).join("/") || null : null;
 
   // `MarkdownView` is the single real rendering path shared by chat bubbles
@@ -155,6 +223,8 @@ export function MarkdownView({ source, api = null, worktreeId = null, scope = "w
   // so overrides only ever applied while the Settings → Markdown page itself
   // was open — every other Markdown surface silently rendered theme defaults.
   useMarkdownStyle();
+
+  const rowsByPath = useRowsByPath(worktreeId, external);
 
   const markdownComponents = useMemo(() => ({
     pre({ children }: { children?: ReactNode }) {
@@ -170,24 +240,25 @@ export function MarkdownView({ source, api = null, worktreeId = null, scope = "w
       ? {
           a({ href, children }: ComponentPropsWithoutRef<"a">) {
             return (
-              <ExternalLink href={href} worktreeId={worktreeId} fileDir={fileDir}>
+              <ExternalLink href={href} worktreeId={worktreeId} fileDir={fileDir} rowsByPath={rowsByPath}>
                 {children}
               </ExternalLink>
             );
           },
         }
       : {}),
-  }), [api, worktreeId, scope, fileDir, external]);
+  }), [api, worktreeId, scope, fileDir, external, rowsByPath]);
 
   return (
-    <div className="workspace-markdown-preview">
+    <div className="workspace-markdown-preview" ref={hostRef}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={rehypePlugins}
         components={markdownComponents}
       >
         {source}
       </ReactMarkdown>
+      <PinGutter placements={placements} targets={targets} />
     </div>
   );
 }

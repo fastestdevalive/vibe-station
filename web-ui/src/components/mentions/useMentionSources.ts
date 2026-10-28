@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { kindAllowed } from "./kinds";
 import type { MentionItem, SourceResult } from "./mentionRows";
 import type { ParsedMentionQuery } from "./mentionQuery";
 import type { MentionEditorConfig } from "./types";
@@ -228,10 +229,12 @@ export function useMentionSources(
   parsed: ParsedMentionQuery,
   open: boolean,
 ): Record<MentionKind, SourceResult> {
-  const file = useFileMentions(cfg, parsed, open);
-  const agent = useAgentMentions(cfg, parsed, open);
-  const worktree = useWorktreeMentions(cfg, parsed, open);
-  const project = useProjectMentions(cfg, open);
+  // A kind outside `cfg.kinds` is never searched or listed (hooks stay unconditional; `open` gates the work).
+  const allowed = (k: MentionKind): boolean => kindAllowed(cfg.kinds, k);
+  const file = useFileMentions(cfg, parsed, open && allowed("file"));
+  const agent = useAgentMentions(cfg, parsed, open && allowed("agent"));
+  const worktree = useWorktreeMentions(cfg, parsed, open && allowed("worktree"));
+  const project = useProjectMentions(cfg, open && allowed("project"));
 
   return {
     file,

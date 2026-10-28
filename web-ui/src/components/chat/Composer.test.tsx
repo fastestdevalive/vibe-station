@@ -4,6 +4,7 @@ import { createRef } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
+import { appendComposerDraft } from "@/hooks/useComposerDraft";
 import { Composer } from "./Composer";
 import type { SkillEditorHandle } from "./SkillEditor";
 
@@ -64,6 +65,44 @@ describe("Composer attachments + send", () => {
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     const [, ids] = onSend.mock.calls[0]!;
     expect(ids).toHaveLength(0);
+  });
+});
+
+describe("Composer picker Attach append (review 9)", () => {
+  it("appends into the live editor: keeps staged files and the newest text, no remount, no stale storage overwrite", async () => {
+    const api = createMockApi();
+    // Stored draft LAGS the editor (debounced save): the editor holds "newest keystrokes".
+    localStorage.setItem("vst-chat-draft-s1", "stale");
+    render(<Composer api={api} sessionId="s1" onSend={vi.fn()} initialText="newest keystrokes" />);
+    const editor = screen.getByLabelText("Message");
+    fireEvent.drop(document.querySelector(".chat-composer")!, { dataTransfer: { files: [new File(["x"], "log.txt")] } });
+    expect(await screen.findByText("log.txt")).toBeTruthy();
+
+    act(() => appendComposerDraft("s1", "picker message"));
+
+    expect(screen.getByLabelText("Message")).toBe(editor); // same DOM node: not remounted
+    await waitFor(() => expect(editor.textContent).toContain("picker message"));
+    expect(editor.textContent).toContain("newest keystrokes");
+    expect(screen.getByText("log.txt")).toBeTruthy(); // the staged file survives
+    expect(localStorage.getItem("vst-chat-draft-s1")).toBe("stale"); // storage untouched: the live editor owns it
+  });
+
+  it("two composers for one session: only the first takes the appended text", async () => {
+    const api = createMockApi();
+    render(
+      <>
+        <Composer api={api} sessionId="s1" onSend={vi.fn()} initialText="" />
+        <Composer api={api} sessionId="s1" onSend={vi.fn()} initialText="" />
+      </>,
+    );
+    act(() => appendComposerDraft("s1", "once"));
+    await waitFor(() => expect(screen.getAllByLabelText("Message").filter((e) => e.textContent?.includes("once"))).toHaveLength(1));
+  });
+
+  it("with no composer mounted the text lands in the stored draft", () => {
+    localStorage.setItem("vst-chat-draft-s9", "keep");
+    appendComposerDraft("s9", "more");
+    expect(localStorage.getItem("vst-chat-draft-s9")).toBe("keep\nmore");
   });
 });
 

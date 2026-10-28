@@ -71,6 +71,7 @@ import type {
 } from "./types";
 import { ApiError } from "./errors";
 import { createArtifactsClient } from "./artifactsClient";
+import { createCommentsClient, parseReviewJson } from "./commentsClient";
 
 function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
@@ -549,6 +550,7 @@ export function createClientApi() {
 
   const api = {
     ...createArtifactsClient({ baseUrl, apiFetch }),
+    ...createCommentsClient({ baseUrl, apiFetch }),
 
     async health(): Promise<HealthResponse> {
       const root = baseUrl();
@@ -880,7 +882,7 @@ export function createClientApi() {
     /** Promote a draft to a live session (`POST /sessions/:id/start`). */
     async startDraft(
       id: string,
-      body: { draftPrompt: string; draftConfig: DraftConfig; skipAutoTurn?: boolean },
+      body: { draftPrompt: string; draftConfig: DraftConfig; skipAutoTurn?: boolean; reviewCommentIds?: string[] },
     ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/start`, {
@@ -888,7 +890,8 @@ export function createClientApi() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return parseJson<{ ok: true; worktreeId?: string; worktree?: Worktree }>(res);
+      // A comments hold can refuse the start (`comments_changed`...): every review-capable route parses failures as ReviewApiError.
+      return parseReviewJson<{ ok: true; worktreeId?: string; worktree?: Worktree }>(res);
     },
 
     /** Default name the next terminal in this worktree would get ("Terminal N"). */
@@ -1553,6 +1556,9 @@ export function createClientApi() {
       attachmentIds?: string[],
       queue?: boolean,
       mentions?: Mention[],
+      /** Review comments to send with this turn (forces the queue; `message` may be empty). A failure is a
+       *  `ReviewApiError` (`comments_changed {remaining}`, `review_too_large {limit}`, `not_attached`). */
+      reviewCommentIds?: string[],
     ): Promise<SendChatResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat`, {
@@ -1563,9 +1569,10 @@ export function createClientApi() {
           ...(attachmentIds?.length ? { attachmentIds } : {}),
           ...(queue ? { queue: true } : {}),
           ...(mentions?.length ? { mentions } : {}),
+          ...(reviewCommentIds?.length ? { reviewCommentIds } : {}),
         }),
       });
-      return parseJson<SendChatResponse>(res);
+      return parseReviewJson<SendChatResponse>(res);
     },
 
     /** Abort the active turn (keeps queued turns). */
@@ -1620,7 +1627,7 @@ export function createClientApi() {
     async resubmitQueuedTurn(
       sessionId: string,
       turnId: string,
-      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[] },
+      body: { edited: boolean; message?: string; attachmentIds?: string[]; mentions?: Mention[]; keepReview?: boolean },
     ): Promise<{ ok: true; turnId: string }> {
       const root = baseUrl();
       const res = await apiFetch(
@@ -1772,14 +1779,21 @@ export function createClientApi() {
       message: string,
       fireAt: string,
       attachmentIds?: string[],
+      /** Review comments to schedule with the message (snapshot taken at schedule time; message may be empty). */
+      reviewCommentIds?: string[],
     ): Promise<{ id: string; fireAt: string }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, fireAt, ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+        body: JSON.stringify({
+          message,
+          fireAt,
+          ...(attachmentIds?.length ? { attachmentIds } : {}),
+          ...(reviewCommentIds?.length ? { reviewCommentIds } : {}),
+        }),
       });
-      return parseJson<{ id: string; fireAt: string }>(res);
+      return parseReviewJson<{ id: string; fireAt: string }>(res);
     },
 
     /** Cancel a scheduled message. */

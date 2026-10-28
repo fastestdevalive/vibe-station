@@ -82,6 +82,8 @@ describe("BottomSheet", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("BottomSheet focus and keyboard (7.1)", () => {
   it("keeps focus in an input across a new onClose identity; Esc calls the latest onClose", async () => {
     const a = vi.fn();
     const b = vi.fn();
@@ -103,3 +105,47 @@ describe("BottomSheet", () => {
     expect(a).not.toHaveBeenCalled();
   });
 
+  it("keeps Tab inside the sheet while it is open", async () => {
+    render(
+      <BottomSheet open onClose={() => {}} label="Actions">
+        <button>First</button>
+        <button>Last</button>
+      </BottomSheet>,
+    );
+    const last = screen.getByRole("button", { name: "Last" });
+    last.focus();
+    const user = userEvent.setup();
+    await user.tab();
+    expect(screen.getByRole("dialog", { name: "Actions" }).contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "First" }));
+  });
+
+  it("sits above the on-screen keyboard (visualViewport inset) and drops back when it closes", () => {
+    const listeners: Record<string, () => void> = {};
+    const vv = {
+      height: 500,
+      offsetTop: 0,
+      addEventListener: (t: string, cb: () => void) => (listeners[t] = cb),
+      removeEventListener: () => {},
+    };
+    const prev = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    try {
+      render(
+        <BottomSheet open onClose={() => {}} label="Actions">
+          <button>x</button>
+        </BottomSheet>,
+      );
+      expect(screen.getByRole("dialog").style.bottom).toBe("300px");
+      act(() => {
+        vv.height = 800;
+        listeners.resize?.();
+      });
+      expect(screen.getByRole("dialog").style.bottom).toBe("");
+    } finally {
+      if (prev) Object.defineProperty(window, "visualViewport", prev);
+      else delete (window as unknown as Record<string, unknown>).visualViewport;
+    }
+  });
+});

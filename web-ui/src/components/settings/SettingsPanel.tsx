@@ -2,7 +2,7 @@ import { useId } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import type { ApiInstance } from "@/api";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { MarkdownStyleSetting } from "./MarkdownStyleSetting";
@@ -27,7 +27,7 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ api }: SettingsPanelProps) {
-  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isMobile = useIsMobile();
   const navigate = useNavigate();
   const { sectionId } = useParams<{ sectionId?: string }>();
   const tabLayoutId = useId();

@@ -1,5 +1,5 @@
 import type { MentionKind, SessionState } from "@/api/types";
-import { MENTION_KINDS, mentionKindDef } from "./kinds";
+import { kindAllowed, MENTION_KINDS, mentionKindDef } from "./kinds";
 import { rankItems } from "./mentionFilter";
 import { MAX_MENTION_QUERY_LENGTH } from "./mentionOps";
 import { CROSS_PROJECT_KINDS, type ParsedMentionQuery } from "./mentionQuery";
@@ -54,6 +54,8 @@ export interface BuildMentionRowsOptions {
   /** The composer's own project; excluded from the worktree project picker
    *  (its worktrees are already listed first). */
   currentProjectId?: string | null;
+  /** Only these kinds are offered (`MentionEditorConfig.kinds`); omitted = all. */
+  kinds?: readonly MentionKind[];
 }
 
 /** Max project-picker rows under `@worktrees:`. */
@@ -141,9 +143,13 @@ export function buildMentionRows(
     return [{ type: "status", text: "Mention limit (50) reached" }];
   }
 
+  const allowed = (k: MentionKind): boolean => kindAllowed(opts.kinds, k);
+  const kindDefs = MENTION_KINDS.filter((d) => allowed(d.kind));
+
   // Scoped query: @files:foo, @agents:bar, etc.
   if (parsed.scope !== null) {
     const kind = parsed.scope;
+    if (!allowed(kind)) return [{ type: "status", text: "No matches" }];
     const def = mentionKindDef(kind);
     const source = sources[kind] ?? { items: [] };
 
@@ -176,7 +182,7 @@ export function buildMentionRows(
   // Unscoped query: empty raw (@)
   if (parsed.raw === "") {
     const rows: MentionRow[] = [];
-    for (const def of MENTION_KINDS) {
+    for (const def of kindDefs) {
       const source = sources[def.kind] ?? { items: [] };
       const items = source.items.slice(0, 3);
       if (items.length > 0) {
@@ -190,18 +196,22 @@ export function buildMentionRows(
       }
     }
 
-    rows.push({ type: "header", title: "Narrow to" });
-    for (const def of MENTION_KINDS) {
-      rows.push({ type: "scope", kind: def.kind, label: `@${def.section}:` });
+    // A single allowed kind has nothing to narrow to.
+    if (kindDefs.length > 1) {
+      rows.push({ type: "header", title: "Narrow to" });
+      for (const def of kindDefs) {
+        rows.push({ type: "scope", kind: def.kind, label: `@${def.section}:` });
+      }
     }
     return rows;
   }
 
   // Unscoped query with non-empty raw (e.g. @ag, @foo)
   const rows: MentionRow[] = [];
-  if (parsed.scopeKinds.length > 0) {
+  const scopeKinds = parsed.scopeKinds.filter(allowed);
+  if (scopeKinds.length > 0 && kindDefs.length > 1) {
     rows.push({ type: "header", title: "SCOPE", caption: "Enter to search only here" });
-    for (const k of parsed.scopeKinds) {
+    for (const k of scopeKinds) {
       const def = mentionKindDef(k);
       rows.push({ type: "scope", kind: k, label: `@${def.section}:` });
     }
@@ -209,10 +219,10 @@ export function buildMentionRows(
 
   // Group order: scope-matching kind first, then remaining kinds
   const orderedKinds: MentionKind[] = [];
-  for (const k of parsed.scopeKinds) {
+  for (const k of scopeKinds) {
     if (!orderedKinds.includes(k)) orderedKinds.push(k);
   }
-  for (const def of MENTION_KINDS) {
+  for (const def of kindDefs) {
     if (!orderedKinds.includes(def.kind)) orderedKinds.push(def.kind);
   }
 
@@ -241,7 +251,7 @@ export function buildMentionRows(
     }
   }
 
-  if (totalItems === 0 && !sawIndexing && parsed.scopeKinds.length === 0) {
+  if (totalItems === 0 && !sawIndexing && scopeKinds.length === 0) {
     return [{ type: "status", text: "No matches" }];
   }
 

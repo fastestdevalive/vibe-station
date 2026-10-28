@@ -18,6 +18,16 @@ function userEvent(turnId: string, text: string, edited = false): NormalizedEven
   };
 }
 
+describe("groupEvents imported review blocks (L6-13)", () => {
+  it("an unchanged user event yields the same review object across calls", () => {
+    const ev = userEvent("t9", 'hi\n\nReview comments (1) · main\n\n1) File: a.rs\n   Quote: "x"\n   Comment: y');
+    const a = groupEvents([ev]).find((i) => i.type === "user") as { review?: unknown };
+    const b = groupEvents([ev]).find((i) => i.type === "user") as { review?: unknown };
+    expect(a.review).toBeDefined();
+    expect(b.review).toBe(a.review);
+  });
+});
+
 describe("groupEvents dedupe (2.T1 / A7)", () => {
   it("keeps ONE bubble per turnId at the first position with the latest text", () => {
     const items = groupEvents([

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useEventTargets } from "@/context/DemoEnv";
 import type { LimitSlotRef } from "@/api/types";
 import { useLimits } from "@/hooks/useLimits";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { LimitChip } from "./LimitChip";
 import { LimitsPopup } from "./LimitsPopup";
 import type { SlotIndex } from "./limitsModel";
@@ -14,7 +14,7 @@ const COOLDOWN_TICK_MS = 1_000;
 export function LimitsBar() {
   const { snapshot, error, refreshing, cooldownUntil, slots, windowFor, refresh, assignSlot } =
     useLimits();
-  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isMobile = useIsMobile();
   const { doc } = useEventTargets();
 
   const [openSlot, setOpenSlot] = useState<SlotIndex | null>(null);

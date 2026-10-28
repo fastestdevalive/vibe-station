@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer, defaultRangeExtractor, type Virtualizer } from "@tanstack/react-virtual";
 import type { ApiInstance } from "@/api";
-import type { Attachment, CarryOver, Command, FileScope, NormalizedEvent } from "@/api/types";
+import type { Attachment, CarryOver, Command, FileScope, NormalizedEvent, ReviewRecord } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
@@ -13,9 +13,38 @@ import { RowUiStateProvider } from "./rowUiState";
 import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
 import { SessionBreakCard } from "./SessionBreakCard";
 import { fromWire } from "@/lib/mentions";
+import { looksLikeReviewText, parseReviewText } from "@/components/comments/parseReviewText";
+
+/** A user row's text and review: the stored snapshot, else the Appendix A block parsed out of imported history. */
+type UserReview = { text: string; review?: ReviewRecord; reviewParsed?: boolean };
+/** Parsed imported blocks per event object, so a streaming delta re-uses the same `review` (keeps `memo` rows still). */
+const parsedReviews = new WeakMap<object, { text: string; result: UserReview }>();
+
+function userReview(ev: Pick<NormalizedEvent, "review" | "cancelled">, text: string): UserReview {
+  if (ev.cancelled) return { text };
+  if (ev.review) return { text, review: ev.review };
+  if (!looksLikeReviewText(text)) return { text };
+  const hit = parsedReviews.get(ev);
+  if (hit && hit.text === text) return hit.result;
+  const parsed = parseReviewText(text);
+  const result: UserReview = parsed ? { text: parsed.message, review: parsed.record, reviewParsed: true } : { text };
+  parsedReviews.set(ev, { text, result });
+  return result;
+}
 
 type RenderItem =
-  | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean; ts?: string }
+  | {
+      type: "user";
+      id: string;
+      text: string;
+      attachments?: Attachment[];
+      turnId?: string;
+      cancelled?: boolean;
+      ts?: string;
+      /** The turn's review comments (stored snapshot, or parsed from imported history). Never on cancelled rows. */
+      review?: ReviewRecord;
+      reviewParsed?: boolean;
+    }
   | { type: "assistant"; id: string; text: string; turnId?: string; ts?: string }
   | {
       type: "thinking";
@@ -193,7 +222,10 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           if (existingIdx != null) {
             const existing = items[existingIdx];
             if (existing && existing.type === "user") {
-              existing.text = fromWire(ev.text ?? "", ev.mentions);
+              const u = userReview(ev, fromWire(ev.text ?? "", ev.mentions));
+              existing.text = u.text;
+              existing.review = u.review;
+              existing.reviewParsed = u.reviewParsed;
               existing.attachments = ev.attachments;
               existing.id = ev.id;
               existing.cancelled = ev.cancelled;
@@ -202,10 +234,13 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
             break;
           }
         }
+        const u = userReview(ev, fromWire(ev.text ?? "", ev.mentions));
         items.push({
           type: "user",
           id: ev.id,
-          text: fromWire(ev.text ?? "", ev.mentions),
+          text: u.text,
+          ...(u.review ? { review: u.review } : {}),
+          ...(u.reviewParsed ? { reviewParsed: true } : {}),
           attachments: ev.attachments,
           ts: ev.ts,
           ...(ev.turnId ? { turnId: ev.turnId } : {}),
@@ -1054,6 +1089,15 @@ export function MessageList({
   // (not the virtual index) — that is what the `live` flag and the fork/focus
   // range pins are computed against. The wrapper `.chat-vrow` (added by the
   // caller) carries the row's key, so `renderItem` returns keyless nodes.
+  const reviewProps = (item: Extract<RenderItem, { type: "user" }>) =>
+    item.review
+      ? {
+          review: item.review,
+          ...(item.reviewParsed ? { reviewParsed: true } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          ...(item.turnId ? { turnId: item.turnId } : {}),
+        }
+      : {};
   const renderItem = (item: RenderItem, i: number): React.ReactNode => {
     switch (item.type) {
       case "user": {
@@ -1092,7 +1136,7 @@ export function MessageList({
         } else if (forkable) {
           return (
             <div className="chat-user-turn">
-              <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />
+              <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} {...reviewProps(item)} />
               <button
                 type="button"
                 className="chat-user-turn__edit"
@@ -1105,7 +1149,7 @@ export function MessageList({
             </div>
           );
         }
-        return <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} />;
+        return <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} {...reviewProps(item)} />;
       }
       case "assistant":
         return <TextMessage role="assistant" text={item.text} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} />;

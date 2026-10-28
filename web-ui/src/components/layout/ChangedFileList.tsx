@@ -1,8 +1,10 @@
-import { File, FileText } from "lucide-react";
+import { File, FileText, MessageSquare } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { ChangedPathEntry, GitStatusChar } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useRovingListNav } from "@/hooks/useRovingListNav";
+import { countsByPath } from "@/components/comments/commentSelectors";
+import { useCommentStore } from "@/components/comments/useCommentStore";
 
 interface FlatFile {
   path: string;
@@ -73,6 +75,8 @@ export interface ChangedFileListControlled {
 }
 
 interface ChangedFileListProps {
+  /** The comment scope (worktree or project id) this list shows counts for: the panel's own context, not the global active worktree. */
+  scopeId?: string | null;
   entries: ChangedPathEntry[];
   loading?: boolean;
   error?: string | null;
@@ -81,11 +85,14 @@ interface ChangedFileListProps {
   controlled?: ChangedFileListControlled;
 }
 
-export function ChangedFileList({ entries, loading, error, controlled }: ChangedFileListProps) {
+export function ChangedFileList({ scopeId, entries, loading, error, controlled }: ChangedFileListProps) {
   const activePathFromStore = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const activePath = controlled ? controlled.activePath : activePathFromStore;
+  // Comment count per file (review comments of this list's own scope); the commit view has none.
+  const scopeComments = useCommentStore((s) => (!controlled && scopeId ? s.byScope[scopeId]?.comments : undefined));
+  const commentCounts = useMemo(() => countsByPath(scopeComments ?? []), [scopeComments]);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
   const flatFiles = useMemo(() => flattenChanged(entries), [entries]);
@@ -163,6 +170,7 @@ export function ChangedFileList({ entries, loading, error, controlled }: Changed
                 {group.files.map((file) => {
                   const isSelected = activePath === file.path;
                   const isCursor = file.path === cursorPath;
+                  const commentCount = commentCounts.get(file.path);
                   return (
                     <div
                       key={file.path}
@@ -183,6 +191,17 @@ export function ChangedFileList({ entries, loading, error, controlled }: Changed
                         )}
                       </span>
                       <span className="changed-file-list-file-name">{file.name}</span>
+                      {commentCount ? (
+                        <span
+                          className="comment-count-chip"
+                          data-count={commentCount}
+                          role="img"
+                          aria-label={`${commentCount} ${commentCount === 1 ? "comment" : "comments"}`}
+                        >
+                          <MessageSquare aria-hidden strokeWidth={2} />
+                          {commentCount}
+                        </span>
+                      ) : null}
                       {file.insertions !== undefined || file.deletions !== undefined ? (
                         <span className="changed-file-list-file__loc" aria-hidden>
                           {file.insertions ? <span className="vcs-graph__add">+{file.insertions}</span> : null}

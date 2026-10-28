@@ -71,18 +71,43 @@ describe("ScheduleStrip rows", () => {
     expect(labels[4]).toContain("Sent one");
   });
 
-  it("renders nothing for zero rows or only immediate rows", () => {
+  it("renders nothing for zero rows", () => {
     const { container } = renderStrip([]);
     expect(container.firstChild).toBeNull();
-    const again = renderStrip([pending({ origin: "immediate" })]);
-    expect(again.container.firstChild).toBeNull();
   });
 
-  it("is a labelled polite live list with the variant class", () => {
+  it("is a labelled list with the variant class, and the list itself is not a live region (L4-03)", () => {
     renderStrip([pending()], { variant: "overlay" });
     const list = screen.getByRole("list", { name: "Scheduled messages" });
-    expect(list.getAttribute("aria-live")).toBe("polite");
+    expect(list.hasAttribute("aria-live")).toBe(false);
     expect(list.className).toContain("sched-strip--overlay");
+  });
+
+  it("the countdown never sits in a live region; the status node only changes text on a phase change (L4-03)", () => {
+    vi.useFakeTimers();
+    const fireAt = new Date(Date.now() + 90_000).toISOString();
+    const t = renderStrip([pending({ fireAt })]);
+    const live = () => [...t.container.querySelectorAll('[aria-live], [role="status"]')];
+    const before = live().map((e) => e.textContent);
+    expect(live().some((e) => e.contains(screen.getByText(/^in 1m/)))).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(live().map((e) => e.textContent)).toEqual(before);
+    // A pending row failing is announced.
+    t.rerender(
+      <ScheduleStrip
+        rows={[{ kind: "failed", id: "p1", message: "x", fireAt, failureReason: "boom", failureKind: "error" }]}
+        api={t.asApi}
+        sessionId="s1"
+        sessionLive
+        variant="chat"
+        onEdit={t.onEdit}
+        onHideSent={t.onHideSent}
+        onError={t.onError}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("A scheduled message failed");
   });
 
   it("renders a pending row with time copy, pending suffix and its three actions", () => {
@@ -148,6 +173,41 @@ describe("ScheduleStrip rows", () => {
     expect(screen.getByText("3 comments").className).toContain("chip--sm");
     expect(screen.getByText("1 comment")).toBeTruthy();
     expect(screen.getAllByText(/comments?$/)).toHaveLength(2);
+  });
+
+  it("a comments-only pending row shows the chip, not (attachments only) (R1F-07)", () => {
+    renderStrip([pending({ message: "", commentCount: 3 })]);
+    expect(screen.queryByText("(attachments only)")).toBeNull();
+    expect(screen.getByText("3 comments")).toBeTruthy();
+    expect(screen.getByRole("listitem").getAttribute("aria-label")).toBe("Scheduled message: 3 review comments");
+  });
+
+  it("a comments-only row orders icon, chip, then text (R1F-17)", () => {
+    renderStrip([pending({ message: "", commentCount: 3 })]);
+    const kids = Array.from(screen.getByRole("listitem").children);
+    const chip = kids.findIndex((k) => k.textContent === "3 comments");
+    const text = kids.findIndex((k) => k.classList.contains("sched-strip__text"));
+    expect(chip).toBe(1);
+    expect(text).toBe(2);
+  });
+
+  it("a failed row with comments says comments restored and shows the chip (R1F-08)", () => {
+    renderStrip([
+      { kind: "failed", id: "a", message: "Summarise", fireAt: inHours(-1), failureReason: "Agent exited, not delivered", failureKind: "agent_exited", commentCount: 2 },
+      { kind: "failed", id: "b", message: "Plain", fireAt: inHours(-1), failureReason: "boom", failureKind: "error" },
+    ]);
+    const [a, b] = screen.getAllByRole("listitem");
+    expect(within(a!).getByText("Agent exited, not delivered · comments restored")).toBeTruthy();
+    expect(within(a!).getByText("2 comments")).toBeTruthy();
+    expect(within(b!).getByText("boom")).toBeTruthy();
+    expect(within(b!).queryByText(/comments/)).toBeNull();
+  });
+
+  it("an empty sent row reads (no message), never (attachments only) (R1V-08)", () => {
+    const sentAt = new Date(2030, 0, 1, 15, 0).toISOString();
+    renderStrip([{ kind: "sent", id: "x", message: "", fireAt: sentAt, sentAt }]);
+    expect(screen.getByText("(no message)")).toBeTruthy();
+    expect(screen.queryByText("(attachments only)")).toBeNull();
   });
 
   it("falls back to (attachments only) and shows an attachment indicator", () => {
