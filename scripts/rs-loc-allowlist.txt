@@ -1,0 +1,11 @@
+# Rust files allowed to exceed the 2000-line limit (scripts/check-rs-loc.sh).
+# Format: <path> <ceiling>. A listed file may not grow past its ceiling; lower the
+# ceiling (or delete the line) when you shrink it. Never add a new entry — split
+# the file instead. Split plan: .vibekit/feature-plans/split-oversized-rs-files.md
+rust/vst-routes/src/sessions.rs 7611
+rust/vst-daemon/src/server.rs 5031
+rust/vst-routes/src/worktrees.rs 2740
+rust/vst-routes/tests/sessions_group_b2.rs 2604
+rust/vst-routes/tests/worktrees.rs 2394
+rust/vst-lsp/src/manager.rs 2208
+rust/vst-routes/src/projects.rs 2185

@@ -15,6 +15,9 @@ if want rust; then
   step "version files in sync"
   bash scripts/check-version-sync.sh
 
+  step "rust file length (<= 2000 lines)"
+  bash scripts/check-rs-loc.sh
+
   step "placeholder web-ui/dist (embed-ui feature needs the dir)"
   mkdir -p web-ui/dist
   [ -e web-ui/dist/index.html ] || touch web-ui/dist/index.html

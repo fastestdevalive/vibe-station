@@ -25,6 +25,9 @@ jobs:
       - name: Check version files are in sync
         run: bash scripts/check-version-sync.sh
 
+      - name: Check Rust file length
+        run: bash scripts/check-rs-loc.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
