@@ -1775,7 +1775,7 @@ async fn handle_socket(
     conn.cleanup().await;
     ready_state.store(3, Ordering::SeqCst);
     net_watcher.abort();
-    let _ = forwarder_handle.await;
+    vst_ws::connection::join_forwarder(forwarder_handle).await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

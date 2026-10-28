@@ -194,16 +194,18 @@ impl std::fmt::Debug for OpenStreamEntry {
 /// `JsonAgentStream` for `chat:open`, so `chat:close`/cleanup can detach them
 /// without leaking.
 ///
-/// `active` is the detach mechanism: `vst-agents::JsonAgentStream` (already
-/// ported, per the plan) exposes `on_message`/`on_meta` but no `off`, and
-/// `vst-agents` is not amendable in this part. So the WS layer gates its
-/// fan-out closures behind this shared flag; [`WsConnection::unregister_chat_stream`]
-/// clears it, making a closed subscription's listeners inert (no duplicate
-/// delivery after close).
+/// Detaching is two-step: `active` is cleared first so a listener that was
+/// already snapshotted by an in-flight `emit_*` goes inert, then dropping
+/// `listeners` removes the closures from the stream. Removal matters, not just
+/// the flag: each closure owns a `WsConnection` clone, and a clone that
+/// outlives the socket keeps the outbound channel open, which hangs teardown
+/// on the forwarder task (leaked CLOSE_WAIT sockets).
 pub struct ChatStreamEntry {
     pub on_message: Box<dyn Fn(&NormalizedEvent) + Send + Sync>,
     pub on_meta: Box<dyn Fn(&vst_types::SessionMeta) + Send + Sync>,
     pub active: Arc<AtomicBool>,
+    /// Guards for the closures registered on the stream; dropped with the entry.
+    pub listeners: Vec<vst_agents::json_agent_stream::ListenerGuard>,
 }
 
 /// A refcounted watcher map entry.
@@ -265,6 +267,9 @@ struct ConnectionInner {
     token_id: Mutex<Option<String>>,
     token_issued_at: Mutex<Option<i64>>,
     token_expires_at: Mutex<Option<i64>>,
+    /// Cancelled by [`WsConnection::cleanup`]; background tasks that hold a
+    /// `WsConnection` clone watch it so they cannot outlive the socket.
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 /// A single WS connection. Clone is cheap (Arc).
@@ -324,8 +329,26 @@ impl WsConnection {
             token_id: Mutex::new(None),
             token_issued_at: Mutex::new(None),
             token_expires_at: Mutex::new(None),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         });
         WsConnection { inner }
+    }
+
+    /// Spawn a task that holds this connection and is dropped when the
+    /// connection is cleaned up. Use for any forwarder that captures a
+    /// `WsConnection` clone and would otherwise run until its source closes.
+    pub fn spawn_until_closed<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        // Only the token is captured here, not a connection clone.
+        let token = self.inner.shutdown.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = token.cancelled() => {}
+                _ = fut => {}
+            }
+        });
     }
 
     /// The connection's unique id.
@@ -647,7 +670,8 @@ impl WsConnection {
             .chat_streams
             .remove(session_id);
         if let Some(entry) = entry {
-            // Mark inert so the still-registered stream listeners no-op.
+            // Inert first (in-flight emits), then dropping the entry removes the
+            // listeners from the stream.
             entry.active.store(false, Ordering::SeqCst);
             drop(entry);
         }
@@ -838,6 +862,8 @@ impl WsConnection {
     pub async fn cleanup(&self) {
         // Collect stream entries to detach BEFORE touching the lock: detach
         // awaits and must never run while holding the state guard.
+        self.inner.shutdown.cancel();
+        let mut chat_entries: Vec<ChatStreamEntry> = Vec::new();
         let streams_to_detach: Vec<OpenStreamEntryRef> = {
             let mut state = self.inner.state.lock().unwrap();
             state.subscriptions.clear();
@@ -852,7 +878,7 @@ impl WsConnection {
                 })
                 .collect::<Vec<_>>();
             state.open_streams.clear();
-            state.chat_streams.clear();
+            chat_entries.extend(state.chat_streams.drain().map(|(_, e)| e));
             state.file_watches.clear();
             state.file_watch_debt.clear();
             state.tree_watches.clear();
@@ -860,9 +886,34 @@ impl WsConnection {
             state.coalesced_output.clear();
             streams
         };
+        for entry in &chat_entries {
+            entry.active.store(false, Ordering::SeqCst);
+        }
+        drop(chat_entries);
         for entry in streams_to_detach {
             let _ = entry.stream.detach(&entry.subscriber_id).await;
         }
+    }
+}
+
+/// How long teardown waits for the outbound forwarder before aborting it.
+const FORWARDER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Join a connection's outbound forwarder task at the end of teardown.
+///
+/// The forwarder normally ends once every sender clone is gone (letting a
+/// queued Close frame flush first), but a stray clone or a write blocked on a
+/// half-open peer would otherwise park the WS handler — and the socket —
+/// forever. Wait a bounded time, then abort.
+pub async fn join_forwarder(mut handle: tokio::task::JoinHandle<()>) {
+    if tokio::time::timeout(FORWARDER_JOIN_TIMEOUT, &mut handle)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "[WS] outbound forwarder did not stop within {FORWARDER_JOIN_TIMEOUT:?}; aborting"
+        );
+        handle.abort();
     }
 }
 

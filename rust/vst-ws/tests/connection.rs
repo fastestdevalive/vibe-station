@@ -416,3 +416,68 @@ async fn subscribe_unsubscribe_roundtrip() {
     let subs = conn.subscriptions();
     assert_eq!(subs.len(), 1);
 }
+
+// ── teardown must release everything that holds a connection clone ─────────
+//
+// A forwarder task / stream listener that keeps a `WsConnection` clone alive
+// after the socket is gone keeps the connection's outbound channel open, which
+// parked the WS handler on the forwarder join forever (CLOSE_WAIT sockets).
+
+#[tokio::test]
+async fn cleanup_ends_tasks_spawned_until_closed() {
+    let (sink, _h) = FakeSink::new(0);
+    let conn = WsConnection::new(sink);
+    let sentinel = Arc::new(());
+    let held = sentinel.clone();
+    let c = conn.clone();
+    conn.spawn_until_closed(async move {
+        let _keep = (held, c);
+        std::future::pending::<()>().await;
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(Arc::strong_count(&sentinel), 2, "task is holding its clone");
+
+    conn.cleanup().await;
+    for _ in 0..50 {
+        if Arc::strong_count(&sentinel) == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(Arc::strong_count(&sentinel), 1, "task dropped on cleanup");
+}
+
+#[tokio::test]
+async fn cleanup_removes_chat_stream_listeners() {
+    use vst_agents::json_agent_stream::JsonAgentStream;
+    use vst_ws::connection::ChatStreamEntry;
+
+    let (sink, _h) = FakeSink::new(0);
+    let conn = WsConnection::new(sink);
+    let stream = JsonAgentStream::new();
+    let c = conn.clone();
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let listeners = vec![
+        stream.subscribe_message(Box::new(move |_| {
+            let _ = &c;
+        })),
+        stream.subscribe_meta(Box::new(|_| {})),
+    ];
+    conn.register_chat_stream(
+        "s1",
+        ChatStreamEntry {
+            on_message: Box::new(|_| {}),
+            on_meta: Box::new(|_| {}),
+            active: active.clone(),
+            listeners,
+        },
+    );
+    assert!(format!("{stream:?}").contains("message_listeners: 1"));
+
+    conn.cleanup().await;
+    assert!(!active.load(Ordering::SeqCst), "flagged inert");
+    assert!(
+        format!("{stream:?}").contains("message_listeners: 0"),
+        "cleanup (not just unregister) detaches the stream listeners"
+    );
+}

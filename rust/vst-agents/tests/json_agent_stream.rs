@@ -134,3 +134,46 @@ fn message_and_meta_channels_are_distinct() {
     );
     assert_eq!(metas.lock().unwrap().len(), 1, "only the meta listener");
 }
+
+/// A `subscribe_*` listener is removed when its guard drops; the plain `on_*`
+/// listeners next to it stay registered. (Regression: a listener that is never
+/// removed keeps whatever it captured — e.g. a WS connection — alive forever.)
+#[test]
+fn subscribe_guard_removes_listener_on_drop() {
+    let stream = JsonAgentStream::new();
+    let hits = Arc::new(Mutex::new(0u32));
+
+    let permanent = Arc::clone(&hits);
+    stream.on_message(Box::new(move |_: &NormalizedEvent| {
+        *permanent.lock().unwrap() += 1;
+    }));
+    let scoped = Arc::clone(&hits);
+    let guard = stream.subscribe_message(Box::new(move |_: &NormalizedEvent| {
+        *scoped.lock().unwrap() += 10;
+    }));
+    let meta_guard = stream.subscribe_meta(Box::new(|_: &SessionMeta| {}));
+
+    stream.emit_message(&sample_event("a"));
+    assert_eq!(*hits.lock().unwrap(), 11);
+    assert!(format!("{stream:?}").contains("message_listeners: 2"));
+
+    drop(guard);
+    drop(meta_guard);
+    stream.emit_message(&sample_event("b"));
+    assert_eq!(
+        *hits.lock().unwrap(),
+        12,
+        "only the permanent listener fires"
+    );
+    let dbg = format!("{stream:?}");
+    assert!(dbg.contains("message_listeners: 1") && dbg.contains("meta_listeners: 0"));
+}
+
+/// A guard outliving its stream is harmless (it only holds a `Weak`).
+#[test]
+fn guard_outliving_stream_is_a_noop() {
+    let stream = JsonAgentStream::new();
+    let guard = stream.subscribe_message(Box::new(|_: &NormalizedEvent| {}));
+    drop(stream);
+    drop(guard);
+}
