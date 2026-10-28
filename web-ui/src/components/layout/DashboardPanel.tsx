@@ -9,7 +9,7 @@ import {
   Play,
 } from "lucide-react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { ApiInstance } from "@/api";
 import type { Project, PrStatus, Session, SessionState, Worktree } from "@/api/types";
 import { SessionChip } from "@/components/layout/SessionChip";
@@ -391,7 +391,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
-  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isMobile = useIsMobile();
 
   const [dashboardView, setDashboardView] = useState<"list" | "kanban">(() => {
     try {

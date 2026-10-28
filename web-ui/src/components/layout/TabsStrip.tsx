@@ -35,7 +35,7 @@ import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
 import { PreviousSessionsMenu } from "@/components/layout/PreviousSessionsMenu";
 import { createProjectDirectDraft } from "@/lib/projectDraft";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
+import { ActionsHost } from "@/components/layout/TopActionsSlot";
 
 type TabKind = "agent" | "terminal";
 
@@ -645,17 +645,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       </button>
     ) : null;
 
-  const outerInset = useTopRightInset();
-
   return (
-    <div
-      className="tabs-strip"
-      data-tauri-drag-region="deep"
-      role="tablist"
-      aria-label={ariaLabel}
-      style={outerInset.width > 0 ? { paddingRight: `${outerInset.width}px` } : undefined}
-    >
-      <div className="tabs-strip__scroll" ref={scrollRef}>
+    <div className="tabs-strip" data-tauri-drag-region="deep">
+      {/* The tablist is the scroll region only, so the actions host (sibling below) sits
+          outside it: a `role=tablist` must not contain the Search / "…" buttons. */}
+      <div className="tabs-strip__scroll" ref={scrollRef} role="tablist" aria-label={ariaLabel}>
         {sessions.length === 0 && !isAgent ? (
           <span className="tabs-strip__empty">No terminals — open one with +</span>
         ) : null}
@@ -937,6 +931,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         />
       ) : null}
       <PaneTools fsTarget={fsTarget} onCloseDock={!isAgent ? () => toggleTerminalDock() : undefined} />
+      {/* Reserve host: the agent row is under the chip when tools are hidden (the
+          terminal dock strip never reserves). */}
+      <ActionsHost zone="agent" enabled={kind === "agent"} />
 
       {isAgent ? null : (
         <NewTerminalDialog

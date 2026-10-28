@@ -14,8 +14,8 @@ import {
   type LspFileRef,
   type OutlineSymbol,
 } from "@/lib/lspApi";
-import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
-import { useToolBarInsets } from "@/hooks/useToolBarInsets";
+import { useWorkspaceStore } from "@/hooks/useStore";
+import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useLspStatus } from "@/hooks/useLspStatus";
 import { useTheme } from "@/hooks/useTheme";
@@ -232,16 +232,6 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
   const layoutKey = worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "__none__";
-
-  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
-  // so this panel's header reaches the top-right corner where the fullscreen +
-  // orientation-toggle buttons float. In left-side orientation it is a narrow
-  // left column that never reaches that corner, so the right inset only
-  // applies while stacked.
-  const masterDetailVertical = useWorkspaceStore(
-    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
-  );
-  const barInsets = useToolBarInsets(masterDetailVertical);
 
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId ?? "__none__"] ?? "tree");
   const pushJump = useWorkspaceStore((s) => s.pushJump);
@@ -507,8 +497,9 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   if (!isWorkingTreeView) {
     return (
       <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
-        <div className="outline-panel__header" style={barInsets}>
+        <div className="outline-panel__header actions-row">
           <span className="outline-panel__title">Outline</span>
+          <ModeHeaderActionsHost mode="outline" />
         </div>
         <div className="outline-panel__empty" data-testid="outline-unavailable">
           Outline unavailable
@@ -521,8 +512,9 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   if (!path && !external) {
     return (
       <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
-        <div className="outline-panel__header" style={barInsets}>
+        <div className="outline-panel__header actions-row">
           <span className="outline-panel__title">Outline</span>
+          <ModeHeaderActionsHost mode="outline" />
         </div>
         <div className="outline-panel__empty">No file open</div>
       </div>
@@ -616,12 +608,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
 
   return (
     <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
-      <div
-        className="outline-panel__header"
-        style={{
-          ...barInsets,
-        }}
-      >
+      <div className="outline-panel__header actions-row">
         <div className="outline-panel__filter-box">
           <Search size={14} className="outline-panel__filter-icon" aria-hidden />
           <input
@@ -633,6 +620,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
             onChange={(e) => setFilterText(e.target.value)}
           />
         </div>
+        <ModeHeaderActionsHost mode="outline" />
       </div>
 
       <div className="outline-panel__content">

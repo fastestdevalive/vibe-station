@@ -97,6 +97,27 @@ several agents at once without them colliding.
 - **CLI** (`vst`) — full scripting surface (`vst project/worktree/session/mode/...`)
   driving the same REST API as the UI.
 
+### Web UI workspace layout
+
+- **Tools rail:** on desktop a full-height 36px column at the window's right edge (`ToolsRailColumn`, a
+  trailing child of `#workspace-layout` and a sibling of the main column in `Layout`), rendered only while the
+  tools pane is shown (`#workspace-layout[data-rail]`): an empty 35px head cell under the actions chip's toggle,
+  tool icons below. Phones (<=768px) and canvas Tools tiles have no window rail; each `ToolPanel` carries its
+  own vertical right-edge rail (45px on phones).
+- **List panel:** the Files list and the VCS commit view's changed-file list (both via `DockedListLayout`, one shared persisted width/height) dock full height on the right of the content column (tab bar over preview),
+  between it and the rail (resize handle on its left edge); the same structure on phones (default half the pane,
+  >=160px; the content column keeps >=144px; stacked keeps the preview >=96px). While the list is open the layout
+  toggle and Fullscreen sit in its header on phones (stacked on any size), in the tab bar otherwise; on desktop
+  its header's right end is reserved for the actions chip.
+- **Actions chip (Search / `ConnectionStatus` / "..." / tools toggle):** one absolute box at the top-right of
+  `#workspace-layout` (`main`'s chrome), rendered once by `Layout`'s `TopActionsOwner` as the LAST child, never
+  re-parented or hidden during transitions (only in fullscreen). Panes register hosts in `TopActionsContext`; the
+  registry picks the one top row under the chip, whose reserve span takes the chip's token-sized width
+  (`--top-actions-w`, minus the rail, plus the offline pill). No measurement, no transition hold. Phones have no
+  chip: the same buttons end the normal top bar.
+- **File tabs:** artifacts open as ordinary file tabs on every size (outside-project ones by absolute path, with a
+  small "Outside project" tag); there is no separate phone artifact preview screen.
+
 ## Auth model
 
 The daemon mints an in-memory master `daemonToken` at boot (never written to

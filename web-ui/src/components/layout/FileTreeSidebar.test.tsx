@@ -151,8 +151,8 @@ describe("FileTreeSidebar", () => {
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
 
-      await user.click(screen.getByRole("button", { name: "Diff view off" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view on" })).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: "Changes view off" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Changes view on" })).toBeInTheDocument());
       expect(screen.getByRole("button", { name: "local" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "branch" })).toBeInTheDocument();
     });
@@ -164,7 +164,7 @@ describe("FileTreeSidebar", () => {
 
       await user.click(screen.getByRole("button", { name: "branch" }));
       // Still the plain tree, never flipped to the "Changes" list.
-      expect(screen.getByRole("button", { name: "Diff view off" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Changes view off" })).toBeInTheDocument();
       expect(screen.getByRole("treeitem", { name: "README.md" })).toBeInTheDocument();
     });
 
@@ -191,14 +191,14 @@ describe("FileTreeSidebar", () => {
 
       // Toggle diff mode ON — the Changes list must open showing "branch",
       // not silently revert to "local".
-      await user.click(screen.getByRole("button", { name: "Diff view off" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view on" })).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: "Changes view off" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Changes view on" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().diffScopeByWorktree["wt-1"]).toBe("branch");
       expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
 
       // Toggle diff mode OFF — the plain tree must still show "branch".
-      await user.click(screen.getByRole("button", { name: "Diff view on" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view off" })).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: "Changes view on" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Changes view off" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().treeScopeByWorktree["wt-1"]).toBe("branch");
       expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
     });
@@ -224,15 +224,15 @@ describe("FileTreeSidebar", () => {
         .mockResolvedValue([{ path: "file.rs", status: "M", insertions: 1, deletions: 0 }]);
       useWorkspaceStore.setState({ activeWorktreeId: null });
       render(<FileTreeSidebar api={api} contextId="proj-1" scope="project" />);
-      await screen.findByRole("button", { name: "Diff view off" });
+      await screen.findByRole("button", { name: "Changes view off" });
 
       // Project scope is always local — no local/branch chip selector.
       expect(screen.queryByRole("group", { name: "Diff scope" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "local" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Diff view off" }));
-      await screen.findByRole("button", { name: "Diff view on" });
+      await user.click(screen.getByRole("button", { name: "Changes view off" }));
+      await screen.findByRole("button", { name: "Changes view on" });
       await waitFor(() => {
         expect(spy).toHaveBeenCalledWith("proj-1", "local", undefined, "project");
       });

@@ -1,7 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { useState } from "react";
+import { DemoEnvProvider } from "@/context/DemoEnv";
+import { createTopActionsStore, TopActionsProvider } from "@/context/TopActionsContext";
+import { ActionsHost, TopActionsOwner } from "./TopActionsSlot";
 import { TopBar } from "./TopBar";
 import { PaneOutletProvider } from "./paneOutlets";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type CanvasGeometry } from "@/hooks/useStore";
@@ -105,14 +109,74 @@ describe("TopBar - canvas mode pane toggles", () => {
     );
   });
 
-  it("Tools button toggles toolPanelVisible in classic mode (unchanged behavior)", async () => {
+  function renderVariant(
+    props: Partial<React.ComponentProps<typeof TopBar>> = {},
+  ) {
+    return render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            projects={projects}
+            worktrees={worktrees}
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+            {...props}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("floating classic: the LAST button of the actions group is the tools toggle; aria-pressed follows the store and a click flips it", async () => {
     const user = userEvent.setup();
     setClassicMode();
-    renderTopBar();
-    await user.click(screen.getByLabelText("Toggle tool panel"));
-    expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.toolPanelVisible).toBe(
-      !DEFAULT_WORKTREE_LAYOUT.toolPanelVisible,
-    );
+    const { container } = renderVariant({ variant: "floating" });
+    const group = container.querySelector(".top-bar-floating-actions") as HTMLElement;
+    const buttons = group.querySelectorAll("button");
+    expect(buttons, "chip width is --top-actions-w (3 buttons): bump it in workspace.css and CHIP_W").toHaveLength(3);
+    const last = buttons[buttons.length - 1] as HTMLElement;
+    expect(last).toHaveAccessibleName("Toggle tool panel");
+    expect(screen.getAllByLabelText("Toggle tool panel")).toHaveLength(1);
+    expect(last).toHaveAttribute("aria-pressed", String(DEFAULT_WORKTREE_LAYOUT.toolPanelVisible));
+    const before = useWorkspaceStore.getState().layoutByWorktree[W1]!.toolPanelVisible;
+    await user.click(last);
+    expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.toolPanelVisible).toBe(!before);
+    expect(screen.getByLabelText("Toggle tool panel")).toHaveAttribute("aria-pressed", String(!before));
+    expect(screen.queryByLabelText("Add Tools tile to canvas")).not.toBeInTheDocument();
+  });
+
+  it("bar, mobile: the last button of .top-bar__end is the tools toggle with the PanelTop icon (vertical default split)", () => {
+    setClassicMode();
+    const { container } = renderVariant({ isMobile: true });
+    const end = container.querySelector(".top-bar__end") as HTMLElement;
+    const buttons = end.querySelectorAll("button");
+    const last = buttons[buttons.length - 1] as HTMLElement;
+    expect(last).toHaveAccessibleName("Toggle tool panel");
+    expect(last.querySelector("svg.lucide-panel-top")).not.toBeNull();
+  });
+
+  it("project route in stored workspace mode (no canvas): the classic toggle", () => {
+    useWorkspaceStore.setState({
+      activeProjectId: "proj-1",
+      activeWorktreeId: null,
+      activeDirectContextId: "proj-1",
+      layoutByWorktree: { "proj-1": { ...DEFAULT_WORKTREE_LAYOUT, layoutMode: "workspace" } },
+      workspaceDocs: {},
+    });
+    renderVariant({ variant: "floating", layoutMode: "project-workspace" });
+    expect(screen.getByLabelText("Toggle tool panel")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Add Tools tile to canvas")).not.toBeInTheDocument();
+  });
+
+  it("canvas mode: exactly one .top-bar__pane-btn, the Add/Remove Tools tile", () => {
+    setCanvasMode();
+    const { container } = renderVariant({ variant: "floating" });
+    expect(container.querySelectorAll(".top-bar__pane-btn")).toHaveLength(1);
+    expect(screen.getByLabelText("Add Tools tile to canvas")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Toggle tool panel")).not.toBeInTheDocument();
   });
 
   // The dedicated canvas toolbar itself lives in WorkspaceCanvas now (its own
@@ -272,4 +336,133 @@ describe("TopBar - dashboardTitle (R2F-04)", () => {
       expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
     });
   }
+});
+
+describe("TopBar - portaled overflow menu (7.T4)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.setState({
+      activeProjectId: "proj-1",
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, layoutMode: "classic" } },
+      workspaceDocs: {},
+    });
+  });
+
+  let setZone: (z: "agent" | "tools") => void = () => {};
+  function Harness({ portalRoot, demo }: { portalRoot: HTMLElement | null; demo?: { scale: number } }) {
+    const [zone, setZ] = useState<"agent" | "tools">("agent");
+    setZone = setZ;
+    const [st] = useState(createTopActionsStore);
+    const env = {
+      demo: !!demo,
+      viewport: null,
+      scale: demo?.scale ?? 1,
+      portalRoot,
+      eventRoot: null,
+    };
+    return (
+      <DemoEnvProvider value={env}>
+        <MemoryRouter>
+          <PaneOutletProvider>
+            <TopActionsProvider store={st}>
+              <div data-testid="agent-row" style={{ overflow: "hidden" }}>
+                <ActionsHost zone="agent" />
+              </div>
+              <div data-testid="tools-row" style={{ overflow: "hidden" }}>
+                <ActionsHost zone="tools" />
+              </div>
+              <TopActionsOwner zones={[zone]}>
+                <TopBar
+                  variant="floating"
+                  projects={projects}
+                  worktrees={worktrees}
+                  isMobile={false}
+                  onToggleLeftSidebar={() => {}}
+                  leftSidebarCollapsed={false}
+                  mobileSidebarOpen={false}
+                  onOpenQuickOpen={() => {}}
+                />
+              </TopActionsOwner>
+            </TopActionsProvider>
+          </PaneOutletProvider>
+        </MemoryRouter>
+      </DemoEnvProvider>
+    );
+  }
+
+  it("opens with either row reserving the chip; the menu is a fixed child of the portal root, not of the row", async () => {
+    const user = userEvent.setup();
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    try {
+      render(<Harness portalRoot={root} />);
+      for (const zone of ["agent", "tools"] as const) {
+        act(() => setZone(zone));
+        const row = screen.getByTestId(`${zone}-row`);
+        // The chip (and its "…") is outside every row; the row only holds the active reserve.
+        expect(row.querySelector(".actions-host__reserve[data-active]")).not.toBeNull();
+        expect(row.contains(screen.getByLabelText("More options"))).toBe(false);
+        await user.click(screen.getByLabelText("More options"));
+        const menu = screen.getByRole("menu");
+        expect(menu.parentElement).toBe(root);
+        expect(row.contains(menu)).toBe(false);
+        expect(menu.style.position).toBe("fixed");
+        expect(parseFloat(menu.style.top)).toBeGreaterThanOrEqual(0);
+        expect(parseFloat(menu.style.right)).toBeGreaterThanOrEqual(0);
+        expect(parseFloat(menu.style.right)).toBeLessThanOrEqual(window.innerWidth);
+        await user.keyboard("{Escape}");
+        expect(screen.queryByRole("menu")).toBeNull();
+      }
+    } finally {
+      root.remove();
+    }
+  });
+
+  it("R1F-03 — Esc closes only the open menu: it never reaches bubble listeners inside the tools row", async () => {
+    const user = userEvent.setup();
+    render(<Harness portalRoot={null} />);
+    act(() => setZone("tools"));
+    const bubble = vi.fn();
+    screen.getByTestId("tools-row").addEventListener("keydown", bubble);
+    const trigger = screen.getByLabelText("More options");
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(bubble.mock.calls.some(([ev]) => (ev as KeyboardEvent).key === "Escape")).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("under a scaled demo stage the fixed top is the unscaled rect bottom + 4", async () => {
+    const user = userEvent.setup();
+    const spy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ x: 0, y: 0, top: 10, left: 0, right: 98, bottom: 49, width: 98, height: 39, toJSON: () => ({}) });
+    try {
+      render(<Harness portalRoot={null} demo={{ scale: 0.98 }} />);
+      await user.click(screen.getByLabelText("More options"));
+      const menu = screen.getByRole("menu");
+      expect(parseFloat(menu.style.top)).toBeCloseTo(49 / 0.98 + 4, 5);
+      expect(parseFloat(menu.style.right)).toBeCloseTo(window.innerWidth - 98 / 0.98, 5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("clicking outside closes the menu; clicking the trigger again toggles it shut", async () => {
+    const user = userEvent.setup();
+    render(<Harness portalRoot={null} />);
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    await user.click(screen.getByLabelText("More options"));
+    await user.click(document.body);
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
 });

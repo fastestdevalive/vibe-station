@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Columns2, PanelTopClose, PanelTopOpen, Rows2, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Columns2, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope, PrStatus } from "@/api/types";
-import type { ToolTab } from "@/hooks/useStore";
-import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT, isFilesLeftPaneOpen } from "@/hooks/useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT, effectiveToolTab, isFilesLeftPaneOpen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { useLayout } from "@/hooks/useLayout";
@@ -14,8 +14,10 @@ import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
 import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useActionsHost } from "@/context/TopActionsContext";
+import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
+import { handleToolsEsc } from "@/lib/toolsEsc";
+import { useIsMobile } from "@/hooks/useIsMobile";
 
 interface ToolPanelProps {
   api: ApiInstance;
@@ -42,11 +44,12 @@ interface ToolPanelProps {
   onClose?: () => void;
 }
 
-export const RAIL_WIDTH = 36;
-const TOP_BAR_HEIGHT = 35;
 export const FILES_LEFT_PANE_DEFAULT_WIDTH = 240;
 export const FILES_LEFT_PANE_MIN_WIDTH = 160;
 export const FILES_LEFT_PANE_MAX_WIDTH = 600;
+/** Desktop floor: the open list's header reserves the actions chip (105px - 36px rail + the offline pill's 76px = 145px),
+ *  so below 145px + room for the header's own items the chip would cover them. Phones have no chip: they keep 160. */
+export const FILES_LEFT_PANE_MIN_WIDTH_DESKTOP = 224;
 export const FILES_LEFT_PANE_DEFAULT_HEIGHT = 240;
 export const FILES_LEFT_PANE_MIN_HEIGHT = 100;
 export const FILES_LEFT_PANE_MAX_HEIGHT = 600;
@@ -54,9 +57,11 @@ export const FILES_LEFT_PANE_MAX_HEIGHT = 600;
 /**
  * Right-side tool panel (R1–R7, R14, R16):
  * - Horizontal tab strip is removed (R1).
- * - Consolidated vertical left rail (FilesLeftRail) selects tool + Files sub-modes (R1–R3).
- * - Rail and FilesLeftPane are overlays (R4) with insets mechanism (R5).
- * - ToolFullscreenButton relocated to top-right overlay matching top-bar height (R6).
+ * - Rail: on desktop the window-level ToolsRailColumn; a canvas tile (`hidePanelControls`) and
+ *   a phone (<=768px, no window rail) render their own right-edge rail (FilesLeftRail).
+ * - The Files list panel is an overlay docked on the right of the preview.
+ * - Pane controls (layout toggle, fullscreen / tile Close) are portaled into this panel's
+ *   registered actions host (top row of the active surface), not an absolute overlay.
  * - Devices tool is disabled in the rail (R7).
  * - Isolation and stacking context scoped (R14).
  * - Preserves state across fullscreen and implements two-step Esc handling (R16).
@@ -72,14 +77,10 @@ export function ToolPanel({
   onClose,
 }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, activeWorktreeId, activeDirectContextId } = useLayout();
+  const isMobile = useIsMobile();
+  const inPaneRail = hidePanelControls || isMobile;
 
   const filesWt = worktreeId ?? "__none__";
-  // Mobile only: the tools rail can be slid out of the way (upward) to reclaim space.
-  const isMobile = useMediaQuery("(max-width: 768px)");
-  const railHidden = useWorkspaceStore((s) => s.toolsRailHidden);
-  const setRailHidden = useWorkspaceStore((s) => s.setToolsRailHidden);
-  const railCollapsed = isMobile && railHidden;
-  const railWidth = railCollapsed ? 0 : RAIL_WIDTH;
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   // References mode reveals the files left pane without flipping the persisted
   // `fileTreeVisible` preference (see `revealReferences`).
@@ -96,22 +97,18 @@ export function ToolPanel({
   );
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [dragHeight, setDragHeight] = useState<number | null>(null);
-  const activePanelWidth = dragWidth ?? storedWidth;
+  const activePanelWidth = isMobile ? (dragWidth ?? storedWidth) : Math.max(FILES_LEFT_PANE_MIN_WIDTH_DESKTOP, dragWidth ?? storedWidth);
   const activePanelHeight = dragHeight ?? storedHeight;
 
   // Decision 9 migration: persisted `toolPanelTab === "search"` seeds Files rail into search mode.
   // Persisted "devices"/"artifacts" (from before they were disabled, or via direct state
   // manipulation) are folded into "files" too — those tools have no active rail button, so
   // leaving the tab on one of them would render a tool with no rail highlight.
-  const effectiveTab = (
-    toolPanelTab === "search" || toolPanelTab === "devices" || toolPanelTab === "artifacts"
-      ? "files"
-      : toolPanelTab
-  ) as ToolTab;
+  const effectiveTab = effectiveToolTab(toolPanelTab);
 
   useEffect(() => {
     const isActiveContext = worktreeId != null && worktreeId === (activeWorktreeId ?? activeDirectContextId);
-    if (isActiveContext && (toolPanelTab === "search" || toolPanelTab === "devices" || toolPanelTab === "artifacts")) {
+    if (isActiveContext && effectiveToolTab(toolPanelTab) !== toolPanelTab) {
       const wasSearch = toolPanelTab === "search";
       setToolPanelTab("files");
       if (wasSearch) {
@@ -120,14 +117,40 @@ export function ToolPanel({
     }
   }, [toolPanelTab, worktreeId, activeWorktreeId, activeDirectContextId, setToolPanelTab]);
 
-  const isPanelOpen = effectiveTab === "files" && isFilesLeftPaneOpen(fileTreeVisible, filesLeftPaneMode);
-  const panelWidth = isPanelOpen ? activePanelWidth : 0;
+  // The VCS commit view docks its changed-file list exactly like the Files list (right side, same size/handle);
+  // the VCS rail icon owns its visibility (`vcsSidebarVisibleByWorktree`).
+  const vcsCommitOpen = useWorkspaceStore(
+    (s) =>
+      effectiveTab === "vcs" &&
+      !!s.vcsSelectedCommitByWorktree[filesWt] &&
+      (s.vcsSidebarVisibleByWorktree[filesWt] ?? true),
+  );
+  const isPanelOpen =
+    vcsCommitOpen || (effectiveTab === "files" && isFilesLeftPaneOpen(fileTreeVisible, filesLeftPaneMode));
+  const stackedList = isPanelOpen && masterDetailVertical;
+
+  // One host per panel: `hostScope` selects this panel's host for the pane controls, and
+  // (when `hostsGlobal`) the same host may reserve the actions chip's width.
+  // Sticky offscreen panels and canvas tiles never take the global node.
+  const hostScope = useId();
+  const hostsGlobal =
+    !hidePanelControls && (worktreeId ?? null) === (activeWorktreeId ?? activeDirectContextId ?? null);
+  // Desktop side-by-side list open: its mode header reserves the chip's width (rightmost row).
+  const listHostsGlobal = hostsGlobal && isPanelOpen && !masterDetailVertical && !isMobile;
+  // An open list's mode header carries the pane controls: stacked on any size, side-by-side on phones.
+  const phoneSideList = isPanelOpen && !masterDetailVertical && isMobile;
+  const listHostsPane = stackedList || phoneSideList;
 
   const insetContextValue = useMemo(
     () => ({
       isPanelOpen,
+      listHostsPane,
+      hostScope,
+      hostsGlobal,
+      listHostsGlobal,
+      filesMode: vcsCommitOpen ? ("commit" as const) : filesLeftPaneMode,
     }),
-    [isPanelOpen],
+    [isPanelOpen, listHostsPane, hostScope, hostsGlobal, listHostsGlobal, filesLeftPaneMode, vcsCommitOpen],
   );
 
   // R16: Escape-key handling order when both expanded panel and fullscreen are
@@ -151,32 +174,10 @@ export function ToolPanel({
   useEffect(() => {
     const el = escPaneRef.current;
     if (!el) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const s = useWorkspaceStore.getState();
-      // Same resolution as useLayout(): the layout may have no persisted entry
-      // yet (fresh view), in which case the DEFAULT layout's tab applies — the
-      // default is "files", so a bare store lookup would wrongly report the
-      // files panel as not-open here.
-      const key = s.activeWorktreeId ?? s.activeDirectContextId;
-      const layout = s.layoutByWorktree[key ?? ""] ?? DEFAULT_WORKTREE_LAYOUT;
-      const effectiveTabForEsc = layout.toolPanelTab === "search" ? "files" : layout.toolPanelTab;
-      const wt = filesWtRef.current;
-      const panelOpen =
-        effectiveTabForEsc === "files" && isFilesLeftPaneOpen(s.fileTreeVisible, s.filesLeftPaneMode[wt] ?? "tree");
-      if (panelOpen) {
-        e.stopPropagation();
-        s.closeFilesLeftPane(wt);
-      } else if (s.workspacePaneFullscreen === "tools") {
-        e.stopPropagation();
-        s.setWorkspacePaneFullscreen(null);
-      }
-    };
+    const onKeyDown = (e: KeyboardEvent) => handleToolsEsc(e, filesWtRef.current, escPaneRef.current);
     el.addEventListener("keydown", onKeyDown);
     return () => el.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  const outerInset = useTopRightInset();
 
   // PR status for the VCS panel — resolved from the session store (branch-guarded).
   const sessions = useServerStore((s) => s.sessions);
@@ -186,128 +187,85 @@ export function ToolPanel({
     return worktreePrStatus(wtSessions, branch ?? "");
   }, [worktreeId, scope, sessions, branch]);
 
+  // Pane controls ride the actions registry: portaled into this panel's picked host.
+  const paneHost = useActionsHost({ scope: hostScope });
+  const toolsFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen === "tools");
+  // Fullscreen row (board Layouts D) shows only Exit fullscreen; Ctrl+/ still toggles layout.
+  const showLayoutToggle = (effectiveTab === "files" || vcsCommitOpen) && !(hostsGlobal && toolsFullscreen);
+  const paneControls = (
+    <>
+      {showLayoutToggle ? (
+        <button
+          type="button"
+          className="tab tab--icon tool-bar-btn"
+          aria-label={masterDetailVertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
+          title={masterDetailVertical ? "Side-by-side layout" : "Stacked layout"}
+          onClick={() => setMasterDetailVertical(filesWt, !masterDetailVertical)}
+        >
+          {masterDetailVertical ? (
+            <Rows2 size={13} strokeWidth={2} aria-hidden />
+          ) : (
+            <Columns2 size={13} strokeWidth={2} aria-hidden />
+          )}
+        </button>
+      ) : null}
+      {!hidePanelControls ? (
+        <ToolFullscreenButton />
+      ) : onClose ? (
+        <button
+          type="button"
+          className="tab tab--icon tool-bar-btn"
+          aria-label="Close tool tile"
+          title="Close tool tile"
+          onClick={onClose}
+        >
+          <X size={13} />
+        </button>
+      ) : null}
+    </>
+  );
+  const hasBar = worktreeId == null || (effectiveTab !== "files" && effectiveTab !== "vcs");
+
   return (
     <ToolsInsetProvider value={insetContextValue}>
       <div
-          ref={escPaneRef}
-          className="tool-panel pane-stack"
-          style={
-            {
-              position: "relative",
-              isolation: "isolate",
-              height: "100%",
-              display: "flex",
-              flexDirection: "column",
-              "--tools-rail-w": `${railWidth}px`,
-              "--tools-rail-full-w": `${RAIL_WIDTH}px`,
-              "--tools-toggle-w": isMobile ? `${RAIL_WIDTH}px` : "0px",
-              "--tools-rail-panel-w": `${activePanelWidth}px`,
-              "--tools-rail-panel-h": `${activePanelHeight}px`,
-              "--tools-top-right-inset": `${outerInset.width}px`,
-            } as React.CSSProperties
-          }
+        ref={escPaneRef}
+        tabIndex={-1}
+        id={hostsGlobal ? "tools-pane" : undefined}
+        className="tool-panel pane-stack"
+        style={
+          {
+            position: "relative",
+            isolation: "isolate",
+            height: "100%",
+            display: "flex",
+            flexDirection: "row",
+            "--tools-rail-panel-w": `${activePanelWidth}px`,
+            "--tools-rail-panel-h": `${activePanelHeight}px`,
+          } as React.CSSProperties
+        }
+      >
+        <div
+          className="tool-panel__content"
+          style={{ position: "relative", flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
-          {/* Rail as vertical overlay on the left edge (R1, R4). The wrapper is a
-              flex container (not just position:absolute) so the rail stretches to
-              the pane's full height instead of only its icon content — otherwise
-              the rail background/border stops partway down and preview content
-              shows through the column below the last icon. */}
-          <div
-            className="tool-panel__rail"
-            aria-hidden={railCollapsed || undefined}
-            style={{
-              position: "absolute",
-              top: isMobile ? `${TOP_BAR_HEIGHT}px` : 0,
-              left: 0,
-              width: `${RAIL_WIDTH}px`,
-              // Files lets content run beneath the rail's last icon; the other tabs
-              // keep a 36px content offset, so the rail column runs the full height
-              // there instead of leaving a bare strip under the icons.
-              ...(effectiveTab !== "files"
-                ? {
-                    bottom: 0,
-                    background: "var(--bg-secondary)",
-                    borderRight: "var(--border-width) solid var(--border-default)",
-                  }
-                : { maxHeight: isMobile ? `calc(100% - ${TOP_BAR_HEIGHT}px)` : "100%" }),
-              zIndex: 21,
-              display: "flex",
-              flexDirection: "column",
-              transform: railCollapsed ? "translateY(-100%)" : undefined,
-              visibility: railCollapsed ? "hidden" : undefined,
-              transition: "transform 0.15s ease, visibility 0.15s",
-            }}
-          >
-            <FilesLeftRail worktreeId={filesWt} />
+        {paneHost ? createPortal(paneControls, paneHost.paneEl) : null}
+
+        {/* Host bar: only where the active surface has no top row of its own (empty state,
+            tabs other than Files/VCS). Files and VCS host in their own bars. */}
+        {hasBar ? (
+          <div className="tool-panel__bar actions-row" data-tauri-drag-region="deep">
+            <ToolActionsHost />
           </div>
+        ) : null}
 
-          {/* Mobile only: show/hide toggle in the top bar's left slot, directly above the rail. */}
-          {isMobile ? (
-            <button
-              type="button"
-              className="tool-panel__rail-toggle"
-              aria-label="Tools bar"
-              aria-pressed={!railHidden}
-              title={railHidden ? "Show tools bar" : "Hide tools bar"}
-              onClick={() => setRailHidden(!railHidden)}
-            >
-              {railHidden ? <PanelTopOpen size={14} strokeWidth={2} aria-hidden /> : <PanelTopClose size={14} strokeWidth={2} aria-hidden />}
-            </button>
-          ) : null}
-
-          {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
-          <div
-            className="tool-panel__top-actions"
-            data-tauri-drag-region="deep"
-            style={{
-              position: "absolute",
-              top: 0,
-              right: `calc(var(--space-2) + ${outerInset.width}px)`,
-              height: "35px",
-              display: "flex",
-              alignItems: "center",
-              gap: "2px",
-              zIndex: 30,
-            }}
-          >
-          {effectiveTab === "files" ? (
-            <button
-              type="button"
-              className="tab tab--icon tool-bar-btn"
-              aria-label={masterDetailVertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
-              title={masterDetailVertical ? "Side-by-side layout" : "Stacked layout"}
-              onClick={() => setMasterDetailVertical(filesWt, !masterDetailVertical)}
-            >
-              {masterDetailVertical ? (
-                <Rows2 size={13} strokeWidth={2} aria-hidden />
-              ) : (
-                <Columns2 size={13} strokeWidth={2} aria-hidden />
-              )}
-            </button>
-          ) : null}
-          {!hidePanelControls ? (
-            <ToolFullscreenButton />
-          ) : onClose ? (
-            <button
-              type="button"
-              className="tab tab--icon tool-bar-btn"
-              aria-label="Close tool tile"
-              title="Close tool tile"
-              onClick={onClose}
-            >
-              <X size={13} />
-            </button>
-          ) : null}
-        </div>
-
-        {/* Content body: zero rail inset for files tool (preview draws underneath rail, §4b) */}
+        {/* Content body */}
         <div
           className="tool-panel__body"
           style={{
             flex: 1,
             minWidth: 0,
             minHeight: 0,
-            paddingLeft: effectiveTab === "files" ? 0 : `${railWidth}px`,
             display: "flex",
             flexDirection: "column",
             position: "relative",
@@ -339,11 +297,24 @@ export function ToolPanel({
                   branch={branch}
                   scope={scope}
                   prStatus={prStatus}
+                  currentWidth={activePanelWidth}
+                  currentHeight={activePanelHeight}
+                  onWidthDrag={setDragWidth}
+                  onHeightDrag={setDragHeight}
                 />
               ) : null}
             </>
           )}
         </div>
+        </div>
+
+        {/* In-pane rail on the right edge: canvas tiles (board C) and phones (no window rail at
+            <=768px). A trailing sibling of the content column; ToolPanel holds no PTY. */}
+        {inPaneRail ? (
+          <aside className={`tool-panel__tile-rail${isMobile ? " tool-panel__tile-rail--touch" : ""}`}>
+            <FilesLeftRail worktreeId={filesWt} />
+          </aside>
+        ) : null}
       </div>
     </ToolsInsetProvider>
   );

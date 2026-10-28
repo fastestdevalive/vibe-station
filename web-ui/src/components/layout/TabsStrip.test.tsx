@@ -15,6 +15,8 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { useModesStore } from "@/store/modesStore";
 import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import type { Session } from "@/api/types";
+import { createTopActionsStore, TopActionsProvider } from "@/context/TopActionsContext";
+import { TopActionsOwner } from "./TopActionsSlot";
 
 /**
  * Capture the `onDragEnd` callback TabsStrip hands to dnd-kit's DndContext,
@@ -136,7 +138,7 @@ describe("TabsStrip", () => {
     expect(await screen.findByRole("tab", { name: /store only/i })).toBeInTheDocument();
   });
 
-  it("3.T2 — the tablist is a deep Tauri drag region, tabs still click, and the scroller hides its scrollbar", async () => {
+  it("3.T2 — the strip root is a deep Tauri drag region, the tablist is its scroll child, tabs still click, and the scroller hides its scrollbar", async () => {
     const { container } = render(
       <MemoryRouter>
         <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
@@ -144,7 +146,10 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     const tablist = container.querySelector('[role="tablist"]') as HTMLElement;
-    expect(tablist.getAttribute("data-tauri-drag-region")).toBe("deep");
+    const strip = container.querySelector(".tabs-strip") as HTMLElement;
+    expect(strip.getAttribute("data-tauri-drag-region")).toBe("deep");
+    expect(tablist.classList.contains("tabs-strip__scroll")).toBe(true);
+    expect(tablist.parentElement).toBe(strip);
     // The tab is a <button role="tab">: Tauri's drag.js skips it, and its own
     // click handler (focus side-effect) is unchanged.
     expect(tab.tagName).toBe("BUTTON");
@@ -1924,4 +1929,67 @@ describe("TabsStrip", () => {
     }
   });
 
+
+  describe("actions host (6.1)", () => {
+    const probe = (
+      <TopActionsOwner zones={["agent"]}>
+        <button type="button" aria-label="Search files">
+          s
+        </button>
+      </TopActionsOwner>
+    );
+
+    it("6.T1 — agent + terminal strips under one provider: exactly one active reserve, in the agent strip, outside the tablist", async () => {
+      const store = createTopActionsStore();
+      const { container } = render(
+        <MemoryRouter>
+          <TopActionsProvider store={store}>
+            <div data-testid="agent-strip">
+              <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+            </div>
+            <div data-testid="terminal-strip">
+              <TabsStrip api={api} worktreeId="wt-1" kind="terminal" />
+            </div>
+            {probe}
+          </TopActionsProvider>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("tab", { name: /agent-2/i });
+      // The chip itself is rendered by the owner (once, outside every strip); the agent strip holds its reserve.
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      expect(screen.getByLabelText("Search files").closest(".tabs-strip")).toBeNull();
+      const active = container.querySelectorAll(".actions-host__reserve[data-active]");
+      expect(active).toHaveLength(1);
+      expect(screen.getByTestId("agent-strip").contains(active[0]!)).toBe(true);
+      expect(screen.getByTestId("terminal-strip").contains(active[0]!)).toBe(false);
+      expect(active[0]!.closest('[role="tablist"]')).toBeNull();
+      expect(container.querySelectorAll(".actions-host")).toHaveLength(1);
+      // The host is a sibling of the scroll region, inside .tabs-strip.
+      expect(active[0]!.closest(".tabs-strip")).not.toBeNull();
+    });
+
+    it("6.T1 — a terminal strip alone hosts nothing: no host, no active reserve", async () => {
+      const store = createTopActionsStore();
+      const { container } = render(
+        <MemoryRouter>
+          <TopActionsProvider store={store}>
+            <TabsStrip api={api} worktreeId="wt-1" kind="terminal" />
+            {probe}
+          </TopActionsProvider>
+        </MemoryRouter>,
+      );
+      expect(container.querySelector(".actions-host")).toBeNull();
+      expect(container.querySelector(".actions-host__reserve[data-active]")).toBeNull();
+    });
+
+    it("6.T1 — without a provider (gallery) the strip renders unchanged", async () => {
+      const { container } = render(
+        <MemoryRouter>
+          <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+        </MemoryRouter>,
+      );
+      await screen.findByRole("tab", { name: /agent-2/i });
+      expect(container.querySelector(".actions-host")).toBeNull();
+    });
+  });
 });

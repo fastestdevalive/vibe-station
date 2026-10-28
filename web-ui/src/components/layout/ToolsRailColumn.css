@@ -1,0 +1,32 @@
+/* Desktop window rail: right-edge column shown while the tools pane is visible. */
+.tools-rail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: var(--tools-rail-col-w);
+  min-height: 0;
+  background: var(--bg-secondary);
+  border-left: var(--border-width) solid var(--border-default);
+  user-select: none;
+}
+
+/* Head cell: continues the panes' top rows (--pane-row-h) to the window edge. Covered by the actions chip; the toggle above it is centred on this column. */
+.tools-rail__head {
+  flex: none;
+  height: var(--pane-row-h);
+  box-sizing: border-box;
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.tools-rail__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.tools-rail .files-left-rail__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

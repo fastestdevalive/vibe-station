@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import type { SearchResult } from "@/api/types";
 import type { ApiInstance } from "@/api";
 import { ApiError } from "@/api/errors";
-import { TopRightInsetProvider } from "@/context/TopRightInsetContext";
 import { SearchPanel } from "./SearchPanel";
 
 type MockSearchApi = ApiInstance & { search: ReturnType<typeof vi.fn> };
@@ -797,28 +796,13 @@ describe("SearchPanel", () => {
     });
   });
 
-  describe("layout and outer inset styling", () => {
-    it("applies paddingRight with outerInset when masterDetailVertical is true", () => {
-      mockStoreState.layoutByWorktree = { "wt-1": { masterDetailVertical: true } };
-      render(
-        <TopRightInsetProvider value={{ width: 100, height: 35 }}>
-          <SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />
-        </TopRightInsetProvider>
-      );
-      const controls = document.querySelector(".search-panel__bar") as HTMLElement;
-      expect(controls.style.paddingRight).toBe("168px"); // 68 + 100
-    });
-
-    it("does not apply paddingRight when masterDetailVertical is false", () => {
-      mockStoreState.layoutByWorktree = { "wt-1": { masterDetailVertical: false } };
-      render(
-        <TopRightInsetProvider value={{ width: 100, height: 35 }}>
-          <SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />
-        </TopRightInsetProvider>
-      );
-      const controls = document.querySelector(".search-panel__bar") as HTMLElement;
-      // Side-by-side: no reserve for the floating buttons, just the normal bar padding.
-      expect(controls.style.paddingRight).toBe("var(--space-2)");
+  describe("header padding", () => {
+    it.each([true, false])("carries no inline padding (CSS owns the flush-right inset) regardless of stacking (vertical=%s)", (vertical) => {
+      mockStoreState.layoutByWorktree = { "wt-1": { masterDetailVertical: vertical } };
+      render(<SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />);
+      const bar = document.querySelector(".search-panel__bar") as HTMLElement;
+      expect(bar.style.padding).toBe("");
+      expect(bar.style.paddingRight).toBe("");
     });
   });
 });

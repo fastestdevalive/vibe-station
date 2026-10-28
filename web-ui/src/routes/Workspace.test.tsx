@@ -239,6 +239,28 @@ function renderProjectWorkspace(
   );
 }
 
+describe("Workspace keyboard-shortcuts dialog (2.T4)", () => {
+  it.each([
+    ["classic worktree bar", "/worktree/wt-1/sess-agent2"],
+    ["dashboard bar", "/"],
+  ])("opens exactly one dialog from every Keyboard button (%s)", async (_label, path) => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <Workspace />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+    const buttons = await screen.findAllByRole("button", { name: "Keyboard shortcuts" });
+    for (let i = 0; i < buttons.length; i++) {
+      await user.click(screen.getAllByRole("button", { name: "Keyboard shortcuts" })[i]!);
+      expect(await screen.findAllByRole("dialog", { name: "Keyboard shortcuts" })).toHaveLength(1);
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument());
+    }
+  });
+});
+
 describe("Workspace project workspace (Phase 1 routing)", () => {
   beforeEach(() => {
     // Reset both stores so each test starts from a clean slate. Clearing the

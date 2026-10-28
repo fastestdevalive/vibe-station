@@ -2,12 +2,11 @@ import { Minus, Plus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
-import { useToolsInset } from "@/context/ToolsInsetContext";
 import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
-import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
@@ -70,13 +69,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
   const navigateBack = useWorkspaceStore((s) => s.navigateBack);
   const navigateForward = useWorkspaceStore((s) => s.navigateForward);
-
-  const { isPanelOpen: insetPanelOpen } = useToolsInset();
-  const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
-  const isPanelOpen = insetPanelOpen || fileTreeVisible;
-  const masterDetailVertical = useWorkspaceStore(
-    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
-  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -716,17 +708,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // panes read the same `diffScopeByWorktree` store slice, so a change made
   // there is reflected here automatically without this pane owning any UI
   // for it. File name + panel controls live on the Files bar above.
-  // With the tree closed (or stacked) the tools rail overlays this pane's
-  // left edge — both the info strip AND the body must clear it, or the rail
-  // icons cover the code view's line numbers (L8).
-  const clearsRail = !controlled && (!isPanelOpen || masterDetailVertical);
   const diffInfo = (
-    <div
-      className="preview-diffinfo"
-      style={{
-        paddingLeft: clearsRail ? "calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))" : undefined,
-      }}
-    >
+    <div className="preview-diffinfo">
       <div className="preview-nav" role="navigation" aria-label="Preview navigation">
         <button
           type="button"
@@ -933,10 +916,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         ref={setBodyRef}
         onScroll={handleScroll}
         className={`preview-body${useCodeChrome ? " preview-body--code" : ""}${showHtmlRendered ? " preview-body--html" : ""}`}
-        style={clearsRail ? {
-                ...previewScaleStyle,
-                paddingLeft: `calc(var(--tools-rail-w, 36px) + ${useCodeChrome ? "0px" : "var(--space-3, 12px)"})`,
-              } : previewScaleStyle}
+        style={previewScaleStyle}
       >
         {body}
       </div>

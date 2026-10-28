@@ -1103,7 +1103,7 @@ describe("FilePreviewPane — 2.9 (back/forward buttons and keyboard shortcuts)"
     expect(navigateForwardSpy).toHaveBeenCalledWith("wt-1");
   });
 
-  it("Revision 3 item 2 — preview-diffinfo applies rail padding when side panel is closed", async () => {
+  it("Revision 3 item 2 — preview-diffinfo never reserves rail padding (rail is a window column on the right)", async () => {
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
       activeFilePath: "README.md",
@@ -1115,7 +1115,7 @@ describe("FilePreviewPane — 2.9 (back/forward buttons and keyboard shortcuts)"
     });
 
     const diffInfo = container.querySelector(".preview-diffinfo") as HTMLElement;
-    expect(diffInfo.style.paddingLeft).toBe("calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))");
+    expect(diffInfo.style.paddingLeft).toBe("");
 
     // Open side panel
     act(() => {

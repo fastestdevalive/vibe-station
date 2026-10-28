@@ -1,6 +1,6 @@
 import type { Project, Worktree } from "@/api/types";
 import { useLayout } from "@/hooks/useLayout";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useVirtualKeyboardVisible } from "@/hooks/useVirtualKeyboardVisible";
 import { LspStatusRow } from "@/components/layout/LspStatusRow";
 import { LimitsBar } from "@/components/limits/LimitsBar";
@@ -26,7 +26,7 @@ interface GlobalStatusBarProps {
  */
 export function GlobalStatusBar({ api, projects, worktrees }: GlobalStatusBarProps) {
   const { activeProjectId, activeWorktreeId } = useLayout();
-  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isMobile = useIsMobile();
   const keyboardVisible = useVirtualKeyboardVisible();
 
   const project = projects.find((p) => p.id === activeProjectId);

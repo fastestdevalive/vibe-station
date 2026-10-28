@@ -193,7 +193,7 @@ describe("FilesPanel — content padding transition", () => {
     expect(content(container).style.transition).toBe("none");
 
     act(() => useWorkspaceStore.getState().toggleFileTree());
-    expect(content(container).style.transition).toBe("padding-left 0.15s ease");
+    expect(content(container).style.transition).toBe("padding-right 0.15s ease");
     act(() => {
       vi.advanceTimersByTime(LAYOUT_TRANSITION_HINT_MS);
     });
@@ -205,17 +205,32 @@ describe("FilesPanel — content padding transition", () => {
 
   it("stays off when switching to a worktree with a different side-panel orientation and size", () => {
     const { container, rerender } = render(<FilesPanel api={api} worktreeId={WT_A} />);
-    expect(content(container).style.paddingLeft).not.toBe("0px");
+    expect(content(container).style.paddingRight).not.toBe("0px");
 
     switchWorktree(WT_B);
     rerender(<FilesPanel api={api} worktreeId={WT_B} />);
     // Sanity: the switch really flipped the padding axis (stacked in WT_B).
-    expect(content(container).style.paddingLeft).toBe("0px");
+    expect(content(container).style.paddingRight).toBe("0px");
     expect(content(container).style.paddingTop).not.toBe("0px");
     expect(content(container).style.transition).toBe("none");
 
     switchWorktree(WT_A);
     rerender(<FilesPanel api={api} worktreeId={WT_A} />);
     expect(content(container).style.transition).toBe("none");
+  });
+});
+
+describe("FilesPanel — no transition hold attribute", () => {
+  const api = createMockApi();
+
+  it("toggling the list never sets data-list-transition (the chip never blinks)", () => {
+    const { container } = render(<FilesPanel api={api} worktreeId={WT_A} />);
+    const root = container.querySelector<HTMLElement>(".files-panel")!;
+    act(() => useWorkspaceStore.getState().toggleFileTree());
+    expect(root).not.toHaveAttribute("data-list-transition");
+    act(() => {
+      vi.advanceTimersByTime(LAYOUT_TRANSITION_HINT_MS);
+    });
+    expect(root).not.toHaveAttribute("data-list-transition");
   });
 });

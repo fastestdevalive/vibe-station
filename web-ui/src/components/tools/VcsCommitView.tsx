@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { ChangedPathEntry, FileScope } from "@/api/types";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
-import { MasterDetailShell } from "@/components/layout/MasterDetailShell";
+import { DockedListLayout } from "@/components/layout/DockedListLayout";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
+import { ModeHeaderActionsHost, ToolActionsHost } from "@/components/layout/TopActionsSlot";
+import { Chip } from "@/components/ui/Chip";
+import { HOST_PRIORITY } from "@/context/TopActionsContext";
+import { useToolsInset } from "@/context/ToolsInsetContext";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface VcsCommitViewProps {
@@ -29,9 +33,11 @@ function shortSha(sha: string): string {
 }
 
 /**
- * Commit-scoped master-detail view (Decision 5, item 9) — reuses
- * `MasterDetailShell` with a controlled `ChangedFileList` + `FilePreviewPane`
- * (Decision 6) so opening a file here never clobbers the Files tab's own
+ * Commit-scoped master-detail view (Decision 5, item 9) — a controlled
+ * `ChangedFileList` + `FilePreviewPane` (Decision 6) in the shared
+ * `DockedListLayout`: the changed-file list is docked on the RIGHT of the diff,
+ * exactly like the Files tab's list (same persisted size, resize handle on its
+ * left edge, stacked option, phone clamps). Opening a file here never clobbers the Files tab's own
  * open file / diff scope. Owns its own `selectedPath` state — nothing here
  * touches `useWorkspaceStore`'s `activeFilePath`/`diffScopeByWorktree`.
  */
@@ -53,6 +59,20 @@ export function VcsCommitView({
   // `fileTreeVisible`). Defaults to visible on first open (State B); the rail
   // icon toggles it closed (State C) / open again without exiting the commit.
   const sidebarVisible = useWorkspaceStore((s) => s.vcsSidebarVisibleByWorktree[worktreeId] ?? true);
+
+  const { listHostsGlobal, listHostsPane } = useToolsInset();
+  const listRef = useRef<HTMLDivElement>(null);
+  // Arrow keys work as soon as a commit opens (and when the VCS rail icon re-opens the list).
+  useEffect(() => {
+    if (!sidebarVisible) return;
+    const id = requestAnimationFrame(() => {
+      const el = listRef.current;
+      (el?.querySelector<HTMLElement>("[tabindex='0']") ?? el?.querySelector<HTMLElement>("[tabindex]"))?.focus({
+        preventScroll: true,
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sidebarVisible]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,50 +100,62 @@ export function VcsCommitView({
   }, [api, worktreeId, sha, scope, submodule]);
 
   const topbarExtra = (
-    <div className="files-topbar__breadcrumb">
-      <DiffScopeSelector
-        scope="commit"
-        commitLabel={`${submodule ? `${submodule} · ` : ""}commit #${shortSha(sha)}`}
-        onBack={onBack}
+    <>
+      <div className="files-topbar__breadcrumb">
+        <DiffScopeSelector
+          scope="commit"
+          commitLabel={`${submodule ? `${submodule} · ` : ""}commit #${shortSha(sha)}`}
+          onBack={onBack}
+        />
+      </div>
+      {/* Same hosting rule as the Files bar: pane controls here unless the open list's header carries them (stacked,
+          or phone side-by-side); the chip's reserve moves to the list header while the desktop list is open. */}
+      <ToolActionsHost
+        when={!listHostsPane}
+        priority={listHostsGlobal ? HOST_PRIORITY.filesBarFallback : HOST_PRIORITY.default}
       />
-    </div>
+    </>
   );
 
   return (
-    <MasterDetailShell
-      storageKey={`commit-${worktreeId}`}
-      worktreeId={worktreeId}
-      autoFocusTree
-      // Revision 4: the split's two redundant built-in toggles (treeToggle +
-      // layoutToggle) are removed — sidebar open/close is now owned by the VCS
-      // rail icon via `treeVisibleOverride`, not MasterDetailShell's own buttons.
-      treeToggle={false}
-      layoutToggle={false}
-      treeVisibleOverride={sidebarVisible}
+    <DockedListLayout
+      wt={worktreeId}
+      open={sidebarVisible}
+      handleLabel="changed files"
       topbarClassName="vcs-topbar"
-      topbarExtra={topbarExtra}
-      leftPane={
-        <ChangedFileList
-          entries={entries}
-          loading={loading}
-          error={error}
-          controlled={{ activePath: selectedPath, onSelect: setSelectedPath }}
-        />
+      topbar={topbarExtra}
+      list={
+        <div ref={listRef} className="commit-files">
+          <div className="commit-files__head actions-row">
+            <span className="commit-files__title">Changes</span>
+            {!loading && !error ? (
+              <Chip size="sm" aria-label={`${entries.length} changed ${entries.length === 1 ? "file" : "files"}`}>
+                {entries.length}
+              </Chip>
+            ) : null}
+            <ModeHeaderActionsHost mode="commit" />
+          </div>
+          <ChangedFileList
+            entries={entries}
+            loading={loading}
+            error={error}
+            controlled={{ activePath: selectedPath, onSelect: setSelectedPath }}
+          />
+        </div>
       }
-      rightPane={
-        <FilePreviewPane
-          api={api}
-          worktreeId={worktreeId}
-          scope={scope}
-          controlled={{
-            path: selectedPath,
-            scope: "commit",
-            commitSha: sha,
-            submodule,
-            deleted: entries.find((e) => e.path === selectedPath)?.status === "D",
-          }}
-        />
-      }
-    />
+    >
+      <FilePreviewPane
+        api={api}
+        worktreeId={worktreeId}
+        scope={scope}
+        controlled={{
+          path: selectedPath,
+          scope: "commit",
+          commitSha: sha,
+          submodule,
+          deleted: entries.find((e) => e.path === selectedPath)?.status === "D",
+        }}
+      />
+    </DockedListLayout>
   );
 }

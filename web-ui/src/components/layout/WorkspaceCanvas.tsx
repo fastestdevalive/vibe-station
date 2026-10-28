@@ -26,7 +26,6 @@ import {
   type TileSpec,
 } from "@/hooks/useStore";
 import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
-import { TopRightInsetProvider, useTopRightInset } from "@/context/TopRightInsetContext";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
@@ -36,8 +35,9 @@ import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
 import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { ActionsHost } from "@/components/layout/TopActionsSlot";
+import { HOST_PRIORITY } from "@/context/TopActionsContext";
 
-const ZERO_INSET = { width: 0, height: 0 };
 
 interface WorkspaceCanvasProps {
   /**
@@ -200,7 +200,6 @@ export function WorkspaceCanvas({
    *  list — reused here so the picker's project order matches the sidebar's. */
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const navigate = useNavigate();
-  const outerInset = useTopRightInset();
 
   const startDraftForWorktree = (targetWorktreeId: string) => {
     void api
@@ -406,6 +405,12 @@ export function WorkspaceCanvas({
       : canvas.mode === "tiled"
         ? findTopRightTiledLeafId(canvas.tree)
         : findTopRightFreeTileId(canvas.tiles, canvas.freeRects);
+  // The toolbar row hosts the actions group (Search / "…", which carries "Show toolbar" and
+  // "Canvas layout"). With the toolbar hidden and nowhere else to host it (no tiles, not
+  // fullscreen) the row is forced back, so "…" stays reachable. Never forced in the
+  // detached view, whose explicit TopBar renders the group.
+  const toolbarShown =
+    canvasToolbarVisible || (!isDetachedView && topRightTileId == null && fullscreenTileId == null);
 
   // Reconcile a dangling `fullscreenTileId` against whatever tile set is
   // CURRENTLY live — every non-fullscreen tile hides via `display:none`
@@ -1047,8 +1052,6 @@ export function WorkspaceCanvas({
     // see paneOutlets.tsx) so only the fullscreen one is visible/interactive.
     const isFullscreen = fullscreenTileId === tile.id;
     const isHiddenForFullscreen = fullscreenTileId !== null && !isFullscreen;
-    const isUnderFloatingWidget = !toolbarOccupiesTop && !fullscreenTileId && tile.id === topRightTileId;
-    const tileInset = isUnderFloatingWidget ? outerInset : ZERO_INSET;
     const tileStyle: CSSProperties = isFullscreen
       ? // Stop above the global status bar, same as `.pane-viewport-fullscreen`.
         { position: "fixed", inset: "0 0 var(--global-status-bar-h, 24px) 0" }
@@ -1077,11 +1080,6 @@ export function WorkspaceCanvas({
               : cv.mode === "free"
                 ? "Click to fullscreen · drag to move"
                 : "Click to fullscreen · drag to rearrange"
-          }
-          style={
-            isUnderFloatingWidget && outerInset.width > 0
-              ? { paddingRight: `calc(var(--space-2) + ${outerInset.width}px)` }
-              : undefined
           }
           onPointerDown={
             cv.mode === "free"
@@ -1143,12 +1141,22 @@ export function WorkspaceCanvas({
           >
             {isFullscreen ? <Minimize2 size={13} /> : <X size={13} />}
           </button>
+          {/* Actions host of the top-right tile while the toolbar is hidden; the header's LAST item, so its reserve sits under the actions chip. The header drags /
+              fullscreens on React pointerdown/click, which bubble through portals, so the
+              wrapper stops both. */}
+          {tile.id === topRightTileId ? (
+            <span
+              style={{ display: "contents" }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ActionsHost zone="canvas" priority={HOST_PRIORITY.canvasTile} />
+            </span>
+          ) : null}
         </div>
         <div className="workspace-canvas__tile-body">
           {outletVisible ? (
-            <TopRightInsetProvider value={tileInset}>
-              <PaneOutlet paneKey={paneKey} />
-            </TopRightInsetProvider>
+            <PaneOutlet paneKey={paneKey} />
           ) : (
             <div className="workspace-canvas__tile-hidden">Hidden — toggle it on in the top bar</div>
           )}
@@ -1211,7 +1219,6 @@ export function WorkspaceCanvas({
         className={`workspace-canvas__toolbar${toolbarPortalEl ? " workspace-canvas__toolbar--portaled" : ""}`}
         role="toolbar"
         aria-label="Workspace canvas"
-        style={outerInset.width > 0 && !toolbarPortalEl ? { paddingRight: `calc(var(--space-3) + ${outerInset.width}px)` } : undefined}
       >
         <div className="workspace-canvas__toolbar-left">
           <div className="workspace-canvas__mode-toggle" role="group" aria-label="Canvas mode">
@@ -1553,6 +1560,11 @@ export function WorkspaceCanvas({
               </div>
             ) : null}
           </div>
+          <ActionsHost
+            zone="canvas"
+            priority={HOST_PRIORITY.canvasToolbar}
+            enabled={toolbarShown && fullscreenTileId === null && !isDetachedView}
+          />
         </div>
       </div>
   );
@@ -1562,7 +1574,7 @@ export function WorkspaceCanvas({
 
   return (
     <div className="workspace-canvas">
-      {canvasToolbarVisible
+      {toolbarShown
         ? toolbarPortalEl
           ? createPortal(toolbarNode, toolbarPortalEl)
           : toolbarNode

@@ -119,7 +119,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   // its own store slice so picking "branch" here never flips `scope` (which
   // FilePreviewPane also reads) and switches the Files header into the flat
   // "Changes" list / full-diff-preview mode. That mode toggle stays the sole
-  // job of the "Diff view" (GitCompare) button, per Task A.2.
+  // job of the "Changes" toggle button, per Task A.2.
   const treeScopeRaw = useWorkspaceStore((s) =>
     activeWorktreeId ? s.treeScopeByWorktree[activeWorktreeId] : undefined,
   );

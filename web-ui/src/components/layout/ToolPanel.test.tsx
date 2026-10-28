@@ -1,9 +1,35 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ToolPanel } from "./ToolPanel";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { createTopActionsStore, TopActionsProvider } from "@/context/TopActionsContext";
+import { TopActionsOwner } from "./TopActionsSlot";
+import type { ComponentProps } from "react";
+
+/** The ONE reserve span marked active by the registry (the row under the actions chip). */
+const activeReserve = (root: ParentNode) => root.querySelector(".actions-host__reserve[data-active]");
+
+/** Renders ToolPanel(s) under a registry provider with a `Search files` probe as the chip content. */
+function renderHosted(
+  panels: ComponentProps<typeof ToolPanel>[],
+  zones: ("tools" | "agent" | "canvas")[] = ["tools"],
+) {
+  const store = createTopActionsStore();
+  return render(
+    <TopActionsProvider store={store}>
+      {panels.map((p, i) => (
+        <ToolPanel key={i} {...p} />
+      ))}
+      <TopActionsOwner zones={zones}>
+        <button type="button" aria-label="Search files" data-testid="owner-probe">
+          s
+        </button>
+      </TopActionsOwner>
+    </TopActionsProvider>,
+  );
+}
 
 describe("ToolPanel", () => {
   const api = createMockApi();
@@ -58,9 +84,134 @@ describe("ToolPanel", () => {
     expect(screen.queryByRole("tablist", { name: "Tools" })).not.toBeInTheDocument();
   });
 
-  it("§3.b, §3.d — renders vertical tool rail with disabled Devices/Artifacts and working VCS", async () => {
+  it("§3.b — a desktop classic panel renders no rail (the rail is the window-level ToolsRailColumn)", () => {
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    expect(container.querySelector(".files-left-rail")).toBeNull();
+    expect(container.querySelector(".tool-panel__tile-rail")).toBeNull();
+    expect(container.querySelector("#tools-pane")).not.toBeNull();
+  });
+
+  describe("<=768px (phone)", () => {
+    const realMatchMedia = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((q: string) => ({
+        matches: q.includes("max-width: 768px"),
+        media: q,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = realMatchMedia;
+    });
+
+    describe("pane controls host (listHostsPane)", () => {
+      const filesLayout = (extra: Partial<typeof DEFAULT_WORKTREE_LAYOUT> = {}) => ({
+        "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" as const, ...extra },
+      });
+      const toggleName = /Switch to (stacked|side-by-side) layout/;
+
+      it("phone side-by-side, list open: the list header carries the layout toggle and Fullscreen; the Files bar has none", async () => {
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          layoutByWorktree: filesLayout({ masterDetailVertical: false }),
+          fileTreeVisible: true,
+          filesLeftPaneMode: { "wt-1": "tree" },
+        });
+        const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+        await screen.findByText("README.md").catch(() => undefined);
+        const bar = container.querySelector(".files-topbar") as HTMLElement;
+        const header = container.querySelector(".file-tree-sidebar-header") as HTMLElement;
+        const overlay = container.querySelector(".files-left-pane-overlay") as HTMLElement;
+        expect(overlay.contains(header)).toBe(true);
+        expect(header.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
+        expect(header.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+        expect(bar.querySelector(".tab--icon")).toBeNull();
+        expect(screen.getAllByLabelText(toggleName)).toHaveLength(1);
+      });
+
+      it("phone side-by-side, list closed: the controls are back in the Files bar", () => {
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          layoutByWorktree: filesLayout({ masterDetailVertical: false }),
+          fileTreeVisible: false,
+        });
+        const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+        const bar = container.querySelector(".files-topbar") as HTMLElement;
+        expect(bar.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
+        expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      });
+
+      it("phone, VCS commit open: the changed-file list header carries the controls; the bar has none", async () => {
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          layoutByWorktree: filesLayout({ toolPanelTab: "vcs" as const, masterDetailVertical: false }),
+          vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } },
+        } as never);
+        const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+        await screen.findByText(/commit #abc1234/);
+        const head = container.querySelector(".commit-files__head") as HTMLElement;
+        expect(head.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
+        expect(head.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+        expect(container.querySelector(".vcs-topbar")!.querySelector(".tab--icon")).toBeNull();
+        expect(screen.getAllByLabelText(toggleName)).toHaveLength(1);
+        useWorkspaceStore.setState({ vcsSelectedCommitByWorktree: {} } as never);
+      });
+
+      it("phone stacked, list open: still the list header", async () => {
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          layoutByWorktree: filesLayout({ masterDetailVertical: true }),
+          fileTreeVisible: true,
+          filesLeftPaneMode: { "wt-1": "tree" },
+        });
+        const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+        await screen.findByText("README.md").catch(() => undefined);
+        const header = container.querySelector(".file-tree-sidebar-header") as HTMLElement;
+        expect(header.contains(screen.getByLabelText("Switch to side-by-side layout"))).toBe(true);
+        expect(container.querySelector(".files-topbar")!.querySelector(".tab--icon")).toBeNull();
+      });
+    });
+
+    it("renders its own vertical touch rail as the LAST child, after the content; rail buttons work", async () => {
+      const user = userEvent.setup();
+      const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+      const root = container.querySelector(".tool-panel") as HTMLElement;
+      const rail = container.querySelector(".tool-panel__tile-rail.tool-panel__tile-rail--touch") as HTMLElement;
+      expect(rail).not.toBeNull();
+      expect(root.lastElementChild).toBe(rail);
+      expect(container.querySelector(".tool-panel__content")!.nextElementSibling).toBe(rail);
+      expect(rail.querySelector('[aria-orientation="vertical"]')).not.toBeNull();
+      await user.click(screen.getByRole("button", { name: "Version Control" }));
+      expect(useWorkspaceStore.getState().layoutByWorktree["wt-1"]?.toolPanelTab).toBe("vcs");
+    });
+
+    it("Esc with focus on a rail button closes the open list", async () => {
+      const user = userEvent.setup();
+      act(() => useWorkspaceStore.setState({ fileTreeVisible: true, layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" } } }));
+      render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+      screen.getByRole("button", { name: "Outline" }).focus();
+      await user.keyboard("{Escape}");
+      expect(useWorkspaceStore.getState().fileTreeVisible).toBe(false);
+    });
+  });
+
+  it("§3.b, §3.d — hidePanelControls renders the tile rail as a flex sibling after the content, with working VCS", async () => {
     const user = userEvent.setup();
-    render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" hidePanelControls />);
+
+    const root = container.querySelector(".tool-panel") as HTMLElement;
+    expect(root.style.flexDirection).toBe("row");
+    expect(root.id).toBe("");
+    const content = container.querySelector(".tool-panel__content") as HTMLElement;
+    const tileRail = container.querySelector(".tool-panel__tile-rail") as HTMLElement;
+    expect(tileRail).not.toBeNull();
+    expect(content.nextElementSibling).toBe(tileRail);
+    expect(tileRail.parentElement).toBe(root);
 
     const devices = screen.getByRole("button", { name: "Devices (coming soon)" });
     expect(devices).toBeDisabled();
@@ -75,24 +226,24 @@ describe("ToolPanel", () => {
   });
 
   it("R6 — renders relocated ToolFullscreenButton", () => {
-    render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
     expect(screen.getByRole("button", { name: /fullscreen/i })).toBeInTheDocument();
   });
 
-  it("§4b — tool-panel__body has zero padding for files tab and 36px padding for VCS tab", async () => {
+  it("without a provider no pane controls render (hosts are null) and nothing throws", () => {
+    render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    expect(screen.queryByRole("button", { name: /fullscreen/i })).toBeNull();
+  });
+
+  it("§4b — tool-panel__body carries no rail padding on any tab", async () => {
     const user = userEvent.setup();
-    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" hidePanelControls />);
 
     const body = container.querySelector(".tool-panel__body") as HTMLElement;
-    // On files tab: zero padding (file preview draws underneath rail)
-    expect(body.style.paddingLeft).toBe("0px");
+    expect(body.style.paddingLeft).toBe("");
 
-    // Switch to VCS tab
-    const vcs = screen.getByRole("button", { name: "Version Control" });
-    await user.click(vcs);
-
-    // On VCS tab: 36px padding so rail icons don't overlap commit list
-    expect(body.style.paddingLeft).toBe("36px");
+    await user.click(screen.getByRole("button", { name: "Version Control" }));
+    expect(body.style.paddingLeft).toBe("");
   });
 
   it("§4a — sets --tools-rail-panel-w according to persisted filesLeftPaneWidthByWorktree", () => {
@@ -109,7 +260,7 @@ describe("ToolPanel", () => {
     useWorkspaceStore.setState({
       layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files", masterDetailVertical: false } },
     });
-    render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
 
     const toggleBtn = screen.getByRole("button", { name: "Switch to stacked layout" });
     expect(toggleBtn).toBeInTheDocument();
@@ -184,6 +335,34 @@ describe("ToolPanel", () => {
     expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
   });
 
+  it("R1F-02 — Esc from inside the list overlay parks focus on the pane so a second Esc exits fullscreen", async () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" } },
+      fileTreeVisible: true,
+      workspacePaneFullscreen: "tools",
+    });
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    await screen.findByText("README.md");
+    const overlay = container.querySelector(".files-left-pane-overlay") as HTMLElement;
+    const inner = document.createElement("div");
+    inner.tabIndex = 0;
+    overlay.appendChild(inner);
+    inner.focus();
+    expect(document.activeElement).toBe(inner);
+    act(() => {
+      inner.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(useWorkspaceStore.getState().fileTreeVisible).toBe(false);
+    expect(document.activeElement).toBe(container.querySelector(".tool-panel"));
+    expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBe("tools");
+    act(() => {
+      (document.activeElement as HTMLElement).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
+  });
+
   it("R16 — Esc closes a references panel revealed with the tree hidden before exiting fullscreen", () => {
     useWorkspaceStore.setState({
       layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" } },
@@ -204,67 +383,190 @@ describe("ToolPanel", () => {
     expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
   });
 
-  it("rail wrapper height-fits the rail so it ends after the last button", () => {
-    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
-    const rail = container.querySelector(".files-left-rail") as HTMLElement;
-    expect(rail).not.toBeNull();
-    const wrapper = rail?.parentElement;
-    // The absolute wrapper hosting the rail is anchored at top:0 with no bottom,
-    // so the column ends after the last icon and content below can use the width.
-    const wrapperStyle = wrapper?.style;
-    expect(wrapperStyle?.position).toBe("absolute");
-    expect(wrapperStyle?.top).toBe("0px");
-    expect(wrapperStyle?.bottom).toBe("");
-    expect(wrapperStyle?.display).toBe("flex");
-    expect(wrapperStyle?.flexDirection).toBe("column");
-  });
-
-  describe("mobile rail toggle", () => {
-    const mockMobile = (matches: boolean) =>
-      vi.spyOn(window, "matchMedia").mockImplementation(
-        (query: string) =>
-          ({
-            matches: query.includes("max-width: 768px") ? matches : false,
-            media: query,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            addListener: () => {},
-            removeListener: () => {},
-            dispatchEvent: () => false,
-            onchange: null,
-          }) as MediaQueryList,
-      );
-
-    afterEach(() => {
-      vi.restoreAllMocks();
-      useWorkspaceStore.setState({ toolsRailHidden: false });
+  describe("actions hosts (registry)", () => {
+    const filesLayout = (extra: Partial<typeof DEFAULT_WORKTREE_LAYOUT> = {}) => ({
+      "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" as const, ...extra },
     });
 
-    it("is not rendered on desktop, and the rail starts at the top", () => {
-      mockMobile(false);
-      const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
-      expect(screen.queryByRole("button", { name: "Tools bar" })).not.toBeInTheDocument();
-      const rail = container.querySelector(".tool-panel__rail") as HTMLElement;
-      expect(rail.style.top).toBe("0px");
+    it("R1F-05 — tools fullscreen hides the layout toggle and shows only Exit fullscreen", () => {
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        layoutByWorktree: filesLayout(),
+        fileTreeVisible: false,
+        workspacePaneFullscreen: "tools",
+      });
+      renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      expect(screen.queryByLabelText(/Switch to (stacked|side-by-side) layout/)).toBeNull();
+      expect(screen.getAllByRole("button", { name: /exit fullscreen/i })).toHaveLength(1);
+      act(() => useWorkspaceStore.getState().setWorkspacePaneFullscreen(null));
+      expect(screen.getAllByLabelText(/Switch to (stacked|side-by-side) layout/)).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Fullscreen" })).toHaveLength(1);
     });
 
-    it("on mobile the rail sits below the toggle; toggling hides it and zeroes --tools-rail-w (shared store state)", async () => {
-      mockMobile(true);
-      const user = userEvent.setup();
-      const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
-      const toggle = screen.getByRole("button", { name: "Tools bar" });
-      const rail = container.querySelector(".tool-panel__rail") as HTMLElement;
+    it("5.T1 — Files tab, list closed: one fullscreen, one layout toggle, one chip; the Files bar holds the reserve and the pane controls", async () => {
+      useWorkspaceStore.setState({ layoutByWorktree: filesLayout(), fileTreeVisible: false });
+      const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      const bar = container.querySelector(".files-topbar") as HTMLElement;
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /fullscreen/i })).toHaveLength(1);
+      expect(screen.getAllByLabelText("Switch to stacked layout")).toHaveLength(1);
+      // The chip is outside every row; the Files bar holds the active reserve.
+      expect(bar.contains(screen.getByLabelText("Search files"))).toBe(false);
+      expect(bar.contains(activeReserve(container))).toBe(true);
+      expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      expect(bar.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
+    });
+
+    it.each([
+      ["tree", ".file-tree-sidebar-header"],
+      ["search", ".search-panel__bar"],
+      ["outline", ".outline-panel__header"],
+      ["references", ".references-panel__header"],
+    ] as const)("5.T2 — stacked + list open, mode %s: reserve lives only in that mode's header", async (mode, sel) => {
+      useWorkspaceStore.setState({
+        layoutByWorktree: filesLayout({ masterDetailVertical: true }),
+        fileTreeVisible: true,
+        filesLeftPaneMode: { "wt-1": mode },
+      });
+      const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      await screen.findByText("README.md").catch(() => undefined);
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /fullscreen/i })).toHaveLength(1);
+      expect(screen.getAllByLabelText("Switch to side-by-side layout")).toHaveLength(1);
+      const headers = Array.from(container.querySelectorAll(sel));
+      expect(headers.length).toBeGreaterThan(0);
+      const reserve = activeReserve(container);
+      expect(headers.some((h) => h.contains(reserve))).toBe(true);
+      expect(container.querySelector(".files-topbar")?.contains(reserve)).toBe(false);
+      // Stacked: the same header carries the pane controls.
+      expect(headers.some((h) => h.contains(screen.getByLabelText("Switch to side-by-side layout")))).toBe(true);
+    });
+
+    it.each([
+      ["tree", ".file-tree-sidebar-header"],
+      ["search", ".search-panel__bar"],
+      ["outline", ".outline-panel__header"],
+      ["references", ".references-panel__header"],
+    ] as const)(
+      "anchor — desktop side-by-side list open, mode %s: the mode header holds the reserve only; layout toggle and Fullscreen stay in .files-topbar",
+      async (mode, sel) => {
+        useWorkspaceStore.setState({
+          layoutByWorktree: filesLayout({ masterDetailVertical: false }),
+          fileTreeVisible: true,
+          filesLeftPaneMode: { "wt-1": mode },
+        });
+        const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+        await screen.findByText("README.md").catch(() => undefined);
+        expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+        const reserve = activeReserve(container);
+        const header = container.querySelector(sel) as HTMLElement;
+        expect(header).not.toBeNull();
+        expect(header).toHaveClass("actions-row"); // every row that can host the chip's reserve carries the shared class
+        expect(header.contains(reserve)).toBe(true);
+        const bar = container.querySelector(".files-topbar") as HTMLElement;
+        expect(bar.contains(reserve)).toBe(false);
+        expect(bar.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
+        expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+        expect(header.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(false);
+        expect(header.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(false);
+      },
+    );
+
+    it("a tools tile of worktree B closes ITS list on Esc even when the active worktree A is on the VCS tab", async () => {
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        layoutByWorktree: {
+          "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "vcs" },
+          "wt-2": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" },
+        },
+        fileTreeVisible: true,
+        filesLeftPaneMode: { "wt-2": "tree" },
+      });
+      const { container } = render(<ToolPanel api={api} worktreeId="wt-2" scope="worktree" hidePanelControls />);
+      await screen.findByText("README.md").catch(() => undefined);
       const root = container.querySelector(".tool-panel") as HTMLElement;
-      expect(rail.style.top).toBe("35px");
-      expect(root.style.getPropertyValue("--tools-rail-w")).toBe("36px");
-      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      act(() => {
+        root.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      });
+      expect(useWorkspaceStore.getState().fileTreeVisible).toBe(false);
+    });
 
-      await user.click(toggle);
-      expect(useWorkspaceStore.getState().toolsRailHidden).toBe(true);
-      expect(root.style.getPropertyValue("--tools-rail-w")).toBe("0px");
-      // The overlay keeps its full footprint so the preview does not shift.
-      expect(root.style.getPropertyValue("--tools-rail-full-w")).toBe("36px");
-      expect(rail.style.visibility).toBe("hidden");
+    it("anchor — side-by-side list closed: the reserve is back in .files-topbar", () => {
+      useWorkspaceStore.setState({ layoutByWorktree: filesLayout(), fileTreeVisible: false });
+      const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      expect((container.querySelector(".files-topbar") as HTMLElement).contains(activeReserve(container))).toBe(true);
+    });
+
+    it("5.T3 — VCS tab: reserve in .vcs-topbar, including the commit view's bar", async () => {
+      useWorkspaceStore.setState({ layoutByWorktree: filesLayout({ toolPanelTab: "vcs" as const }) });
+      const { container, unmount } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      let bar = container.querySelector(".vcs-topbar") as HTMLElement;
+      expect(bar).not.toBeNull();
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      expect(bar.contains(activeReserve(container))).toBe(true);
+      expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      unmount();
+
+      useWorkspaceStore.setState({ vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } } } as never);
+      const second = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      await screen.findByText(/commit #abc1234/);
+      bar = second.container.querySelector(".vcs-topbar") as HTMLElement;
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      // Commit open, list docked right: the chip's reserve moves into the list header (like the Files list header);
+      // the pane controls stay in the bar.
+      const head = second.container.querySelector(".commit-files__head") as HTMLElement;
+      expect(head).toHaveClass("actions-row");
+      expect(head.contains(activeReserve(second.container))).toBe(true);
+      expect(bar.contains(activeReserve(second.container))).toBe(false);
+      expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      second.unmount();
+
+      // List closed (VCS rail icon): the reserve is back in the bar.
+      useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: { "wt-1": false } });
+      const third = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      await screen.findByText(/commit #abc1234/);
+      bar = third.container.querySelector(".vcs-topbar") as HTMLElement;
+      expect(bar.contains(activeReserve(third.container))).toBe(true);
+      useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: {}, vcsSelectedCommitByWorktree: {} } as never);
+    });
+
+    it("5.T4 — no worktree: reserve in .tool-panel__bar above the empty state", () => {
+      useWorkspaceStore.setState({ activeWorktreeId: null, activeDirectContextId: null });
+      const { container } = renderHosted([{ api, worktreeId: null, scope: "worktree" }]);
+      const bar = container.querySelector(".tool-panel__bar") as HTMLElement;
+      expect(bar).toHaveClass("actions-row");
+      expect(bar).not.toBeNull();
+      expect(bar.contains(activeReserve(container))).toBe(true);
+      expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      expect(screen.getByText("Select a worktree to use tools")).toBeInTheDocument();
+    });
+
+    it("5.T5 — a tile (hidePanelControls) has Close but never reserves the chip; one #tools-pane across sticky panels", () => {
+      const onClose = () => {};
+      const { container } = renderHosted([
+        { api, worktreeId: "wt-1", scope: "worktree", hidePanelControls: true, onClose },
+      ], ["canvas"]);
+      expect(screen.getByRole("button", { name: "Close tool tile" })).toBeInTheDocument();
+      // A tile never reserves the chip's width (the registry's `canvas` zone has no host here).
+      expect(activeReserve(container)).toBeNull();
+      expect(container.querySelector("#tools-pane")).toBeNull();
+    });
+
+    it("5.T5 — active + offscreen panels: one Search files, one #tools-pane", () => {
+      useWorkspaceStore.setState({
+        layoutByWorktree: {
+          "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" },
+          "wt-2": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" },
+        },
+        activeWorktreeId: "wt-1",
+      });
+      const { container } = renderHosted([
+        { api, worktreeId: "wt-1", scope: "worktree" },
+        { api, worktreeId: "wt-2", scope: "worktree" },
+      ]);
+      expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
+      expect(container.querySelectorAll("#tools-pane")).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: /fullscreen/i })).toHaveLength(2);
     });
   });
 });
