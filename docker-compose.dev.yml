@@ -24,24 +24,46 @@
 # docker-compose.screenshots.yml instead — it bakes source into the image
 # (no hot reload) and keeps auth on, which this file intentionally doesn't.
 #
-# `claude` and gemini are installed directly in the image (dev.Dockerfile);
-# ~/.gemini is bind-mounted so OAuth credentials are available inside the container.
-# opencode/agy/codex/cursor-agent are bind-mounted from the host by
-# docker-compose.dev.hostbins.yml, layered on by scripts/dev-sandbox.sh on LINUX
-# hosts only (macOS host binaries are Mach-O and can't run in the Linux container;
-# on a Mac those harnesses show "not found"). Override paths with OPENCODE_BIN,
-# CURSOR_AGENT_VERSIONS, AGY_BIN, CODEX_PLATFORM_DIR if yours differ.
-# macOS: claude auth REQUIRES the long-lived token (`claude setup-token`) — the
-# Keychain-held login is not readable from the container.
+# Every agent harness — claude, codex, opencode, cursor-agent, agy, omp, pi (and
+# gemini) — is installed IN the image as a pinned Linux build for the image's arch
+# (dev.Dockerfile), on Linux and macOS hosts alike. This file mounts no host
+# binary: a Mac's are Mach-O (ENOEXEC in this Linux container). On a LINUX host,
+# scripts/dev-sandbox.sh layers a generated overlay that bind-mounts the host's own
+# opencode/agy/codex/cursor-agent (only those that exist) under /opt/host-bins, and
+# scripts/dev-entrypoint.sh prefers them over the image's pinned copies. On macOS
+# it layers nothing. CREDENTIALS come from the host, and how depends on where
+# each CLI keeps its login:
 #
-# Real credentials for claude/cursor/opencode/agy are piped in too (read-only
-# "seed" mounts under /seed/*, copied by scripts/dev-entrypoint.sh into a
-# writable location inside the container — see that script's
-# `seed_writable_home` calls for exactly what's copied vs. excluded per CLI,
-# and why: each CLI's credential lives in a different, specific file/dir,
-# usually alongside gigabytes of unrelated local history/db state that a
-# throwaway sandbox has no use for). `VST_NO_AUTH` above is the DAEMON's own
-# login, unrelated to these — these are the underlying agent CLIs' auth.
+#   claude        macOS keeps the login in the Keychain, so a long-lived token from
+#                 `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN, read by
+#                 scripts/dev-sandbox.sh from ~/.config/vibe-station/claude-oauth-token)
+#                 is REQUIRED there (`dev-sandbox.sh up` offers to mint and save one
+#                 on a TTY); Linux falls back to copying .credentials.json.
+#   codex         ~/.codex/auth.json is seeded when codex uses its file store
+#                 (`cli_auth_credentials_store`); with a keyring store there's no
+#                 file, so `codex login --device-auth` inside (or --with-api-key).
+#   opencode      ~/.local/share/opencode/auth.json (a file on every OS) is seeded,
+#                 or `opencode auth login` inside.
+#   cursor-agent  Linux: ~/.config/cursor/auth.json is seeded. macOS: Keychain, so
+#                 `cursor-agent login` inside (NO_OPEN_BROWSER is set — it prints the
+#                 URL), or export CURSOR_API_KEY before `up` (passed through below).
+#   agy           macOS: Keychain, so sign in inside (agy prints a URL, you paste
+#                 the code back). On Linux the login is ALSO in-sandbox: the
+#                 container has no Secret Service, see scripts/dev-entrypoint.sh.
+#   omp, pi       ~/.omp/agent and ~/.pi/agent (plain files on every OS) are seeded.
+#
+# Logins made INSIDE the sandbox (codex/opencode/cursor-agent/agy) are kept in
+# this worktree's data volume (scripts/dev-entrypoint.sh's `seed_persistent_home`),
+# so they survive the `--force-recreate` every `scripts/dev-sandbox.sh up` does; a
+# credential the host DOES have on disk is still re-copied on top at every start.
+#
+# Real credentials are piped in via read-only "seed" mounts under /seed/*, copied
+# by scripts/dev-entrypoint.sh into a writable location inside the container — see
+# that script for exactly what's copied vs. excluded per CLI, and why: each CLI's
+# credential lives in a different, specific file/dir, usually alongside gigabytes
+# of unrelated local history/db state that a throwaway sandbox has no use for.
+# `VST_NO_AUTH` above is the DAEMON's own login, unrelated to these — these are
+# the underlying agent CLIs' auth. The sandbox never reads the macOS Keychain.
 #
 # To inspect a running sandbox interactively, use
 # `docker compose exec -u vst vst-dev bash` (or `docker exec -u vst
@@ -105,28 +127,24 @@ services:
       # to a copied .credentials.json snapshot that breaks at the next token
       # rotation — see the claude block in scripts/dev-entrypoint.sh.
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      # cursor-agent's documented headless auth (an API key from the Cursor
+      # dashboard). No value = passed through only when set on the host, and left
+      # UNSET (not empty) in the container otherwise. NO_OPEN_BROWSER makes
+      # `cursor-agent login` print its URL instead of trying to open a browser.
+      CURSOR_API_KEY:
+      NO_OPEN_BROWSER: "1"
     volumes:
-      # Agent CLI binaries: `claude` is installed INSIDE the image (dev.Dockerfile),
-      # so it never depends on the host. The other host-installed harness binaries
-      # (opencode, agy, codex, cursor-agent) are bind-mounted by the OPTIONAL
-      # docker-compose.dev.hostbins.yml, which scripts/dev-sandbox.sh layers on
-      # only for Linux hosts — a macOS host's binaries are Mach-O and would fail
-      # with ENOEXEC inside the Linux container. Without that file those harnesses
-      # simply show as "not found" in the doctor. pi is a pure-JS bundle (runs on
-      # the image's node), so it is mounted on every host.
-      # pi — requires sibling files from its dist/bundle/ directory (cli-runtime.js,
-      # chunks/, etc.) so a single-file mount silently breaks it. Same pattern as
-      # cursor-agent: mount the whole bundle dir, symlink cli.js → /usr/local/bin/pi
-      # from inside the container where siblings are reachable.
-      - ${PI_BUNDLE_DIR:-/var/empty}:/opt/pi-bundle:ro
-      # Gemini/agy creds: mount host ~/.gemini READ-ONLY as a seed. The container
-      # entrypoint (see `command:` below) copies it into a WRITABLE /home/vst/.gemini
-      # on startup — agy (antigravity-cli) writes logs/cache/conversations under
-      # ~/.gemini/antigravity-cli and fails hard on a read-only mount. The bulky
-      # `antigravity` and `antigravity-browser-profile` dirs (~1.9G, the desktop
-      # IDE + its browser profile) are skipped during the copy — agy-cli needs
-      # neither. Refreshed host OAuth tokens re-propagate only on container
-      # recreate (the copy is guarded by a `.seeded` marker), not on restart.
+      # Agent CLI binaries: none are mounted here — every harness is installed
+      # INSIDE the image (dev.Dockerfile); on Linux hosts only, scripts/dev-sandbox.sh
+      # adds the host's own installs via a generated overlay. The mounts below are
+      # credentials/config only.
+      # Gemini/agy creds/config: mount host ~/.gemini READ-ONLY as a seed. The
+      # entrypoint copies it into a WRITABLE /home/vst/.gemini that lives in the
+      # data volume (`seed_persistent_home`) — agy (antigravity-cli) writes logs/
+      # cache/conversations under ~/.gemini/antigravity-cli and fails hard on a
+      # read-only mount, and an in-sandbox agy sign-in must survive a recreate.
+      # The bulky `antigravity` and `antigravity-browser-profile` dirs (~1.9G, the
+      # desktop IDE + its browser profile) are skipped — agy-cli needs neither.
       - ${HOME}/.gemini:/seed/gemini:ro
       # claude creds: `.credentials.json` (the OAuth token) lives directly
       # under `~/.claude`, alongside gigabytes of past-conversation
@@ -163,11 +181,6 @@ services:
       # and models.db. Bulk state (sessions/, cache/, ...) is excluded by the entrypoint.
       # omp itself is installed IN the image (dev.Dockerfile) — never mounted.
       - ${OMP_AGENT_HOME:-${HOME}/.omp/agent}:/seed/omp-agent:ro
-      # codex-acp vendor: the ACP adapter for Codex Rich Chat, installed
-      # by scripts/install-codex-acp-vendor.sh into vendor/codex-acp/. Mount
-      # read-only so the daemon (running from /app) finds it by walking upward.
-      - ./vendor/codex-acp:/app/vendor/codex-acp:ro
-
       # Rust daemon/CLI binaries. Mount the host's pre-built DEBUG binaries
       # read-only (scripts/dev-sandbox.sh builds `cargo build -p vst-daemon -p
       # vst-cli`, deliberately without `--release` — this is a dev sandbox for

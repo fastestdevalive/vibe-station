@@ -1,8 +1,11 @@
 # Dev sandbox for testing vibe-station on a feature branch.
 # Runs daemon + Vite dev server in one container.
-# `claude` is installed in the image (works on Linux arm64 + amd64, so macOS hosts
-# never mount their Mach-O binary). opencode/agy/codex/cursor-agent are mounted
-# from the host only on Linux hosts (docker-compose.dev.hostbins.yml).
+# Every agent harness (claude, codex, opencode, cursor-agent, agy, omp, pi) is
+# installed in the image as a pinned Linux build for TARGETARCH (arm64 + amd64), so
+# a macOS host never mounts its Mach-O binaries and a Linux host without them still
+# works. (On Linux, scripts/dev-sandbox.sh mounts the host's own opencode/agy/codex/
+# cursor-agent when present, preferred over these.) Credentials come from the host
+# — see docker-compose.dev.yml.
 # Gemini can use `scripts/fake-gemini.sh` mounted as `/usr/local/bin/gemini` (see docker-compose.dev.yml).
 #
 # Usage:
@@ -55,6 +58,60 @@ RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/downlo
 # Pinned to the version installed in the existing sandbox image (2.1.306) so
 # rebuilds are reproducible; bump deliberately.
 RUN npm install -g pnpm@9.0.0 @google/gemini-cli @anthropic-ai/claude-code@2.1.306
+
+# Every other harness is ALSO installed in-image, as its vendor's own Linux build
+# for the image's arch — never bind-mounted from the host (a macOS host's binaries
+# are Mach-O -> ENOEXEC, and a Linux host's would make the sandbox depend on
+# whatever that host happens to have installed). Pinned to the versions this repo
+# was last verified against; bump deliberately. Credentials are NOT baked in — see
+# docker-compose.dev.yml's header for how each one gets auth.
+#
+# codex: the official npm package; npm installs only the matching
+# @openai/codex-linux-{arm64,x64} optional dep (the real static ELF + its
+# codex-resources/ siblings). pi: pure JS on the image's node (same package the
+# doctor hint names).
+RUN npm install -g @openai/codex@0.163.0 @mariozechner/pi-coding-agent@0.73.1
+
+# opencode (v2): the same release tarballs anomalyco's Homebrew tap installs
+# (opencode.ai/files/bin/<ver>/), checksums copied from that formula.
+# agy (Antigravity CLI): the tarballs its install.sh resolves from the release
+# manifest (antigravity-cli-auto-updater.../manifests/linux_<arch>.json) — the
+# script itself also runs `agy install` (shell rc/PATH edits) which the image
+# doesn't want, so fetch the pinned artifact directly. Checksums are the
+# manifest's sha512.
+# cursor-agent: the package https://cursor.com/install downloads (its URL embeds
+# the version); extracted to /opt like the installer's versions/<ver>/ dir, since
+# its launcher resolves its bundled node + chunk files relative to its realpath.
+# Cursor publishes no checksum, so these sha256s were computed on download.
+RUN set -eu; \
+  case "${TARGETARCH:-amd64}" in \
+    arm64) oc_asset=opencode-linux-arm64.tar.gz; \
+           oc_sha=3ddeab155dd75f36d9fd4f5db80e2392181a4b9f59e347a0361a127244686e94; \
+           agy_asset=linux-arm/cli_linux_arm64.tar.gz; \
+           agy_sha=a703d10ea96d20d35c2ab6a056ce07ac196fac215cdf1ac3a8750a519fa42c3ac1bc4ac8776c98c94e0a816b6b37beaf0e5d98d30eed3e60a90d18ac9a060130; \
+           cur_arch=arm64; \
+           cur_sha=22a36df9720830668ccd4d707e5190204ab9c8a0efb2f068cc914895f804d3ec ;; \
+    amd64) oc_asset=opencode-linux-x64-baseline.tar.gz; \
+           oc_sha=911e9778fac07559678c5f46d8b130856e237a7f021091509273e81a2dada183; \
+           agy_asset=linux-x64/cli_linux_x64.tar.gz; \
+           agy_sha=96a259b7475ae70a5b002ea8a83b804bba9b6ad2171af0cd0839b3959d9e6046ba36e181bc2d5597522aeceaacc06023564c46232fdb958f26f8c72267d9f0fd; \
+           cur_arch=x64; \
+           cur_sha=85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294 ;; \
+    *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+  esac; \
+  tmp="$(mktemp -d)"; cd "$tmp"; \
+  curl -fsSL -o oc.tgz "https://opencode.ai/files/bin/2.1.2/${oc_asset}"; \
+  echo "${oc_sha}  oc.tgz" | sha256sum -c -; \
+  tar -xzf oc.tgz opencode; install -m 0755 opencode /usr/local/bin/opencode; \
+  curl -fsSL -o agy.tgz "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.9-4962164969177088/${agy_asset}"; \
+  echo "${agy_sha}  agy.tgz" | sha512sum -c -; \
+  tar -xzf agy.tgz antigravity; install -m 0755 antigravity /usr/local/bin/agy; \
+  curl -fsSL -o cursor.tgz "https://downloads.cursor.com/lab/2026.10.22-27dcf5f/linux/${cur_arch}/agent-cli-package.tar.gz"; \
+  echo "${cur_sha}  cursor.tgz" | sha256sum -c -; \
+  mkdir -p /opt/cursor-agent; tar --strip-components=1 -xzf cursor.tgz -C /opt/cursor-agent; \
+  ln -sf /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent; \
+  ln -sf /opt/cursor-agent/cursor-agent /usr/local/bin/agent; \
+  cd /; rm -rf "$tmp"
 
 # Runtime user: Claude Code hard-refuses to run with
 # --dangerously-skip-permissions (which this codebase always passes when
@@ -121,6 +178,14 @@ RUN bun install -g @oh-my-pi/pi-coding-agent@18.12.6
 # WORKDIR), but scripts/dev-entrypoint.sh also pins VST_CLAUDE_ACP_ENTRY to it
 # explicitly so the lookup doesn't depend on `su -c`'s cwd.
 RUN ./scripts/install-claude-acp-vendor.sh
+
+# Same for Codex's ACP adapter (Rich Chat), found by the same walk-upward from
+# /app. Used to be bind-mounted from the host's vendor/codex-acp, which is empty
+# until someone runs this script on the host — so codex Rich Chat silently had no
+# adapter in a fresh checkout's sandbox. Installing it here, like claude-acp,
+# removes that host prerequisite (the adapter is pure JS; `codex.rs` points it at
+# the in-image `codex` via CODEX_PATH).
+RUN ./scripts/install-codex-acp-vendor.sh
 
 # The Rust CLI binary is mounted from the host at /usr/local/bin/vst-rust by
 # docker-compose.dev.yml, and scripts/dev-entrypoint.sh symlinks it to
