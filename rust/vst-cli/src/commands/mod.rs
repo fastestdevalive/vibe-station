@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod artifact;
+pub mod comment;
 pub mod daemon;
 pub mod doctor;
 pub mod file;

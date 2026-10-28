@@ -1,0 +1,29 @@
+{
+  "name": "main",
+  "comments": [
+    {
+      "id": "c1",
+      "pin": 1,
+      "path": "src/a.rs",
+      "pathKind": "repo",
+      "surface": "file",
+      "lines": { "start": 4, "end": 6 },
+      "quote": "x",
+      "text": "y",
+      "anchor": "anchored",
+      "prefix": "before",
+      "occurrence": 1,
+      "createdAt": "2026-10-27T10:00:00.000Z"
+    },
+    {
+      "id": "c2",
+      "pin": 5,
+      "path": "/abs/plan.md",
+      "pathKind": "artifact",
+      "surface": "markdown",
+      "quote": "q",
+      "text": "t",
+      "anchor": "file_missing"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ pub mod events;
 pub mod limits;
 pub mod rest;
 pub mod review;
+pub mod review_format;
 pub mod serde_ext;
 pub mod terminal_delivery;
 pub mod ws;

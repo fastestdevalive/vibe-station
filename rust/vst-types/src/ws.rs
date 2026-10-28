@@ -337,6 +337,17 @@ pub enum ServerMessage {
         ids: Vec<String>,
         reason: crate::artifacts::ArtifactRemoveReason,
     },
+    #[serde(rename = "comments:changed", rename_all = "camelCase")]
+    CommentsChanged {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        upserted: Vec<crate::review::ReviewComment>,
+        deleted: Vec<crate::review::DeletedComment>,
+    },
+    #[serde(rename = "terminal-delivery:updated", rename_all = "camelCase")]
+    TerminalDeliveryUpdated {
+        delivery: crate::review::TerminalDelivery,
+    },
     /// The event fan-out dropped events (receiver lagged): every client must
     /// refetch whatever it has loaded.
     #[serde(rename = "ws:resync")]

@@ -235,6 +235,19 @@ pub enum ServerEvent {
         ids: Vec<String>,
         reason: crate::artifacts::ArtifactRemoveReason,
     },
+    /// Review comments of a scope changed (coalesced ~250 ms by `vst-review`).
+    #[serde(rename = "comments:changed", rename_all = "camelCase")]
+    CommentsChanged {
+        scope_kind: crate::artifacts::ScopeKind,
+        scope_id: String,
+        upserted: Vec<crate::review::ReviewComment>,
+        deleted: Vec<crate::review::DeletedComment>,
+    },
+    /// A Terminal comment delivery changed state (global, not subscription-gated).
+    #[serde(rename = "terminal-delivery:updated", rename_all = "camelCase")]
+    TerminalDeliveryUpdated {
+        delivery: crate::review::TerminalDelivery,
+    },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

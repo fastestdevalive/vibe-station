@@ -1,0 +1,28 @@
+{
+  "state": "held",
+  "scopeKind": "worktree",
+  "scopeId": "wt-1",
+  "name": "main",
+  "comments": [
+    {
+      "id": "c1",
+      "pin": 1,
+      "path": "a.rs",
+      "pathKind": "repo",
+      "surface": "file",
+      "quote": "x",
+      "text": "y",
+      "anchor": "anchored"
+    },
+    {
+      "id": "c2",
+      "pin": 2,
+      "path": "b.rs",
+      "pathKind": "repo",
+      "surface": "file",
+      "quote": "x",
+      "text": "y",
+      "anchor": "outdated"
+    }
+  ]
+}

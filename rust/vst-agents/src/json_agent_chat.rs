@@ -321,6 +321,11 @@ pub struct EnqueueChatTurnOpts {
     pub steer: Option<bool>,
     /// Persist the turn's `user` row silent (the agent still gets it).
     pub silent: bool,
+    /// Pre-minted turn id (a review hold records it before the turn exists).
+    pub turn_id: Option<String>,
+    /// Review comments riding this turn: forces a plain FIFO enqueue (a steer
+    /// would drop them) regardless of `steer`.
+    pub review: Option<json_agent_session::ReviewTurn>,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
 }
@@ -352,15 +357,17 @@ pub async fn enqueue_chat_turn(
     // carries the `[Attached files:]` header.
     let message = opts.message;
 
-    let result = if opts.steer == Some(false) || opts.silent {
-        let r = agent.enqueue_ext(
+    let result = if opts.steer == Some(false) || opts.silent || opts.review.is_some() {
+        let r = agent.enqueue_full(json_agent_session::queue::EnqueueSpec {
             message,
-            opts.attachments,
-            opts.mentions,
+            attachments: opts.attachments,
+            mentions: opts.mentions,
             system_prompt,
-            None, // fork_from_chat_id
-            opts.silent,
-        );
+            fork_from_chat_id: None,
+            silent: opts.silent,
+            turn_id: opts.turn_id,
+            review: opts.review,
+        });
         EnqueueChatResult {
             turn_id: r.turn_id,
             queue_position: r.queue_position,
@@ -427,6 +434,11 @@ pub struct StartJsonCreateTurnOpts {
     pub daemon_port: u16,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
+    /// Review comments held for turn 1 (draft promotion): the prompt may then be
+    /// empty. Any early exit or enqueue failure restores the hold.
+    pub review: Option<crate::json_agent_session::ReviewTurn>,
+    /// The id turn 1's user row will carry (the hold's boot-reconcile key).
+    pub turn_id: Option<String>,
 }
 
 /// Auto-enqueue the create-dialog prompt as turn 1 (Decision 8 / CUJ 1).
@@ -434,8 +446,24 @@ pub async fn start_json_create_turn(
     opts: StartJsonCreateTurnOpts,
     registry: &JsonAgentRegistry<JsonAgentSession>,
 ) {
-    let prompt = match opts.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
-        Some(p) => p.to_string(),
+    let hold_id = opts.review.as_ref().map(|r| r.hold_id.clone());
+    let restore = |reason: vst_types::review::RestoreReason| {
+        let port = registry.review_port();
+        let hold = hold_id.clone();
+        async move {
+            if let (Some(port), Some(hold)) = (port, hold) {
+                port.restore_hold(&hold, reason).await;
+            }
+        }
+    };
+    let prompt = match opts
+        .prompt
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| opts.review.as_ref().map(|_| String::new()))
+    {
+        Some(p) => p,
         None => {
             // No turn 1 (e.g. a plain reset of a Rich Chat agent): nothing will
             // ever move the session off `not_started`, and the UI shows a
@@ -473,6 +501,7 @@ pub async fn start_json_create_turn(
         .as_ref()
         .map_or(true, |c| c.session.lifecycle.state == LifecycleState::Done);
     if done {
+        restore(vst_types::review::RestoreReason::SessionRemoved).await;
         return;
     }
 
@@ -483,8 +512,11 @@ pub async fn start_json_create_turn(
             attachments: vec![],
             mentions: vec![],
             daemon_port: opts.daemon_port,
-            steer: None,
+            // A review turn never steers (R70); turn 1 has nothing to steer anyway.
+            steer: opts.review.as_ref().map(|_| false),
             silent: opts.silent,
+            turn_id: opts.turn_id.clone(),
+            review: opts.review.clone(),
             store: opts.store.clone(),
             broadcaster: opts.broadcaster.clone(),
         },
@@ -497,6 +529,7 @@ pub async fn start_json_create_turn(
             "[json-chat] turn-1 auto-enqueue failed for {}: {:?}",
             opts.session_id, e
         );
+        restore(vst_types::review::RestoreReason::SendFailed).await;
         return;
     }
 
@@ -634,6 +667,11 @@ pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> Sched
             .into_iter()
             .map(|r| ScheduledFailedMeta {
                 attachments: parse_attachments_json(r.attachments.as_deref()),
+                comment_count: r
+                    .comments_snapshot
+                    .as_deref()
+                    .and_then(vst_types::review::snapshot_meta)
+                    .map(|m| m.count),
                 id: r.id,
                 message: r.message,
                 fire_at: r.fire_at,
@@ -678,10 +716,89 @@ fn parse_attachments_json(json: Option<&str>) -> Option<Vec<Attachment>> {
     json.and_then(|s| serde_json::from_str::<Vec<Attachment>>(s).ok())
 }
 
+/// A scheduled row's still-`held` comments snapshot, if it has one. `Err` when a
+/// snapshot is present but unreadable: the row must then fail visibly instead of
+/// going out as plain text without its comments.
+fn held_payload(
+    row: &vst_types::rest::sessions::ScheduledMessageRow,
+) -> Result<Option<vst_types::review::ScheduledReviewPayload>, String> {
+    use vst_types::review::{PayloadState, ScheduledReviewPayload};
+    let Some(raw) = row.comments_snapshot.as_deref() else {
+        return Ok(None);
+    };
+    match ScheduledReviewPayload::parse_checked(raw) {
+        Ok((payload, degraded)) => {
+            if degraded {
+                tracing::warn!(row_id = %row.id, "commentsSnapshot parsed with fallbacks");
+            }
+            Ok(
+                (payload.state == PayloadState::Held && !payload.comments.is_empty())
+                    .then_some(payload),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(row_id = %row.id, "commentsSnapshot unreadable: {e}");
+            Err("The attached comments could not be read; the message was not sent.".to_string())
+        }
+    }
+}
+
+/// Restores an adopted hold if the delivery that owns it is dropped before it
+/// finishes (the callers wrap the whole delivery in a timeout, which drops the
+/// future mid-flight and would otherwise strand the comments until the next
+/// boot). [`Self::disarm`] once the delivery returned: its own result handling
+/// settles the hold from there.
+#[doc(hidden)]
+pub struct AdoptedHoldGuard {
+    port: std::sync::Arc<dyn vst_types::review::ReviewPort>,
+    hold_id: String,
+    armed: bool,
+}
+
+impl AdoptedHoldGuard {
+    #[doc(hidden)]
+    pub fn new(port: std::sync::Arc<dyn vst_types::review::ReviewPort>, hold_id: String) -> Self {
+        Self {
+            port,
+            hold_id,
+            armed: true,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AdoptedHoldGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("[vst] adopted hold dropped outside a runtime; left for boot reconcile");
+            return;
+        };
+        let (port, hold_id) = (self.port.clone(), self.hold_id.clone());
+        handle.spawn(async move {
+            port.restore_hold(&hold_id, vst_types::review::RestoreReason::ScheduleFailed)
+                .await;
+        });
+    }
+}
+
 /// Deliver a claimed scheduled message exactly as if the user had pressed
 /// Send on freshly typed text: `submit()` steers a running turn when it can
 /// and otherwise queues, and the session is marked working. Returns a
 /// human-readable reason on failure (shown to the user with Retry / Dismiss).
+///
+/// A row carrying review comments (`commentsSnapshot`, state `held`) is adopted
+/// into a turn hold and queued (never steered) with its review. Every failure
+/// before the adopt restores the snapshot once (`schedule_failed`, the payload
+/// flips `restored` in the same transaction); a failure after it restores the
+/// hold instead. An `origin = 'immediate'` row is never delivered here (it is a
+/// Terminal send; a json fire of it is a bug): it fails and restores.
 pub async fn deliver_scheduled_message(
     row: &vst_types::rest::sessions::ScheduledMessageRow,
     daemon_port: u16,
@@ -689,12 +806,102 @@ pub async fn deliver_scheduled_message(
     broadcaster: &Broadcaster,
     registry: &JsonAgentRegistry<JsonAgentSession>,
 ) -> Result<EnqueueChatResult, String> {
+    use vst_types::review::RestoreReason;
+    let Some(payload) = held_payload(row)? else {
+        return deliver_plain(row, daemon_port, store, broadcaster, registry, None).await;
+    };
+    let scope = vst_types::artifacts::ScopeKey {
+        scope_kind: payload.scope_kind,
+        scope_id: payload.scope_id.clone(),
+    };
+    let record = vst_types::review::ReviewRecord {
+        name: payload.name,
+        comments: payload.comments,
+    };
+    let Some(port) = registry.review_port() else {
+        return Err("Review comments are unavailable in this daemon.".to_string());
+    };
+    let restore_snapshot = |reason: RestoreReason| {
+        port.restore_snapshot(Some(&row.id), record.clone(), scope.clone(), reason)
+    };
+
+    if row.origin.as_deref() == Some("immediate") {
+        restore_snapshot(RestoreReason::ScheduleFailed).await;
+        return Err("A Terminal send cannot be delivered to a Rich Chat agent.".to_string());
+    }
+    // Pre-flight, so a missing / archived / non-json session fails BEFORE the adopt.
+    if let Err(reason) = check_deliverable(store, &row.session_id).await {
+        restore_snapshot(RestoreReason::ScheduleFailed).await;
+        return Err(reason);
+    }
+    let turn_id = crate::util::new_uuid_v4();
+    let hold = match port
+        .adopt_snapshot(&row.id, record, scope, &row.session_id, &turn_id)
+        .await
+    {
+        Ok(h) => h,
+        Err(_) => {
+            // No longer `held`: another path already restored or delivered it.
+            return Err("The attached comments are no longer available.".to_string());
+        }
+    };
+    let hold_id = hold.hold_id.clone();
+    let review = json_agent_session::ReviewTurn {
+        hold_id: hold.hold_id,
+        record: hold.record,
+    };
+    // A caller's timeout drops this future between the adopt and the enqueue:
+    // the guard then puts the comments back instead of stranding them.
+    let mut guard = AdoptedHoldGuard::new(port.clone(), hold_id.clone());
+    let res = deliver_plain(
+        row,
+        daemon_port,
+        store,
+        broadcaster,
+        registry,
+        Some((turn_id, review)),
+    )
+    .await;
+    guard.disarm();
+    if res.is_err() {
+        port.restore_hold(&hold_id, RestoreReason::ScheduleFailed)
+            .await;
+    }
+    res
+}
+
+/// The checks of `deliver_plain` that can fail before anything is enqueued.
+async fn check_deliverable(store: &StoreHandle, session_id: &str) -> Result<(), String> {
+    let ctx = find_json_session_context(store, session_id)
+        .await
+        .ok_or_else(|| "The session no longer exists.".to_string())?;
+    if ctx.session.archived_at.is_some() {
+        return Err("The session was archived before this message was due.".to_string());
+    }
+    if ctx.session.channel != Some(Channel::Json) {
+        return Err("The session is no longer a Rich Chat session.".to_string());
+    }
+    Ok(())
+}
+
+async fn deliver_plain(
+    row: &vst_types::rest::sessions::ScheduledMessageRow,
+    daemon_port: u16,
+    store: &StoreHandle,
+    broadcaster: &Broadcaster,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+    review: Option<(String, json_agent_session::ReviewTurn)>,
+) -> Result<EnqueueChatResult, String> {
     let ctx = find_json_session_context(store, &row.session_id)
         .await
         .ok_or_else(|| "The session no longer exists.".to_string())?;
     if ctx.session.archived_at.is_some() {
         return Err("The session was archived before this message was due.".to_string());
     }
+    let (turn_id, review) = match review {
+        Some((t, r)) => (Some(t), Some(r)),
+        None => (None, None),
+    };
     let result = enqueue_chat_turn(
         EnqueueChatTurnOpts {
             session_id: row.session_id.clone(),
@@ -704,6 +911,8 @@ pub async fn deliver_scheduled_message(
             daemon_port,
             steer: Some(true),
             silent: false,
+            turn_id,
+            review,
             store: store.clone(),
             broadcaster: broadcaster.clone(),
         },
@@ -780,4 +989,38 @@ pub async fn read_session_meta(
     };
     let meta: TranscriptMeta = read_meta_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id);
     build_meta_from_store_meta(&opts, &meta)
+}
+
+#[cfg(test)]
+mod held_payload_tests {
+    use super::held_payload;
+    use vst_types::rest::sessions::ScheduledMessageRow;
+
+    fn row(snapshot: Option<&str>) -> ScheduledMessageRow {
+        ScheduledMessageRow {
+            id: "r1".into(),
+            session_id: "s1".into(),
+            message: "m".into(),
+            attachments: None,
+            fire_at: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            status: "pending".into(),
+            sent_at: None,
+            sent_turn_id: None,
+            failure_reason: None,
+            claimed_at: None,
+            channel: Some("json".into()),
+            delivery_phase: None,
+            failure_kind: None,
+            comments_snapshot: snapshot.map(str::to_string),
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn no_snapshot_is_plain_and_unreadable_snapshot_is_an_error() {
+        assert!(held_payload(&row(None)).unwrap().is_none());
+        assert!(held_payload(&row(Some("{\"state\":\"future\"}"))).is_err());
+    }
 }

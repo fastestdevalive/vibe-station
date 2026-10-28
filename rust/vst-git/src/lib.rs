@@ -28,6 +28,7 @@
 //! here locally so this crate does not reach outside its own module.
 
 pub mod branch_validator;
+pub mod diff_text;
 pub mod direct_pty;
 pub mod git;
 pub mod naming;
@@ -41,6 +42,7 @@ pub mod slugify;
 pub mod worktree_service;
 
 pub use branch_validator::{branch_exists_in_repo, validate_branch, ValidationResult};
+pub use diff_text::{file_diff, git_dir, is_valid_base_sha, rename_map, DiffTextError};
 pub use direct_pty::DirectPtyRegistry;
 pub use git::GitService;
 pub use paths::Paths;

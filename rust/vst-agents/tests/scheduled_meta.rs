@@ -255,6 +255,43 @@ async fn terminal_rows_carry_phase_comment_count_kind_origin_and_pasted() {
     assert!(j.get("phase").is_some());
 }
 
+#[tokio::test]
+async fn failed_rows_report_the_comments_they_carried() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    store.add_project(project()).await.unwrap();
+    for (id, snap) in [("with", Some(r#"{"comments":[{},{}]}"#)), ("without", None)] {
+        store
+            .insert_scheduled_message(
+                id,
+                "sess-1",
+                "m",
+                None,
+                "2026-01-01T00:00:10Z",
+                NOW,
+                Some("json"),
+                snap,
+                Some("schedule"),
+            )
+            .await
+            .unwrap();
+        store
+            .claim_scheduled_message(id, "sess-1", NOW)
+            .await
+            .unwrap();
+        store
+            .mark_scheduled_message_failed(id, "boom", Some("agent_exited"), NOW)
+            .await
+            .unwrap();
+    }
+    let st = vst_agents::json_agent_chat::read_schedule_state(&store, "sess-1").await;
+    let by = |id: &str| st.failed.iter().find(|m| m.id == id).unwrap();
+    assert_eq!(by("with").comment_count, Some(2));
+    assert_eq!(by("without").comment_count, None);
+    let j = serde_json::to_value(by("without")).unwrap();
+    assert!(j.get("commentCount").is_none());
+}
+
 /// Current time in the store's `...Z` second-precision format.
 fn vst_now() -> String {
     let secs = std::time::SystemTime::now()

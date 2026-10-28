@@ -22,6 +22,7 @@ pub mod model_race;
 pub mod out_of_band;
 pub mod pids;
 pub mod queue;
+pub mod review;
 pub mod task_signals;
 pub mod tasks;
 
@@ -36,6 +37,7 @@ use vst_store::transcript::{
     open_transcript_store, transcript_db_path, ImportOutcome, SincePage, TranscriptMeta,
     TranscriptPage, TranscriptStore,
 };
+use vst_types::review::{RestoreReason, TurnObserver};
 use vst_types::{
     Attachment, Broadcaster, CarryOver, Command, LifecycleState, Mention, NormalizedEvent,
     NormalizedEventKind, NormalizedEventProvider, ProjectRecord, SessionBreakKind, SessionMeta,
@@ -83,6 +85,18 @@ pub struct QueuedTurn {
     /// carried summary / transcript instruction behind the break card.
     pub silent: bool,
     pub mentions: Vec<Mention>,
+    /// Review comments riding this turn (plan 04). Rendered into the message at
+    /// run time and persisted on the user row; the `hold_id` marks the held rows
+    /// that restore them if the turn never reaches the transcript.
+    pub review: Option<ReviewTurn>,
+}
+
+/// The review comments a queued turn carries: the hold (rows marked `heldBy`) that owns them
+/// until the turn's `user` row is persisted, and the snapshot to render.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReviewTurn {
+    pub hold_id: String,
+    pub record: vst_types::review::ReviewRecord,
 }
 
 /// A turn withdrawn into the editing hold.
@@ -259,6 +273,12 @@ pub(super) struct State {
 pub(super) struct Inner {
     /// Daemon-wide activity sink; attached by `get_or_create_json_agent_session`.
     pub(super) activity: std::sync::OnceLock<Arc<dyn vst_types::activity::ActivitySink>>,
+    /// Review-comments observer (plan 04); attached by `get_or_create_json_agent_session`.
+    /// With none installed a review turn still runs, but nothing restores its hold.
+    pub(super) review_observer: std::sync::OnceLock<Arc<dyn TurnObserver>>,
+    /// Why this session is being released (set by `release_with`, read by the
+    /// cancel sweep and by a turn whose row could not be persisted).
+    pub(super) release_reason: Mutex<RestoreReason>,
     /// Artifact capture: sink slot + tool-call merge state (see `artifacts.rs`).
     pub(super) artifacts: artifacts::ArtifactCapture,
     pub(super) state: Mutex<State>,
@@ -454,6 +474,8 @@ impl JsonAgentSession {
         );
         let inner = Inner {
             activity: std::sync::OnceLock::new(),
+            review_observer: std::sync::OnceLock::new(),
+            release_reason: Mutex::new(RestoreReason::SessionRemoved),
             artifacts: Default::default(),
             state: Mutex::new(state),
             lifecycle_lock: tokio::sync::Mutex::new(()),
@@ -559,6 +581,7 @@ impl JsonAgentSession {
                     } else {
                         Some(t.mentions.clone())
                     },
+                    review: t.review.as_ref().map(|r| r.record.summary()),
                 })
                 .collect(),
             usage: s.usage.clone(),
@@ -801,11 +824,19 @@ impl JsonAgentSession {
     /// Full teardown: latch released, abort + queue clear, wait for drain to
     /// unwind (bounded), tear down ACP connection, close the SQLite handle.
     pub async fn release(&self) {
+        self.release_with(RestoreReason::SessionRemoved).await;
+    }
+
+    /// [`release`](Self::release) saying why: queued review turns restore their
+    /// comments with `reason` (a deleted session: `session_removed`; a channel
+    /// flip: `channel_changed`).
+    pub async fn release_with(&self, reason: RestoreReason) {
+        *self.0.release_reason.lock().unwrap() = reason;
         // Persist a `cancelled` marker for every still-queued/held turn BEFORE
         // the `released` latch goes up (Decision 5) — `persist_event` no-ops
         // once the latch is set, and `release()` is not teardown-only: it's
         // also the ordinary Rich Chat -> terminal channel toggle.
-        self.cancel_all_pending_turns();
+        self.cancel_all_pending_turns(reason);
         // Latch WHILE HOLDING THE STORE LOCK. `persist_event` checks the latch
         // and appends under that same lock, so this keeps "is released, then
         // append" atomic across the state/store lock split: an in-flight
@@ -1044,6 +1075,9 @@ pub fn get_or_create_json_agent_session(
         if let Some(sink) = registry.artifact_sink() {
             s.attach_artifact_sink(sink);
         }
+        if let Some(obs) = registry.review_observer() {
+            s.attach_review_observer(obs);
+        }
         s
     });
     let session = (*session).clone();
@@ -1068,12 +1102,22 @@ impl JsonAgentSession {
     /// `released` check happens under that same lock, which is what keeps it
     /// atomic with the append (see `Inner::released` and `release()`).
     pub(super) fn persist_event(&self, ev: &mut NormalizedEvent) {
+        self.persist_event_checked(ev);
+    }
+
+    /// [`persist_event`](Self::persist_event) reporting whether the row was
+    /// appended (`false` when released or disposed).
+    pub(super) fn persist_event_checked(&self, ev: &mut NormalizedEvent) -> bool {
         let mut store = self.0.store.lock().unwrap();
         if self.0.released.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
-        if let Some(store) = store.as_mut() {
-            store.append(ev);
+        match store.as_mut() {
+            Some(store) => {
+                store.append(ev);
+                true
+            }
+            None => false,
         }
     }
 
@@ -1087,6 +1131,14 @@ impl JsonAgentSession {
     pub fn persist_event_for_test(&self, ev: &NormalizedEvent) {
         let mut ev_clone = ev.clone();
         self.persist_event(&mut ev_clone);
+    }
+
+    /// Test-only: drop the transcript store without releasing the session, so
+    /// the next user-row write is not persisted (the failure `persist_turn_row`
+    /// reports as `false` while the session is still live).
+    #[doc(hidden)]
+    pub fn drop_store_for_test(&self) {
+        *self.0.store.lock().unwrap() = None;
     }
 
     /// Test-only: run `f` while holding the session-`state` mutex.
@@ -1524,6 +1576,7 @@ mod tests {
                 fork_from_chat_id: None,
                 silent: false,
                 mentions: vec![],
+                review: None,
             });
         }
 
@@ -1814,4 +1867,7 @@ mod tests {
             "window-only snapshot must be recorded, not dropped"
         );
     }
+
+    // Review turns (plan 04): split out to keep this file under the line limit.
+    mod review_turns;
 }

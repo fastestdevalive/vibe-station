@@ -16,6 +16,8 @@ pub enum DaemonResult<T> {
     Err {
         status: u16,
         error: String,
+        /// The daemon's human `message`, when it sent one.
+        message: Option<String>,
         conflict_with: Option<Value>,
     },
 }
@@ -135,11 +137,16 @@ pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
             .unwrap_or("Unknown error")
             .to_string();
 
+        let message = val
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let conflict_with = val.get("conflictWith").cloned();
 
         Ok(DaemonResult::Err {
             status,
             error,
+            message,
             conflict_with,
         })
     }

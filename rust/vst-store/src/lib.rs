@@ -21,6 +21,8 @@ pub mod schema;
 pub mod transcript;
 
 pub mod artifacts;
+pub mod comment_consumers;
+pub mod comments;
 pub mod ordered_lists;
 pub mod tunnel;
 

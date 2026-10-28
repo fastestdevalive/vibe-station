@@ -10,6 +10,7 @@ members = [
     "vst-artifacts",
     "vst-proc",
     "vst-git",
+    "vst-fswatch",
     "vst-review",
     "vst-rpc",
     "vst-agents",
@@ -53,6 +54,7 @@ vst-store = { path = "vst-store" }
 vst-tasks = { path = "vst-tasks" }
 vst-activity = { path = "vst-activity" }
 vst-review = { path = "vst-review" }
+vst-fswatch = { path = "vst-fswatch" }
 vst-artifacts = { path = "vst-artifacts" }
 vst-proc = { path = "vst-proc" }
 vst-git = { path = "vst-git" }

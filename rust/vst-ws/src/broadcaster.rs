@@ -340,6 +340,20 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             ids,
             reason,
         },
+        ServerEvent::CommentsChanged {
+            scope_kind,
+            scope_id,
+            upserted,
+            deleted,
+        } => ServerMessage::CommentsChanged {
+            scope_kind,
+            scope_id,
+            upserted,
+            deleted,
+        },
+        ServerEvent::TerminalDeliveryUpdated { delivery } => {
+            ServerMessage::TerminalDeliveryUpdated { delivery }
+        }
     }
 }
 

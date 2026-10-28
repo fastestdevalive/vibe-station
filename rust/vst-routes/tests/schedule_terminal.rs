@@ -234,6 +234,7 @@ fn body(message: &str) -> CreateScheduledMessageBody {
         message: message.into(),
         attachment_ids: vec![],
         fire_at: FUTURE.into(),
+        review_comment_ids: vec![],
     }
 }
 
@@ -447,6 +448,34 @@ async fn the_pending_cap_counts_schedule_rows_only() {
 }
 
 // ── row actions (6.T4) ──────────────────────────────────────────────────────
+
+/// A row scheduled under Rich Chat, picked up by Terminal delivery after a
+/// channel flip, is cancelled through the delivery owner (observer fires once).
+#[tokio::test]
+async fn a_json_row_picked_up_by_terminal_delivery_cancels_through_the_owner() {
+    let (_h, _g) = home();
+    let e = env(vec![session("s1", Channel::Json, "m-claude")]).await;
+    let id = e.routes.schedule_create("s1", body("go")).await.unwrap().id;
+    let row = e.store.get_scheduled_message(&id).await.unwrap().unwrap();
+    assert_eq!(row.channel.as_deref(), Some("json"));
+
+    flip_channel(&e.store, "s1", Channel::Tmux).await;
+    e.routes.schedule_send_now("s1", &id).await.unwrap();
+    let row = e.store.get_scheduled_message(&id).await.unwrap().unwrap();
+    assert_eq!(
+        row.channel.as_deref(),
+        Some("json"),
+        "stored channel is unchanged"
+    );
+    assert_eq!(row.delivery_phase.as_deref(), Some("waiting"));
+
+    e.routes.schedule_cancel("s1", &id).await.unwrap();
+    assert!(e.store.get_scheduled_message(&id).await.unwrap().is_none());
+    assert_eq!(
+        e.outcomes.lock().unwrap().clone(),
+        vec![(id.clone(), TerminalOutcome::Cancelled)]
+    );
+}
 
 #[tokio::test]
 async fn send_now_cancel_retry_and_dismiss_on_tmux_rows() {

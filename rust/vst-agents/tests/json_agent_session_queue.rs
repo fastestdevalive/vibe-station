@@ -13,6 +13,7 @@ fn make_turn(id: &str, order: u64) -> QueuedTurn {
         fork_from_chat_id: None,
         silent: false,
         mentions: vec![],
+        review: None,
     }
 }
 
@@ -1500,11 +1501,12 @@ async fn enqueue_with_mentions_populates_meta_and_allows_edit_resubmit() {
 
     // begin_edit_queued_turn returns them
     let held = session.begin_edit_queued_turn(&res.turn_id);
-    let (msg, atts, mentions, qi) = held.expect("held turn");
-    assert_eq!(msg, "hello");
-    assert!(atts.is_empty());
-    assert_eq!(mentions, vec![mention.clone()]);
-    assert_eq!(qi, 0);
+    let held = held.expect("held turn");
+    assert_eq!(held.message, "hello");
+    assert!(held.attachments.is_empty());
+    assert_eq!(held.mentions, vec![mention.clone()]);
+    assert_eq!(held.queue_index, 0);
+    assert!(held.review.is_none());
 
     // resubmit_queued_turn(edited=true) replaces them
     let new_mention = vst_types::Mention {
@@ -1793,6 +1795,8 @@ async fn enqueue_chat_turn_escapes_attachment_path_and_delivers_plain_text() {
             daemon_port: 0,
             steer: Some(false),
             silent: false,
+            turn_id: None,
+            review: None,
             store,
             broadcaster,
         },
@@ -1935,4 +1939,34 @@ async fn attachment_header_reaches_agent_once_and_is_not_stored() {
         .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id))
         .expect("user event");
     assert_eq!(user.text.as_deref(), Some(r"see C:\\temp"));
+}
+
+/// 2.T13 — a turn carrying review comments is never steered (a steer sends only
+/// the raw message and would drop the block): an eligible-to-steer session queues
+/// it FIFO and it runs at turn end.
+#[tokio::test]
+async fn review_head_is_never_steered_and_stays_queued() {
+    let h = SteerHarness::new(&[("STEER_PROMPT_MS", "800")]);
+    h.finish_first_turn().await;
+    h.session.enqueue("two".into(), vec![], None, None);
+    let review = vst_agents::json_agent_session::ReviewTurn {
+        hold_id: "h1".into(),
+        record: vst_types::review::ReviewRecord {
+            name: "feat".into(),
+            comments: vec![],
+        },
+    };
+    let q = h
+        .session
+        .enqueue_full(vst_agents::json_agent_session::queue::EnqueueSpec {
+            message: "three".into(),
+            review: Some(review),
+            ..Default::default()
+        });
+    assert!(q.queue_position >= 1, "queued behind the running turn");
+    h.wait_dispatched().await;
+    sleep_ms(250).await;
+    assert!(h.steered().is_empty(), "a review head must not be steered");
+    assert_eq!(h.session.get_meta().queue_depth, 1);
+    h.session.abort_and_drain();
 }

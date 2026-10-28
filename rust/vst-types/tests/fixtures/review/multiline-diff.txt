@@ -1,0 +1,18 @@
+Review comments (2) · main
+
+1) File: src/lib.rs
+   Lines: 10–12   Side: old   Scope: branch changes
+   Quote:
+   | fn a() {
+   |     1
+   | }
+   Comment:
+   | split this:
+   | 
+   | - first
+   | - second
+
+2) File: src/lib.rs
+   Lines: 30   Side: new   Scope: local changes
+   Quote: "let s = \"hi\";"
+   Comment: quotes "ok"

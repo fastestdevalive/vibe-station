@@ -12,7 +12,7 @@
 use tokio_util::sync::CancellationToken;
 use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, TurnState};
 
-use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn};
+use super::{JsonAgentSession, QueuedTurn};
 use crate::json_agent_chat::{
     BACKGROUND_REASON, BACKGROUND_TURN_ENDED_REASON, SUBAGENT_NOTICE_REASON,
 };
@@ -49,6 +49,9 @@ impl JsonAgentSession {
         // iteration so a notice slot that arrives during human-queue drain is
         // still consumed before we exit.
         loop {
+            if self.is_released() {
+                break;
+            }
             let (has_queue, has_notice, promoted) = {
                 let s = self.0.state.lock().unwrap();
                 (
@@ -92,16 +95,20 @@ impl JsonAgentSession {
                 // already persisted — not at enqueue time. Must NOT live inside
                 // `run_one_turn`: the notice-slot path calls that directly and
                 // already emits its own (silent) user event before it.
-                self.emit_user_event(
-                    &turn.turn_id,
-                    &turn.raw_message,
-                    &turn.attachments,
-                    EmitUserEventOpts {
-                        silent: turn.silent,
-                        mentions: turn.mentions.clone(),
-                        ..Default::default()
-                    },
-                );
+                //
+                // A turn popped just before `release()` latched was not persisted
+                // (its comments went back to the panel): it must not run, or the
+                // review block would reach the agent AND sit in the panel.
+                let mut turn = turn;
+                if !self.persist_popped_turn_row(&turn).await {
+                    if self.is_released() {
+                        break;
+                    }
+                    // The row write failed on a live session: `persist_turn_row`
+                    // already restored the comments to the panel, so the turn
+                    // runs without them (never both panel and agent).
+                    turn.review = None;
+                }
                 self.run_one_turn(turn).await;
             }
 
@@ -273,6 +280,12 @@ impl JsonAgentSession {
             &self.0.paths,
         )
         .await;
+        // Review comments go last (after skill resolution, attachments and the
+        // mention block), so line 1 stays the user's own text.
+        let message = match &turn.review {
+            Some(review) => super::review::append_review_block(message, review),
+            None => message,
+        };
         let attachment_paths: Vec<String> =
             turn.attachments.iter().map(|a| a.path.clone()).collect();
         let input = TurnInput {
@@ -510,6 +523,7 @@ impl JsonAgentSession {
             silent: true,
             fork_from_chat_id: None,
             mentions: vec![],
+            review: None,
         };
 
         // Run the notice turn. A dismiss while running aborts it via stop_active_turn.

@@ -558,7 +558,10 @@ impl WorktreeRoutes {
         let on_clear_attachments: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
         release_session_runtime(
             session,
-            ReleaseOpts { clear_attachments },
+            ReleaseOpts {
+                clear_attachments,
+                ..Default::default()
+            },
             &self.json_registry,
             &direct_pty,
             &self.tmux,
@@ -850,6 +853,8 @@ impl WorktreeRoutes {
                 tokio::spawn(async move {
                     start_json_create_turn(
                         StartJsonCreateTurnOpts {
+                            review: None,
+                            turn_id: None,
                             silent: false,
                             session_id: main_sid,
                             prompt: prompt_val,
@@ -1463,10 +1468,19 @@ impl WorktreeRoutes {
             .await;
 
         // No FK to cascade: drop the scheduled messages of the sessions just removed.
-        let _ = self
-            .store
-            .purge_scheduled_messages_for_missing_sessions()
-            .await;
+        // Rich Chat rows that still hold review comments put them back first.
+        // A failed restore keeps the rows: their snapshot is the only copy, and
+        // the boot orphan sweep restores it first.
+        let restored = match self.json_registry.review_port() {
+            Some(port) => port.restore_orphaned_snapshots().await,
+            None => true,
+        };
+        if restored {
+            let _ = self
+                .store
+                .purge_scheduled_messages_for_missing_sessions()
+                .await;
+        }
         // Same for the worktree's artifact rows (no FK; `hide` never purges).
         let artifact_scope = ScopeKey::worktree(wt_id);
         match &self.artifacts {
@@ -1699,6 +1713,8 @@ impl WorktreeRoutes {
             Err(msg) => return Err(WorktreeRouteError::Unprocessable(msg)),
         };
         let git_dir_str = git_dir.to_string_lossy().to_string();
+        // Guard only (result unused): refuse `..` / absolute paths before they
+        // reach git. Do not remove as "unused".
         resolve_inside_worktree(&git_dir, file_path)?;
 
         let mut cmd = Command::new("git");

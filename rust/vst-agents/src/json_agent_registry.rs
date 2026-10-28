@@ -19,6 +19,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use vst_types::activity::ActivitySink;
 use vst_types::artifacts::ArtifactSink;
+use vst_types::review::{ReviewPort, TurnObserver};
+
+/// The review-comments seams installed together (one setter).
+struct ReviewHooks {
+    port: Arc<dyn ReviewPort>,
+    observer: Arc<dyn TurnObserver>,
+}
 
 /// Interior-mutable `sessionId → Arc<T>` map, safe to share across routes.
 pub struct JsonAgentRegistry<T> {
@@ -29,6 +36,10 @@ pub struct JsonAgentRegistry<T> {
     /// Daemon-wide artifact sink (file effects of finished tool calls), set once
     /// from `run.rs`. Optional: with none installed capture is a no-op.
     artifact: OnceLock<Arc<dyn ArtifactSink>>,
+    /// Review-comments owner, as the two `vst-types` seams (`ReviewPort` for
+    /// routes and the scheduled-fire path, `TurnObserver` for sessions), set once
+    /// from `run.rs`. With none installed review turns are never created.
+    review: OnceLock<ReviewHooks>,
 }
 
 impl<T> Default for JsonAgentRegistry<T> {
@@ -37,6 +48,7 @@ impl<T> Default for JsonAgentRegistry<T> {
             inner: Mutex::new(HashMap::new()),
             activity: OnceLock::new(),
             artifact: OnceLock::new(),
+            review: OnceLock::new(),
         }
     }
 }
@@ -65,6 +77,21 @@ impl<T> JsonAgentRegistry<T> {
     /// The installed artifact sink, if any.
     pub fn artifact_sink(&self) -> Option<Arc<dyn ArtifactSink>> {
         self.artifact.get().cloned()
+    }
+
+    /// Install the review-comments seams (first call wins; later calls are ignored).
+    pub fn set_review_hooks(&self, port: Arc<dyn ReviewPort>, observer: Arc<dyn TurnObserver>) {
+        let _ = self.review.set(ReviewHooks { port, observer });
+    }
+
+    /// The review port, if installed.
+    pub fn review_port(&self) -> Option<Arc<dyn ReviewPort>> {
+        self.review.get().map(|h| h.port.clone())
+    }
+
+    /// The turn observer sessions report to, if installed.
+    pub fn review_observer(&self) -> Option<Arc<dyn TurnObserver>> {
+        self.review.get().map(|h| h.observer.clone())
     }
 
     /// The live session registered for `session_id`, if any.

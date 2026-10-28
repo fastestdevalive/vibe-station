@@ -185,6 +185,67 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
   ",
     )?;
 
+    // Review comments and their pin numbers (`MAX(pin)+1` per scope). A Rich Chat send marks
+    // rows `heldBy` (hidden from every reader) until the turn persists. NO
+    // foreign keys on purpose (same reason as above: a project save re-inserts
+    // worktrees/sessions); `scopeId` / `sessionId` are soft references, purged
+    // explicitly. Later columns MUST go through `add_column_if_missing`.
+    db.execute_batch(
+        "
+    CREATE TABLE IF NOT EXISTS comments (
+      id              TEXT PRIMARY KEY,
+      scopeKind       TEXT NOT NULL CHECK (scopeKind IN ('worktree','project')),
+      scopeId         TEXT NOT NULL,
+      pin             INTEGER NOT NULL,
+      path            TEXT NOT NULL,
+      pathKind        TEXT NOT NULL CHECK (pathKind IN ('repo','artifact')),
+      surface         TEXT NOT NULL,
+      diffScope       TEXT,
+      baseSha         TEXT,
+      side            TEXT,
+      lineStart       INTEGER,
+      lineEnd         INTEGER,
+      oldStart        INTEGER,
+      oldEnd          INTEGER,
+      newStart        INTEGER,
+      newEnd          INTEGER,
+      quote           TEXT NOT NULL,
+      prefix          TEXT NOT NULL DEFAULT '',
+      suffix          TEXT NOT NULL DEFAULT '',
+      occurrence      INTEGER NOT NULL DEFAULT 0,
+      text            TEXT NOT NULL,
+      anchor          TEXT NOT NULL DEFAULT 'anchored',
+      anchorReason    TEXT,
+      curStart        INTEGER,
+      curEnd          INTEGER,
+      movedFrom       TEXT,
+      attachedTo      TEXT,
+      attachedAt      TEXT,
+      attachTouchedAt TEXT,
+      restoredReason  TEXT,
+      blockBytes      INTEGER NOT NULL DEFAULT 0,
+      version         INTEGER NOT NULL DEFAULT 1,
+      createdAt       TEXT NOT NULL,
+      updatedAt       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_comments_scope_path ON comments(scopeKind, scopeId, path);
+    CREATE INDEX IF NOT EXISTS idx_comments_attachedTo ON comments(attachedTo);
+
+  ",
+    )?;
+
+    for col in ["heldBy", "heldSession", "heldTurn", "heldAt"] {
+        add_column_if_missing(db, "comments", col, "TEXT")?;
+    }
+    db.execute_batch(
+        "
+    DROP INDEX IF EXISTS idx_comments_scope_pin;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_scope_pin_live
+      ON comments(scopeKind, scopeId, pin) WHERE heldBy IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_comments_heldBy ON comments(heldBy) WHERE heldBy IS NOT NULL;
+  ",
+    )?;
+
     add_column_if_missing(db, "global_drafts", "name", "TEXT")?;
     add_column_if_missing(db, "global_drafts", "nameSource", "TEXT")?;
     add_column_if_missing(db, "global_drafts", "sortOrder", "REAL")?;

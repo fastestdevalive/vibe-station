@@ -1,5 +1,5 @@
 //! `TerminalDeliveryHandle`: the single owner of delivering a scheduled message
-//! (or, later, review comments) into a Terminal (tmux) agent.
+//! (or an immediate review-comment send) into a Terminal (tmux) agent.
 //!
 //! One job per row, one running job per target session (a per-session FIFO), all
 //! in memory as a cache of the `scheduled_messages` row, which is the durable
@@ -49,12 +49,20 @@ pub const PANE_IO_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bound on [`TerminalDeliveryHandle::probe_once`].
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Largest paste body, measured after sanitizing.
-pub const MAX_PASTE_BYTES: usize = 32 * 1024;
+pub const MAX_PASTE_BYTES: usize = vst_types::review::TERMINAL_SEND_MAX_BYTES;
 
 const UNSUPPORTED_REASON: &str = "Scheduling is not available for this agent anymore";
 const ARCHIVED_REASON: &str = "The session was archived before this message was due.";
 const EXITED_REASON: &str = "Agent exited, not delivered";
-const TIMEOUT_REASON: &str = "Not ready within 10 min";
+/// "Not ready within 10 min" for the default; follows `with_timeouts`.
+fn timeout_reason(limit: Duration) -> String {
+    let secs = limit.as_secs();
+    if secs >= 60 && secs % 60 == 0 {
+        format!("Not ready within {} min", secs / 60)
+    } else {
+        format!("Not ready within {secs} s")
+    }
+}
 const RESET_REASON: &str = "Agent was reset before this was pasted";
 
 /// What a job needs to know about its target session, resolved fresh each tick.
@@ -93,6 +101,12 @@ pub type PasteBody = Arc<dyn Fn(&ScheduledMessageRow) -> String + Send + Sync>;
 /// Receives every terminal outcome of a tmux row, exactly once. Must be sync
 /// and non-blocking (spawn your own work).
 pub type OutcomeObserver = Arc<dyn Fn(String, TerminalOutcome) + Send + Sync>;
+
+/// Called synchronously with a tmux row just before its `Cancelled` / `Gone`
+/// outcome is reported, while the row is still readable: those two paths delete
+/// the row, so an observer that spawns its own work could no longer find the
+/// comment snapshot it must restore. Must be sync and non-blocking.
+pub type RowCapture = Arc<dyn Fn(&ScheduledMessageRow) + Send + Sync>;
 
 /// Cancellation of one job; also the identity of a fire (see `State::known`).
 #[derive(Default)]
@@ -150,6 +164,7 @@ struct Inner {
     notify: NotifyScheduled,
     observer: Option<OutcomeObserver>,
     paste_body: RwLock<PasteBody>,
+    row_capture: RwLock<Option<RowCapture>>,
     state: Mutex<State>,
     pane_io_timeout: Duration,
     job_timeout: Duration,
@@ -179,6 +194,7 @@ impl TerminalDeliveryHandle {
                 notify,
                 observer,
                 paste_body: RwLock::new(default_body),
+                row_capture: RwLock::new(None),
                 state: Mutex::new(State::default()),
                 pane_io_timeout: PANE_IO_TIMEOUT,
                 job_timeout: JOB_TIMEOUT,
@@ -203,6 +219,16 @@ impl TerminalDeliveryHandle {
             .paste_body
             .write()
             .unwrap_or_else(|p| p.into_inner()) = f;
+        self
+    }
+
+    /// Install the [`RowCapture`] hook (see its docs). Optional.
+    pub fn with_row_capture(self, f: RowCapture) -> Self {
+        *self
+            .inner
+            .row_capture
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = Some(f);
         self
     }
 
@@ -264,12 +290,18 @@ impl TerminalDeliveryHandle {
     /// the job is stopped, clients are notified and the observer hears
     /// `Cancelled`; `InFlight` (mid-paste) and `NotFound` change nothing.
     pub async fn cancel_row(&self, session_id: &str, row_id: &str) -> StoreResult<CancelOutcome> {
+        // Read the row first: the cancel deletes it, and the observer needs its
+        // comment snapshot (see `RowCapture`).
+        let before = self.inner.store.get_scheduled_message(row_id).await?;
         let out = self
             .inner
             .store
             .cancel_scheduled_message(row_id, session_id)
             .await?;
         if out == CancelOutcome::Deleted {
+            if let Some(row) = &before {
+                self.inner.capture(row);
+            }
             self.inner.stop_job(row_id);
             self.inner.notify_session(session_id).await;
             self.inner.observe(row_id, TerminalOutcome::Cancelled);
@@ -289,11 +321,7 @@ impl TerminalDeliveryHandle {
     /// [`Self::rearm_after_failed_reset`].
     pub async fn stop_for_reset(&self, session_id: &str) {
         let inner = &self.inner;
-        let rows = match inner
-            .store
-            .list_pending_scheduled_messages(session_id)
-            .await
-        {
+        let rows = match inner.store.list_delivery_rows(session_id).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(session_id, "terminal reset could not list rows: {e}");
@@ -324,11 +352,7 @@ impl TerminalDeliveryHandle {
     /// `Rearmed`) so the poller delivers them to the session that stays.
     pub async fn rearm_after_failed_reset(&self, session_id: &str) {
         let inner = &self.inner;
-        let Ok(rows) = inner
-            .store
-            .list_pending_scheduled_messages(session_id)
-            .await
-        else {
+        let Ok(rows) = inner.store.list_delivery_rows(session_id).await else {
             return;
         };
         let mut rearmed = Vec::new();
@@ -357,11 +381,7 @@ impl TerminalDeliveryHandle {
     /// jobs and tells the observer `Gone` for each tmux row still held.
     pub async fn on_session_removed(&self, session_id: &str) {
         let inner = &self.inner;
-        let rows = match inner
-            .store
-            .list_pending_scheduled_messages(session_id)
-            .await
-        {
+        let rows = match inner.store.list_delivery_rows(session_id).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(
@@ -373,6 +393,7 @@ impl TerminalDeliveryHandle {
         };
         for row in rows.iter().filter(|r| is_delivery_row(r)) {
             inner.stop_job(&row.id);
+            inner.capture(row);
             inner.observe(&row.id, TerminalOutcome::Gone);
         }
     }
@@ -433,7 +454,7 @@ fn is_tmux(row: &ScheduledMessageRow) -> bool {
 
 /// A row terminal delivery owns: made for Terminal, or already carrying a
 /// delivery phase (a job holds it, whatever channel was stored at creation).
-fn is_delivery_row(row: &ScheduledMessageRow) -> bool {
+pub fn is_delivery_row(row: &ScheduledMessageRow) -> bool {
     is_tmux(row) || row.delivery_phase.is_some()
 }
 
@@ -492,6 +513,17 @@ impl Inner {
         let left = deadline.saturating_duration_since(Instant::now());
         self.blocking_within(left.min(self.pane_io_timeout), f)
             .await
+    }
+
+    fn capture(&self, row: &ScheduledMessageRow) {
+        let hook = self
+            .row_capture
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(f) = hook {
+            f(row);
+        }
     }
 
     fn observe(&self, row_id: &str, outcome: TerminalOutcome) {
@@ -644,7 +676,7 @@ impl Inner {
                     session_id,
                     &job.row_id,
                     FailureKind::TimedOut,
-                    TIMEOUT_REASON,
+                    &timeout_reason(self.job_timeout),
                 )
                 .await;
                 return;
@@ -856,7 +888,10 @@ impl Inner {
                 session_id,
                 row_id,
                 FailureKind::ChannelUnsupported,
-                "The message is larger than 32 KB, the limit for a Terminal agent",
+                &format!(
+                    "The message is larger than {} KB, the limit for a Terminal agent",
+                    MAX_PASTE_BYTES / 1024
+                ),
             )
             .await;
             return;

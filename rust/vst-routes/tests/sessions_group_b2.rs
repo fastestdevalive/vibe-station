@@ -1692,6 +1692,7 @@ async fn start_draft_agy_no_channel_defaults_to_tmux() {
             use_worktree: None,
         },
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
     assert!(res.ok);

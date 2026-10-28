@@ -1,0 +1,10 @@
+{
+  "type": "comments:changed",
+  "scopeKind": "project",
+  "scopeId": "p-1",
+  "upserted": [],
+  "deleted": [
+    { "id": "c1", "reason": "sent" },
+    { "id": "c2", "reason": "deleted" }
+  ]
+}

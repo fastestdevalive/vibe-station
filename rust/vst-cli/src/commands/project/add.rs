@@ -89,6 +89,7 @@ pub async fn run_project_add(opts: ProjectAddOptions) -> Result<(), (String, i32
             status,
             error,
             conflict_with,
+            ..
         } => {
             if status == 409 {
                 let hint = conflict_with

@@ -516,6 +516,7 @@ async fn start_global_draft_400() {
         draft_prompt: "hi".into(),
         draft_config: draft_config(DraftEntryPoint::Global, "m"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("gd1", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
@@ -533,6 +534,7 @@ async fn start_not_drafting_403() {
         draft_prompt: "x".into(),
         draft_config: draft_config(DraftEntryPoint::Direct, "m"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-running", &body).await.unwrap_err();
     assert!(matches!(err, StartError::NotDrafting(_)));
@@ -551,6 +553,7 @@ async fn start_empty_prompt_400() {
         draft_prompt: "   ".into(),
         draft_config: draft_config(DraftEntryPoint::Direct, "m"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
@@ -571,6 +574,7 @@ async fn start_missing_mode_id_400() {
         draft_prompt: "x".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
@@ -589,6 +593,7 @@ async fn start_direct_entry_promotes_to_direct() {
         draft_prompt: "do the thing".into(),
         draft_config: draft_config(DraftEntryPoint::Direct, "my-mode"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
     assert_eq!(
@@ -624,6 +629,7 @@ async fn start_direct_entry_broadcasts_session_updated_with_channel() {
         draft_prompt: "do the thing".into(),
         draft_config: draft_config(DraftEntryPoint::Direct, "my-mode"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     r.start_session("s-draft", &body).await.unwrap();
 
@@ -667,6 +673,7 @@ async fn start_tab_entry_promotes_into_worktree() {
         draft_prompt: "tab task".into(),
         draft_config: draft_config(DraftEntryPoint::Tab, "my-mode"),
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-tab", &body).await.unwrap();
     let mut saw_channel = false;
@@ -731,6 +738,7 @@ async fn start_global_entry_existing_worktree_promotes_into_selected_worktree() 
         draft_prompt: "use the worktree I picked".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
 
@@ -770,6 +778,7 @@ async fn start_global_entry_no_worktree_opinion_is_still_unknown_400() {
         draft_prompt: "x".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
@@ -799,6 +808,7 @@ async fn start_direct_entry_existing_worktree_promotes_into_selected_worktree() 
         draft_prompt: "actually put this in w1".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
 
@@ -824,6 +834,7 @@ async fn start_unknown_entry_point_400() {
         draft_prompt: "x".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
@@ -853,6 +864,7 @@ async fn start_worktree_new_on_nongit_project_returns_notgit() {
         draft_prompt: "new worktree on non-git".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::NotGit));
@@ -874,6 +886,7 @@ async fn start_worktree_new_promotes_into_new_worktree() {
         draft_prompt: "new worktree task".into(),
         draft_config: cfg,
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
     assert!(res.worktree_id.is_some());

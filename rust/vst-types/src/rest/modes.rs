@@ -17,6 +17,11 @@ pub struct SupportedCli {
     /// (`terminal_delivery()` is `Some`). Absent from older daemons = false.
     #[serde(default)]
     pub supports_terminal_delivery: bool,
+    /// Review comments can be sent to a Terminal agent of this CLI:
+    /// `terminal_delivery()` is `Some` and its paste is multi-line safe.
+    /// Absent from older daemons = false.
+    #[serde(default)]
+    pub supports_terminal_comments: bool,
     pub imports_native_history: bool,
     pub supports_json_to_terminal_resume: bool,
     pub detected: bool,

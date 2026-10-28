@@ -1,0 +1,5 @@
+Review comments (1) · main
+
+1) File: /Users/me/.claude/plans/a-very-long-folder-name/another/plan.md
+   Quote: "step 3"
+   Comment: split this

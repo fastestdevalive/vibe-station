@@ -139,6 +139,7 @@ pub async fn run_project_create(opts: ProjectCreateOptions) -> Result<(), (Strin
             status,
             error,
             conflict_with,
+            ..
         } => {
             if status == 409 {
                 let hint = conflict_with

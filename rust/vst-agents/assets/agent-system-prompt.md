@@ -174,6 +174,13 @@ Register what the user asked for or will want to open: deliverables (reports, pl
 requested, and anything outside the project they will look at. Use `vst artifact add <path> [<path>...]`
 (several paths per call; harmless to repeat). Do not register scratch, intermediate, temp or log files.
 
+## Review comments
+
+The user may send you line comments on your code as a block starting `Review comments (N) · <branch>`, each item
+with `File`, optional `Lines` / `Side`, a `Quote` of the code and their `Comment`. Address each item against the
+quoted code (it may have moved; `Lines` is where it was). `vst comment list --unsent --json` shows what is still
+waiting in the user's panel; you cannot create or resolve comments.
+
 ---
 
 ## Ending your session

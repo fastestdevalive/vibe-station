@@ -1,0 +1,15 @@
+{
+  "type": "terminal-delivery:updated",
+  "delivery": {
+    "id": "td-1",
+    "scopeKind": "worktree",
+    "scopeId": "wt-1",
+    "sessionId": "s-1",
+    "state": "timed_out",
+    "commentIds": ["c1"],
+    "commentCount": 1,
+    "bytes": 120,
+    "reason": "timed_out",
+    "updatedAt": "2026-10-27T10:10:00.000Z"
+  }
+}
