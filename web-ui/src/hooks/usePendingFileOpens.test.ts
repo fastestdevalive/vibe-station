@@ -41,4 +41,43 @@ describe("useOpenFilesChanged (review Fix E)", () => {
     handler!({ type: "openFiles:changed", projectId: "proj-1", paths: ["/c.ts"] } as WSEvent);
     expect(useWorkspaceStore.getState().openFileTabsByWorktree["proj-1"]).toEqual(["/c.ts"]);
   });
+
+  function capture() {
+    let handler: ((ev: WSEvent) => void) | null = null;
+    vi.spyOn(api, "on").mockImplementation(((event: unknown, cb: (ev: WSEvent) => void) => {
+      if (event === "openFiles:changed") handler = cb;
+      return () => {};
+    }) as never);
+    renderHook(() => useOpenFilesChanged(api));
+    return (paths: string[]) => handler!({ type: "openFiles:changed", worktreeId: "wt-1", paths } as WSEvent);
+  }
+
+  it("keeps the active tab pointing at the same file when the echo reorders", () => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      openFileTabsByWorktree: { "wt-1": ["a", "b", "c"] },
+      activeFileTabIdxByWorktree: { "wt-1": 2 },
+      activeFilePath: "c",
+      peekFile: null,
+    });
+    capture()(["c", "a", "b"]);
+    const s = useWorkspaceStore.getState();
+    expect(s.activeFileTabIdxByWorktree["wt-1"]).toBe(0);
+    expect(s.openFileTabsByWorktree["wt-1"]![0]).toBe("c");
+    expect(s.activeFilePath).toBe("c");
+  });
+
+  it("clamps the index and follows it with activeFilePath when the active path is gone", () => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      openFileTabsByWorktree: { "wt-1": ["a", "b", "c"] },
+      activeFileTabIdxByWorktree: { "wt-1": 2 },
+      activeFilePath: "c",
+      peekFile: null,
+    });
+    capture()(["a", "b"]);
+    const s = useWorkspaceStore.getState();
+    expect(s.activeFileTabIdxByWorktree["wt-1"]).toBe(1);
+    expect(s.activeFilePath).toBe("b");
+  });
 });

@@ -4,6 +4,17 @@ import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
+import { copyText } from "@/lib/copyText";
+import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import { fetchArtifactScope, useArtifactScope } from "@/components/artifacts/useArtifactsSync";
+import { useArtifactRow, useArtifactSource } from "@/components/artifacts/useArtifactSource";
+import { ArtifactStripItems } from "@/components/artifacts/ArtifactStrip";
+import {
+  ArtifactStatePanel,
+  TruncatedBanner,
+  panelForReadError,
+  type ArtifactPanelState,
+} from "@/components/artifacts/ArtifactStatePanels";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -16,7 +27,7 @@ import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
 import { HtmlView, isOverHtmlCap } from "@/components/preview/HtmlView";
 import { HtmlModeToggle, useHtmlPreviewMode } from "@/components/preview/HtmlModeToggle";
-import { isHtmlPath } from "@/components/preview/htmlDocument";
+import { HTML_FILE_MAX_BYTES, isHtmlPath } from "@/components/preview/htmlDocument";
 import { isImagePath } from "@/lib/imageFile";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
@@ -48,6 +59,18 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const previewInfo = usePreviewedPath(worktreeId, fileScope, controlled);
   const { path, scope, external } = previewInfo;
   const isExternalPeek = Boolean(external);
+  // Artifact seam (plan 8.4): an ABSOLUTE path with no LSP token is only readable through an artifact row, so
+  // its bytes come from `getArtifactContent` and every worktree-relative pipeline (watch, gutter, diff, LSP,
+  // outline) is off for it. `none` keeps today's behaviour (relative paths, LSP external peeks).
+  const artifactSource = useArtifactSource(fileScope, controlled ? null : worktreeId, path, isExternalPeek);
+  const artifactSourced = artifactSource.kind !== "none";
+  const artifactRow = artifactSource.kind === "artifact" ? artifactSource.row : undefined;
+  const artifactRowId = artifactRow?.id ?? null;
+  // Refetch signal for the artifact branch: a rewrite, a size change or a missing/ok flip (driven by `artifact:upserted`).
+  const artifactStamp = artifactRow ? `${artifactRow.lastWrittenAt}\0${artifactRow.size ?? ""}\0${artifactRow.state}` : null;
+  useArtifactScope(api, fileScope, controlled || isExternalPeek ? null : worktreeId);
+  // The row behind the strip's pin: an absolute artifact tab, or an in-repo file that is also an artifact.
+  const stripRow = useArtifactRow(worktreeId, path, !controlled && !isExternalPeek);
   const externalToken = external?.token;
   const commitSha = controlled?.commitSha;
   const submodule = controlled?.submodule;
@@ -100,6 +123,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const bodyKey =
     worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}\0${submodule ?? ""}\0${externalToken ?? ""}` : null;
   const [loaded, setLoaded] = useState<{ key: string; fileBody: string | null; diffBody: string | null } | null>(null);
+  // Artifact-only: text cut by the daemon at 1 MiB, and the panel for a failed/absent read — both keyed to
+  // `bodyKey` so a tab switch never shows the previous file's banner or panel.
+  const [truncated, setTruncated] = useState<{ key: string; total: number } | null>(null);
+  const [artifactFailure, setArtifactFailure] = useState<{ key: string; state: ArtifactPanelState } | null>(null);
   // Cache the last 10 file bodies so switching back to a tab shows content
   // immediately without a loading flash. Without this, bodyKey mismatches
   // loaded.key while the refetch is in flight, fileBody becomes null, the
@@ -120,13 +147,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const [imageFullscreen, setImageFullscreen] = useState(false);
   const gutterSigRef = useRef<string | null>(null);
   const [gutterMarks, setGutterMarks] = useState<Map<number, ReadonlySet<GutterMarkKind>> | null>(null);
-  const { lastChanged } = useFileWatch(api, worktreeId, isExternalPeek ? null : path, fileScope);
+  const { lastChanged } = useFileWatch(api, worktreeId, isExternalPeek || artifactSourced ? null : path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
   // watchFile() watches the parent dir): a tree-level change to this
   // worktree also nudges the fetch effect, even if the per-file watcher
   // missed the exact rename. Additive only — does not change either hook's
   // contract (Phase 7, Requirement 5).
-  const { lastChanged: treeLastChanged } = useTreeWatch(api, worktreeId, fileScope);
+  const { lastChanged: treeLastChanged } = useTreeWatch(api, artifactSourced ? null : worktreeId, fileScope);
 
   // Catch-up refetch on a WS reconnect (Phase 4 of the file-watch leak fix):
   // while a file is open and the user doesn't navigate away, the ONLY thing
@@ -181,18 +208,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const gutterKey = worktreeId && path ? `${fileScope}:${worktreeId}:${path}:${gutterScope}` : null;
   const gutterMissing = gutterKey != null && gutterMissingKey === gutterKey;
   useEffect(() => {
-    if (!worktreeId || !path || scope !== "none" || gutterMissing) return;
+    if (!worktreeId || !path || scope !== "none" || gutterMissing || artifactSourced) return;
     const id = setInterval(() => {
       if (document.visibilityState === "visible") setVcsTick((t) => t + 1);
     }, GUTTER_POLL_MS);
     return () => clearInterval(id);
-  }, [worktreeId, path, scope, gutterMissing]);
+  }, [worktreeId, path, scope, gutterMissing, artifactSourced]);
 
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
 
   useEffect(() => {
-    if (!bodyKey || !worktreeId || !path || isImagePath(path)) {
+    // An artifact path whose row is not (yet) known fetches nothing: `loading` waits for the list, `evicted`
+    // renders its panel. Images are fetched by the blob effect below.
+    if (!bodyKey || !worktreeId || !path || isImagePath(path) || artifactSource.kind === "loading" || artifactSource.kind === "evicted" || artifactSource.kind === "error") {
       setLoaded(null);
       setError(null);
       setTooLarge(false);
@@ -207,7 +236,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     setTooLarge(false);
     void (async () => {
       try {
-        if (isExternalPeek && externalToken) {
+        if (artifactRowId) {
+          // Artifact branch (before the scope branches): the one hardened read path. A refetch keeps the same
+          // `bodyKey`, so the old body stays on screen until the fresh one lands (no Loading flash).
+          const content = await api.getArtifactContent(artifactRowId);
+          if (cancelled) return;
+          if (content.kind === "text") {
+            setLoaded({ key: bodyKey, fileBody: content.body, diffBody: null });
+            setTruncated(content.truncatedTotal != null ? { key: bodyKey, total: content.truncatedTotal } : null);
+            setArtifactFailure(null);
+          } else {
+            setError("Unexpected image content for a text file");
+          }
+        } else if (isExternalPeek && externalToken) {
           const text = await getExternalFile(api, fileScope, worktreeId, externalToken);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: null });
         } else if (scope === "none") {
@@ -248,7 +289,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
       } catch (e) {
-        if (e instanceof ApiError && e.status === 422) {
+        const panel = artifactRowId ? panelForReadError(e) : null;
+        if (panel) {
+          if (!cancelled) {
+            setArtifactFailure({ key: bodyKey, state: panel });
+            setLoaded(null);
+          }
+        } else if (e instanceof ApiError && e.status === 422) {
           if (!cancelled) {
             setTooLarge(true);
             setLoaded(null);
@@ -261,7 +308,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha, reconnectTick, submodule]);
+  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha, reconnectTick, submodule, artifactSource.kind, artifactRowId, artifactStamp]);
 
   // Populate the content cache whenever a fresh load completes.
   useEffect(() => {
@@ -296,13 +343,18 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   }, [imageKey]);
 
   useEffect(() => {
-    if (!worktreeId || !path || !imageKey) return;
+    if (!worktreeId || !path || !imageKey || artifactSource.kind === "loading" || artifactSource.kind === "evicted" || artifactSource.kind === "error") return;
     // Image blobs have no `submodule` param — root-join against the worktree
     // root so a submodule-relative image path resolves (see the fetch effect).
     const rootedPath = submodule && path ? `${submodule}/${path}` : path;
     let cancelled = false;
-    api
-      .getFileBlob(worktreeId, rootedPath, fileScope)
+    const blobPromise = artifactRowId
+      ? api.getArtifactContent(artifactRowId).then((c) => {
+          if (c.kind !== "image") throw new Error("Unexpected text content for an image");
+          return c.blob;
+        })
+      : api.getFileBlob(worktreeId, rootedPath, fileScope);
+    blobPromise
       .then((blob) => {
         if (cancelled) return;
         const url = URL.createObjectURL(blob);
@@ -310,18 +362,23 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           if (prev && prev.key === imageKey) URL.revokeObjectURL(prev.url);
           return { key: imageKey, url };
         });
+        if (artifactRowId && bodyKey) setArtifactFailure((f) => (f?.key === bodyKey ? null : f));
       })
-      .catch(() => { /* image not found — render the loading/empty state */ });
+      .catch((e: unknown) => {
+        // image not found — render the loading/empty state; an artifact image shows its state panel instead
+        const panel = artifactRowId ? panelForReadError(e) : null;
+        if (!cancelled && panel && bodyKey) setArtifactFailure({ key: bodyKey, state: panel });
+      });
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged, reconnectTick, submodule]);
+  }, [api, worktreeId, path, fileScope, imageKey, bodyKey, lastChanged, treeLastChanged, reconnectTick, submodule, artifactSource.kind, artifactRowId, artifactStamp]);
 
   // Fetch gutter marks (git add/modify/delete annotations) when viewing a plain
   // file in working-tree scope. Only scope="none" supports gutter marks; other
   // scopes show a diff view which already has its own add/remove line coloring.
   useEffect(() => {
-    if (!worktreeId || !path || scope !== "none") {
+    if (!worktreeId || !path || scope !== "none" || artifactSourced) {
       gutterSigRef.current = null;
       setGutterMarks(null);
       return;
@@ -377,7 +434,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick, vcsTick, commitSha, gutterScope]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick, vcsTick, commitSha, gutterScope, artifactSourced]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -655,12 +712,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // `lspFileRef` object identity every tick — CodeView's file-switch effect
   // is keyed on it, and a fresh identity every 2s cancels in-flight
   // go-to-def/hover requests and closes pickers/tooltips every poll.
-  const lspFileRef: LspFileRef = useMemo(
+  // No LSP at all for an artifact-sourced path: an absolute path is not a workspace path (the daemon would
+  // refuse it) and the artifact reader serves bytes only.
+  const lspFileRef: LspFileRef | undefined = useMemo(
     () =>
-      external
-        ? { kind: "external", token: external.token }
-        : { kind: "workspace", path: path! },
-    [external, path]
+      artifactSourced
+        ? undefined
+        : external
+          ? { kind: "external", token: external.token }
+          : { kind: "workspace", path: path! },
+    [external, path, artifactSourced]
   );
 
   // No worktree context (e.g. nothing selected yet). The dashboard has its own
@@ -676,8 +737,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // Rendered markdown is always Sans (`.preview-body` isolates it from the
   // interface font), so it uses the fixed 14px sans body size; code and other
   // previews (and markdown shown as a diff) keep the 13px UI base.
+  // Diff scopes make no sense for artifact-sourced paths (no git baseline): render them as a plain view.
+  const viewScope = artifactSourced ? "none" : scope;
   const previewBaseSize =
-    path?.endsWith(".md") && !(scope === "local" || scope === "branch" || scope === "commit")
+    path?.endsWith(".md") && !(viewScope === "local" || viewScope === "branch" || viewScope === "commit")
       ? "var(--fs-body-sans)"
       : "var(--font-size-base)";
   const previewScaleStyle: CSSProperties = {
@@ -696,8 +759,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // toggle. `htmlMode` is the user's persisted preference; a line-jump forces
   // Source until the user clicks Rendered (`renderOverrideKey`). Oversize
   // disables Rendered entirely.
-  const isHtml = isHtmlPath(path) && scope === "none";
-  const htmlTooLarge = isHtml && fileBody != null && isOverHtmlCap(fileBody, "file");
+  const isHtml = isHtmlPath(path) && viewScope === "none";
+  // A text artifact the daemon cut at 1 MiB can never render whole: fall back to Source (the cut total is the size).
+  const truncatedTotal = truncated?.key === bodyKey ? truncated.total : null;
+  const htmlTooLarge =
+    isHtml &&
+    ((truncatedTotal != null && truncatedTotal > HTML_FILE_MAX_BYTES) || (fileBody != null && isOverHtmlCap(fileBody, "file")));
+  const copyPath = () => void copyText(artifactRow?.path ?? path);
   const htmlForcedSource = effectiveLineKey != null && renderOverrideKey !== effectiveLineKey;
   const showHtmlRendered =
     isHtml && htmlMode === "rendered" && !htmlForcedSource && !htmlTooLarge && fileBody != null;
@@ -708,8 +776,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // panes read the same `diffScopeByWorktree` store slice, so a change made
   // there is reflected here automatically without this pane owning any UI
   // for it. File name + panel controls live on the Files bar above.
-  const diffInfo = (
-    <div className="preview-diffinfo">
+  const previewNav = (
       <div className="preview-nav" role="navigation" aria-label="Preview navigation">
         <button
           type="button"
@@ -732,18 +799,63 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           ▶
         </button>
       </div>
+  );
+  const htmlToggle = isHtml ? (
+        <HtmlModeToggle
+          mode={htmlTooLarge || htmlForcedSource ? "source" : htmlMode}
+          onChange={(m) => {
+            // Re-clicking the mode already shown (forced Source / oversize)
+            // must not overwrite the saved preference.
+            if (m === (htmlTooLarge || htmlForcedSource ? "source" : htmlMode)) return;
+            setHtmlMode(m);
+            if (m === "rendered") setRenderOverrideKey(effectiveLineKey);
+          }}
+          renderDisabled={htmlTooLarge}
+          renderDisabledReason="File too large to render"
+        />
+  ) : null;
+  // Artifact state panels (ArtifactStates frame 7). Evicted and missing follow the live row; the rest come from
+  // the failed read. A row flipped to `missing` by `artifact:upserted` swaps in without waiting for a refetch.
+  const artifactPanel: ArtifactPanelState | null =
+    artifactSource.kind === "evicted"
+      ? { kind: "evicted" }
+      : artifactSource.kind === "error"
+        ? { kind: "listError", message: artifactSource.message }
+        : artifactRow?.state === "missing"
+        ? { kind: "missing" }
+        : artifactFailure?.key === bodyKey
+          ? artifactFailure.state
+          : null;
+  // Artifact strip (`Main.dc.html` `.vstrip`): mono display path, writer chip, `outside repo` chip, pin. Shown for
+  // artifact-sourced paths (no diff stats: there is no git baseline) — an in-repo file that is also an artifact
+  // keeps its diff strip and gains the same tail.
+  const scopeLabel =
+    viewScope === "branch" ? "Compared to fork base" : viewScope === "commit" ? "Commit diff" : "Compared to HEAD";
+  const artifactStrip = artifactSourced ? (
+    <div className="preview-diffinfo artifact-strip">
+      {previewNav}
+      <span className="artifact-strip__path" title={path}>
+        {artifactRow?.displayPath ?? path}
+      </span>
+      {artifactRow ? (
+        <ArtifactStripItems api={api} scopeId={worktreeId} row={artifactRow} />
+      ) : (
+        <span className="artifact-strip__spacer" />
+      )}
+      {artifactPanel ? null : htmlToggle}
+    </div>
+  ) : null;
+  const diffInfo = artifactStrip ?? (
+    <div className="preview-diffinfo">
+      {previewNav}
       {diffStats ? (
         <span className="preview-diffinfo__stats" aria-label="Diff line counts">
           <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
           <span className="preview-diffinfo__stats-minus">−{diffStats.deletions}</span>
         </span>
       ) : null}
-      <span className="preview-diffinfo__scope">
-        {scope === "branch"
-          ? "Compared to fork base"
-          : scope === "commit"
-            ? "Commit diff"
-            : "Compared to HEAD"}
+      <span className="preview-diffinfo__scope" title={scopeLabel}>
+        {scopeLabel}
       </span>
       {scope === "commit" && path && worktreeId && !submodule && !controlled?.deleted ? (
         // A commit's diff is not a tab. Open the same file as a normal Files
@@ -762,22 +874,33 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           View source
         </button>
       ) : null}
-      {isHtml ? (
-        <HtmlModeToggle
-          mode={htmlTooLarge || htmlForcedSource ? "source" : htmlMode}
-          onChange={(m) => {
-            // Re-clicking the mode already shown (forced Source / oversize)
-            // must not overwrite the saved preference.
-            if (m === (htmlTooLarge || htmlForcedSource ? "source" : htmlMode)) return;
-            setHtmlMode(m);
-            if (m === "rendered") setRenderOverrideKey(effectiveLineKey);
-          }}
-          renderDisabled={htmlTooLarge}
-          renderDisabledReason="File too large to render"
-        />
-      ) : null}
+      {htmlToggle}
+      {stripRow ? <ArtifactStripItems api={api} scopeId={worktreeId} row={stripRow} /> : null}
     </div>
   );
+
+  if (artifactSourced && artifactPanel) {
+    const closeTab = () => {
+      const st = useWorkspaceStore.getState();
+      const idx = (st.openFileTabsByWorktree[worktreeId] ?? []).indexOf(path);
+      if (idx >= 0) st.closeFileTab(worktreeId, idx);
+    };
+    const removeRow = () => {
+      if (!artifactRow) return;
+      void api
+        .removeArtifact(artifactRow.id)
+        .then(() => useArtifactsStore.getState().hideRow(worktreeId, artifactRow.id))
+        .catch((e: unknown) => {
+          if ((e as { code?: string }).code === "ARTIFACT_NOT_FOUND") useArtifactsStore.getState().hideRow(worktreeId, artifactRow.id);
+        });
+    };
+    return (
+      <div className="pane pane-stack">
+        {diffInfo}
+        <ArtifactStatePanel state={artifactPanel} onCopyPath={copyPath} onCloseTab={closeTab} onRemove={artifactRow ? removeRow : undefined} onRetry={() => void fetchArtifactScope(api, fileScope, worktreeId)} />
+      </div>
+    );
+  }
 
   if (tooLarge) {
     return (
@@ -816,7 +939,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         <div className="empty-state">Loading image…</div>
       );
     }
-    if (scope === "local" || scope === "branch" || scope === "commit") {
+    if (viewScope === "local" || viewScope === "branch" || viewScope === "commit") {
       const diffText = diffBody ?? "";
       const fallback = fileBody ?? undefined;
       return (
@@ -846,7 +969,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           {segments.map((seg, i) =>
             seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={submodule && path ? `${submodule}/${path}` : path} />
+              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={submodule && path ? `${submodule}/${path}` : path} external={artifactSourced && !artifactRow?.inRepo} />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={themeMode} />
             ),
@@ -876,7 +999,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     );
   })();
 
-  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && !isImage && scope === "none");
+  const useCodeChrome = viewScope === "local" || viewScope === "branch" || viewScope === "commit" || (!isMd && !isImage && viewScope === "none");
 
   const bump = (delta: number) => {
     if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
@@ -903,15 +1026,18 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     </div>
   );
 
+  const showFontOverlay = !showHtmlRendered;
+
   return (
     <div
-      className="pane pane-stack preview-pane"
+      className={`pane pane-stack preview-pane${showFontOverlay ? " preview-pane--font-overlay" : ""}`}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{ position: "relative" }}
     >
       {diffInfo}
-      {showHtmlRendered ? null : fontOverlay}
+      {truncatedTotal != null ? <TruncatedBanner total={truncatedTotal} onCopyPath={copyPath} /> : null}
+      {showFontOverlay ? fontOverlay : null}
       <div
         ref={setBodyRef}
         onScroll={handleScroll}

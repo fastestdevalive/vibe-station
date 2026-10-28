@@ -70,9 +70,28 @@ export function useOpenFilesChanged(api: ApiInstance): void {
       if (ev.type !== "openFiles:changed") return;
       const id = ev.worktreeId ?? ev.projectId;
       if (!id) return;
-      useWorkspaceStore.setState((s) => ({
-        openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [id]: ev.paths },
-      }));
+      useWorkspaceStore.setState((s) => {
+        // The daemon appends while the client may have replaced a tab in
+        // place, so the same index can now name another file: re-derive the
+        // active index from the active PATH (or clamp when it is gone).
+        const prevTabs = s.openFileTabsByWorktree[id] ?? [];
+        const prevIdx = s.activeFileTabIdxByWorktree[id] ?? -1;
+        const activePath = prevTabs[prevIdx] ?? null;
+        let nextIdx = activePath != null ? ev.paths.indexOf(activePath) : -1;
+        const activeGone = nextIdx < 0;
+        if (activeGone) {
+          nextIdx = ev.paths.length ? Math.min(Math.max(prevIdx, 0), ev.paths.length - 1) : -1;
+        }
+        const isActiveScope = (s.activeWorktreeId ?? s.activeDirectContextId) === id;
+        const next: Partial<typeof s> = {
+          openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [id]: ev.paths },
+          activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [id]: nextIdx },
+        };
+        if (isActiveScope && !s.peekFile && activeGone) {
+          next.activeFilePath = ev.paths[nextIdx] ?? null;
+        }
+        return next;
+      });
     });
     return unsub;
   }, [api]);

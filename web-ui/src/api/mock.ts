@@ -72,6 +72,7 @@ import type {
   WorktreeOrderResult,
 } from "./types";
 import { ApiError } from "./errors";
+import { createMockArtifacts } from "./mockArtifacts";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
 import type { ConnectionState } from "./client";
 
@@ -558,6 +559,10 @@ export function createMockApi(seed: MockSeed = {}) {
   let mockTaskRev = 0;
 
   const api = {
+    ...createMockArtifacts(emit, (scopeId) =>
+      sessions.filter((x) => x.worktreeId === scopeId && x.type === "agent").map((x) => x.id),
+    ),
+
     __test: {
       simulateExit,
       emit,

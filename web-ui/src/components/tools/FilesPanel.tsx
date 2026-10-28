@@ -1,4 +1,4 @@
-import { ArrowUpRight, FileText, List, ListTree, Plus, Search, X } from "lucide-react";
+import { ArrowUpRight, FileText, FolderOutput, List, ListTree, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -8,6 +8,8 @@ import { FilesLeftPane, type FilesLeftPaneHandle } from "@/components/layout/Fil
 import { DockedListLayout } from "@/components/layout/DockedListLayout";
 import { usePendingFileOpens } from "@/hooks/usePendingFileOpens";
 import { HOST_PRIORITY } from "@/context/TopActionsContext";
+import { isArtifactTabPath } from "@/lib/artifactTabPath";
+import { Chip } from "@/components/ui/Chip";
 import { useToolsInset } from "@/context/ToolsInsetContext";
 import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 
@@ -17,15 +19,9 @@ interface FilesPanelProps {
   worktreeId: string | null;
   scope?: FileScope;
   onOpenQuickOpen?: () => void;
-  currentWidth?: number;
-  currentHeight?: number;
-  onWidthDrag?: (width: number | null) => void;
-  onHeightDrag?: (height: number | null) => void;
 }
 
 const NO_TABS: string[] = [];
-
-export { mobileListSize } from "@/components/layout/DockedListLayout";
 
 /** Last path segment — the file name shown on the tab. */
 function baseName(path: string): string {
@@ -49,7 +45,7 @@ function sourceIcon(source: PeekFileValue["source"]) {
 
 /**
  * Files tool (R4, R5, §4):
- * Overlays FilesLeftPane over FilePreviewPane rather than splitting via MasterDetailShell.
+ * Overlays FilesLeftPane over FilePreviewPane rather than splitting the pane.
  * The list panel is docked on the RIGHT of the preview (left of the window rail column); the
  * content pane pads its right edge by the panel width when open.
  * Drag-to-resize is on the panel's LEFT edge (§4a): dragging left grows it.
@@ -63,10 +59,6 @@ export function FilesPanel({
   worktreeId,
   scope = "worktree",
   onOpenQuickOpen,
-  currentWidth,
-  currentHeight,
-  onWidthDrag,
-  onHeightDrag,
 }: FilesPanelProps) {
   const wt = worktreeId ?? "__none__";
 
@@ -123,6 +115,24 @@ export function FilesPanel({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  // Keep the active file tab visible in a long strip.
+  const revealActiveTab = useCallback(() => {
+    fileTabsScrollRef.current
+      ?.querySelector<HTMLElement>("[data-active]")
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, []);
+  useEffect(() => {
+    revealActiveTab();
+  }, [activeIdx, openTabs, peekActive, revealActiveTab]);
+  // After a reload the strip gets its final width only once the panel group lays out: re-reveal on resize.
+  useEffect(() => {
+    const el = fileTabsScrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => revealActiveTab());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [revealActiveTab]);
+
   const rightPaneTopbar = (
     <>
       <div
@@ -152,7 +162,20 @@ export function FilesPanel({
                 }
               }}
             >
-              <FileText size={13} aria-hidden />
+              {isArtifactTabPath(path) ? (
+                <Chip
+                  tone="warn"
+                  size="sm"
+                  className="files-topbar__tab-tag"
+                  role="img"
+                  aria-label="Outside project"
+                  title={`Outside project: ${path}`}
+                >
+                  <FolderOutput size={10} aria-hidden />
+                </Chip>
+              ) : (
+                <FileText size={13} aria-hidden />
+              )}
               <span className="files-topbar__tab-name">{baseName(path)}</span>
               <button
                 type="button"
@@ -232,10 +255,6 @@ export function FilesPanel({
       wt={wt}
       open={isPanelOpen}
       handleLabel="files"
-      currentWidth={currentWidth}
-      currentHeight={currentHeight}
-      onWidthDrag={onWidthDrag}
-      onHeightDrag={onHeightDrag}
       topbar={
         <>
           {rightPaneTopbar}

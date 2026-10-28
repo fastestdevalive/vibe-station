@@ -1,3 +1,4 @@
+import { useArtifactsSync } from "@/components/artifacts/useArtifactsSync";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useDemoEnv } from "../context/DemoEnv";
@@ -68,6 +69,7 @@ export function Workspace() {
   // the snapshot here keeps the existing prop API for TopBar etc. intact
   // and gives us the `bundleLoaded` boundary used by URL sync.
   useServerSync(api);
+  useArtifactsSync(api);
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);

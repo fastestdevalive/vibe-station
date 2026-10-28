@@ -87,12 +87,15 @@ export function useScheduledSends(api: ApiInstance, sessionId: string | null | u
       }));
     });
     const offOpen = api.on("ws:open", fetchSnapshot);
+    // The server dropped events: refetch what this strip shows.
+    const offResync = api.on("ws:resync", fetchSnapshot);
     fetchSnapshot();
 
     return () => {
       live = false;
       offScheduled();
       offOpen();
+      offResync();
       unsubscribe();
     };
   }, [api, sessionId]);

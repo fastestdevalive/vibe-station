@@ -3,6 +3,7 @@
  * REAL app several times in one page (m1, m2, m3 in turn); every singleton the app keeps at module level
  * must therefore be returned to its freshly-imported state before the next mount.
  */
+import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
 import { useWorkspaceStore, __resetForDemo as resetWorkspaceModule } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useTaskStore } from "@/hooks/useTaskStore";
@@ -40,6 +41,7 @@ export const APP_STORES = [
   useBulkWorktrees,
   useTaskStore,
   useScheduleDevOverride,
+  useArtifactsStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { useTreeWatch } from "@/hooks/useSubscription";
 import { useRovingListNav, type RovingRow } from "@/hooks/useRovingListNav";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
+import { isArtifactTabPath } from "@/lib/artifactTabPath";
 import { FileTreeHeader } from "@/components/layout/FileTreeHeader";
 
 /** Sort folders before files, then alphabetical (case-insensitive). */
@@ -222,14 +223,15 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     void (async () => {
       const results = await Promise.all(
         missing.map(async (dirPath) => {
-          const list = await api.tree(activeWorktreeId, dirPath, fileScope);
-          return [dirPath, sortEntries(list)] as const;
+          // A failed fetch keeps whatever was last known (and stays retryable): null, not [].
+          const list = await api.tree(activeWorktreeId, dirPath, fileScope).catch(() => null);
+          return list ? ([dirPath, sortEntries(list)] as const) : null;
         }),
       );
       if (cancelled) return;
       setChildrenByPath((prev) => {
         const next = new Map(prev);
-        for (const [dirPath, list] of results) next.set(dirPath, list);
+        for (const r of results) if (r) next.set(r[0], r[1]);
         return next;
       });
     })();
@@ -262,14 +264,15 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     void (async () => {
       const results = await Promise.all(
         dirs.map(async (dirPath) => {
-          const list = await api.tree(activeWorktreeId, dirPath, fileScope);
-          return [dirPath, sortEntries(list)] as const;
+          // A failed fetch keeps whatever was last known (and stays retryable): null, not [].
+          const list = await api.tree(activeWorktreeId, dirPath, fileScope).catch(() => null);
+          return list ? ([dirPath, sortEntries(list)] as const) : null;
         }),
       );
       if (cancelled) return;
       setChildrenByPath((prev) => {
         const next = new Map(prev);
-        for (const [dirPath, list] of results) next.set(dirPath, list);
+        for (const r of results) if (r) next.set(r[0], r[1]);
         return next;
       });
     })();
@@ -280,7 +283,8 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   }, [lastChanged]);
 
   const parentsOfActive = useMemo(() => {
-    if (!activeFilePath) return [];
+    // Absolute = outside-repo artifact tab; it has no place in the repo tree.
+    if (!activeFilePath || isArtifactTabPath(activeFilePath)) return [];
     const parts = activeFilePath.split("/").filter(Boolean);
     parts.pop();
     const out: string[] = [];
@@ -499,7 +503,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
             </div>
           ) : null}
           {diffMode ? (
-            <ChangedFileList entries={groupedEntries} loading={groupedLoading} error={groupedError} />
+            <ChangedFileList scopeId={activeWorktreeId} entries={groupedEntries} loading={groupedLoading} error={groupedError} />
           ) : (
             visibleRows.map((row) => {
               const isDir = row.type === "dir";

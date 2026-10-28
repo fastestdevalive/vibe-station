@@ -31,7 +31,7 @@ function makeApi(get: (id: string) => Promise<ScheduleSnapshot>) {
       return () => handlers.get(type)!.delete(h);
     },
   } as unknown as ApiInstance;
-  const emit = (e: WSEvent | { type: "ws:open" }) => {
+  const emit = (e: WSEvent | { type: "ws:open" | "ws:resync" }) => {
     for (const h of handlers.get(e.type) ?? []) h(e as WSEvent);
   };
   return { api, emit, subscribe, unsubscribe, getScheduledMessages };
@@ -93,6 +93,17 @@ describe("useScheduledSends", () => {
     renderHook(() => useScheduledSends(t.api, "s1"));
     await waitFor(() => expect(t.getScheduledMessages).toHaveBeenCalledTimes(1));
     act(() => t.emit({ type: "ws:open" }));
+    expect(t.getScheduledMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches on ws:resync and unsubscribes it on unmount (review 16)", async () => {
+    const t = makeApi(async () => snap());
+    const { unmount } = renderHook(() => useScheduledSends(t.api, "s1"));
+    await waitFor(() => expect(t.getScheduledMessages).toHaveBeenCalledTimes(1));
+    act(() => t.emit({ type: "ws:resync" }));
+    expect(t.getScheduledMessages).toHaveBeenCalledTimes(2);
+    unmount();
+    act(() => t.emit({ type: "ws:resync" }));
     expect(t.getScheduledMessages).toHaveBeenCalledTimes(2);
   });
 

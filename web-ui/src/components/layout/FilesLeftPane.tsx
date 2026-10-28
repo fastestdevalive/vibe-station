@@ -1,11 +1,12 @@
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useRef } from "react";
 import type { ApiInstance } from "@/api";
-import type { FileScope } from "@/api/types";
+import type { ArtifactRow, FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { FileTreeSidebar } from "@/components/layout/FileTreeSidebar";
 import { SearchPanel } from "@/components/tools/SearchPanel";
 import { ReferencesPanel } from "@/components/tools/ReferencesPanel";
 import { OutlinePanel } from "@/components/tools/OutlinePanel";
+import { ArtifactsList } from "@/components/artifacts/ArtifactsList";
 
 interface FilesLeftPaneProps {
   api: ApiInstance;
@@ -15,7 +16,7 @@ interface FilesLeftPaneProps {
 }
 
 /** Imperative handle exposing the active mode's tabbable row to
- *  `MasterDetailShell`'s refocus effects (Phase 3.3/3.5a, B4a) — scoped to the
+ *  the docked list's refocus effects (Phase 3.3/3.5a, B4a) — scoped to the
  *  ACTIVE mode's container, never a `display:none` inactive pane. */
 export interface FilesLeftPaneHandle {
   focusActivePane: () => void;
@@ -23,7 +24,7 @@ export interface FilesLeftPaneHandle {
 
 /**
  * Mode-switching wrapper for the Files tool's left pane. The tree body,
- * search body, references body, and outline body are ALWAYS mounted and CSS-hidden when inactive
+ * search body, references body, outline body and artifacts body are ALWAYS mounted and CSS-hidden when inactive
  * (Requirement 9) — never conditionally unmounted on a rail-mode switch, so
  * each mode's async state survives.
  *
@@ -38,6 +39,20 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
     const searchContainerRef = useRef<HTMLDivElement>(null);
     const referencesContainerRef = useRef<HTMLDivElement>(null);
     const outlineContainerRef = useRef<HTMLDivElement>(null);
+    const artifactsContainerRef = useRef<HTMLDivElement>(null);
+
+    // Artifacts rows open as file tabs: in-repo by repo-relative path, outside the repo by the ABSOLUTE
+    // path (R31; persisted durably by `openFileTabNew`, so `openFiles:changed` echoes keep the tab).
+    const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
+    const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
+    const openArtifact = useCallback(
+      (row: ArtifactRow) => {
+        if (!worktreeId) return;
+        openFileTabNew(worktreeId, row.inRepo ? row.displayPath : row.path);
+        // Artifacts open as file tabs, same on every size (the list stays open, the tab bar stays).
+      },
+      [worktreeId, openFileTabNew],
+    );
 
     useImperativeHandle(
       ref,
@@ -48,6 +63,7 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
             search: searchContainerRef.current,
             references: referencesContainerRef.current,
             outline: outlineContainerRef.current,
+            artifacts: artifactsContainerRef.current,
           };
           const container = containerMap[mode] ?? treeContainerRef.current;
           const focusable =
@@ -84,6 +100,21 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
           className={mode === "references" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
         >
           <ReferencesPanel api={api} worktreeId={worktreeId} scope={scope} />
+        </div>
+        <div
+          ref={artifactsContainerRef}
+          className={mode === "artifacts" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
+        >
+          {worktreeId ? (
+            <ArtifactsList
+              api={api}
+              worktreeId={worktreeId}
+              scope={scope}
+              selectedPath={activeFilePath}
+              onOpen={openArtifact}
+              enabled={mode === "artifacts"}
+            />
+          ) : null}
         </div>
       </div>
     );

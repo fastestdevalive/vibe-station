@@ -71,6 +71,13 @@ const GROUPS: ShortcutGroup[] = [
       { keys: ["Ctrl+Shift+M"], action: "New worktree" },
     ],
   },
+  {
+    title: "Artifacts list",
+    shortcuts: [
+      { keys: ["Enter"], action: "Open the focused artifact" },
+      { keys: ["p"], action: "Pin or unpin the focused artifact" },
+    ],
+  },
 ];
 
 export function KeyboardShortcutsDialog({ open, onClose }: KeyboardShortcutsDialogProps) {
