@@ -13,7 +13,7 @@
 //! handles, drops the guard, then invokes — matching the TS's synchronous,
 //! ordered fan-out.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use vst_types::{NormalizedEvent, SessionMeta};
 
@@ -22,8 +22,29 @@ type MetaListener = dyn Fn(&SessionMeta) + Send + Sync;
 
 #[derive(Default)]
 struct Inner {
-    message: Vec<Arc<MessageListener>>,
-    meta: Vec<Arc<MetaListener>>,
+    next_id: u64,
+    message: Vec<(u64, Arc<MessageListener>)>,
+    meta: Vec<(u64, Arc<MetaListener>)>,
+}
+
+/// RAII handle for a registered listener: dropping it removes the listener
+/// from the stream, which releases whatever the closure captured (e.g. a
+/// `WsConnection` clone — a listener that outlives its connection keeps the
+/// connection's outbound channel open forever). Holds only a `Weak` ref so it
+/// never keeps the stream alive.
+pub struct ListenerGuard {
+    inner: Weak<Mutex<Inner>>,
+    id: u64,
+}
+
+impl Drop for ListenerGuard {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.upgrade() {
+            let mut inner = inner.lock().unwrap();
+            inner.message.retain(|(id, _)| *id != self.id);
+            inner.meta.retain(|(id, _)| *id != self.id);
+        }
+    }
 }
 
 /// The session's chat-event emitter. Shared with the WS layer via `Arc`.
@@ -37,19 +58,64 @@ impl JsonAgentStream {
         Self::default()
     }
 
-    /// Register a `message` listener (fan-out on every `emit_message`).
+    /// Register a permanent `message` listener (fan-out on every
+    /// `emit_message`). Use [`Self::subscribe_message`] for a listener that
+    /// must be removable.
     pub fn on_message(&self, f: Box<MessageListener>) {
-        self.inner.lock().unwrap().message.push(Arc::from(f));
+        self.add_message(f);
     }
 
-    /// Register a `meta` listener (fan-out on every `emit_meta`).
+    /// Register a permanent `meta` listener (fan-out on every `emit_meta`).
     pub fn on_meta(&self, f: Box<MetaListener>) {
-        self.inner.lock().unwrap().meta.push(Arc::from(f));
+        self.add_meta(f);
+    }
+
+    /// Like [`Self::on_message`], but the listener is removed when the
+    /// returned guard is dropped.
+    #[must_use = "dropping the guard immediately removes the listener"]
+    pub fn subscribe_message(&self, f: Box<MessageListener>) -> ListenerGuard {
+        ListenerGuard {
+            inner: Arc::downgrade(&self.inner),
+            id: self.add_message(f),
+        }
+    }
+
+    /// Like [`Self::on_meta`], but the listener is removed when the returned
+    /// guard is dropped.
+    #[must_use = "dropping the guard immediately removes the listener"]
+    pub fn subscribe_meta(&self, f: Box<MetaListener>) -> ListenerGuard {
+        ListenerGuard {
+            inner: Arc::downgrade(&self.inner),
+            id: self.add_meta(f),
+        }
+    }
+
+    fn add_message(&self, f: Box<MessageListener>) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_id += 1;
+        let id = inner.next_id;
+        inner.message.push((id, Arc::from(f)));
+        id
+    }
+
+    fn add_meta(&self, f: Box<MetaListener>) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_id += 1;
+        let id = inner.next_id;
+        inner.meta.push((id, Arc::from(f)));
+        id
     }
 
     /// Emit a normalized chat event to every `message` listener, in order.
     pub fn emit_message(&self, event: &NormalizedEvent) {
-        let listeners = self.inner.lock().unwrap().message.clone();
+        let listeners: Vec<_> = self
+            .inner
+            .lock()
+            .unwrap()
+            .message
+            .iter()
+            .map(|(_, l)| l.clone())
+            .collect();
         for listener in &listeners {
             listener(event);
         }
@@ -57,7 +123,14 @@ impl JsonAgentStream {
 
     /// Emit a meta update to every `meta` listener, in order.
     pub fn emit_meta(&self, meta: &SessionMeta) {
-        let listeners = self.inner.lock().unwrap().meta.clone();
+        let listeners: Vec<_> = self
+            .inner
+            .lock()
+            .unwrap()
+            .meta
+            .iter()
+            .map(|(_, l)| l.clone())
+            .collect();
         for listener in &listeners {
             listener(meta);
         }

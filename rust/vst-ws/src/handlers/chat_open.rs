@@ -257,17 +257,26 @@ pub async fn handle_chat_open(
 
     // Register the closures on the stream, and keep the SAME Arc bodies in the
     // entry so `unregister` can mark them inert via the shared `active` flag.
-    {
+    let listeners = {
         let f = on_message_arc.clone();
-        resolved.agent.stream().on_message(Box::new(move |e| f(e)));
         let g = on_meta_arc.clone();
-        resolved.agent.stream().on_meta(Box::new(move |m| g(m)));
-    }
+        vec![
+            resolved
+                .agent
+                .stream()
+                .subscribe_message(Box::new(move |e| f(e))),
+            resolved
+                .agent
+                .stream()
+                .subscribe_meta(Box::new(move |m| g(m))),
+        ]
+    };
 
     let entry = ChatStreamEntry {
         on_message: Box::new(move |e| on_message_arc(e)),
         on_meta: Box::new(move |m| on_meta_arc(m)),
         active,
+        listeners,
     };
     conn.register_chat_stream(&session_id, entry);
 

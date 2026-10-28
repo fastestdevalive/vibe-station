@@ -121,7 +121,7 @@ async fn open_session_locked(
     {
         let c = conn.clone();
         let sid = session_id.to_string();
-        tokio::spawn(async move {
+        conn.spawn_until_closed(async move {
             use tokio::sync::broadcast::error::RecvError;
             loop {
                 match chunk_rx.recv().await {
@@ -143,7 +143,7 @@ async fn open_session_locked(
     {
         let c = conn.clone();
         let sid = session_id.to_string();
-        tokio::spawn(async move {
+        conn.spawn_until_closed(async move {
             while opened_rx.recv().await.is_ok() {
                 c.send(ServerMessage::SessionOpened {
                     session_id: sid.clone(),
@@ -154,7 +154,7 @@ async fn open_session_locked(
     {
         let c = conn.clone();
         let sid = session_id.to_string();
-        tokio::spawn(async move {
+        conn.spawn_until_closed(async move {
             while let Ok(err) = error_rx.recv().await {
                 c.send(ServerMessage::SessionError {
                     session_id: sid.clone(),
@@ -179,7 +179,7 @@ async fn open_session_locked(
         // multiplied keystrokes ("s" -> "ss" -> "sss") on repeated
         // close/open remounts (e.g. worktree switches).
         let this_stream = stream.clone();
-        tokio::spawn(async move {
+        conn.spawn_until_closed(async move {
             while close_rx.recv().await.is_ok() {
                 if let Some(entry) = c.open_stream_entry(&sid) {
                     if Arc::ptr_eq(&entry.stream, &this_stream) {
