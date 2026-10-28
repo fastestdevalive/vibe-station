@@ -1,0 +1,439 @@
+/* Artifacts list. Layout only: shared pieces (Chip, EmptyState, Toast, BottomSheet) live in components/ui/ui.css.
+   Colours, sizes and radii come from theme tokens (Main.dc.html / ArtifactStates.dc.html / Mobile.dc.html). */
+
+.artifacts-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-sidebar-secondary);
+  color: var(--fg-primary);
+  font-size: var(--fs-ui);
+}
+
+.artifacts-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--pane-row-h);
+  --actions-row-pad: 10px; /* gutter used by .actions-row (workspace.css) */
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+.artifacts-head__icon {
+  color: var(--fg-muted);
+}
+.artifacts-head__title {
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifacts-col {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.artifacts-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px var(--space-2);
+  flex: none;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+}
+.artifacts-tools__seg {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.artifacts-tools__meta {
+  margin-left: auto;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifacts-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ── groups ── */
+.artifacts-cap {
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro);
+  font-weight: 500;
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.artifacts-group__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.artifacts-group__head--button {
+  cursor: pointer;
+}
+.artifacts-group__head--button:hover {
+  background: transparent;
+  color: var(--fg-secondary);
+}
+.artifacts-group__pin {
+  fill: var(--fg-muted);
+}
+.artifacts-group__count {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── rows ── */
+.artifacts-row-wrap {
+  position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 40px;
+}
+.artifacts-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+  align-items: center;
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 4px 12px;
+  border-left: 2px solid transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+  outline: none;
+}
+.artifacts-row:hover {
+  background: var(--bg-hover);
+}
+.artifacts-row:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+}
+.artifacts-row--selected {
+  background: var(--bg-active);
+  border-left-color: var(--fg-primary);
+}
+.artifacts-row__icon {
+  color: var(--fg-secondary);
+}
+.artifacts-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifacts-row--missing .artifacts-row__name {
+  text-decoration: line-through;
+  color: var(--fg-muted);
+}
+.artifacts-row__time {
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.artifacts-row__sub {
+  grid-column: 2 / 4;
+  margin-top: -2px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+}
+.artifacts-row__path {
+  flex: 0 1 auto;
+  min-width: 6ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.artifacts-row__by {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The ⋯ button replaces the time on hover/focus; keyboard users open the menu with the Menu key / Shift+F10. */
+.artifacts-row__more {
+  position: absolute;
+  top: 5px;
+  right: 10px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+}
+.artifacts-row__more:hover,
+.artifacts-row__more[aria-expanded="true"] {
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+}
+.artifacts-row-wrap:hover .artifacts-row__more,
+.artifacts-row-wrap:focus-within .artifacts-row__more,
+.artifacts-row__more[aria-expanded="true"] {
+  display: inline-flex;
+}
+.artifacts-row-wrap:hover .artifacts-row__time,
+.artifacts-row-wrap:focus-within .artifacts-row__time,
+.artifacts-row-wrap:has(.artifacts-row__more[aria-expanded="true"]) .artifacts-row__time {
+  visibility: hidden;
+}
+
+/* ── mobile (`.mrow`) ── */
+.artifacts-row--mobile {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  min-height: 52px;
+  padding: 6px 14px;
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  font-size: 14px;
+}
+.artifacts-row--mobile .artifacts-row__sub {
+  margin-top: -6px;
+  font-size: 12px;
+}
+.artifacts-listbox--mobile .artifacts-row__more {
+  display: none !important;
+}
+.artifacts-listbox--mobile .artifacts-row-wrap:hover .artifacts-row__time {
+  visibility: visible;
+}
+
+.artifacts-listbox--mobile .artifacts-row-wrap {
+  contain-intrinsic-size: auto 52px;
+}
+
+/* ── menu (`.pop`) ── */
+.artifacts-menu {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 4px 0;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-ui);
+}
+.artifacts-menu:not(.artifacts-menu--sheet) {
+  position: fixed;
+  z-index: var(--z-popover);
+}
+.artifacts-menu--sheet {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.artifacts-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.artifacts-menu__item:hover {
+  background: var(--bg-hover);
+}
+.artifacts-menu__item:focus-visible {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+  outline: none;
+}
+.artifacts-menu__item--touch {
+  min-height: 44px;
+  padding: 6px 0;
+  font-size: 14px;
+}
+.artifacts-menu__sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-default);
+}
+
+/* ── states ── */
+.artifacts-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: var(--space-3);
+}
+.artifacts-skeleton__bar {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.artifacts-error .ui-empty__title {
+  color: var(--fg-danger);
+}
+.artifacts-nomatch {
+  padding: var(--space-4) var(--space-3);
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+}
+.artifacts-code {
+  font-family: var(--font-mono);
+  color: var(--fg-primary);
+}
+.artifacts-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifacts-row {
+    transition: none;
+  }
+}
+
+/* ── Preview strip (Main.dc.html `.vstrip`; Rendered.dc.html states A/B) ── */
+.artifact-strip {
+  height: 30px;
+  box-sizing: border-box;
+  gap: 10px;
+  padding: 0 var(--space-3);
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  background: var(--bg-primary);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+/* Beat `.preview-diffinfo`'s block padding regardless of stylesheet order (`.vstrip` is 30px). */
+.preview-diffinfo.artifact-strip {
+  height: 30px;
+  padding-block: 0;
+}
+.artifact-strip__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.artifact-strip__spacer {
+  flex: 1;
+}
+.artifact-strip__note {
+  font-size: var(--fs-meta);
+  color: var(--fg-warning);
+}
+.artifact-strip__pin {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.artifact-strip__pin:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+.artifact-strip__pin:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+  outline: none;
+}
+.artifact-strip__pin-icon--on {
+  color: var(--comment);
+  fill: var(--comment);
+}
+
+/* Preview state panels fill the pane (ArtifactStates.dc.html frame 7 `.empty`). */
+.artifact-state {
+  flex: 1;
+  min-height: 0;
+}
+
+/* "Outside project" tag on a file tab (an artifact opened by absolute path): replaces the leading file icon. Same
+   warn tone as the preview strip's outside-repo chip; an icon-only 16px pill so it fits narrow phone tabs. */
+.files-topbar__tab-tag {
+  flex: none;
+}
+
+/* Outside-repo markdown: blocked local images and inert local links (R98). */
+.markdown-img-blocked {
+  display: inline-block;
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) dashed var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+}
+.markdown-link-inert {
+  color: var(--fg-muted);
+  cursor: not-allowed;
+  text-decoration: underline dotted;
+}
+
+.artifacts-tools__select {
+  height: 24px;
+}
+
+@media (max-width: 768px) {
+  .artifacts-group__head--button {
+    min-height: 44px;
+  }
+  .artifacts-tools__seg [role="radio"] {
+    min-height: 44px;
+  }
+  .artifacts-tools__select {
+    height: 44px;
+  }
+  .preview-diffinfo.artifact-strip {
+    height: 44px;
+  }
+  .artifact-strip__pin {
+    width: 44px;
+    height: 44px;
+  }
+}

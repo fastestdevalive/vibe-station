@@ -1,0 +1,555 @@
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { memo } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ArtifactRow, Session, SessionState } from "@/api/types";
+import { ApiError } from "@/api/errors";
+import { useServerStore } from "@/hooks/useServerStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
+import { ArtifactsList } from "./ArtifactsList";
+import { useArtifactsStore } from "./artifactsStore";
+import { makeRow, upsert } from "./testFixtures";
+
+const renderRowCounter = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./ArtifactRow", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./ArtifactRow")>();
+  const Real = mod.ArtifactRow;
+  // memo mirrors the real component: the count only grows when a row's props actually change.
+  const Counted = memo(function Counted(props: React.ComponentProps<typeof Real>) {
+    renderRowCounter.count++;
+    return <Real {...props} />;
+  });
+  return { ...mod, ArtifactRow: Counted };
+});
+
+const S = "wt1";
+
+function session(id: string, over: Partial<Session> = {}): Session {
+  return {
+    id,
+    worktreeId: S,
+    projectId: "p1",
+    modeId: null,
+    type: "agent",
+    name: id,
+    isMain: false,
+    state: "working",
+    lifecycleState: "drafting",
+    tmuxName: id,
+    createdAt: "2026-10-27T09:00:00.000Z",
+    ...over,
+  };
+}
+
+function makeApi() {
+  return {
+    listArtifacts: vi.fn(async () => ({ rev: 1, cap: 500, total: 0, items: [] as ArtifactRow[] })),
+    pinArtifact: vi.fn(async (id: string, pinned: boolean) => ({ ...makeRow({ id }), pinned })),
+    removeArtifact: vi.fn(async () => ({ ok: true as const })),
+  };
+}
+
+function seed(rows: ArtifactRow[], opts: { total?: number; sessions?: Session[]; states?: Record<string, SessionState> } = {}) {
+  useServerStore.setState({ projects: [], worktrees: [], sessions: opts.sessions ?? [session("s-run")], loaded: true });
+  useWorkspaceStore.setState({ sessionStates: opts.states ?? {} });
+  useArtifactsStore.getState().replace(S, "worktree", { rev: 1, cap: 500, total: opts.total ?? rows.length, items: rows });
+}
+
+function renderList(api = makeApi(), props: Partial<React.ComponentProps<typeof ArtifactsList>> = {}) {
+  const view = render(<ArtifactsList api={api} worktreeId={S} scope="worktree" {...props} />);
+  return { api, ...view };
+}
+
+const names = () => within(screen.queryByRole("listbox") ?? document.body).queryAllByRole("option").map((o) => o.querySelector(".artifacts-row__name")?.textContent);
+
+beforeEach(() => {
+  useArtifactsStore.getState().reset();
+  useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+});
+afterEach(() => vi.useRealTimers());
+
+describe("ArtifactsList groups (7.T1)", () => {
+  const sessions = [session("s-run"), session("s-old", { state: "exited" })];
+  const rows = [
+    makeRow({ id: "pin", pinned: true, writers: ["s-old"], lastWrittenAt: "2026-10-27T10:05:00.000Z" }),
+    makeRow({ id: "run", writers: ["s-run"], lastWrittenAt: "2026-10-27T10:04:00.000Z" }),
+    makeRow({ id: "old", writers: ["s-old"], lastWrittenAt: "2026-10-27T10:03:00.000Z" }),
+    makeRow({ id: "gone", writers: ["deleted-id"], lastWrittenAt: "2026-10-27T10:02:00.000Z" }),
+  ];
+
+  it("pinned on top, running writer in This run, exited/deleted in Earlier (collapsed, toggles), counts in headers", async () => {
+    seed(rows, { sessions });
+    renderList();
+    expect(screen.getByRole("group", { name: "Pinned, 1 artifact" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "This run, 1 artifact" })).toBeInTheDocument();
+    expect(names()).toEqual(["pin.md", "run.md"]);
+
+    const earlier = screen.getByRole("button", { name: "Earlier, 2 artifacts" });
+    expect(earlier).toHaveAttribute("aria-expanded", "false");
+    expect(earlier).toHaveTextContent("Earlier· 2");
+    await userEvent.click(earlier);
+    expect(earlier).toHaveAttribute("aria-expanded", "true");
+    expect(names()).toEqual(["pin.md", "run.md", "old.md", "gone.md"]);
+    await userEvent.click(earlier);
+    expect(names()).toEqual(["pin.md", "run.md"]);
+  });
+
+  it("collapse state survives a remount of the same scope; other scopes keep the defaults", async () => {
+    seed([makeRow({ id: "r", writers: ["s-run"] })]);
+    const first = renderList();
+    await userEvent.click(screen.getByRole("button", { name: "This run, 1 artifact" }));
+    expect(screen.getByRole("button", { name: "This run, 1 artifact" })).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+    renderList();
+    expect(screen.getByRole("button", { name: "This run, 1 artifact" })).toHaveAttribute("aria-expanded", "false");
+    expect(useArtifactsStore.getState().groupOpen.other).toBeUndefined();
+  });
+
+  it("This run collapses too, and the Pinned header is not a toggle", async () => {
+    seed(rows, { sessions });
+    renderList();
+    const run = screen.getByRole("button", { name: "This run, 1 artifact" });
+    expect(run).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(run);
+    expect(names()).toEqual(["pin.md"]);
+    expect(screen.queryByRole("button", { name: /^Pinned/ })).toBeNull();
+  });
+
+  it("any live writer in `writers` (not just the newest) puts the row in This run", () => {
+    seed([makeRow({ id: "two", writers: ["s-old", "s-run"] })], { sessions });
+    renderList();
+    expect(screen.getByRole("group", { name: "This run, 1 artifact" })).toBeInTheDocument();
+  });
+
+  it("an archived session is not live", () => {
+    seed([makeRow({ id: "a", writers: ["s-arch"] })], { sessions: [session("s-arch", { archivedAt: "2026-10-27T09:30:00.000Z" })] });
+    renderList();
+    expect(screen.queryByRole("group", { name: /This run/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Earlier, 1 artifact" })).toBeInTheDocument();
+  });
+
+  it("header count chip shows the number of rows and the meta shows total of cap", () => {
+    seed(rows, { sessions, total: 7 });
+    renderList();
+    expect(screen.getByLabelText("4 artifacts")).toHaveTextContent("4");
+    expect(screen.getByText("7 of 500")).toBeInTheDocument();
+  });
+});
+
+describe("ArtifactsList session filter (7.T2)", () => {
+  const rows = [
+    makeRow({ id: "by-main", writers: ["main"], lastWrittenAt: "2026-10-27T10:03:00.000Z" }),
+    makeRow({ id: "by-child", writers: ["child"], lastWrittenAt: "2026-10-27T10:02:00.000Z" }),
+    makeRow({ id: "by-b", writers: ["b"], lastWrittenAt: "2026-10-27T10:01:00.000Z" }),
+    makeRow({ id: "multi", writers: ["b", "main"], lastWrittenAt: "2026-10-27T10:00:00.000Z" }),
+  ];
+  const three = [session("main", { name: "main", isMain: true }), session("b", { name: "Agent B" }), session("c", { name: "Agent C" }), session("child", { name: "Sub", parentSessionId: "main" })];
+
+  it("3 top-level sessions render a segmented control; children are not options; default is All", () => {
+    seed(rows, { sessions: three });
+    renderList();
+    const group = screen.getByRole("radiogroup");
+    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["All sessions", "main", "Agent B", "Agent C"]);
+    expect(within(group).getByRole("radio", { name: "All sessions" })).toHaveAttribute("aria-checked", "true");
+    expect(names()).toHaveLength(4);
+  });
+
+  it("falls back to the dropdown when the segmented control overflows; the N of 500 meta stays", () => {
+    const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const isSeg = (el: HTMLElement) => el.classList.contains("artifacts-tools__seg");
+    Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return isSeg(this as HTMLElement) ? 270 : 0; } });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return isSeg(this as HTMLElement) ? 200 : 0; } });
+    try {
+      seed(rows, { sessions: three });
+      renderList();
+      expect(screen.queryByRole("radiogroup")).toBeNull();
+      expect(screen.getByRole("combobox", { name: "Filter by session" })).toBeInTheDocument();
+      expect(screen.getByText(/of 500$/)).toBeInTheDocument();
+    } finally {
+      if (sw) Object.defineProperty(HTMLElement.prototype, "scrollWidth", sw);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+      if (cw) Object.defineProperty(HTMLElement.prototype, "clientWidth", cw);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
+    }
+  });
+
+  it("selecting a parent includes rows written by its children; any writer in `writers` matches", async () => {
+    seed(rows, { sessions: three });
+    renderList();
+    await userEvent.click(screen.getByRole("radio", { name: "main" }));
+    expect(names()).toEqual(["by-main.md", "by-child.md", "multi.md"]);
+    await userEvent.click(screen.getByRole("radio", { name: "Agent B" }));
+    expect(names()).toEqual(["by-b.md", "multi.md"]);
+  });
+
+  it("4 top-level sessions render a dropdown labelled Session: All (4)", async () => {
+    seed(rows, { sessions: [...three, session("d", { name: "Agent D" })] });
+    renderList();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    const select = screen.getByRole("combobox", { name: "Filter by session" });
+    expect(within(select).getByRole("option", { name: "Session: All (4)" })).toBeInTheDocument();
+    expect(within(select).queryByRole("option", { name: /Sub/ })).toBeNull();
+    await userEvent.selectOptions(select, "b");
+    expect(names()).toEqual(["by-b.md", "multi.md"]);
+  });
+
+  it("the session dropdown may use the full row width (R1F-04)", () => {
+    seed(rows, { sessions: [...three, session("d", { name: "Agent D" })] });
+    renderList();
+    expect(screen.getByLabelText("Filter by session").style.maxWidth).toBe("100%");
+  });
+});
+
+describe("ArtifactsList notices (7.T3, 7.T7)", () => {
+  it("a created cli outside-repo upsert shows the added notice; Remove calls removeArtifact", async () => {
+    seed([makeRow({ id: "a", writers: ["s1"] })], { sessions: [session("s1", { name: "Agent 1" })] });
+    const { api } = renderList();
+    act(() => {
+      useArtifactsStore.getState().applyUpserted({
+        scopeId: S,
+        rev: 2,
+        rows: [upsert({ id: "shot", path: "/tmp/shots/login.png", displayPath: "/tmp/shots/login.png", inRepo: false, kind: "image", addedVia: "cli", writers: ["s1"] }, true)],
+      });
+    });
+    const note = screen.getByRole("status");
+    expect(note).toHaveTextContent("Agent 1 added /tmp/shots/login.png (outside the repo) ·");
+    await userEvent.click(within(note).getByRole("button", { name: "Remove" }));
+    expect(api.removeArtifact).toHaveBeenCalledWith("shot");
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(names()).toEqual(["a.md"]);
+  });
+
+  it("an in-repo or non-created upsert shows no notice", () => {
+    seed([makeRow({ id: "a" })]);
+    renderList();
+    act(() => {
+      useArtifactsStore.getState().applyUpserted({ scopeId: S, rev: 2, rows: [upsert({ id: "in", addedVia: "cli", inRepo: true }, true)] });
+      useArtifactsStore.getState().applyUpserted({ scopeId: S, rev: 3, rows: [upsert({ id: "a", addedVia: "cli", inRepo: false }, false)] });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("the added notice is dismissible", async () => {
+    seed([makeRow({ id: "a" })]);
+    renderList();
+    act(() => {
+      useArtifactsStore.getState().applyUpserted({ scopeId: S, rev: 2, rows: [upsert({ id: "o", addedVia: "cli", inRepo: false, displayPath: "/tmp/o.md", path: "/tmp/o.md" }, true)] });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("cap notice shows the dropped count and auto-dismisses after 10 s", () => {
+    vi.useFakeTimers();
+    seed([makeRow({ id: "a", writers: ["s-run"] }), makeRow({ id: "b", writers: ["s-run"] })]);
+    renderList();
+    act(() => useArtifactsStore.getState().applyRemoved({ scopeId: S, rev: 2, ids: ["b"], reason: "cap" }));
+    expect(screen.getByRole("status")).toHaveTextContent("1 oldest artifact was dropped (limit 500). Pinned are kept.");
+    act(() => void vi.advanceTimersByTime(9_900));
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    act(() => void vi.advanceTimersByTime(200));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("the cap notice and the added notice from the same burst render together", () => {
+    seed([makeRow({ id: "a" }), makeRow({ id: "b" }), makeRow({ id: "c" }), makeRow({ id: "d" })]);
+    renderList();
+    act(() => {
+      useArtifactsStore.getState().applyRemoved({ scopeId: S, rev: 2, ids: ["b", "c", "d"], reason: "cap" });
+      useArtifactsStore.getState().applyUpserted({ scopeId: S, rev: 3, rows: [upsert({ id: "o", addedVia: "cli", inRepo: false, displayPath: "/tmp/o.md", path: "/tmp/o.md" }, true)] });
+    });
+    const notes = screen.getAllByRole("status");
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toHaveTextContent("3 oldest artifacts were dropped (limit 500). Pinned are kept.");
+    expect(notes[1]).toHaveTextContent("(outside the repo)");
+  });
+
+  it("plural cap notice", () => {
+    seed([makeRow({ id: "a" }), makeRow({ id: "b" }), makeRow({ id: "c" })]);
+    renderList();
+    act(() => useArtifactsStore.getState().applyRemoved({ scopeId: S, rev: 2, ids: ["b", "c"], reason: "cap" }));
+    expect(screen.getByRole("status")).toHaveTextContent("2 oldest artifacts were dropped (limit 500). Pinned are kept.");
+  });
+});
+
+describe("ArtifactsList row render (7.T4)", () => {
+  it("name and dir spans carry the full display path as a title", () => {
+    seed([makeRow({ id: "t", writers: ["s-run"], path: "/tmp/deep/dir/t.md", displayPath: "/tmp/deep/dir/t.md", inRepo: false })]);
+    renderList();
+    expect(document.querySelector(".artifacts-row__name")).toHaveAttribute("title", "/tmp/deep/dir/t.md");
+    expect(document.querySelector(".artifacts-row__path")).toHaveAttribute("title", "/tmp/deep/dir/");
+  });
+
+  it("outside-repo chip, missing chip + strike-through, N edits, deleted agent, relative time, selected", () => {
+    const now = Date.now();
+    seed(
+      [
+        makeRow({ id: "out", path: "/home/u/.claude/plans/x.md", displayPath: "~/.claude/plans/x.md", inRepo: false, writers: ["s-run"], editCount: 3, lastWrittenAt: new Date(now - 120_000).toISOString() }),
+        makeRow({ id: "miss", state: "missing", writers: ["s-run"], editCount: 4, displayPath: "docs/old.md", lastWrittenAt: new Date(now - 130_000).toISOString() }),
+        makeRow({ id: "ghost", writers: ["nope"], lastWrittenAt: new Date(now - 140_000).toISOString() }),
+      ],
+      { sessions: [session("s-run", { name: "main" })] },
+    );
+    renderList(makeApi(), { selectedPath: "docs/old.md" });
+    const out = screen.getAllByRole("option")[0]!;
+    expect(within(out).getByText("outside repo")).toHaveClass("chip", "chip--warn", "chip--sm");
+    expect(within(out).getByText("~/.claude/plans/")).toBeInTheDocument();
+    expect(out).toHaveTextContent("· main · 3 edits");
+    expect(within(out).getByText("2m")).toBeInTheDocument();
+    expect(out).toHaveAttribute("aria-selected", "false");
+
+    const miss = screen.getAllByRole("option")[1]!;
+    expect(within(miss).getByText("missing")).toHaveClass("chip--neutral");
+    expect(miss).toHaveClass("artifacts-row--missing", "artifacts-row--selected");
+    expect(miss).toHaveAttribute("aria-selected", "true");
+    // a missing row's sub-line is the chip plus the path only
+    expect(miss).not.toHaveTextContent("edits");
+    expect(miss).toHaveTextContent("docs/old.md");
+
+    // deleted writer goes to Earlier
+    fireEvent.click(screen.getByRole("button", { name: /^Earlier/ }));
+    expect(screen.getByRole("option", { name: /ghost\.md/ })).toHaveTextContent("· deleted agent");
+  });
+
+  it("no outside-repo chip for an in-repo row; no edits text for a single edit", () => {
+    seed([makeRow({ id: "a", writers: ["s-run"] })]);
+    renderList();
+    const row = screen.getByRole("option");
+    expect(within(row).queryByText("outside repo")).toBeNull();
+    expect(row).not.toHaveTextContent("edit");
+  });
+});
+
+describe("ArtifactsList states (7.T5)", () => {
+  it("empty state copy includes the from-now-on line and the vst artifact add hint", () => {
+    seed([]);
+    renderList();
+    expect(screen.getByText("No artifacts yet")).toBeInTheDocument();
+    expect(screen.getByText(/show up here from now on/)).toBeInTheDocument();
+    expect(screen.getByText("vst artifact add <path>")).toBeInTheDocument();
+  });
+
+  it("loading shows five skeleton bars and aria-busy", () => {
+    let release: (v: { rev: number; cap: number; total: number; items: ArtifactRow[] }) => void = () => {};
+    const api = makeApi();
+    api.listArtifacts.mockImplementation(() => new Promise((r) => (release = r)));
+    const { container } = renderList(api);
+    expect(container.querySelector(".artifacts-pane")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("artifacts-skeleton").children).toHaveLength(5);
+    act(() => release({ rev: 1, cap: 500, total: 0, items: [] }));
+  });
+
+  it("error shows Retry and no stale rows; Retry refetches", async () => {
+    seed([makeRow({ id: "stale" })]);
+    useArtifactsStore.getState().setError(S, "worktree", "boom");
+    const api = makeApi();
+    api.listArtifacts.mockResolvedValue({ rev: 1, cap: 500, total: 1, items: [makeRow({ id: "fresh", writers: ["s-run"] })] });
+    renderList(api);
+    expect(screen.getByText("Couldn’t load artifacts")).toBeInTheDocument();
+    expect(screen.getByText(/Showing nothing rather than a stale list/)).toBeInTheDocument();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(api.listArtifacts).toHaveBeenCalledWith(S, "worktree");
+    await waitFor(() => expect(names()).toEqual(["fresh.md"]));
+  });
+
+  it("fetches the scope on first need", async () => {
+    const api = makeApi();
+    useServerStore.setState({ sessions: [session("s-run")], loaded: true });
+    api.listArtifacts.mockResolvedValue({ rev: 1, cap: 500, total: 1, items: [makeRow({ id: "first", writers: ["s-run"] })] });
+    renderList(api);
+    await waitFor(() => expect(names()).toEqual(["first.md"]));
+    expect(api.listArtifacts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ArtifactsList menu and keyboard (7.T6)", () => {
+  const sessions = [session("s-run")];
+  const rows = [
+    makeRow({ id: "pin", pinned: true, writers: ["s-run"], path: "/repo/docs/pin.md", lastWrittenAt: "2026-10-27T10:02:00.000Z" }),
+    makeRow({ id: "r2", writers: ["s-run"], path: "/repo/docs/r2.md", lastWrittenAt: "2026-10-27T10:01:00.000Z" }),
+  ];
+
+  async function openMenu(name: RegExp) {
+    const row = screen.getByRole("option", { name });
+    const wrap = row.parentElement!;
+    await userEvent.click(within(wrap).getByRole("button", { name: "Row actions" }));
+    return screen.getByRole("menu");
+  }
+
+  it("Pin calls pinArtifact(id, true) and the menu offers Unpin for a pinned row", async () => {
+    seed(rows, { sessions });
+    const { api } = renderList();
+    const menu = await openMenu(/r2\.md/);
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Pin", "Copy path", "Remove from artifacts"]);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    expect(api.pinArtifact).toHaveBeenCalledWith("r2", true);
+    await waitFor(() => expect(screen.getByRole("group", { name: "Pinned, 2 artifacts" })).toBeInTheDocument());
+
+    const menu2 = await openMenu(/pin\.md/);
+    expect(within(menu2).getByRole("menuitem", { name: "Unpin" })).toBeInTheDocument();
+  });
+
+  it("Remove of a pinned row calls removeArtifact and the row leaves Pinned", async () => {
+    seed(rows, { sessions });
+    const { api } = renderList();
+    const menu = await openMenu(/pin\.md/);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Remove from artifacts" }));
+    expect(api.removeArtifact).toHaveBeenCalledWith("pin");
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Pinned/ })).toBeNull());
+    expect(names()).toEqual(["r2.md"]);
+  });
+
+  it("Pin at the limit shows the inline notice", async () => {
+    seed(rows, { sessions });
+    const api = makeApi();
+    api.pinArtifact.mockRejectedValue(new ApiError("limit", 409, "PIN_LIMIT"));
+    renderList(api);
+    const menu = await openMenu(/r2\.md/);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    expect(await screen.findByText("50 pinned is the limit")).toBeInTheDocument();
+  });
+
+  it("Copy path writes the absolute path", async () => {
+    seed(rows, { sessions });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderList();
+    const menu = await openMenu(/r2\.md/);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy path" }));
+    expect(writeText).toHaveBeenCalledWith("/repo/docs/r2.md");
+  });
+
+  it("right-click opens the same menu; Esc closes it and focus returns to the row", async () => {
+    seed(rows, { sessions });
+    renderList();
+    const row = screen.getByRole("option", { name: /r2\.md/ });
+    row.focus();
+    fireEvent.contextMenu(row);
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeInTheDocument();
+    await waitFor(() => expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(menu).getAllByRole("menuitem")[1]).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(row).toHaveFocus();
+  });
+
+  it("R1F-03: focus enters the first item only once the menu is visible", async () => {
+    seed(rows, { sessions });
+    renderList();
+    const seen: { role: string | null; visibility: string | undefined }[] = [];
+    const orig = HTMLElement.prototype.focus;
+    const spy = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, ...a) {
+      if (this.getAttribute("role") === "menuitem") {
+        seen.push({ role: "menuitem", visibility: (this.closest('[role="menu"]') as HTMLElement | null)?.style.visibility });
+      }
+      return orig.apply(this, a as []);
+    });
+    await openMenu(/r2\.md/);
+    spy.mockRestore();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]!.visibility).toBe("visible");
+  });
+
+  it("R1F-03: Esc dispatched outside the menu closes it and is not seen by bubble listeners", async () => {
+    seed(rows, { sessions });
+    renderList();
+    await openMenu(/r2\.md/);
+    const bubble = vi.fn();
+    document.body.addEventListener("keydown", bubble);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    document.body.removeEventListener("keydown", bubble);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(bubble).not.toHaveBeenCalled();
+  });
+
+  it("Tab stays inside the open menu", async () => {
+    seed(rows, { sessions });
+    renderList();
+    const menu = await openMenu(/r2\.md/);
+    const items = within(menu).getAllByRole("menuitem");
+    items[items.length - 1]!.focus();
+    await userEvent.tab();
+    expect(items[0]).toHaveFocus();
+  });
+
+  it("the Menu key opens the menu from the keyboard", async () => {
+    seed(rows, { sessions });
+    renderList();
+    screen.getByRole("option", { name: /r2\.md/ }).focus();
+    await userEvent.keyboard("{ContextMenu}");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("`p` toggles pin on the focused row; Enter opens it; bare Delete does nothing", async () => {
+    seed(rows, { sessions });
+    const onOpen = vi.fn();
+    const { api } = renderList(makeApi(), { onOpen });
+    const row = screen.getByRole("option", { name: /r2\.md/ });
+    row.focus();
+    await userEvent.keyboard("p");
+    expect(api.pinArtifact).toHaveBeenCalledWith("r2", true);
+    await userEvent.keyboard("{Delete}");
+    expect(api.removeArtifact).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Enter}");
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "r2" }));
+  });
+
+  it("arrow keys move between rows", async () => {
+    seed(rows, { sessions });
+    renderList();
+    const first = screen.getByRole("option", { name: /pin\.md/ });
+    first.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await waitFor(() => expect(screen.getByRole("option", { name: /r2\.md/ })).toHaveFocus());
+  });
+
+  it("clicking a row calls onOpen with it", async () => {
+    seed(rows, { sessions });
+    const onOpen = vi.fn();
+    renderList(makeApi(), { onOpen });
+    await userEvent.click(screen.getByRole("option", { name: /r2\.md/ }));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: "r2" }));
+  });
+});
+
+describe("ArtifactsList live-state rule (7.T8)", () => {
+  it("resolves state via sessionStates[id] ?? session.state, never lifecycleState", () => {
+    // `lifecycleState` is "drafting" (frozen) on every fixture session: if it were read, none would be live.
+    const sessions = [
+      session("only-map", { state: "exited", lifecycleState: "exited" }),
+      session("only-record", { state: "working", lifecycleState: "exited" }),
+      session("map-wins", { state: "working", lifecycleState: "working" }),
+    ];
+    seed(
+      [
+        makeRow({ id: "a", writers: ["only-map"], lastWrittenAt: "2026-10-27T10:03:00.000Z" }),
+        makeRow({ id: "b", writers: ["only-record"], lastWrittenAt: "2026-10-27T10:02:00.000Z" }),
+        makeRow({ id: "c", writers: ["map-wins"], lastWrittenAt: "2026-10-27T10:01:00.000Z" }),
+      ],
+      { sessions, states: { "only-map": "working", "map-wins": "done" } },
+    );
+    renderList();
+    // a: record says exited but the live map says working -> This run; b: no map entry, record working -> This run;
+    // c: map says done (wins over the record's working) -> Earlier.
+    expect(names()).toEqual(["a.md", "b.md"]);
+    expect(screen.getByRole("group", { name: "This run, 2 artifacts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Earlier, 1 artifact" })).toBeInTheDocument();
+  });
+});
+
+describe("ArtifactsList re-render budget (R1F-15)", () => {
+  it("patching one row re-renders at most two rows", () => {
+    const rows = Array.from({ length: 50 }, (_, i) => makeRow({ id: `r${i}`, writers: ["s-run"], lastWrittenAt: `2026-10-27T10:${String(i).padStart(2, "0")}:00.000Z` }));
+    seed(rows);
+    renderRowCounter.count = 0;
+    renderList();
+    expect(renderRowCounter.count).toBeGreaterThanOrEqual(50);
+    renderRowCounter.count = 0;
+    act(() => useArtifactsStore.getState().patchRow(S, { ...rows[3]!, editCount: 9 }));
+    expect(renderRowCounter.count).toBeLessThanOrEqual(2);
+  });
+});

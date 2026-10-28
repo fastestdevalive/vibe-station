@@ -9,7 +9,6 @@ import { worktreePrStatus } from "@/lib/statusColor";
 import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
-import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
@@ -102,8 +101,9 @@ export function ToolPanel({
 
   // Decision 9 migration: persisted `toolPanelTab === "search"` seeds Files rail into search mode.
   // Persisted "devices"/"artifacts" (from before they were disabled, or via direct state
-  // manipulation) are folded into "files" too — those tools have no active rail button, so
-  // leaving the tab on one of them would render a tool with no rail highlight.
+  // manipulation) are folded into "files" too — Artifacts is now a Files list MODE (not a tab)
+  // and Devices has no active rail button, so leaving the tab on one of them would render a
+  // tool with no rail highlight.
   const effectiveTab = effectiveToolTab(toolPanelTab);
 
   useEffect(() => {
@@ -288,7 +288,6 @@ export function ToolPanel({
                 />
               ) : null}
               {effectiveTab === "devices" ? <DevicesPanel /> : null}
-              {effectiveTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
               {effectiveTab === "vcs" ? (
                 <VcsPanel
                   api={api}

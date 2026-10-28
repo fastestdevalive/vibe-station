@@ -70,6 +70,7 @@ import type {
   WorktreeOrderResult,
 } from "./types";
 import { ApiError } from "./errors";
+import { createArtifactsClient } from "./artifactsClient";
 
 function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
@@ -547,6 +548,8 @@ export function createClientApi() {
   }
 
   const api = {
+    ...createArtifactsClient({ baseUrl, apiFetch }),
+
     async health(): Promise<HealthResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/health`);

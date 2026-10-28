@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -77,6 +77,19 @@ describe("ToolPanel", () => {
     // Persisted tab is already "files" (not "search"), so the migration effect is
     // a no-op and the user's tree choice is NOT overridden back to search.
     expect(useWorkspaceStore.getState().filesLeftPaneMode["wt-1"]).toBe("tree");
+  });
+
+  it("8.T2 — a persisted toolPanelTab 'artifacts' still folds into 'files' and renders no placeholder panel", async () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "artifacts" } },
+      filesLeftPaneMode: {},
+    });
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    await screen.findByText("README.md");
+    expect(useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.toolPanelTab).toBe("files");
+    // The old hard-coded sample rows / upload placeholder are gone.
+    expect(container.querySelector(".artifacts-panel, .artifacts-upload")).toBeNull();
+    expect(screen.queryByText(/drop files here|upload/i)).not.toBeInTheDocument();
   });
 
   it("R1 — does not render a horizontal tab strip", () => {
@@ -216,8 +229,8 @@ describe("ToolPanel", () => {
     const devices = screen.getByRole("button", { name: "Devices (coming soon)" });
     expect(devices).toBeDisabled();
 
-    const artifacts = screen.getByRole("button", { name: "Artifacts (coming soon)" });
-    expect(artifacts).toBeDisabled();
+    const artifacts = screen.getByRole("button", { name: "Artifacts" });
+    expect(artifacts).toBeEnabled();
 
     // Clicking VCS switches active tool
     const vcs = screen.getByRole("button", { name: "Version Control" });
@@ -246,13 +259,14 @@ describe("ToolPanel", () => {
     expect(body.style.paddingLeft).toBe("");
   });
 
-  it("§4a — sets --tools-rail-panel-w according to persisted filesLeftPaneWidthByWorktree", () => {
+  it("§4a — the list size var follows persisted filesLeftPaneWidthByWorktree (set by DockedListLayout, the one owner)", () => {
     useWorkspaceStore.setState({
       filesLeftPaneWidthByWorktree: { "wt-1": 320 },
     });
     const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
-    const panel = container.querySelector(".tool-panel") as HTMLElement;
-    expect(panel.style.getPropertyValue("--tools-rail-panel-w")).toBe("320px");
+    expect((container.querySelector(".tool-panel") as HTMLElement).style.getPropertyValue("--list-pane-w")).toBe("");
+    const panel = container.querySelector(".files-panel") as HTMLElement;
+    expect(panel.style.getPropertyValue("--list-pane-w")).toBe("320px");
   });
 
   it("§3.f — renders split-orientation toggle in top actions and toggles masterDetailVertical in store", async () => {
@@ -271,13 +285,60 @@ describe("ToolPanel", () => {
     expect(screen.getByRole("button", { name: "Switch to side-by-side layout" })).toBeInTheDocument();
   });
 
-  it("sets --tools-rail-panel-h according to persisted filesLeftPaneHeightByWorktree", () => {
+  describe("W1-01 — the layout toggle keeps keyboard focus when the pane controls change host", () => {
+    afterEach(() => {
+      useWorkspaceStore.setState({ vcsSelectedCommitByWorktree: {} } as never);
+    });
+
+    it("Files: side-by-side -> stacked moves the toggle into the list header, still focused; and back", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files", masterDetailVertical: false } },
+        fileTreeVisible: true,
+        filesLeftPaneMode: { "wt-1": "tree" },
+      });
+      const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      const first = screen.getByRole("button", { name: "Switch to stacked layout" });
+      first.focus();
+      await user.keyboard("{Enter}");
+      const header = container.querySelector(".file-tree-sidebar-header") as HTMLElement;
+      const second = screen.getByRole("button", { name: "Switch to side-by-side layout" });
+      expect(header.contains(second)).toBe(true);
+      expect(document.activeElement).toBe(second);
+
+      await user.keyboard("{Enter}");
+      const third = screen.getByRole("button", { name: "Switch to stacked layout" });
+      expect(container.querySelector(".files-topbar")!.contains(third)).toBe(true);
+      expect(document.activeElement).toBe(third);
+    });
+
+    it("VCS commit view: the toggle keeps focus across the host change", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "vcs", masterDetailVertical: false } },
+        vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } },
+      } as never);
+      const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
+      await screen.findByText(/commit #abc1234/);
+      // The commit view focuses its file list once on open; let that settle before moving focus to the toggle.
+      await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("treeitem"));
+      screen.getByRole("button", { name: "Switch to stacked layout" }).focus();
+      await user.keyboard("{Enter}");
+      const next = screen.getByRole("button", { name: "Switch to side-by-side layout" });
+      expect((container.querySelector(".commit-files__head") as HTMLElement).contains(next)).toBe(true);
+      expect(document.activeElement).toBe(next);
+    });
+  });
+
+  it("the list height var follows persisted filesLeftPaneHeightByWorktree", () => {
     useWorkspaceStore.setState({
       filesLeftPaneHeightByWorktree: { "wt-1": 350 },
     });
     const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
-    const panel = container.querySelector(".tool-panel") as HTMLElement;
-    expect(panel.style.getPropertyValue("--tools-rail-panel-h")).toBe("350px");
+    const panel = container.querySelector(".files-panel") as HTMLElement;
+    expect(panel.style.getPropertyValue("--list-pane-h")).toBe("350px");
   });
 
   it("R16 — Esc with focus INSIDE the tools pane closes the files panel", async () => {

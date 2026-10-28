@@ -12,7 +12,9 @@ export const api =
 
 export type ApiInstance = ReturnType<typeof createMockApi> | ReturnType<typeof createClientApi>;
 
-export { ApiError } from "./errors";
+export { ApiError, ArtifactApiError, ArtifactReadError } from "./errors";
+export type { ArtifactReadDetail } from "./errors";
+export type { ArtifactContent } from "./artifactsClient";
 export * from "./types";
 export { createMockApi } from "./mock";
 export { createClientApi } from "./client";

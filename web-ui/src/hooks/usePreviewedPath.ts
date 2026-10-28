@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { DiffScope, FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { isArtifactTabPath } from "@/lib/artifactTabPath";
 
 export interface FilePreviewControlled {
   path: string | null;
@@ -64,7 +65,7 @@ export function usePreviewedPath(
   );
 
   // Project scope (direct sessions) can enter diff mode too, via the Files
-  // header's "Diff view" toggle — it's always "local" there (no branch
+  // header's "Changes" toggle — it's always "local" there (no branch
   // concept), same source (`diffScopeByWorktree`) as worktree scope.
   const scope: DiffScope = controlled ? controlled.scope : (scopeFromStore ?? "none");
 
@@ -72,8 +73,11 @@ export function usePreviewedPath(
 
   // Working-tree view is plain view (scope="none"), no historical commit diff,
   // and not rendered markdown.
+  // An ABSOLUTE path without an LSP token is an artifact tab (read through the artifact reader only), never a
+  // workspace file: Outline/References must not query the language server for it.
+  const isArtifactPath = !controlled && !external && isArtifactTabPath(path);
   const isWorkingTreeView =
-    scope === "none" && !commitSha && !(path?.endsWith(".md") ?? false);
+    scope === "none" && !commitSha && !isArtifactPath && !(path?.endsWith(".md") ?? false);
 
   return {
     path,

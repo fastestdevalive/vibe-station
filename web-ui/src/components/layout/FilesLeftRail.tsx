@@ -28,13 +28,16 @@ const FILE_MODES: FileModeItem[] = [
   { mode: "references", label: "References", icon: List },
 ];
 
+/** Artifacts is a Files list mode too (Decision 12), but sits in the bottom group; no badge (Decision 13). */
+const ARTIFACT_MODES: FileModeItem[] = [{ mode: "artifacts", label: "Artifacts", icon: Package }];
+
 /**
  * Consolidated tools rail (Revision 2): a right-edge vertical column (desktop window
  * rail, canvas tile rail, phone in-pane rail); the host owns the border/stacking:
  * - Top group: Tree, Search, Outline, References (file tools and sub-modes)
  *   Clicking switches to Files tool and toggles/opens that sub-mode.
  * - Divider
- * - Bottom group: Devices (disabled), Artifacts (disabled), VCS (enabled).
+ * - Bottom group: Devices (disabled), Artifacts (Files list mode), VCS (enabled).
  */
 export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   const { toolPanelTab, setToolPanelTab } = useLayout();
@@ -130,7 +133,7 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
 
       <div className="files-left-rail__divider" role="separator" />
 
-      {/* Bottom group: Devices (disabled), Artifacts (disabled), VCS (enabled) */}
+      {/* Bottom group: Devices (disabled), Artifacts (list mode), VCS (enabled) */}
       <div
         className="files-left-rail__group"
         role="group"
@@ -146,15 +149,23 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
           <MonitorSmartphone size={16} />
         </button>
 
-        <button
-          type="button"
-          aria-label="Artifacts (coming soon)"
-          title="Artifacts (coming soon)"
-          disabled
-          className="files-left-rail__btn files-left-rail__btn--disabled"
-        >
-          <Package size={16} />
-        </button>
+        {ARTIFACT_MODES.map((fm) => {
+          const Icon = fm.icon;
+          const isActive = effectiveTab === "files" && mode === fm.mode;
+          return (
+            <button
+              key={fm.mode}
+              type="button"
+              aria-label={fm.label}
+              aria-pressed={isActive}
+              title={fm.label}
+              className={`files-left-rail__btn${isActive ? " files-left-rail__btn--active" : ""}`}
+              onClick={() => handleModeClick(fm.mode)}
+            >
+              <Icon size={16} />
+            </button>
+          );
+        })}
 
         <button
           type="button"

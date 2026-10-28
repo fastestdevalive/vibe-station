@@ -38,10 +38,9 @@ export type ToolSplitOrientation = "horizontal" | "vertical";
  * Which layout transition an EXPLICIT user toggle just asked for — see
  * `WorkspaceState.layoutTransitionHint`.
  * - `"split"`: the agent/tools/terminal-dock PanelGroups in Layout.tsx.
- * - `"tools"`: tools pane show/hide: the split animates like `"split"`, and the top actions hold still.
  * - `"files"`: the Files side-panel overlay's content padding in FilesPanel.tsx.
  */
-export type LayoutTransitionHint = "split" | "tools" | "files";
+export type LayoutTransitionHint = "split" | "files";
 
 /** Re-exported: the hint window lives in `lib/layoutTransition.ts` (no store import). */
 export { LAYOUT_TRANSITION_HINT_MS };
@@ -227,7 +226,7 @@ export function clampLeftSidebarWidth(px: number): number {
   return Math.min(LEFT_SIDEBAR_MAX_WIDTH, Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(px)));
 }
 
-export type FilesLeftPaneMode = "tree" | "search" | "outline" | "references";
+export type FilesLeftPaneMode = "tree" | "search" | "outline" | "references" | "artifacts";
 
 /** Whether the tools pane's files left pane is open. References mode shows it
  *  even with the file tree hidden (`revealReferences` doesn't flip the
@@ -348,10 +347,10 @@ export interface WorkspaceState {
    *  header selector while browsing the tree, diff mode off) — kept separate
    *  from `diffScopeByWorktree` so selecting a scope while tree-browsing
    *  never flips the "Changes" flat-list / full-diff-preview mode on; that
-   *  mode is controlled exclusively by the "Diff view" (GitCompare) button. */
+   *  mode is controlled exclusively by the "Changes" toggle. */
   treeScopeByWorktree: Record<string, "local" | "branch">;
   /** Which left-pane mode the Files tool shows per worktree/direct-context:
-   *  "tree" (default), "search", or "references". Keyed by the same resolved context id as
+   *  "tree" (default), "search", "references", "outline" or "artifacts". Keyed by the same resolved context id as
    *  `layoutKey` (activeWorktreeId ?? activeDirectContextId) — NOT a bare
    *  activeWorktreeId, which is null for direct sessions (B5). */
   filesLeftPaneMode: Record<string, FilesLeftPaneMode>;
@@ -1024,9 +1023,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const next = patchLayout(s, { toolPanelVisible: !cur.toolPanelVisible });
             // Leaving fullscreen if we just hid the panel that was maximized.
             if (cur.toolPanelVisible && s.workspacePaneFullscreen === "tools") {
-              return withTransitionHint("tools", { ...next, workspacePaneFullscreen: null });
+              return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
             }
-            return withTransitionHint("tools", next);
+            return withTransitionHint("split", next);
           }),
         setToolPanelTab: (tab) =>
           set((s) => patchLayout(s, { toolPanelTab: tab, toolPanelVisible: true })),

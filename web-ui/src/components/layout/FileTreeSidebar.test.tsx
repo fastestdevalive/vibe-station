@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { FileTreeSidebar } from "./FileTreeSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { makeComment } from "@/components/comments/testFixtures";
+import { useCommentStore } from "@/components/comments/useCommentStore";
 
 describe("FileTreeSidebar", () => {
   const api = createMockApi();
@@ -36,6 +38,35 @@ describe("FileTreeSidebar", () => {
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith("wt-1", "src", "worktree");
     });
+  });
+
+  it("R1F-04: an absolute (outside-repo) active path expands nothing and fetches only the root", async () => {
+    const spy = vi.spyOn(api, "tree");
+    spy.mockClear();
+    useWorkspaceStore.setState({ activeFilePath: "/tmp/vst-av/plan.md" });
+    render(<FileTreeSidebar api={api} />);
+    await screen.findByText("README.md");
+    expect(spy.mock.calls.map((c) => c[1])).toEqual([""]);
+    spy.mockRestore();
+  });
+
+  it("R1F-04: a failing dir fetch is swallowed and other dirs still load", async () => {
+    const real = api.tree.bind(api);
+    const treeSpy = vi.spyOn(api, "tree").mockImplementation((wt, p, scope) =>
+      p === "src" ? Promise.reject(new Error("404")) : real(wt, p, scope),
+    );
+    const rejections: unknown[] = [];
+    const onRej = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRej);
+    useWorkspaceStore.setState({ activeFilePath: "src/App.tsx" });
+    render(<FileTreeSidebar api={api} />);
+    await screen.findByText("README.md");
+    // The failing fetch actually happened (src is expanded for the active file); let its rejection settle.
+    await waitFor(() => expect(treeSpy).toHaveBeenCalledWith("wt-1", "src", "worktree"));
+    await act(async () => {});
+    process.off("unhandledRejection", onRej);
+    treeSpy.mockRestore();
+    expect(rejections).toEqual([]);
   });
 
   it("clicking file sets active file path", async () => {
@@ -239,5 +270,56 @@ describe("FileTreeSidebar", () => {
       expect(await screen.findByText("file.rs")).toBeInTheDocument();
       spy.mockRestore();
     });
+  });
+
+  describe("Changes list comment counts follow the list's own context (L4-01)", () => {
+    const changed = [{ path: "file.rs", status: "M" as const, insertions: 1, deletions: 0 }];
+    const seed = (scopeId: string, kind: "worktree" | "project", n: number) =>
+      useCommentStore.getState().replace(scopeId, kind, {
+        comments: Array.from({ length: n }, (_, i) => makeComment({ id: `${scopeId}-${i}`, pin: i + 1, path: "file.rs" })),
+        nextPin: n + 1,
+        terminalDeliveries: [],
+      });
+
+    beforeEach(() => useCommentStore.getState().reset());
+
+    it("a project-scope sidebar (no active worktree) shows its project's counts", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "listChangedPaths").mockResolvedValue(changed);
+      seed("proj-1", "project", 3);
+      useWorkspaceStore.setState({ activeWorktreeId: null });
+      render(<FileTreeSidebar api={api} contextId="proj-1" scope="project" />);
+      await user.click(await screen.findByRole("button", { name: "Changes view off" }));
+      expect(await screen.findByRole("img", { name: "3 comments" })).toBeInTheDocument();
+    });
+
+    it("a sidebar for worktree B shows B's counts, not the active worktree wt-1's", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(api, "listChangedPaths").mockResolvedValue(changed);
+      seed("wt-1", "worktree", 5);
+      seed("wt-2", "worktree", 2);
+      useWorkspaceStore.setState({ activeWorktreeId: "wt-1" });
+      render(<FileTreeSidebar api={api} contextId="wt-2" />);
+      await user.click(await screen.findByRole("button", { name: "Changes view off" }));
+      expect(await screen.findByRole("img", { name: "2 comments" })).toBeInTheDocument();
+      expect(screen.queryByRole("img", { name: "5 comments" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("a transient tree-refresh error keeps the last-known children of an expanded folder (L4-02)", async () => {
+    const user = userEvent.setup();
+    const real = api.tree.bind(api);
+    let fail = false;
+    const treeSpy = vi.spyOn(api, "tree").mockImplementation((wt, p, scope) => (fail && p === "src" ? Promise.reject(new Error("503")) : real(wt, p, scope)));
+    render(<FileTreeSidebar api={api} />);
+    await user.click(await screen.findByRole("treeitem", { name: "src" }));
+    await screen.findByText("App.tsx");
+    fail = true;
+    const calls = treeSpy.mock.calls.length;
+    act(() => api.__test.emit({ type: "tree:changed", worktreeId: "wt-1", path: "src", kind: "added" }));
+    await waitFor(() => expect(treeSpy.mock.calls.length).toBeGreaterThan(calls));
+    await act(async () => {});
+    expect(screen.getByText("App.tsx")).toBeInTheDocument();
+    treeSpy.mockRestore();
   });
 });

@@ -34,27 +34,58 @@ describe("FilesLeftRail", () => {
       expect(buttons[2]).toHaveAccessibleName("Outline");
       expect(buttons[3]).toHaveAccessibleName("References");
       expect(buttons[4]).toHaveAccessibleName("Devices (coming soon)");
-      expect(buttons[5]).toHaveAccessibleName("Artifacts (coming soon)");
+      expect(buttons[5]).toHaveAccessibleName("Artifacts");
       expect(buttons[6]).toHaveAccessibleName("Version Control");
 
       expect(screen.getByRole("separator")).toBeInTheDocument();
     });
 
-    it("Devices and Artifacts are disabled and not clickable", async () => {
+    it("Devices stays disabled and not clickable", async () => {
       const user = userEvent.setup();
       render(<FilesLeftRail worktreeId={WT} />);
 
       const devicesBtn = screen.getByRole("button", { name: "Devices (coming soon)" });
-      const artifactsBtn = screen.getByRole("button", { name: "Artifacts (coming soon)" });
-
       expect(devicesBtn).toBeDisabled();
-      expect(artifactsBtn).toBeDisabled();
 
       await user.click(devicesBtn);
       expect(useWorkspaceStore.getState().layoutByWorktree[WT]?.toolPanelTab).toBe("files");
+    });
+
+    it("8.T1 — Artifacts is enabled, labelled 'Artifacts', has no badge and toggles its list mode (second press collapses)", async () => {
+      const user = userEvent.setup();
+      render(<FilesLeftRail worktreeId={WT} />);
+
+      expect(screen.queryByRole("button", { name: /coming soon.*artifacts|artifacts.*coming soon/i })).not.toBeInTheDocument();
+      const artifactsBtn = screen.getByRole("button", { name: "Artifacts" });
+      expect(artifactsBtn).toBeEnabled();
+      expect(artifactsBtn).toHaveAttribute("title", "Artifacts");
+      expect(artifactsBtn).toHaveAttribute("aria-pressed", "false");
+      // Decision 13: no unseen badge, the button holds the icon only.
+      expect(artifactsBtn.textContent).toBe("");
+      expect(artifactsBtn.querySelector(".files-left-rail__badge, [class*='badge']")).toBeNull();
 
       await user.click(artifactsBtn);
-      expect(useWorkspaceStore.getState().layoutByWorktree[WT]?.toolPanelTab).toBe("files");
+      expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("artifacts");
+      expect(artifactsBtn).toHaveAttribute("aria-pressed", "true");
+      expect(artifactsBtn).toHaveClass("files-left-rail__btn--active");
+      // The tree button is no longer the pressed one.
+      expect(screen.getByRole("button", { name: "Switch to file tree" })).toHaveAttribute("aria-pressed", "false");
+      const s = useWorkspaceStore.getState();
+      expect(isFilesLeftPaneOpen(s.fileTreeVisible, s.filesLeftPaneMode[WT]!)).toBe(true);
+
+      // Press the active icon again: collapses the list (R9).
+      await user.click(artifactsBtn);
+      const after = useWorkspaceStore.getState();
+      expect(isFilesLeftPaneOpen(after.fileTreeVisible, after.filesLeftPaneMode[WT]!)).toBe(false);
+    });
+
+    it("8.T1 — other rail buttons are unchanged by the Artifacts mode (tree still switches back)", async () => {
+      const user = userEvent.setup();
+      render(<FilesLeftRail worktreeId={WT} />);
+      await user.click(screen.getByRole("button", { name: "Artifacts" }));
+      await user.click(screen.getByRole("button", { name: "Outline" }));
+      expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("outline");
+      expect(screen.getByRole("button", { name: "Artifacts" })).toHaveAttribute("aria-pressed", "false");
     });
 
     it("clicking VCS switches the active tool to vcs", async () => {
