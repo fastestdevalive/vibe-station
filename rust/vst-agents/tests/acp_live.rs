@@ -25,7 +25,7 @@ use agent_client_protocol::schema::v1::{ContentBlock, StopReason, TextContent};
 use vst_agents::acp_connection::{AcpConnection, AcpLaunchSpec};
 use vst_agents::acp_transport::AcpTransport;
 
-const PINNED_ADAPTER_SPEC: &str = "@agentclientprotocol/claude-agent-acp@0.70.0";
+const PINNED_ADAPTER_SPEC: &str = "@agentclientprotocol/claude-agent-acp@0.98.0";
 
 async fn live_conn() -> Option<AcpConnection> {
     if std::env::var("VST_ACP_LIVE_TESTS").is_err() {

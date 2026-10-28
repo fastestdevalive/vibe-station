@@ -15,7 +15,7 @@
 # tarball does NOT ship that tree: scripts/build-claude-acp.sh compiles it with
 # `bun build --compile` into a self-contained `claude-acp` binary (verified with a
 # real prompt turn; an older note here claiming the compiled form fails at
-# `session/new` no longer reproduces on bun 1.4.2 + adapter 0.70.0). The tree
+# `session/new` no longer reproduces on bun 1.4.3 + adapter 0.98.0). The tree
 # installed here is still what dev checkouts, the dev sandbox and the Tauri
 # desktop bundle run via `bun <entry.js>`.
 #

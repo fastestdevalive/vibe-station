@@ -659,7 +659,7 @@ impl AgentPlugin for ClaudePlugin {
     /// `session/load` the adapter ignores `_meta`: the session resumes on the
     /// transcript's model (or the env one, see [`Self::acp_model_env`]). An
     /// explicit `session/set_config_option {configId: "model"}` after load
-    /// re-pins it (verified against adapter 0.70.0: the next turn runs the
+    /// re-pins it (verified against adapter 0.98.0: the next turn runs the
     /// requested model, 1M window). The reported `currentValue` can be a full
     /// id naming the requested alias's model, so the session layer may
     /// re-assert a model that already applies — harmless. Empty = no
@@ -688,7 +688,7 @@ impl AgentPlugin for ClaudePlugin {
 ///
 /// (A compiled standalone binary was once tried and recorded here as failing
 /// at `session/new` with "Cannot find package '@anthropic-ai/claude-agent-sdk'".
-/// Re-tested with bun 1.4.2 + adapter 0.70.0: `bun build --compile` of
+/// Re-tested with bun 1.4.3 + adapter 0.98.0: `bun build --compile` of
 /// `dist/index.js` completes `initialize`, `session/new` AND a real prompt turn
 /// from a directory with no `node_modules` — that is now the curl-install form,
 /// see [`claude_acp_bin`]. This `bun <entry.js>` path stays for dev/desktop.)
