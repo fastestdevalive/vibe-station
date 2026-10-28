@@ -30,6 +30,7 @@ export interface SessionTasks extends TaskGroups {
   openTaskId: string | null;
   open: (id: string) => void;
   close: () => void;
+  /** Preferred view (bar vs strip) while a task is active; NOT the live tray state (see `trayMode.ts`). */
   expanded: boolean;
   setExpanded: (v: boolean) => void;
   /** One-shot "no longer tracked" text; call `ackLostNotice` once shown. */

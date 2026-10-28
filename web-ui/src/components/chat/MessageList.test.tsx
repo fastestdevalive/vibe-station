@@ -626,6 +626,40 @@ describe("MessageList footer-resize-aware auto-scroll", () => {
     }
   });
 
+  // The footer grew in one step (e.g. the task tray opening, or reduced motion): the scroller shrank, which can push
+  // a reader who WAS following the live edge past the 80px threshold in a single frame.
+  it("re-pins when the scroller shrank by a footer step and the reader was near the bottom before it", () => {
+    const ro = mockResizeObserver();
+    try {
+      const { container } = render(<MessageList events={[userEvent("t1", "hi")]} pending={[]} />);
+      Object.defineProperty(container, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
+      container.scrollTop = 560; // distance 40: near the bottom
+      act(() => ro.trigger()); // records the 400px height
+      Object.defineProperty(container, "clientHeight", { value: 280, configurable: true }); // footer grew by 120
+      act(() => ro.trigger()); // distance is now 160, but 160 - 120 < 80
+      expect(container.scrollTop).toBe(1000);
+    } finally {
+      ro.restore();
+    }
+  });
+
+  it("does not re-pin after a footer step when the reader was already scrolled well away", () => {
+    const ro = mockResizeObserver();
+    try {
+      const { container } = render(<MessageList events={[userEvent("t1", "hi")]} pending={[]} />);
+      Object.defineProperty(container, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(container, "clientHeight", { value: 400, configurable: true });
+      container.scrollTop = 300; // distance 300
+      act(() => ro.trigger());
+      Object.defineProperty(container, "clientHeight", { value: 280, configurable: true });
+      act(() => ro.trigger());
+      expect(container.scrollTop).toBe(300);
+    } finally {
+      ro.restore();
+    }
+  });
+
   // Moving a scroller (or an ancestor) in the DOM — what React does to a keyed
   // panel that changes position when the agent/tool split flips orientation —
   // makes the browser zero its `scrollTop` with NO `scroll` event. The only

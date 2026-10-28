@@ -1,26 +1,74 @@
-import { useEffect, useMemo, useRef } from "react";
-import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, ChevronUp, ListChecks } from "lucide-react";
 import type { TaskSummary } from "@/api/types";
 import { useRovingListNav } from "@/hooks/useRovingListNav";
 import { TaskIcon } from "./TaskIcon";
 import { useSecondTick } from "./useSecondTick";
-import { chipLabels, isQuiet, rowAriaLabel, rowMeta, summaryText, type TaskGroups } from "./taskFormat";
+import { useDelayedUnmount } from "./useDelayedUnmount";
+import { useTrayMode } from "./useTrayMode";
+import { classify, type View } from "./trayMode";
+import { chipLabels, groupTasks, isQuiet, rowAriaLabel, rowMeta, summaryText, type TaskGroups } from "./taskFormat";
 
 export interface TaskTrayProps {
+  sessionId: string;
   groups: TaskGroups;
   total: number;
-  expanded: boolean;
-  onExpandedChange: (v: boolean) => void;
+  /** False until the first snapshot of this connection arrived (reconnect resets it): keep showing last-known. */
+  known: boolean;
+  /** Preferred view while a task is active (persisted), not the live tray state. */
+  pref: View;
+  onPrefChange: (v: View) => void;
+  /** The full-window task view is open; the footer is inert meanwhile. */
+  taskViewOpen: boolean;
   onOpenTask: (id: string) => void;
-  /** Esc on a row hands focus back to the composer (same as QueuedTray). */
+  /** Esc collapses and hands focus back to the composer (same as QueuedTray). */
   focusComposer?: () => void;
 }
 
-/** Tray of background tasks above the composer. Hidden when nothing is tracked. */
-export function TaskTray({ groups, total, expanded, onExpandedChange, onOpenTask, focusComposer }: TaskTrayProps) {
-  const now = useSecondTick(groups.running.length > 0);
+const EMPTY = groupTasks([], 0);
+const inertProps = (inactive: boolean) => (inactive ? { inert: true, "aria-hidden": true, tabIndex: -1 } : {});
+
+/**
+ * Background-task tray above the composer with three views: `dot` (all finished), `strip` (one-line chip)
+ * and `bar` (row list). Dot -> strip -> bar, one step per tap. View logic is the pure `trayMode.ts`; this component only renders it.
+ */
+export function TaskTray({ sessionId, groups, total, known, pref, onPrefChange, taskViewOpen, onOpenTask, focusComposer }: TaskTrayProps) {
+  // Last-known groups survive a reconnect reset (tasks -> undefined) so nothing flaps.
+  const last = useRef({ sessionId, groups: EMPTY, total: 0 });
+  if (last.current.sessionId !== sessionId) last.current = { sessionId, groups: EMPTY, total: 0 };
+  if (known) last.current = { sessionId, groups, total };
+  const view = known ? { groups, total } : last.current;
+  const g = view.groups;
+
+  const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const rows = useMemo<TaskSummary[]>(() => [...groups.live, ...groups.finished], [groups.live, groups.finished]);
+  const cls = known ? classify(view.total, g.live.length) : undefined;
+  const { mode, dispatch, rootHandlers, listHandlers } = useTrayMode({
+    sessionId,
+    cls,
+    pref,
+    onWritePref: onPrefChange,
+    viewOpen: taskViewOpen,
+    rootRef,
+    focusComposer,
+  });
+  const isBar = mode === "bar";
+  const listMounted = useDelayedUnmount(isBar, 270);
+  // Enter animation: the list mounts closed (0fr), a forced reflow commits that, then it opens, so the
+  // footer grows over the transition and MessageList's ResizeObserver re-pins the chat each frame.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [entered, setEntered] = useState(false);
+  useLayoutEffect(() => {
+    if (!listMounted) {
+      setEntered(false);
+      return;
+    }
+    void wrapRef.current?.getBoundingClientRect();
+    setEntered(true);
+  }, [listMounted]);
+
+  const now = useSecondTick(g.running.length > 0 && mode !== "dot" && mode !== "hidden");
+  const rows = useMemo<TaskSummary[]>(() => [...g.live, ...g.finished], [g.live, g.finished]);
   const nav = useRovingListNav(
     useMemo(() => rows.map((t) => ({ path: t.id })), [rows]),
     { onOpen: onOpenTask },
@@ -34,30 +82,13 @@ export function TaskTray({ groups, total, expanded, onExpandedChange, onOpenTask
     el.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(cursorPath)}"]`)?.focus();
   }, [cursorPath]);
 
-  if (total === 0) return null;
+  if (mode === "hidden") return null;
 
-  const hasAccent = groups.running.length > 0;
-  const summary = summaryText(groups);
-
-  if (!expanded) {
-    return (
-      <div className="task-tray" data-testid="task-tray">
-        <button
-          type="button"
-          className="task-tray__chip"
-          data-testid="task-tray-chip"
-          aria-expanded={false}
-          aria-label={`Background tasks, ${summary}. Expand`}
-          onClick={() => onExpandedChange(true)}
-        >
-          {hasAccent ? <TaskIcon state="running" quiet={false} size={14} label={false} /> : null}
-          <span className="task-tray__chip-count">{summary}</span>
-          <span className="task-tray__chip-labels">{chipLabels(groups.live.length ? groups.live : groups.finished, now)}</span>
-          <ChevronUp size={14} aria-hidden />
-        </button>
-      </div>
-    );
-  }
+  const hasAccent = g.running.length > 0;
+  const summary = summaryText(g);
+  const panelId = `task-tray-list-${sessionId}`;
+  const isStrip = mode === "strip";
+  const toggle = (active: boolean) => ({ "data-tray-toggle": "", "data-active": active ? "true" : "false", ...inertProps(!active) });
 
   const renderRow = (t: TaskSummary) => {
     const quiet = isQuiet(t, now);
@@ -83,43 +114,87 @@ export function TaskTray({ groups, total, expanded, onExpandedChange, onOpenTask
     );
   };
 
+  const title = `Background${summary ? ` · ${summary}` : ""}`;
+
   return (
-    <div className="task-tray task-tray--open" data-testid="task-tray">
+    <div className="task-tray" data-testid="task-tray" data-mode={mode} ref={rootRef} {...rootHandlers}>
       <button
         type="button"
-        className="task-tray__head"
-        data-testid="task-tray-head"
-        aria-expanded
-        aria-label="Collapse background tasks"
-        onClick={() => onExpandedChange(false)}
+        className="task-tray__dot"
+        data-testid="task-tray-dot"
+        {...toggle(mode === "dot")}
+        aria-label={`Background tasks, ${summary}. Show`}
+        onClick={() => dispatch({ type: "tapDot" })}
       >
-        {hasAccent ? <TaskIcon state="running" quiet={false} size={14} label={false} /> : null}
-        <span className="task-tray__head-title">Background{summary ? ` · ${summary}` : ""}</span>
-        <ChevronDown size={14} aria-hidden />
+        <ListChecks size={14} aria-hidden />
       </button>
-      <div
-        className="task-tray__list"
-        ref={listRef}
-        role="group"
-        aria-label="Background tasks"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            focusComposer?.();
-            return;
-          }
-          nav.handleKeyDown(e);
-        }}
-      >
-        {groups.live.map(renderRow)}
-        {groups.finished.length > 0 ? (
-          <>
-            <div className="task-tray__group" data-testid="task-tray-finished">
-              Finished
+      <div className="task-tray__reveal">
+        <div className="task-tray__clip">
+          <div className="task-tray__shell">
+            <button
+              type="button"
+              className="task-tray__chip"
+              data-testid="task-tray-chip"
+              {...toggle(isStrip)}
+              aria-expanded={false}
+              aria-label={`Background tasks, ${summary}. Expand`}
+              onClick={() => dispatch({ type: "tapStrip" })}
+            >
+              <span className="task-tray__lead">{hasAccent ? <TaskIcon state="running" quiet={false} size={14} label={false} /> : null}</span>
+              <span className="task-tray__chip-count">{summary}</span>
+              <span className="task-tray__chip-labels">{chipLabels(g.live.length ? g.live : g.finished, now)}</span>
+              <ChevronUp size={14} aria-hidden />
+            </button>
+            <div
+              className="task-tray__head"
+              data-testid="task-tray-head"
+              data-active={isBar ? "true" : "false"}
+              {...(isBar ? {} : { inert: true, "aria-hidden": true })}
+            >
+              <span className="task-tray__lead">
+                {hasAccent ? <TaskIcon state="running" quiet={false} size={14} label={false} /> : null}
+              </span>
+              <span className="task-tray__head-title">{title}</span>
+              <button
+                type="button"
+                className="task-tray__close"
+                data-testid="task-tray-close"
+                data-tray-toggle=""
+                data-active={isBar ? "true" : "false"}
+                aria-expanded
+                {...(isBar && listMounted ? { "aria-controls": panelId } : {})}
+                aria-label="Collapse background tasks"
+                tabIndex={isBar ? 0 : -1}
+                onClick={() => dispatch({ type: "tapHeader" })}
+              >
+                <ChevronDown size={14} aria-hidden />
+              </button>
             </div>
-            {groups.finished.map(renderRow)}
-          </>
-        ) : null}
+            {listMounted ? (
+              <div className="task-tray__listwrap" ref={wrapRef} data-open={isBar && entered ? "true" : "false"} {...(isBar ? {} : { inert: true })}>
+                <div
+                  className="task-tray__list"
+                  id={panelId}
+                  ref={listRef}
+                  role="group"
+                  aria-label="Background tasks"
+                  onScroll={listHandlers.onScroll}
+                  onKeyDown={nav.handleKeyDown}
+                >
+                  {g.live.map(renderRow)}
+                  {g.finished.length > 0 ? (
+                    <>
+                      <div className="task-tray__group" data-testid="task-tray-finished">
+                        Finished
+                      </div>
+                      {g.finished.map(renderRow)}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
     </div>
   );

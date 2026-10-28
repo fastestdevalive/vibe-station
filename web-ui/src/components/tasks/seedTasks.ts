@@ -5,6 +5,7 @@ export const SEED_SCENARIOS = [
   "one running command",
   "60-row stress",
   "reduced height (8 rows)",
+  "all finished",
 ] as const;
 export type SeedScenario = (typeof SEED_SCENARIOS)[number];
 
@@ -34,6 +35,12 @@ export function buildSeedTasks(scenario: SeedScenario, now = Date.now()): TaskSu
   switch (scenario) {
     case "one running command":
       return [task(now, "cmd-build", { label: "cargo build --release -p vst-daemon", startedAt: ago(now, 252_000) })];
+    case "all finished":
+      return [
+        task(now, "fin-done", { label: "cargo test", state: "done", endedAt: ago(now, 30_000) }),
+        task(now, "fin-failed", { label: "npm run build", state: "failed", reason: "Exit code 1", endedAt: ago(now, 20_000) }),
+        task(now, "fin-stopped", { label: "tail -f daemon.log", state: "stopped", endedAt: ago(now, 10_000) }),
+      ];
     case "60-row stress":
       return Array.from({ length: 60 }, (_, i) =>
         task(now, `stress-${i}`, {

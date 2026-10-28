@@ -34,39 +34,133 @@
 }
 
 /* ── Tray ──────────────────────────────────────────────────────────────────── */
+/* Geometry shared by the tray and the neighbours that must clear its dot (jump button, queued rows), so it lives on
+   their common ancestor. One source of truth for the strip chip height; the dot diameter derives from it: the dot IS
+   the strip's outer box collapsed to its right end (chip + shell gaps tall, width = height, right edge = the shell's
+   right edge, bottom = the row's bottom, i.e. just above the composer: the footer is bottom-anchored). */
+.chat-pane,
 .task-tray {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-top: var(--border-width) solid var(--border-subtle);
+  --task-tray-chip-h: 32px;
+  --task-tray-shell-gap: calc(var(--space-1) + var(--border-width));
+  --task-tray-dot-d: calc(var(--task-tray-chip-h) + 2 * var(--task-tray-shell-gap));
+}
+@media (pointer: coarse) {
+  .chat-pane,
+  .task-tray {
+    --task-tray-chip-h: 44px; /* strip chip and dot grow together */
+  }
+}
+/* While the dot floats over the bottom-right of the row above the composer, keep the chat's jump-to-bottom button
+   and any queued-message rows clear of it. */
+.chat-pane:has(.task-tray[data-mode="dot"]) .chat-jump-to-bottom {
+  bottom: calc(var(--space-3) + var(--task-tray-dot-d) + var(--space-2));
+}
+.chat-pane__footer:has(.task-tray[data-mode="dot"]) .chat-queued-tray {
+  padding-right: calc(var(--task-tray-dot-d) + var(--space-3));
+}
+/* Three views (data-mode): dot (all finished; zero flow height, a strip-height circle at the strip's right end),
+   strip and bar (in flow). Only grid-template-rows / clip-path / background-color / border-color / opacity /
+   visibility animate. */
+.task-tray {
+  --task-tray-dur: 200ms;
+  --task-tray-dur-h: 260ms;
+  /* Circle <-> strip morph: the shell's clip-path (and the chip's own contents) animate; the row's height
+     follows (collapse) or leads (expand) so the chat slides rather than snaps. */
+  --task-tray-morph: 200ms;
+  --task-tray-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Height growth uses a gentle ease so each frame's footer step is small (MessageList also re-pins after a shrink). */
+  --task-tray-ease-h: cubic-bezier(0.4, 0, 0.6, 1);
+  position: relative;
   color: var(--fg-primary);
   font-size: var(--font-size-sm);
 }
-.chat-pane__footer > .task-tray:first-child {
-  border-top: none;
+.task-tray__reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--task-tray-dur-h) var(--task-tray-ease-h) 0ms;
+}
+.task-tray[data-mode="dot"] .task-tray__reveal {
+  grid-template-rows: 0fr;
+  /* Collapse: wait until the strip has become a circle and been handed to the dot, then give the row back
+     to the chat (it clips the shell from the bottom, so it must not start while the circle is still showing). */
+  transition-delay: 240ms;
+}
+.task-tray__reveal > .task-tray__clip {
+  min-height: 0;
+  overflow: hidden;
+}
+.task-tray__shell {
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-1);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+  opacity: 1;
+  clip-path: inset(0 0 0 0 round var(--radius-xl));
+  /* Expand (dot -> strip): the row opens first, then the circle widens into the strip. */
+  transition:
+    clip-path var(--task-tray-morph) var(--task-tray-ease) 100ms,
+    background-color var(--task-tray-morph) var(--task-tray-ease) 100ms,
+    border-color var(--task-tray-morph) var(--task-tray-ease) 100ms,
+    opacity 80ms linear 100ms;
+}
+.task-tray[data-mode="dot"] .task-tray__shell {
+  /* The strip's outer box clipped to a circle at its right end: exactly where the dot button sits. Fill matches
+     the dot's so the handover only adds the ring and icon. */
+  clip-path: inset(0 0 0 calc(100% - var(--task-tray-dot-d)) round calc(var(--task-tray-dot-d) / 2));
+  background: var(--bg-elevated);
+  border-color: transparent;
+  /* Hand over to the dot button once the circle is formed. */
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    clip-path var(--task-tray-morph) var(--task-tray-ease) 60ms,
+    background-color var(--task-tray-morph) var(--task-tray-ease) 60ms,
+    border-color var(--task-tray-morph) var(--task-tray-ease) 60ms,
+    opacity 80ms linear calc(var(--task-tray-morph) + 40ms);
+}
+/* The chip stays laid out in dot mode (so the circle can be clipped from it); its contents fade first. */
+.task-tray__chip > * {
+  transition: opacity 100ms linear 180ms;
+}
+.task-tray[data-mode="dot"] .task-tray__chip > * {
+  opacity: 0;
+  transition-delay: 0ms;
 }
 .task-tray__chip,
 .task-tray__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
-  padding: 0 var(--space-3);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-xl);
-  background: var(--bg-secondary);
+  min-height: var(--task-tray-chip-h);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
   color: var(--fg-primary);
   font: inherit;
   text-align: left;
-  cursor: pointer;
   min-width: 0;
 }
-.task-tray__head {
-  border: 0;
-  background: transparent;
-  min-height: 28px;
-  padding: 0 var(--space-1);
+.task-tray__chip {
+  width: 100%;
+  cursor: pointer;
+  border-radius: var(--radius-lg);
+}
+.task-tray[data-mode="bar"] .task-tray__chip,
+.task-tray__head[data-active="false"] {
+  display: none;
+}
+.task-tray__lead:empty {
+  display: none;
+}
+.task-tray__lead {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-secondary);
 }
 .task-tray__chip-count,
 .task-tray__head-title {
@@ -84,15 +178,96 @@
   white-space: nowrap;
   color: var(--fg-secondary);
 }
-.task-tray--open {
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-xl);
-  background: var(--bg-secondary);
-  margin: var(--space-2) var(--space-3) 0;
-  padding: var(--space-2);
+.task-tray__close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
 }
-.chat-pane__footer > .task-tray--open:first-child {
-  margin-top: var(--space-2);
+.task-tray__close:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Dot: icon only (no count). The strip "collapsed into a circle": the tray root has zero flow height in dot mode
+   (reveal is 0fr). The footer is bottom-anchored, so the composer does NOT move; the strip's row is handed to the
+   chat. The dot sits exactly where the chip was: same bottom gap above the composer's top edge, same right edge,
+   diameter = chip height (same custom properties as the strip). It never overlaps the composer. */
+.task-tray__dot {
+  position: absolute;
+  bottom: 0;
+  right: var(--space-3);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: var(--task-tray-dot-d);
+  height: var(--task-tray-dot-d);
+  padding: 0;
+  /* fg-secondary (neutral token, opaque in every theme; fg-muted is translucent in nord), for 3:1 non-text contrast. */
+  border: var(--border-width) solid var(--fg-secondary);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  opacity: 1;
+  /* Same circle the shell was just clipped to: appears as it fades out (collapse). */
+  transition:
+    opacity 80ms linear calc(var(--task-tray-morph) + 40ms),
+    visibility 0s;
+}
+.task-tray__dot::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+@media (pointer: coarse) {
+  .task-tray__dot::before {
+    inset: 0; /* the circle itself is already >= 44px */
+  }
+}
+.task-tray__dot[data-active="false"] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  /* Expand: gone once the shell circle takes over (the row opens first). */
+  transition:
+    opacity 80ms linear 100ms,
+    visibility 0s linear 180ms;
+}
+/* List: unmounts after its exit window; rows collapse via grid-template-rows. */
+.task-tray__listwrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--task-tray-dur-h) var(--task-tray-ease-h);
+}
+.task-tray__listwrap[data-open="false"] {
+  grid-template-rows: 0fr;
+}
+.task-tray__listwrap > .task-tray__list {
+  min-height: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-tray,
+  .task-tray * {
+    transition: none !important;
+  }
+}
+@media (pointer: coarse) {
+  .task-tray__close {
+    min-width: 40px;
+    min-height: 40px;
+  }
 }
 .task-tray__list {
   display: flex;
@@ -118,6 +293,11 @@
   cursor: pointer;
   min-width: 0;
 }
+@media (pointer: coarse) {
+  .task-tray__row {
+    min-height: 44px;
+  }
+}
 .task-tray__row:hover {
   background: var(--bg-tertiary);
 }
@@ -125,7 +305,8 @@
   color: var(--fg-secondary);
 }
 .task-tray__chip:focus-visible,
-.task-tray__head:focus-visible,
+.task-tray__dot:focus-visible,
+.task-tray__close:focus-visible,
 .task-tray__row:focus-visible,
 .task-view__btn:focus-visible,
 .task-view__back:focus-visible,
@@ -133,6 +314,12 @@
 .task-view:focus-visible {
   outline: 2px solid var(--fg-secondary);
   outline-offset: 1px;
+}
+/* Rings stay inside the clip's overflow:hidden. */
+.task-tray__chip:focus-visible,
+.task-tray__close:focus-visible,
+.task-tray__row:focus-visible {
+  outline-offset: -2px;
 }
 .task-tray__row-label {
   min-width: 0;
@@ -512,8 +699,6 @@
 @media (pointer: coarse) {
   .task-view__back,
   .task-view__btn,
-  .task-tray__head,
-  .task-tray__chip,
   .task-log__resume,
   .task-log__check {
     min-height: 40px;
