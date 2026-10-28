@@ -1030,13 +1030,14 @@ async fn do_initialize(
             // none of them and the handlers are never called.
             //
             // Deliberately NOT advertising `_meta.jetbrains.air.asyncTasks`:
-            // the vendored adapter (0.70.0) has no async-task code, so it would
-            // do nothing, and bumping the adapter was evaluated and not taken
-            // (plan task-tray, Findings § Bump decision / gap K1). Background
-            // tasks are derived by `AgentPlugin::task_observations` instead.
-            // To adopt structured task events later: bump the pin in
-            // `vendor/claude-acp`, inject the capability per plugin here, add
-            // an `UntypedMessage` handler for `async_task_*` updates.
+            // the vendored adapter (0.98.0) only emits `async_task_*` updates
+            // to a client that lists `asyncTasks` in
+            // `_meta.jetbrains.air.capabilities`, and nothing here consumes them
+            // yet (plan task-tray, Findings § Bump decision / gap K1).
+            // Background tasks are derived by `AgentPlugin::task_observations`
+            // instead. To adopt structured task events later: inject the
+            // capability per plugin here, add an `UntypedMessage` handler for
+            // `async_task_*` updates.
             InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
                 ClientCapabilities::new()
                     .fs(FileSystemCapabilities::new()

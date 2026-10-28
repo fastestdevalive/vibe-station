@@ -308,7 +308,7 @@ extension); otherwise the message is queued (cancel-and-resend is the ceiling).
 
 | CLI | Steering | Notes |
 |---|---|---|
-| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0; reports `_meta.steering.supported: true` in `initialize`. One of two plugins implementing `supports_mid_turn_steering()` |
+| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0 (vendored: 0.98.0); reports `_meta.steering.supported: true` in `initialize`. One of two plugins implementing `supports_mid_turn_steering()` |
 | opencode | **Disabled deliberately** | Advertises steering and replies `injected`, but the text never reaches the model (silently swallowed). Re-enable only after a fixed version is verified |
 | agy | Not supported | `agy` stream-json stdin accepts only `user` events (anything else is ignored) and `initialize` does not advertise steering; the daemon queues. No competitor steers agy mid-turn |
 | cursor | Not supported | Closed binary, no steering surface; cancelling starts a fresh conversation |

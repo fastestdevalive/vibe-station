@@ -6,14 +6,14 @@
 //!
 //! This validates the exact crate version pinned in `vst-agents/Cargo.toml`
 //! against the exact adapter version the daemon's `package.json` pins
-//! (`@agentclientprotocol/claude-agent-acp@0.70.0`), so the transport shape
+//! (`@agentclientprotocol/claude-agent-acp@0.98.0`), so the transport shape
 //! `04b` implements against (`vst-agents/src/acp_transport.rs`) is frozen
 //! against something that has actually round-tripped a real turn, not just
 //! against the crate's own type signatures.
 //!
 //! # Requires
 //! - `npx` on PATH (spawns the adapter via `npx -y
-//!   @agentclientprotocol/claude-agent-acp@0.70.0`, network access on first
+//!   @agentclientprotocol/claude-agent-acp@0.98.0`, network access on first
 //!   run to fetch/cache the npm package).
 //! - The `claude` CLI already authenticated in this environment (the adapter
 //!   shells out to the Claude Agent SDK, which uses the same auth as `claude`).
@@ -33,7 +33,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
 
-const PINNED_ADAPTER_SPEC: &str = "@agentclientprotocol/claude-agent-acp@0.70.0";
+const PINNED_ADAPTER_SPEC: &str = "@agentclientprotocol/claude-agent-acp@0.98.0";
 const PROMPT: &str = "Reply with exactly one word: hello";
 
 #[tokio::main]

@@ -1,5 +1,5 @@
 //! Claude background-task detection — the ONE file that knows the vendored
-//! adapter's (0.70.0) unstable task surface (plan Findings F2/F4/F9, gaps K1-K5):
+//! adapter's (0.98.0) unstable task surface (plan Findings F2/F4/F9, gaps K1-K5):
 //!
 //! - background Bash: the launch is a tool call whose PERSISTED input has
 //!   `command` + `run_in_background: true`; the confirmation is free text in
