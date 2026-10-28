@@ -229,7 +229,10 @@ impl ProjectRoutes {
         let on_clear_attachments: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
         release_session_runtime(
             session,
-            ReleaseOpts { clear_attachments },
+            ReleaseOpts {
+                clear_attachments,
+                ..Default::default()
+            },
             &self.json_registry,
             &direct_pty,
             &self.tmux,
@@ -1510,10 +1513,19 @@ impl ProjectRoutes {
 
         let _ = tokio::fs::remove_dir_all(&data_dir).await;
         // No FK to cascade: drop the scheduled messages of the project's sessions.
-        let _ = self
-            .store
-            .purge_scheduled_messages_for_missing_sessions()
-            .await;
+        // Rich Chat rows that still hold review comments put them back first.
+        // A failed restore keeps the rows: their snapshot is the only copy, and
+        // the boot orphan sweep restores it first.
+        let restored = match self.json_registry.review_port() {
+            Some(port) => port.restore_orphaned_snapshots().await,
+            None => true,
+        };
+        if restored {
+            let _ = self
+                .store
+                .purge_scheduled_messages_for_missing_sessions()
+                .await;
+        }
         // Same for the artifact rows of the project and its worktrees (no FK).
         let mut scopes = vec![ScopeKey::project(id)];
         scopes.extend(project.worktrees.iter().map(|w| ScopeKey::worktree(&w.id)));

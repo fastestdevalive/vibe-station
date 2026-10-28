@@ -24,6 +24,7 @@ fn chat_body_with_mentions_round_trips() {
         attachment_ids: None,
         queue: None,
         mentions: Some(vec![mention.clone()]),
+        review_comment_ids: None,
     };
     let json_str = serde_json::to_string(&body).expect("serialize ChatBody");
     let back: ChatBody = serde_json::from_str(&json_str).expect("deserialize ChatBody");
@@ -88,6 +89,7 @@ fn edit_queued_result_none_mentions_serializes_without_mentions_key() {
         attachments: vec![],
         queue_index: 0,
         mentions: None,
+        review: None,
     };
     let val = serde_json::to_value(&result).expect("to_value EditQueuedResult");
     assert!(

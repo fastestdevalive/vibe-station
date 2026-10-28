@@ -3101,7 +3101,6 @@ dependencies = [
  "icu_normalizer",
  "libc",
  "ring",
- "serde_json",
  "tempfile",
  "tokio",
  "tracing",
@@ -3154,6 +3153,7 @@ dependencies = [
  "vst-agents",
  "vst-agy-stream-acp",
  "vst-artifacts",
+ "vst-fswatch",
  "vst-git",
  "vst-harness-limits",
  "vst-lifecycle",
@@ -3172,6 +3172,19 @@ name = "vst-diff"
 version = "0.0.3-beta"
 dependencies = [
  "similar",
+ "vst-types",
+]
+
+[[package]]
+name = "vst-fswatch"
+version = "0.0.3-beta"
+dependencies = [
+ "ignore",
+ "notify",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
  "vst-types",
 ]
 
@@ -3262,12 +3275,17 @@ dependencies = [
 name = "vst-review"
 version = "0.0.3-beta"
 dependencies = [
+ "async-trait",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "vst-artifacts",
+ "vst-fswatch",
+ "vst-git",
  "vst-proc",
  "vst-store",
  "vst-types",
@@ -3371,7 +3389,6 @@ dependencies = [
  "async-trait",
  "futures",
  "ignore",
- "notify",
  "nucleo-matcher",
  "portable-pty",
  "serde",
@@ -3382,6 +3399,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "vst-agents",
+ "vst-fswatch",
  "vst-proc",
  "vst-store",
  "vst-types",

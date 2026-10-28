@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher as NotifyWatcher};
 
-use crate::services::ignore_filter::{build_ignore_matcher, IgnoreMatcher};
+use crate::ignore_filter::{build_ignore_matcher, IgnoreMatcher};
 
 /// How a watcher reports events to its owner.
 #[derive(Clone)]

@@ -37,6 +37,12 @@ impl JsonAgentSession {
         spec: AcpLaunchSpec,
         enrich: Option<Arc<AcpEnrichHook>>,
     ) -> Result<AcpConnection, AcpTransportError> {
+        // A released session never starts an agent process.
+        if self.is_released() {
+            return Err(AcpTransportError::RequestFailed(
+                "session was released".to_string(),
+            ));
+        }
         // Check liveness of any cached connection.
         let existing = {
             let s = self.0.state.lock().unwrap();

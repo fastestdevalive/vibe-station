@@ -339,6 +339,9 @@ pub struct QueuedTurnMeta {
     pub message: String,
     pub attachments: Option<Vec<Attachment>>,
     pub mentions: Option<Vec<Mention>>,
+    /// Summary of the review comments this turn carries (count + files).
+    #[serde(default)]
+    pub review: Option<crate::review::ReviewSummary>,
 }
 
 /// Normalized non-text content block (acp-normalize-superset, Gap 1).
@@ -534,6 +537,10 @@ pub struct NormalizedEvent {
     pub parent_tool_use_id: Option<String>,
     /// task_signal only: harness-specific task lifecycle payload (claude: whitelisted raw SDK message).
     pub task_signal: Option<serde_json::Value>,
+    /// user only: the review comments this turn carried (snapshot; `None` on
+    /// cancelled rows). Rendered into the message at run time, restorable from here.
+    #[serde(default)]
+    pub review: Option<crate::review::ReviewRecord>,
 }
 
 impl Default for NormalizedEvent {
@@ -582,6 +589,7 @@ impl Default for NormalizedEvent {
             to_mode: None,
             parent_tool_use_id: None,
             task_signal: None,
+            review: None,
         }
     }
 }
@@ -742,6 +750,9 @@ pub struct ScheduledFailedMeta {
     pub failure_kind: Option<String>,
     #[serde(default)]
     pub origin: Option<String>,
+    /// Review comments the row carried (all restored to the panel on failure).
+    #[serde(default)]
+    pub comment_count: Option<u32>,
 }
 
 /// A terminal scheduled message that was pasted recently, shown briefly as

@@ -144,6 +144,10 @@ pub struct StartDraftBody {
     pub draft_prompt: String,
     pub draft_config: DraftConfig,
     pub skip_auto_turn: Option<bool>,
+    /// Review comments to carry into the first turn (an empty `draftPrompt` is
+    /// allowed when present).
+    #[serde(default)]
+    pub review_comment_ids: Option<Vec<String>>,
 }
 
 /// `POST /sessions/:id/start` success.
@@ -307,6 +311,10 @@ pub struct ChatBody {
     pub attachment_ids: Option<Vec<String>>,
     pub queue: Option<bool>,
     pub mentions: Option<Vec<Mention>>,
+    /// Review comments to send with this turn (forces queue, never steers;
+    /// `message` may be empty when present).
+    #[serde(default)]
+    pub review_comment_ids: Option<Vec<String>>,
 }
 
 /// `POST /sessions/:id/chat` success (202) — `EnqueueChatResult`.
@@ -337,6 +345,9 @@ pub struct EditQueuedResult {
     pub queue_index: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mentions: Option<Vec<Mention>>,
+    /// Summary of the review comments the queued turn carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::review::ReviewSummary>,
 }
 
 /// `POST /sessions/:id/chat/queue/:turnId/resubmit` request body.
@@ -348,6 +359,10 @@ pub struct ResubmitBody {
     pub message: Option<String>,
     pub attachment_ids: Option<Vec<String>>,
     pub mentions: Option<Vec<Mention>>,
+    /// Keep the queued turn's review comments (default true); `false` restores
+    /// them to the panel.
+    #[serde(default)]
+    pub keep_review: Option<bool>,
 }
 
 /// `POST /sessions/:id/chat/queue/:turnId/resubmit|promote` success.
@@ -473,6 +488,10 @@ pub struct CreateScheduledMessageBody {
     #[serde(default)]
     pub attachment_ids: Vec<String>,
     pub fire_at: String, // ISO-8601 UTC
+    /// Review comments to schedule with the message (the message may be empty
+    /// when present).
+    #[serde(default)]
+    pub review_comment_ids: Vec<String>,
 }
 
 /// Response for `POST /sessions/:id/schedule`.

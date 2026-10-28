@@ -6,8 +6,8 @@
 //!   liveness and the plugin's delivery capabilities + readiness probe;
 //! - the notify closure re-broadcasts the session's scheduled state.
 //!
-//! The outcome observer is a parameter: the daemon passes `None` today; the
-//! review-comments feature injects one (see `TerminalDeliveryHandle::new`).
+//! The outcome observer is a parameter: the daemon injects the review owner's
+//! (`ReviewHandle::terminal_observer`, see `vst-daemon`'s `build_state`).
 //! The pane access is a parameter too, so route tests drive a scripted pane.
 
 use std::sync::Arc;
@@ -67,6 +67,13 @@ impl TargetResolver for StoreTargetResolver {
             })
         })
     }
+}
+
+/// The resolver of the daemon's delivery owner, for callers that need a session's
+/// current channel and plugin capabilities without owning a job (the review
+/// owner's eligibility check).
+pub fn target_resolver(store: StoreHandle) -> Arc<dyn TargetResolver> {
+    Arc::new(StoreTargetResolver { store })
 }
 
 /// Build the daemon's single Terminal delivery owner. `io` is the real tmux in

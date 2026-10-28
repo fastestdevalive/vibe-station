@@ -175,6 +175,7 @@ pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (Str
             status,
             error,
             conflict_with,
+            ..
         } => {
             if status == 422 && error == "NOT_GIT" {
                 return Err((

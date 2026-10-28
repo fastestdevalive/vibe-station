@@ -401,6 +401,7 @@ async fn chat_missing_session_404() {
                 attachment_ids: None,
                 queue: None,
                 mentions: None,
+                review_comment_ids: None,
             },
         )
         .await
@@ -421,6 +422,7 @@ async fn chat_global_draft_404() {
                 attachment_ids: None,
                 queue: None,
                 mentions: None,
+                review_comment_ids: None,
             },
         )
         .await
@@ -446,6 +448,7 @@ async fn chat_archived_400() {
                 attachment_ids: None,
                 queue: None,
                 mentions: None,
+                review_comment_ids: None,
             },
         )
         .await
@@ -469,6 +472,7 @@ async fn chat_attachment_not_found_400() {
                 attachment_ids: Some(vec!["a1".into()]),
                 queue: None,
                 mentions: None,
+                review_comment_ids: None,
             },
         )
         .await
@@ -495,6 +499,7 @@ async fn chat_with_51_mentions_bad_request() {
                 attachment_ids: None,
                 queue: None,
                 mentions: Some(mentions),
+                review_comment_ids: None,
             },
         )
         .await
@@ -519,6 +524,7 @@ async fn chat_with_control_char_label_bad_request() {
                 attachment_ids: None,
                 queue: None,
                 mentions: Some(mentions),
+                review_comment_ids: None,
             },
         )
         .await
@@ -543,6 +549,7 @@ async fn chat_with_valid_mention_behaves_like_without() {
                 attachment_ids: None,
                 queue: None,
                 mentions: Some(mentions),
+                review_comment_ids: None,
             },
         )
         .await
@@ -749,6 +756,7 @@ async fn resubmit_bad_mention_label_400() {
                 message: Some("x".into()),
                 attachment_ids: None,
                 mentions: Some(vec![agent_mention("s2", "bad\nlabel")]),
+                keep_review: None,
             },
         )
         .await
@@ -806,6 +814,7 @@ async fn edit_and_resubmit_carry_mentions() {
                 message: Some("new".into()),
                 attachment_ids: None,
                 mentions: Some(vec![agent_mention("s3", "bad\nlabel")]),
+                keep_review: None,
             },
         )
         .await
@@ -823,6 +832,7 @@ async fn edit_and_resubmit_carry_mentions() {
                 message: Some("new".into()),
                 attachment_ids: None,
                 mentions: Some(vec![agent_mention("s3", "Agent 3")]),
+                keep_review: None,
             },
         )
         .await
@@ -843,6 +853,7 @@ async fn resubmit_missing_session_404() {
                 message: Some("x".into()),
                 attachment_ids: None,
                 mentions: None,
+                keep_review: None,
             },
         )
         .await
@@ -867,6 +878,7 @@ async fn resubmit_not_editing_404() {
                 message: None,
                 attachment_ids: None,
                 mentions: None,
+                keep_review: None,
             },
         )
         .await
@@ -972,6 +984,7 @@ async fn chat_json_returns_202_turn_id() {
                 attachment_ids: None,
                 queue: Some(true),
                 mentions: None,
+                review_comment_ids: None,
             },
         )
         .await

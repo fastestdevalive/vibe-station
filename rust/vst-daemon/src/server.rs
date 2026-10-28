@@ -165,6 +165,8 @@ pub struct AppState {
     /// Artifacts owner (`vst-artifacts`); `run.rs` starts it and installs it as
     /// the Rich Chat capture sink.
     pub artifacts: vst_artifacts::ArtifactsHandle,
+    /// Review-comments owner (`vst-review`); `run.rs` starts its lease sweeper.
+    pub review: vst_review::ReviewHandle,
 
     // Routes
     pub health_routes: HealthRoutes,
@@ -430,6 +432,34 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         )),
     );
     project_routes = project_routes.with_artifacts(artifacts.clone());
+    let mut review = vst_review::ReviewHandle::new(
+        opts.store.clone(),
+        opts.broadcaster.clone(),
+        artifacts.clone(),
+    );
+    // The one bounded `notify` watcher for commented files and git state; a
+    // failure to create it only turns live re-anchoring off.
+    match vst_fswatch::path_watcher::PathWatcher::native() {
+        Ok(watcher) => {
+            review = review.with_watcher(
+                watcher,
+                Arc::new(vst_artifacts::StoreResolver::new(
+                    opts.store.clone(),
+                    opts.paths.vst_home().clone(),
+                )),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[vst] comment file watcher unavailable, anchors update on restart only: {e}"
+            );
+        }
+    }
+    // Rich Chat sends, queued-turn cancels and scheduled fires reach the comments
+    // owner only through these two `vst-types` seams (no `vst-agents` edge).
+    let (review_port, review_observer) = vst_review::hooks(&review);
+    opts.json_registry
+        .set_review_hooks(review_port, review_observer);
     let worktree_routes = WorktreeRoutes::new(
         opts.store.clone(),
         opts.broadcaster.clone(),
@@ -463,6 +493,27 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     let direct_streams: DirectStreamRegistry =
         Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
+    // The single Terminal delivery owner. The review owner gets its outcomes
+    // (restoring comments on failure / cancel / removal), its paste body (the
+    // Appendix A block of a row's snapshot, built at fire time) and a copy of each
+    // row about to be deleted; the owner in turn gets the handle for sends.
+    let terminal_delivery = vst_routes::terminal_delivery::build_terminal_delivery(
+        opts.store.clone(),
+        opts.broadcaster.clone(),
+        Arc::new(opts.tmux.clone()),
+        Some(review.terminal_observer()),
+    )
+    .with_paste_body(vst_review::review_paste_body())
+    .with_row_capture(review.terminal_row_capture());
+    // Worktree / project deletes purge schedule rows too: they go through the
+    // handle so each removed session's jobs stop and its outcome is reported.
+    project_routes = project_routes.with_terminal_delivery(terminal_delivery.clone());
+    worktree_routes = worktree_routes.with_terminal_delivery(terminal_delivery.clone());
+    review.attach_terminal(vst_review::TerminalWiring {
+        delivery: terminal_delivery.clone(),
+        resolver: vst_routes::terminal_delivery::target_resolver(opts.store.clone()),
+    });
+
     let session_routes = SessionRoutes {
         store: opts.store.clone(),
         broadcaster: opts.broadcaster.clone(),
@@ -477,12 +528,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         model_catalog: model_catalog.clone(),
         handoff_timeout: vst_routes::sessions::DEFAULT_HANDOFF_TIMEOUT,
         reset_cancels: Default::default(),
-        terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
-            opts.store.clone(),
-            opts.broadcaster.clone(),
-            Arc::new(opts.tmux.clone()),
-            None,
-        ),
+        terminal_delivery: terminal_delivery.clone(),
     };
 
     let attachment_routes =
@@ -590,6 +636,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         ws_hub,
         code_store,
         artifacts,
+        review,
         health_routes,
         open_routes,
         project_routes,
@@ -973,7 +1020,9 @@ pub fn router_from_state(state: AppState) -> Router {
         .route("/tailscale/up", post(handle_tailscale_up))
         .route("/tailscale/qr", get(handle_tailscale_qr))
         // Artifacts (thin handlers in artifact_routes.rs)
-        .merge(crate::artifact_routes::routes());
+        .merge(crate::artifact_routes::routes())
+        // Review comments (thin handlers in review_routes.rs)
+        .merge(crate::review_routes::routes());
 
     Router::new()
         // Utility & protocol routes stay at root (not under /api)
@@ -3254,6 +3303,17 @@ async fn handle_start_session(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({ "error": "NOT_GIT" })),
             ),
+            StartError::ScopeChanged(m) => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": "scope_changed", "message": m })),
+            ),
+            StartError::Review(e) => {
+                let p = vst_routes::review_http::review_error_parts(&e);
+                (
+                    StatusCode::from_u16(p.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    Json(p.body()),
+                )
+            }
             StartError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),
@@ -3444,6 +3504,13 @@ async fn handle_reset_session(
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": m, "code": "reset_in_progress" })),
         ),
+        ResetError::Review(e) => {
+            let p = vst_routes::review_http::review_error_parts(&e);
+            (
+                StatusCode::from_u16(p.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(p.body()),
+            )
+        }
         ResetError::Internal(m) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
@@ -3852,6 +3919,14 @@ async fn handle_schedule_send_now(
 /// SCREAMING_SNAKE name of the variant) so the UI never string-matches.
 fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Value>) {
     let code = err.code();
+    // Review refusals share the comments routes' mapping and body shape.
+    if let ChatRouteError::Review(e) = &err {
+        let p = vst_routes::review_http::review_error_parts(e);
+        return (
+            StatusCode::from_u16(p.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            Json(p.body()),
+        );
+    }
     let (status, message) = match err {
         ChatRouteError::NotFound(m) => (StatusCode::NOT_FOUND, m),
         ChatRouteError::BadRequest(m)
@@ -3871,6 +3946,7 @@ fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Va
         | ChatRouteError::NotEditing(m)
         | ChatRouteError::TurnNotQueued(m) => (StatusCode::NOT_FOUND, m),
         ChatRouteError::ModelListUnavailable(m) => (StatusCode::BAD_GATEWAY, m),
+        ChatRouteError::Review(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         ChatRouteError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
     };
     (

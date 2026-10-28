@@ -1,5 +1,6 @@
 //! Streams for the WS layer.
 
-pub mod file_watcher;
+/// Moved to `vst-fswatch`; re-exported at its old path.
+pub use vst_fswatch::file_watcher;
 pub mod pty_stream;
 pub mod tmux_output;

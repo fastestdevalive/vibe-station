@@ -6,15 +6,46 @@
 //! **Invariant:** turn ordering must survive cancel/promote/edit races — always
 //! re-derive insert position from `ahead_ids`, never trust a cached index.
 
+use vst_types::review::RestoreReason;
 use vst_types::{Attachment, Mention, MentionKind, TurnState};
 
-use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn, State};
+use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn, ReviewTurn, State};
 use crate::{acp_transport::AcpTransport, util::new_uuid_v4};
 
 /// Return value of `enqueue()`.
 pub struct EnqueueResult {
     pub turn_id: String,
     pub queue_position: usize,
+}
+
+/// Everything an enqueue can carry (`enqueue` / `enqueue_with` / `enqueue_ext`
+/// are thin wrappers that fill the defaults).
+#[derive(Default)]
+pub struct EnqueueSpec {
+    pub message: String,
+    pub attachments: Vec<Attachment>,
+    pub mentions: Vec<Mention>,
+    pub system_prompt: Option<String>,
+    pub fork_from_chat_id: Option<String>,
+    pub silent: bool,
+    /// Pre-minted turn id (the route mints it so the review hold can record it
+    /// before the turn exists); `None` mints one here.
+    pub turn_id: Option<String>,
+    /// Review comments riding this turn. A turn with a review is never steered.
+    pub review: Option<ReviewTurn>,
+}
+
+/// What `begin_edit_queued_turn` hands back: the held turn's content.
+#[derive(Clone, Debug)]
+pub struct BeginEdit {
+    pub message: String,
+    pub attachments: Vec<Attachment>,
+    pub mentions: Vec<Mention>,
+    /// The turn's original queue index.
+    pub queue_index: usize,
+    /// A copy of the turn's review (it stays on the held turn; use
+    /// `take_review` to move it out).
+    pub review: Option<ReviewTurn>,
 }
 
 /// Return value of `submit()`.
@@ -99,20 +130,54 @@ impl JsonAgentSession {
         fork_from_chat_id: Option<String>,
         silent: bool,
     ) -> EnqueueResult {
+        self.enqueue_full(EnqueueSpec {
+            message,
+            attachments,
+            mentions,
+            system_prompt,
+            fork_from_chat_id,
+            silent,
+            ..Default::default()
+        })
+    }
+
+    /// The general enqueue: every option of [`EnqueueSpec`].
+    pub fn enqueue_full(&self, spec: EnqueueSpec) -> EnqueueResult {
+        let EnqueueSpec {
+            message,
+            attachments,
+            mentions,
+            system_prompt,
+            fork_from_chat_id,
+            silent,
+            turn_id,
+            mut review,
+        } = spec;
         // Optionally write the system prompt file now (idempotent for later turns).
         if let Some(sp) = system_prompt {
             let _ = std::fs::create_dir_all(&self.0.data_dir);
             let _ = std::fs::write(&self.0.system_prompt_file, sp);
         }
 
-        let turn_id = new_uuid_v4();
+        let turn_id = turn_id.unwrap_or_else(new_uuid_v4);
         let queue_position = {
             let s = self.0.state.lock().unwrap();
             s.queue.len() + if s.running { 1 } else { 0 }
         };
 
+        // Re-check INSIDE the push lock (the check above can lose to a
+        // `release()` that latches and drains between it and the push, which
+        // would strand the review in a queue nothing drains: `release()` latches
+        // before it takes `state`, so a push that wins `state` after it sees the
+        // latch). Same pattern as `kick_drain`.
+        let mut stranded: Option<(String, RestoreReason)> = None;
         {
             let mut s = self.0.state.lock().unwrap();
+            if self.is_released() {
+                if let Some(r) = review.take() {
+                    stranded = Some((r.hold_id, *self.0.release_reason.lock().unwrap()));
+                }
+            }
             let order = s.enqueue_counter;
             s.enqueue_counter += 1;
             s.queue.push_back(QueuedTurn {
@@ -123,6 +188,7 @@ impl JsonAgentSession {
                 fork_from_chat_id,
                 mentions,
                 silent,
+                review,
             });
             // Only flip to Queued when nothing is running. While a turn is
             // actively streaming (`s.running`), `queue_position` is always
@@ -135,6 +201,9 @@ impl JsonAgentSession {
             if !s.running && queue_position > 0 {
                 s.turn_state = TurnState::Queued;
             }
+        }
+        if let Some(c) = stranded {
+            self.spawn_turn_cancelled(vec![c]);
         }
         self.emit_meta();
         self.kick_drain();
@@ -291,6 +360,9 @@ impl JsonAgentSession {
                         if self.can_steer_now(&s)
                             && h.attachments.is_empty()
                             && h.fork_from_chat_id.is_none()
+                            // A steer carries only the raw message: it would drop
+                            // the review block (never steer comments).
+                            && h.review.is_none()
                             && !mentions_block_steer(&h.mentions) =>
                     {
                         let cmds = s.commands.clone().unwrap_or_default();
@@ -342,16 +414,7 @@ impl JsonAgentSession {
                         }
                         Self::sync_idle_state_inner(&mut s);
                     }
-                    self.emit_user_event(
-                        &head.turn_id,
-                        &head.raw_message,
-                        &[],
-                        EmitUserEventOpts {
-                            silent: head.silent,
-                            mentions: head.mentions.clone(),
-                            ..Default::default()
-                        },
-                    );
+                    let _ = self.persist_turn_row(&head).await;
                     self.emit_meta();
                     prompt_required_tries = 0;
                 }
@@ -377,9 +440,20 @@ impl JsonAgentSession {
 
     /// Abort the active turn AND clear the queue + holds (Decision 13/A5).
     /// Sets the FIX-G latch so the notice slot does not fire immediately.
+    ///
+    /// Anything it clears that still carries a review (a turn enqueued after
+    /// `release()`'s cancel sweep) restores its comments too; the observer is
+    /// idempotent, so a turn the sweep already handled is a no-op here.
     pub fn abort_and_drain(&self) {
-        let cancel = {
+        let reason = *self.0.release_reason.lock().unwrap();
+        let (cancel, dropped) = {
             let mut s = self.0.state.lock().unwrap();
+            let dropped: Vec<(String, RestoreReason)> = s
+                .queue
+                .iter()
+                .chain(s.holds.values().map(|h| &h.turn))
+                .filter_map(|t| t.review.as_ref().map(|r| (r.hold_id.clone(), reason)))
+                .collect();
             s.queue.clear();
             s.holds.clear();
             // Kill live PIDs BEFORE aborting — must freeze the process tree
@@ -391,11 +465,12 @@ impl JsonAgentSession {
             s.aborted_since_last_drain = true; // FIX-G
             let c = s.active_turn.take().map(|t| t.cancel);
             s.turn_state = TurnState::Idle;
-            c
+            (c, dropped)
         };
         if let Some(c) = cancel {
             c.cancel();
         }
+        self.spawn_turn_cancelled(dropped);
         self.emit_meta();
     }
 
@@ -469,6 +544,9 @@ impl JsonAgentSession {
                     ..Default::default()
                 },
             );
+            if let Some(r) = &turn.review {
+                self.spawn_turn_cancelled(vec![(r.hold_id.clone(), RestoreReason::TurnCancelled)]);
+            }
             {
                 let mut s = self.0.state.lock().unwrap();
                 Self::sync_idle_state_inner(&mut s);
@@ -486,7 +564,10 @@ impl JsonAgentSession {
     /// after this, from `release()`) does the actual clearing. Must run BEFORE
     /// the `released` latch goes up, or `persist_event` silently no-ops every
     /// emit here (mod.rs) and the text is lost with no error.
-    pub fn cancel_all_pending_turns(&self) {
+    ///
+    /// Each turn that still carries a review restores its comments with
+    /// `reason` (the observer is idempotent: this sweep can run twice).
+    pub fn cancel_all_pending_turns(&self, reason: RestoreReason) {
         let dropped: Vec<QueuedTurn> = {
             let s = self.0.state.lock().unwrap();
             s.queue
@@ -507,26 +588,31 @@ impl JsonAgentSession {
                 },
             );
         }
+        self.spawn_turn_cancelled(
+            dropped
+                .iter()
+                .filter_map(|t| t.review.as_ref().map(|r| (r.hold_id.clone(), reason)))
+                .collect(),
+        );
     }
 
     /// Withdraw a queued turn into the editing hold. Returns the draft content
     /// or `None` if the turn is not in the queue. Idempotent for already-held
     /// turns (returns the held content, no double-hold).
-    pub fn begin_edit_queued_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<(String, Vec<Attachment>, Vec<Mention>, usize)> {
+    pub fn begin_edit_queued_turn(&self, turn_id: &str) -> Option<BeginEdit> {
         let mut s = self.0.state.lock().unwrap();
         if s.steering_turn_id.as_deref() == Some(turn_id) {
             return None; // being delivered to the agent right now
         }
         // Already held — idempotent re-acquire.
         if let Some(held) = s.holds.get(turn_id) {
-            let msg = held.turn.raw_message.clone();
-            let att = held.turn.attachments.clone();
-            let mentions = held.turn.mentions.clone();
-            let qi = held.ahead_ids.len();
-            return Some((msg, att, mentions, qi));
+            return Some(BeginEdit {
+                message: held.turn.raw_message.clone(),
+                attachments: held.turn.attachments.clone(),
+                mentions: held.turn.mentions.clone(),
+                queue_index: held.ahead_ids.len(),
+                review: held.turn.review.clone(),
+            });
         }
         let idx = s.queue.iter().position(|t| t.turn_id == turn_id)?;
         let ahead_ids: Vec<String> = s
@@ -536,20 +622,24 @@ impl JsonAgentSession {
             .map(|t| t.turn_id.clone())
             .collect();
         let turn = s.queue.remove(idx).unwrap();
-        let msg = turn.raw_message.clone();
-        let att = turn.attachments.clone();
-        let mentions = turn.mentions.clone();
-        let qi = idx;
+        let out = BeginEdit {
+            message: turn.raw_message.clone(),
+            attachments: turn.attachments.clone(),
+            mentions: turn.mentions.clone(),
+            queue_index: idx,
+            review: turn.review.clone(),
+        };
         s.holds
             .insert(turn_id.to_string(), super::HeldTurn { turn, ahead_ids });
         Self::sync_idle_state_inner(&mut s);
         drop(s);
         self.emit_meta();
-        Some((msg, att, mentions, qi))
+        Some(out)
     }
 
     /// Re-enqueue a held turn after editing. Re-derives insert position from
     /// `ahead_ids` (robust to cancels/promotes that happened during the edit).
+    /// A review the turn carries is kept.
     pub fn resubmit_queued_turn(
         &self,
         turn_id: &str,
@@ -557,6 +647,21 @@ impl JsonAgentSession {
         attachments: Vec<Attachment>,
         mentions: Vec<Mention>,
         edited: bool,
+    ) -> bool {
+        self.resubmit_queued_turn_with(turn_id, message, attachments, mentions, edited, true)
+    }
+
+    /// [`resubmit_queued_turn`](Self::resubmit_queued_turn) choosing what happens
+    /// to the turn's review: `keep_review == false` drops it from the turn and
+    /// restores the comments to the panel (`turn_cancelled`).
+    pub fn resubmit_queued_turn_with(
+        &self,
+        turn_id: &str,
+        message: String,
+        attachments: Vec<Attachment>,
+        mentions: Vec<Mention>,
+        edited: bool,
+        keep_review: bool,
     ) -> bool {
         let mut s = self.0.state.lock().unwrap();
         if s.steering_turn_id.as_deref() == Some(turn_id) {
@@ -572,12 +677,20 @@ impl JsonAgentSession {
             turn.attachments = attachments.clone();
             turn.mentions = mentions;
         }
+        let dropped_review = if keep_review {
+            None
+        } else {
+            turn.review.take()
+        };
 
         let insert_at = Self::insert_position_after_ahead_ids(&s.queue, &held.ahead_ids);
         s.queue.insert(insert_at, turn);
         Self::sync_idle_state_inner(&mut s);
         drop(s);
 
+        if let Some(r) = dropped_review {
+            self.spawn_turn_cancelled(vec![(r.hold_id, RestoreReason::TurnCancelled)]);
+        }
         self.emit_meta();
         self.wake_steer();
         self.kick_drain();
@@ -608,6 +721,19 @@ impl JsonAgentSession {
         message: String,
         attachments: Vec<Attachment>,
     ) -> ForkResult {
+        self.fork_turn_with_review(from_turn_id, message, attachments, None)
+    }
+
+    /// [`fork_turn`](Self::fork_turn) with an optional review (PRD R73). The fork
+    /// is a NEW turn: the answered source turn's hold was deleted at persist, so
+    /// the caller supplies a record it adopted itself. Never steered.
+    pub fn fork_turn_with_review(
+        &self,
+        from_turn_id: &str,
+        message: String,
+        attachments: Vec<Attachment>,
+        review: Option<ReviewTurn>,
+    ) -> ForkResult {
         let fork_seq = {
             let store = self.0.store.lock().unwrap();
             store
@@ -626,7 +752,13 @@ impl JsonAgentSession {
         self.rebuild_meta_from_transcript();
 
         let agent_chat_id = self.0.state.lock().unwrap().session.agent_chat_id.clone();
-        let result = self.enqueue(message, attachments, None, agent_chat_id);
+        let result = self.enqueue_full(EnqueueSpec {
+            message,
+            attachments,
+            fork_from_chat_id: agent_chat_id,
+            review,
+            ..Default::default()
+        });
         ForkResult::Ok {
             turn_id: result.turn_id,
             superseded_turn_ids,

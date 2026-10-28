@@ -207,6 +207,7 @@ async fn t1_releases_and_unregisters_json_agent() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -250,6 +251,7 @@ async fn t1b_awaits_release_before_returning() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -289,6 +291,7 @@ async fn t2_tmux_session_kills_pane_not_pty() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -333,6 +336,7 @@ async fn t2b_direct_pty_kills_child_not_tmux() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -372,6 +376,7 @@ async fn t2c_missing_pane_is_not_an_error() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -399,6 +404,7 @@ async fn t3_attachments_cleared_only_when_requested() {
         &make_session("s-keep", "vr-keep", true),
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -418,6 +424,7 @@ async fn t3_attachments_cleared_only_when_requested() {
         &make_session("s-clear", "vr-clear", true),
         ReleaseOpts {
             clear_attachments: true,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -450,6 +457,7 @@ async fn t3b_always_clears_idle_tracking() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -483,6 +491,7 @@ async fn t2_1_kill_succeeds_no_retry() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -521,6 +530,7 @@ async fn t2_2_retry_once_on_first_kill_miss() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -561,6 +571,7 @@ async fn t2_3_warn_when_kill_never_takes() {
         &session,
         ReleaseOpts {
             clear_attachments: false,
+            ..Default::default()
         },
         &registry,
         &direct_pty,
@@ -595,4 +606,57 @@ async fn t2_3_warn_when_kill_never_takes() {
         msg.contains("vr-kill-stuck"),
         "warn must contain tmux name: {msg}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Plan 04 (2.T7) — the release reason reaches the agent
+// ---------------------------------------------------------------------------
+
+struct ReasonAgent {
+    seen: Mutex<Vec<vst_types::review::RestoreReason>>,
+}
+
+impl Releasable for ReasonAgent {
+    async fn release(&self) {}
+
+    async fn release_with(&self, reason: vst_types::review::RestoreReason) {
+        self.seen.lock().unwrap().push(reason);
+    }
+}
+
+#[tokio::test]
+async fn the_release_reason_is_passed_through_and_defaults_to_session_removed() {
+    use vst_types::review::RestoreReason;
+    let tmux = MockTmux::always_gone();
+    let direct_pty = vst_git::DirectPtyRegistry::new();
+    for (reason, want) in [
+        (None, RestoreReason::SessionRemoved),
+        (
+            Some(RestoreReason::ChannelChanged),
+            RestoreReason::ChannelChanged,
+        ),
+    ] {
+        let session = make_session("s-reason", "vr-r", false);
+        let registry = Arc::new(JsonAgentRegistry::<ReasonAgent>::new());
+        let agent = Arc::new(ReasonAgent {
+            seen: Mutex::new(Vec::new()),
+        });
+        registry.set(session.id.clone(), agent.clone());
+        let (on_idle, _) = spy_fn();
+        let (on_attach, _) = spy_fn();
+        release_session_runtime(
+            &session,
+            ReleaseOpts {
+                restore_reason: reason,
+                ..Default::default()
+            },
+            &registry,
+            &direct_pty,
+            tmux.as_ref(),
+            on_idle,
+            on_attach,
+        )
+        .await;
+        assert_eq!(*agent.seen.lock().unwrap(), vec![want]);
+    }
 }

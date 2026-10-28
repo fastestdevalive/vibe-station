@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use vst_git::DirectPtyRegistry;
 use vst_types::domain::SessionRecord;
+use vst_types::review::RestoreReason;
 
 use crate::json_agent_registry::JsonAgentRegistry;
 
@@ -36,6 +37,12 @@ pub trait TmuxSessionOps: Send + Sync {
 /// `JsonAgentSession` that `release_session_runtime` needs.
 pub trait Releasable: Send + Sync {
     fn release(&self) -> impl std::future::Future<Output = ()> + Send;
+
+    /// Release saying why queued review turns restore their comments. Defaults to
+    /// plain [`release`](Self::release) for handles with no review turns.
+    fn release_with(&self, _reason: RestoreReason) -> impl std::future::Future<Output = ()> + Send {
+        self.release()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +69,10 @@ impl Releasable for crate::json_agent_session::JsonAgentSession {
     fn release(&self) -> impl std::future::Future<Output = ()> + Send {
         crate::json_agent_session::JsonAgentSession::release(self)
     }
+
+    fn release_with(&self, reason: RestoreReason) -> impl std::future::Future<Output = ()> + Send {
+        crate::json_agent_session::JsonAgentSession::release_with(self, reason)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +82,9 @@ impl Releasable for crate::json_agent_session::JsonAgentSession {
 #[derive(Debug, Default)]
 pub struct ReleaseOpts {
     pub clear_attachments: bool,
+    /// Why a queued review turn's comments go back to the panel
+    /// (`None` = `session_removed`).
+    pub restore_reason: Option<RestoreReason>,
 }
 
 /// Callbacks injected into the release path. Bundled into one struct so
@@ -125,7 +139,8 @@ pub async fn release_session_runtime_with_warn<R: Releasable>(
     // turn's process group, and closes SQLite. Without the await the drain's
     // trailing lifecycle persist could land after the caller writes `done`.
     if let Some(a) = agent {
-        a.release().await;
+        a.release_with(opts.restore_reason.unwrap_or(RestoreReason::SessionRemoved))
+            .await;
     }
 
     if opts.clear_attachments {

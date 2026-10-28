@@ -409,6 +409,8 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Sweep artifact rows of deleted worktrees/projects; skipped (with a warn)
     // unless the migration above succeeded on THIS boot.
     crate::artifact_boot::purge_orphan_artifacts_after_migration(&store, &migration).await;
+    // Same for review comments (before the owner's boot pass re-anchors them).
+    crate::review_boot::purge_orphan_comments_after_migration(&store, &migration).await;
 
     // Snapshot each existing session's mode icon so deleting a mode can't
     // change it (idempotent; new sessions are stamped at creation).
@@ -581,6 +583,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let artifacts = state.artifacts.clone();
     json_registry.set_artifact_sink(Arc::new(artifacts.clone()));
     let artifacts_task = artifacts.start();
+    // Review comments: the 60 s attach-lease sweeper and the watch-driven
+    // re-anchor loop (push-only; pushes only real changes).
+    let review_for_boot = state.review.clone();
+    let review_task = Arc::new(state.review.clone()).start();
 
     // Delete exited plain terminals: sweep stale ones now, then follow events.
     let terminal_reaper_handle =
@@ -616,6 +622,27 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Before the listener serves: re-arm waiting Terminal rows and fail rows a
     // previous daemon left mid-delivery, then tell the delivery owner so its
     // outcome observer hears about each one.
+    // Review comments first: restore what the crash left in flight (holds, claimed
+    // Rich Chat schedule rows, rows of vanished sessions) and remember the claimed
+    // immediate Terminal rows, so their `error` below reads "last send didn't
+    // finish" (R110). The observer is already installed, so `report_recovery`
+    // reaches it.
+    let transcripts: vst_review::TranscriptReader = {
+        let (store, registry) = (store.clone(), json_registry.clone());
+        Arc::new(move |session_id| {
+            let (store, registry, id) = (store.clone(), registry.clone(), session_id.to_string());
+            Box::pin(async move {
+                match vst_agents::json_agent_chat::find_json_session_context(&store, &id).await {
+                    Some(ctx) => Some(vst_agents::json_agent_chat::read_session_transcript(
+                        &ctx, &registry,
+                    )),
+                    // Not a Rich Chat session (or gone): no user row can exist.
+                    None => store.find_session(&id).await.map(|_| Vec::new()),
+                }
+            })
+        })
+    };
+    review_for_boot.reconcile_boot(transcripts).await;
     let recovery = schedule_poller.recover_orphans().await;
     terminal_delivery.report_recovery(recovery).await;
     let schedule_handle = schedule_poller.clone().start();
@@ -648,6 +675,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         // Write what the artifact intake still holds (bounded), then stop it.
         artifacts.shutdown(std::time::Duration::from_secs(1)).await;
         artifacts_task.abort();
+        review_task.abort();
         // Abort pollers and any still-running post-bind boot work.
         lifecycle_handle.abort();
         pr_handle.abort();

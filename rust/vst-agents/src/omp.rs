@@ -13,6 +13,10 @@
 //! Two-identity strategy: `identical` — the ACP `session/new` id is assumed to be
 //! omp's own session id (the `<ts>_<id>.jsonl` suffix), so this plugin implements
 //! neither `capture_native_chat_id` nor `supports_json_to_terminal_resume`.
+//!
+//! Artifact capture: `extract_file_effects` is NOT overridden — the ACP write shapes of this
+//! harness are UNMEASURED (no fixture under `tests/fixtures/acp_writes/`), so the
+//! generic default stays until one is recorded.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

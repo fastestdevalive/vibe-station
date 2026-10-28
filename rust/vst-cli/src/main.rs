@@ -3,8 +3,8 @@
 use vst_cli::commands;
 use vst_cli::output::die;
 use vst_cli::program::{
-    self, AgentCommand, ArtifactCommand, Command, DaemonCommand, FileCommand, FilesCommand,
-    ModeCommand, ProjectCommand, TerminalCommand, WorktreeCommand,
+    self, AgentCommand, ArtifactCommand, Command, CommentCommand, DaemonCommand, FileCommand,
+    FilesCommand, ModeCommand, ProjectCommand, TerminalCommand, WorktreeCommand,
 };
 #[tokio::main]
 async fn main() {
@@ -565,6 +565,28 @@ async fn main() {
             ArtifactCommand::Unknown(args) => {
                 die(
                     &format!("Unknown artifact command: {}", args.join(" ")),
+                    Some(1),
+                );
+            }
+        },
+        Command::Comment(comment_cmd) => match comment_cmd {
+            CommentCommand::List { args } => {
+                let opts = match commands::comment::list::parse_comment_list_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                finish_artifact(commands::comment::list::run_comment_list(opts).await);
+            }
+            CommentCommand::Show { args } => {
+                let opts = match commands::comment::show::parse_comment_show_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                finish_artifact(commands::comment::show::run_comment_show(opts).await);
+            }
+            CommentCommand::Unknown(args) => {
+                die(
+                    &format!("Unknown comment command: {}", args.join(" ")),
                     Some(1),
                 );
             }

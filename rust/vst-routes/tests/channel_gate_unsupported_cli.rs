@@ -258,6 +258,7 @@ async fn start_draft_pi_explicit_json_rejected() {
             use_worktree: None,
         },
         skip_auto_turn: Some(true),
+        review_comment_ids: None,
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(

@@ -1,0 +1,10 @@
+Review comments (2) · main
+
+1) File: src/a.rs (outdated)
+   Lines: 5
+   Quote: "old text"
+   Comment: was this intended?
+
+2) File: src/gone.rs (file no longer exists)
+   Quote: "removed"
+   Comment: why delete

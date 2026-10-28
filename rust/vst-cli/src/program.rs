@@ -21,6 +21,7 @@ Commands:
   file       open
   files      ls | open | close
   artifact   add | list | pin
+  comment    list | show
   open       open a path in the UI
   status     daemon and session status
   summary    summarize sessions
@@ -44,6 +45,7 @@ pub enum Command {
     File(FileCommand),
     Files(FilesCommand),
     Artifact(ArtifactCommand),
+    Comment(CommentCommand),
     Open(OpenArgs),
     Status(StatusArgs),
     Summary(SummaryArgs),
@@ -179,6 +181,13 @@ pub enum ArtifactCommand {
     Add { args: Vec<String> },
     List { args: Vec<String> },
     Pin { args: Vec<String> },
+    Unknown(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommentCommand {
+    List { args: Vec<String> },
+    Show { args: Vec<String> },
     Unknown(Vec<String>),
 }
 
@@ -377,6 +386,20 @@ where
                     Command::Artifact(ArtifactCommand::Unknown(r))
                 }
                 None => Command::Artifact(ArtifactCommand::Unknown(vec![])),
+            }
+        }
+        "comment" => {
+            let sub = iter.next();
+            let rest: Vec<String> = iter.collect();
+            match sub.as_deref() {
+                Some("list" | "ls") => Command::Comment(CommentCommand::List { args: rest }),
+                Some("show") => Command::Comment(CommentCommand::Show { args: rest }),
+                Some(other) => {
+                    let mut r = vec![other.to_string()];
+                    r.extend(rest);
+                    Command::Comment(CommentCommand::Unknown(r))
+                }
+                None => Command::Comment(CommentCommand::Unknown(vec![])),
             }
         }
         "open" => Command::Open(OpenArgs {

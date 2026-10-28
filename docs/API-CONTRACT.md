@@ -56,9 +56,16 @@ A session is always one of two kinds — an **agent** (`vst agent ...`) or a pla
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst artifact add` | `<path>... [--json]` | Adds files (max 50, one `POST /artifacts`) to the calling agent session's scope; scope comes from `$VST_SPAWN_TOKEN` (agent sessions only). Relative paths resolve against cwd. Exit `0` ok · `2` every path not found · `1` any other failure. |
+| `vst artifact add` | `<path>... [--json]` | Adds files (max 50, one `POST /artifacts`) to the calling agent session's scope; scope comes from `$VST_SPAWN_TOKEN` (agent sessions only). Relative paths resolve against cwd. Exit `0` ok · `2` not found (every path, or the session) · `1` any other failure. |
 | `vst artifact list` (alias `ls`) | `[--worktree=<id> \| --project=<id>] [--json]` | Lists artifacts; scope defaults to `$VST_WORKTREE`, then `$VST_PROJECT`. |
 | `vst artifact pin` | `<id\|path> [--unpin] [--worktree=<id> \| --project=<id>] [--json]` | Pins/unpins an artifact (id or path); exit `2` when nothing matches. |
+
+### Review comments
+
+| Command | Args / Flags | Description |
+|---|---|---|
+| `vst comment list` (alias `ls`) | `[--unsent] [--worktree=<id> \| --project=<id>] [--json]` | Lists the user's review comments (line / selection notes on a diff or file) of a scope; scope defaults to `$VST_WORKTREE`, then `$VST_PROJECT`. `--unsent` = not attached to a composer (`GET ...?delivery=unsent`). `--json` prints the bare array. |
+| `vst comment show` | `<id> [--json]` | One comment (`GET /comments/:id`); exit `2` when it does not exist. Read-only: agents never create or resolve comments. |
 
 ### Daemon
 
@@ -149,6 +156,28 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | DELETE | `/artifacts/:id` | — | `{ ok }` | Also clears the pin. 404 `ARTIFACT_NOT_FOUND`. |
 | GET | `/artifacts/:id/content` | — | text (`text/plain`, may carry `X-Vst-Truncated-Total`) or image bytes | The only way to read artifact content outside the worktree root. 404 `ARTIFACT_NOT_FOUND` · 410 `ARTIFACT_MISSING` · 403 `ARTIFACT_DENIED`/`ARTIFACT_UNREADABLE` · 415 `ARTIFACT_BINARY` · 422 `ARTIFACT_TOO_LARGE`. Error bodies are `{ error: <CODE>, message }`. |
 
+### Review comments
+
+Scope twins: `/worktrees/:id/...` and `/projects/:id/...` (direct sessions). All under `/api`; bodies are camelCase. Errors are `{ error: <code>, message, ...detail }`.
+
+| Method | Path | Query / Body | Returns | Notes |
+|---|---|---|---|---|
+| GET | `/worktrees/:id/comments` | `?path=&delivery=unsent\|all` | `{ comments, nextPin, terminalDeliveries }` | `terminalDeliveries` = in-flight Terminal sends of the scope. 404 `not_found`, 400 `invalid_delivery`. |
+| POST | `/worktrees/:id/comments` | `{ id, path, pathKind, surface, diffScope?, baseSha?, side?, lineStart?, lineEnd?, oldStart?.., quote, prefix, suffix, occurrence, text, restorePin? }` | `201 { comment }` (200 when the id exists) | 400 `invalid_anchor`, 409 `cap_reached` (500 live rows), 409 `id_taken` (the id belongs to another scope or is held by a queued send), 413 `text_too_long`/`quote_too_long`, 422 `invalid_path`. |
+| GET / PATCH / DELETE | `/comments/:id` | PATCH `{ text, version? }` | `{ comment }` / `{ ok }` | 404 `not_found`. |
+| POST | `/worktrees/:id/comments/attach` · `/detach` | `{ composerKey, commentIds?, refreshOnly? }` | `{ attached }` / `{ detached }` | Composer lease (30 min); 400 `invalid_composer`. |
+| POST | `/worktrees/:id/comments/render` | `{ commentIds?, message? }` | `{ text, bytes, count }` | Copy as text; never 413. |
+| POST | `/worktrees/:id/comments/dismiss-restored` | — | `{ cleared }` | Clears the "restored" notices. |
+| POST | `/sessions/:id/chat` | `+ reviewCommentIds` | existing | Review turns always queue (never steer); message may be empty with ids. 409 `comments_changed {remaining}`, 413 `review_too_large {limit, unit}`, 403 `not_attached`. |
+| POST | `/sessions/:id/chat/turns/:turnId/restore-review` | — | `{ restored, skipped }` | Puts a sent card's persisted snapshot back; 409 `turn_not_restorable`. |
+| POST | `/sessions/:id/schedule` | `+ reviewCommentIds` | existing | Rows leave the panel into the scheduled row's snapshot; message may be empty. Terminal target over 32 KB: 413 `review_too_large {limit: 32768}`. Cancel / failure restores (`schedule_cancelled` / `schedule_failed`). |
+| POST | `/sessions/:id/start` | `+ reviewCommentIds` | existing | `draftPrompt` may be empty with ids. 409 `scope_changed` when the promotion would leave the comments' scope (new worktree, another worktree). |
+| POST | `/worktrees/:id/terminal-deliveries` | `{ terminalDeliveryId, sessionId, commentIds, message?, composerKey? }` | `202 { delivery }` | Idempotent by `terminalDeliveryId`. 400 `TERMINAL_DELIVERY_UNSUPPORTED` (not a Terminal agent whose CLI takes multi-line pastes), 400 `no_comments` (nothing to send), 409 `delivery_in_flight` (one pending send per session), 409 `duplicate` (the delivery row already exists), 413 `review_too_large`, 409 `comments_changed`, 409 `scope_mismatch`. |
+| DELETE | `/terminal-deliveries/:id` | — | `{ ok }` | Stops the job; the comments return (`send_cancelled`). 409 `delivery_pasting` once pasting started, 404 `not_found`. |
+| GET | `/sessions/:id/terminal-readiness` | — | `{ readiness: "ready" \| "awaiting_approval" \| "unknown" }` | One bounded (2 s) pane probe; nothing is pasted. |
+
+`restoredReason` (set on comments that came back): `turn_cancelled`, `send_failed`, `timed_out`, `agent_exited`, `restart`, `session_removed`, `channel_changed`, `schedule_cancelled`, `schedule_failed`, `send_cancelled`.
+
 ### Sessions (= Tabs)
 
 | Method | Path | Query / Body | Returns | Notes |
@@ -180,7 +209,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | POST | `/sessions/:id/schedule/:msgId/dismiss` | — | `{ ok }` | Deletes a *failed* scheduled message. 404 if it isn't failed. |
 | GET | `/sessions/:id/meta` | — | `SessionMeta` | Latest tokens/model/turn-state/queueDepth; rebuilt from the transcript tail after a restart. Also carries the session's scheduled-send state, authoritative (an empty array clears it; absent on a live `session:meta` means "not carried — keep what you have"): `scheduledSends` (pending, not yet in flight), `scheduledFailed` (`{ id, message, attachments?, fireAt, failureReason }[]`, newest 20 — Retry / Dismiss in the UI) and `scheduledTurnIds` (turn ids that originated from a schedule — the newest 200 — used to badge them in the transcript and mark them in the queued tray). `meta.commands?: { name, description, argumentHint? }[]` is the session's slash-command/skill catalog — the CLI's own ACP `available_commands_update` (full-replace, captured in-turn AND out-of-band) merged per-field with the directories scanned from `skillPaths`: on a name collision ACP wins `description`/`argumentHint`, and directory-only entries are withheld from CLIs whose plugin cannot dispatch them. Absent until either source has answered; `[]` once one has and the catalog is genuinely empty. |
 
-Errors on every schedule route are `{ error, code }`: `BAD_REQUEST`, `ARCHIVED`, `AGENT_EXITED`, `DONE` (409), `TERMINAL_DELIVERY_UNSUPPORTED`, `NOT_SCHEDULABLE`, `NOT_FOUND`, `TURN_NOT_FOUND`, `ALREADY_DELIVERING`.
+Errors on every schedule route are `{ error, code }`: `BAD_REQUEST`, `ARCHIVED`, `AGENT_EXITED`, `DONE` (409), `TERMINAL_DELIVERY_UNSUPPORTED`, `NOT_SCHEDULABLE`, `NOT_FOUND`, `TURN_NOT_FOUND`, `ALREADY_DELIVERING`. Review refusals on `/schedule` and `/chat` (and `/start`, `/reset`) instead keep the comments-route shape `{ error: <lower-case code>, message, code, ...detail }` (e.g. `comments_changed` + `remaining`, `review_too_large` + `limit`/`unit`); a store failure is logged and answered as `internal` / `store error`.
 
 WS `session:scheduled` (sent to subscribed connections) carries `scheduledSends`, `scheduledFailed`, `scheduledTurnIds` and `scheduledSent?`; an absent `scheduledSent` means "keep what you have", an empty array clears it.
 
@@ -218,7 +247,7 @@ WS `session:scheduled` (sent to subscribed connections) carries `scheduledSends`
 
 | Method | Path | Query / Body | Returns | Notes |
 |---|---|---|---|---|
-| GET | `/supported-clis` | — | `SupportedCli[]` | One entry per known CLI. `SupportedCli = { id, defaultModel, supportsJson, supportsTerminalDelivery, importsNativeHistory, supportsJsonToTerminalResume, detected, starterBundleNames, usingFallbackOnly, defaultChannel, defaultChannelOverridden }`. `defaultChannel` is the CLI's **effective** default execution channel (a `defaultChannelByCli` override if set, else the plugin's own default: `json` for claude/cursor/opencode/omp, `tmux` for agy/pi). `defaultChannelOverridden` is `true` when `defaultChannel` reflects a user override rather than the plugin's hardwired default. |
+| GET | `/supported-clis` | — | `SupportedCli[]` | One entry per known CLI. `SupportedCli = { id, defaultModel, supportsJson, supportsTerminalDelivery, supportsTerminalComments, importsNativeHistory, supportsJsonToTerminalResume, detected, starterBundleNames, usingFallbackOnly, defaultChannel, defaultChannelOverridden }`. `supportsTerminalComments` is `true` when Terminal delivery accepts multi-line pastes; it gates Send-to-Terminal for review comments. `defaultChannel` is the CLI's **effective** default execution channel (a `defaultChannelByCli` override if set, else the plugin's own default: `json` for claude/cursor/opencode/omp, `tmux` for agy/pi). `defaultChannelOverridden` is `true` when `defaultChannel` reflects a user override rather than the plugin's hardwired default. |
 | GET | `/modes` | — | `Mode[]` | Max 10 per user. |
 | POST | `/modes` | `{ name, cli, context, presetId? }` | `Mode` | 409 on duplicate name. |
 | PUT | `/modes/:id` | `{ name?, context? }` | `Mode` | `cli` is **immutable** post-create (cli switch would invalidate every session that's already running this mode). |
@@ -313,6 +342,8 @@ Coalescing: server debounces rapid changes (~200ms) so 5 saves in a burst → 1 
 | `limits:updated` | `{ limits: LimitsSnapshot }` |
 | `artifact:upserted` | `{ scopeKind, scopeId, rev, rows: (ArtifactRow & { created })[] }` (batched) |
 | `artifact:removed` | `{ scopeKind, scopeId, rev, ids, reason: "cap" \| "removed" \| "merged" }` |
+| `comments:changed` | `{ scopeKind, scopeId, upserted: ReviewComment[], deleted: { id, reason: "deleted" \| "sent" \| "scheduled" }[] }` (coalesced ~250 ms per scope; refetch on `ws:open` / `ws:resync`) |
+| `terminal-delivery:updated` | `{ delivery: TerminalDelivery }` (`state`: `waiting` \| `pasting` \| `sent` \| `timed_out` \| `failed` \| `cancelled`; global, not subscription-gated) |
 | `ws:resync` | — (event fan-out lagged: refetch every loaded artifact scope) |
 | `pong` | — |
 

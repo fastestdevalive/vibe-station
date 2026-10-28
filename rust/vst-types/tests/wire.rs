@@ -516,3 +516,62 @@ fn artifact_wire_ignores_unknown_fields_and_defaults_optionals() {
         serde_json::from_value(serde_json::json!({"path": "/a", "extra": 1})).unwrap();
     assert!(r.artifact.is_none() && r.outside_worktree.is_none() && r.error.is_none());
 }
+
+// ── review comments (plan 04, Phase 1a) ──────────────────────────────────
+
+#[test]
+fn review_comment_fixtures_roundtrip() {
+    use vst_types::rest::review::{CommentListResponse, CreateCommentBody};
+    use vst_types::review::{ReviewComment, ReviewRecord, ScheduledReviewPayload};
+    assert_roundtrip::<ReviewComment>("review-comment.json");
+    assert_roundtrip::<ReviewRecord>("review-record.json");
+    assert_roundtrip::<ScheduledReviewPayload>("scheduled-review-payload.json");
+    assert_roundtrip::<CommentListResponse>("comment-list-response.json");
+    assert_roundtrip::<CreateCommentBody>("create-comment-body.json");
+}
+
+#[test]
+fn comment_events_roundtrip() {
+    assert_roundtrip::<ServerMessage>("server-message-comments-changed.json");
+    assert_roundtrip::<ServerMessage>("server-message-terminal-delivery-updated.json");
+}
+
+/// 1.T11: the payload shape meets plan 02's `snapshot_meta` count rule.
+#[test]
+fn scheduled_review_payload_fixture_counts_two_comments() {
+    let text = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/wire/scheduled-review-payload.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    assert_eq!(
+        vst_types::review::snapshot_meta(&text).map(|m| m.count),
+        Some(2)
+    );
+}
+
+/// 1.T11: payloads written before the review fields existed still parse, and the
+/// new optional fields stay out of the output.
+#[test]
+fn old_payloads_default_the_new_review_fields() {
+    use vst_types::rest::sessions::{ChatBody, ResubmitBody, StartDraftBody};
+    let chat: ChatBody = serde_json::from_str(r#"{"message":"hi"}"#).unwrap();
+    assert_eq!(chat.review_comment_ids, None);
+    assert_eq!(
+        serde_json::to_value(&chat).unwrap(),
+        serde_json::json!({ "message": "hi" })
+    );
+    let resubmit: ResubmitBody = serde_json::from_str(r#"{"edited":false}"#).unwrap();
+    assert_eq!(resubmit.keep_review, None);
+    let start: StartDraftBody =
+        serde_json::from_str(r#"{"draftPrompt":"p","draftConfig":{"entryPoint":"tab"}}"#).unwrap();
+    assert_eq!(start.review_comment_ids, None);
+    let cli: SupportedCli = serde_json::from_value(serde_json::json!({
+        "id": "claude", "defaultModel": "m", "supportsJson": true,
+        "importsNativeHistory": false, "supportsJsonToTerminalResume": false,
+        "detected": true, "starterBundleNames": [], "usingFallbackOnly": false,
+        "defaultChannel": "json", "defaultChannelOverridden": false
+    }))
+    .unwrap();
+    assert!(!cli.supports_terminal_comments);
+}

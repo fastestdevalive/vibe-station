@@ -456,11 +456,15 @@ enum SettledWait {
 /// A queued turn this reset withdrew into the editing hold (so the release
 /// does not turn it into a struck-through `cancelled` row).
 #[derive(Clone, Debug)]
-struct WithdrawnTurn {
-    turn_id: String,
-    message: String,
-    attachments: Vec<Attachment>,
-    mentions: Vec<vst_types::domain::Mention>,
+pub(crate) struct WithdrawnTurn {
+    pub(crate) turn_id: String,
+    pub(crate) message: String,
+    pub(crate) attachments: Vec<Attachment>,
+    pub(crate) mentions: Vec<vst_types::domain::Mention>,
+    /// The turn's review comments, taken OUT of the turn so the release that
+    /// follows never restores them; the reset re-attaches them on failure and
+    /// otherwise carries or drops them.
+    pub(crate) review: Option<vst_agents::json_agent_session::ReviewTurn>,
 }
 
 /// Carried content produced by step 3 of a reset.
@@ -1527,16 +1531,28 @@ impl SessionRoutes {
     /// runtime on its channel: JSON never spawns a TTY at create; tmux/pty go
     /// through the guarded spawn jobs.
     pub async fn spawn_new_session_for_channel(&self, opts: SpawnChannelOpts) {
+        let _ = self.spawn_new_session_for_channel_checked(opts).await;
+    }
+
+    /// [`spawn_new_session_for_channel`](Self::spawn_new_session_for_channel)
+    /// reporting whether the launch succeeded. A JSON target spawns nothing at
+    /// create (its turn 1 is enqueued detached), so it is `Ok` at once.
+    pub async fn spawn_new_session_for_channel_checked(
+        &self,
+        opts: SpawnChannelOpts,
+    ) -> Result<(), String> {
         let is_json = opts.session.channel == Some(Channel::Json);
         if is_json {
             if opts.skip_auto_turn {
-                return;
+                return Ok(());
             }
             let routes = self.clone();
             let registry = self.json_registry.clone();
             tokio::spawn(async move {
                 start_json_create_turn(
                     StartJsonCreateTurnOpts {
+                        review: None,
+                        turn_id: None,
                         silent: false,
                         session_id: opts.session.id.clone(),
                         prompt: opts.prompt.clone(),
@@ -1548,24 +1564,24 @@ impl SessionRoutes {
                 )
                 .await;
             });
-            return;
+            return Ok(());
         }
         if opts.worktree.is_some() {
-            self.run_agent_spawn_job(opts).await;
+            self.run_agent_spawn_job(opts).await
         } else {
-            self.run_direct_agent_spawn_job(opts).await;
+            self.run_direct_agent_spawn_job(opts).await
         }
     }
 
-    async fn run_agent_spawn_job(&self, opts: SpawnChannelOpts) {
+    async fn run_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
         let session_id = opts.session.id.clone();
         let result = self.try_run_agent_spawn_job(opts).await;
-        let (state, reason) = match result {
+        let (state, reason) = match &result {
             Ok(()) => (LifecycleState::Working, None),
-            Err(r) => (LifecycleState::Exited, Some(r)),
+            Err(r) => (LifecycleState::Exited, Some(r.clone())),
         };
         if self.release_if_retired_during_spawn(&session_id).await {
-            return;
+            return result;
         }
         self.persist_spawn_state(&session_id, state, reason.as_deref())
             .await;
@@ -1574,17 +1590,18 @@ impl SessionRoutes {
             state,
             reason,
         });
+        result
     }
 
-    async fn run_direct_agent_spawn_job(&self, opts: SpawnChannelOpts) {
+    async fn run_direct_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
         let session_id = opts.session.id.clone();
         let result = self.try_run_direct_agent_spawn_job(opts).await;
-        let (state, reason) = match result {
+        let (state, reason) = match &result {
             Ok(()) => (LifecycleState::Working, None),
-            Err(r) => (LifecycleState::Exited, Some(r)),
+            Err(r) => (LifecycleState::Exited, Some(r.clone())),
         };
         if self.release_if_retired_during_spawn(&session_id).await {
-            return;
+            return result;
         }
         self.persist_spawn_state(&session_id, state, reason.as_deref())
             .await;
@@ -1593,6 +1610,7 @@ impl SessionRoutes {
             state,
             reason,
         });
+        result
     }
 
     async fn try_run_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
@@ -1820,8 +1838,11 @@ impl SessionRoutes {
                 // No FK to cascade — drop the session's scheduled messages here.
                 // The terminal delivery owner hears about them first (it stops
                 // their jobs and reports each one gone).
+                let restored = self.restore_review_snapshots(id).await;
                 self.terminal_delivery.on_session_removed(id).await;
-                let _ = self.store.delete_scheduled_messages_for_session(id).await;
+                if restored {
+                    let _ = self.store.delete_scheduled_messages_for_session(id).await;
+                }
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.to_string(),
                 });
@@ -1966,8 +1987,11 @@ impl SessionRoutes {
                 // No FK to cascade — drop the session's scheduled messages here.
                 // The terminal delivery owner hears about them first (it stops
                 // their jobs and reports each one gone).
+                let restored = self.restore_review_snapshots(&id).await;
                 self.terminal_delivery.on_session_removed(&id).await;
-                let _ = self.store.delete_scheduled_messages_for_session(&id).await;
+                if restored {
+                    let _ = self.store.delete_scheduled_messages_for_session(&id).await;
+                }
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.clone(),
                 });
@@ -2202,9 +2226,17 @@ impl SessionRoutes {
         }
 
         let trimmed_prompt = body.draft_prompt.trim().to_string();
-        if trimmed_prompt.is_empty() {
+        let review_ids: Vec<String> = body.review_comment_ids.clone().unwrap_or_default();
+        // Review comments are a first turn of their own: the prompt may be empty
+        // when they are present.
+        if trimmed_prompt.is_empty() && review_ids.is_empty() {
             return Err(StartError::Validation(
                 "draftPrompt cannot be empty".to_string(),
+            ));
+        }
+        if !review_ids.is_empty() && body.skip_auto_turn.unwrap_or(false) {
+            return Err(StartError::Validation(
+                "review comments need the session's first turn".to_string(),
             ));
         }
 
@@ -2271,6 +2303,12 @@ impl SessionRoutes {
             // nor worktree-new.
             || (entry_point == DraftEntryPoint::Direct && draft_config.use_worktree != Some(true));
 
+        if is_worktree_new && !review_ids.is_empty() {
+            // A new worktree would change the comments' scope.
+            return Err(StartError::ScopeChanged(
+                "Starting in a new worktree would leave the comments' scope".to_string(),
+            ));
+        }
         if is_worktree_new {
             return self
                 .start_new_worktree(
@@ -2295,6 +2333,7 @@ impl SessionRoutes {
                     &mode_id,
                     skip_auto_turn,
                     daemon_port,
+                    &review_ids,
                 )
                 .await;
         }
@@ -2476,6 +2515,7 @@ impl SessionRoutes {
         mode_id: &str,
         skip_auto_turn: bool,
         daemon_port: u16,
+        review_ids: &[String],
     ) -> Result<StartDraftResult, StartError> {
         let mut existing_worktree: Option<WorktreeRecord> = None;
         // Determine worktree if the user picked "Existing worktree" — for
@@ -2527,6 +2567,18 @@ impl SessionRoutes {
 
         let target_wt_id = existing_worktree.as_ref().map(|w| w.id.clone());
         let worktree_id = target_wt_id.clone().or_else(|| session.worktree_id.clone());
+        // Review comments leave the panel only once every check that can refuse
+        // the promotion has passed; a failure below restores them.
+        let review = self
+            .hold_start_review(
+                review_ids,
+                project,
+                session,
+                worktree_id.as_deref(),
+                channel == Channel::Json,
+                trimmed_prompt,
+            )
+            .await?;
         let updated_session = self.build_promoted_session(
             session,
             worktree_id.as_deref(),
@@ -2543,7 +2595,7 @@ impl SessionRoutes {
         let sid = session.id.clone();
         let project_id = project.id.clone();
         let us = updated_session.clone();
-        if let Some(wt) = &existing_worktree {
+        let mutated: Result<(), StartError> = if let Some(wt) = &existing_worktree {
             let wt_id = wt.id.clone();
             self.store
                 .mutate_project(&project_id, move |p| {
@@ -2560,7 +2612,8 @@ impl SessionRoutes {
                     )))
                 })
                 .await
-                .map_err(|e| StartError::Internal(e.to_string()))?;
+                .map(|_| ())
+                .map_err(|e| StartError::Internal(e.to_string()))
         } else {
             self.store
                 .mutate_project(&project_id, move |p| {
@@ -2572,7 +2625,18 @@ impl SessionRoutes {
                     Ok(p.clone())
                 })
                 .await
-                .map_err(|e| StartError::Internal(e.to_string()))?;
+                .map(|_| ())
+                .map_err(|e| StartError::Internal(e.to_string()))
+        };
+        if let Err(e) = mutated {
+            if let Some(r) = &review {
+                self.restore_hold(
+                    &r.hold.hold_id,
+                    vst_types::review::RestoreReason::SendFailed,
+                )
+                .await;
+            }
+            return Err(e);
         }
 
         if let Some(wt) = &existing_worktree {
@@ -2629,7 +2693,7 @@ impl SessionRoutes {
         };
         let routes = self.clone();
         tokio::spawn(async move {
-            routes.spawn_new_session_for_channel(opts).await;
+            routes.spawn_started_draft(opts, review).await;
         });
 
         // Report the worktree even though it already existed (entryPoint
@@ -3596,6 +3660,26 @@ impl SessionRoutes {
             AgentPaths::default().direct_session_data_dir(&project.id, &new_id)
         };
 
+        // A Terminal target carries queued review comments on its launch prompt,
+        // which tmux caps: refuse up front (blocks alone; the full quoted prompt
+        // is re-checked once the summary and queued turns are known), before
+        // anything is stopped.
+        if !is_json_channel && old_channel == Channel::Json && queued == QueuedPolicy::Carry {
+            if let Some(agent) = self.json_registry.get(&session.id) {
+                let blocks: String = agent
+                    .queued_reviews()
+                    .iter()
+                    .map(|r| crate::reset_carry::carried_message_with_review("", r))
+                    .collect::<Vec<_>>()
+                    .join(crate::reset_carry::LAUNCH_PART_SEP);
+                if let Some(too_large) =
+                    crate::reset_carry::terminal_launch_prompt_too_large(&blocks)
+                {
+                    return Err(ResetError::Review(too_large));
+                }
+            }
+        }
+
         // Register the in-flight flag (second concurrent reset ⇒ InProgress).
         // The drop guard removes it on every exit path, including errors.
         let flag = self.reset_cancels.register(&session.id).ok_or_else(|| {
@@ -3634,29 +3718,9 @@ impl SessionRoutes {
             }
         };
 
-        // --- Step 4: point of no return -------------------------------------
-        if flag.commit().is_err() {
-            self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
-                .await;
-            return Err(ResetError::Cancelled(
-                "The reset was cancelled; the old agent is unchanged.".to_string(),
-            ));
-        }
-
-        // --- Step 5: final sweep + release ----------------------------------
-        if old_channel == Channel::Json {
-            let mut swept = self.sweep_queued_turns(&session.id);
-            withdrawn.append(&mut swept);
-        }
-        self.release_session_runtime(&session, false).await;
-
-        // --- Step 6: carry rows + break marker ------------------------------
-        // The replacement's Rich Chat runtime opens its transcript store in this
-        // dir; with Carry over = Nothing nothing else creates it before then,
-        // and opening a store in a missing dir panics.
-        if is_json_channel {
-            let _ = std::fs::create_dir_all(&new_dir);
-        }
+        // The base of the replacement's prompt (summary / transcript pointer, then
+        // the user's prompt), known before the point of no return so the Terminal
+        // launch cap can see the WHOLE quoted prompt.
         let marker_text = match carry_over {
             CarryOver::Nothing => None,
             CarryOver::Summary => prepared.handoff_text.clone(),
@@ -3675,25 +3739,98 @@ impl SessionRoutes {
         if let Some(p) = &body.prompt {
             prompt_parts.push(p.clone());
         }
-        // (text, mentions): a Rich Chat target keeps each carried turn's sidecar.
-        let carried_messages: Vec<(String, Vec<vst_types::domain::Mention>)> =
+        // A Terminal target's launch prompt carries review blocks in the tmux
+        // command line (capped): refuse before the old agent is touched.
+        if !is_json_channel
+            && queued == QueuedPolicy::Carry
+            && withdrawn.iter().any(|t| t.review.is_some())
+        {
+            let parts = crate::reset_carry::terminal_launch_parts(
+                &prompt_parts,
+                withdrawn
+                    .iter()
+                    .map(|t| (t.message.as_str(), t.review.as_ref())),
+            );
+            if let Some(too_large) = crate::reset_carry::terminal_launch_prompt_too_large(
+                &parts.join(crate::reset_carry::LAUNCH_PART_SEP),
+            ) {
+                self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
+                    .await;
+                return Err(ResetError::Review(too_large));
+            }
+        }
+
+        // --- Step 4: point of no return -------------------------------------
+        if flag.commit().is_err() {
+            self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
+                .await;
+            return Err(ResetError::Cancelled(
+                "The reset was cancelled; the old agent is unchanged.".to_string(),
+            ));
+        }
+
+        // --- Step 5: final sweep + release ----------------------------------
+        if old_channel == Channel::Json {
+            let mut swept = self.sweep_queued_turns(&session.id);
+            withdrawn.append(&mut swept);
+        }
+        self.release_session_runtime(&session, false).await;
+        // A dropped queued turn's comments go back to the panel; a carried one
+        // keeps its hold (rehomed below to the turn that delivers it).
+        if queued != QueuedPolicy::Carry {
+            for review in withdrawn.iter().filter_map(|t| t.review.as_ref()) {
+                self.restore_hold(
+                    &review.hold_id,
+                    vst_types::review::RestoreReason::TurnCancelled,
+                )
+                .await;
+            }
+        }
+
+        // --- Step 6: carry rows + break marker ------------------------------
+        // The replacement's Rich Chat runtime opens its transcript store in this
+        // dir; with Carry over = Nothing nothing else creates it before then,
+        // and opening a store in a missing dir panics.
+        if is_json_channel {
+            let _ = std::fs::create_dir_all(&new_dir);
+        }
+        // (text, mentions, review): a Rich Chat target keeps each carried turn's
+        // sidecar and its review comments.
+        let carried_messages: Vec<crate::reset_carry::CarriedMessage> =
             if queued == QueuedPolicy::Carry {
                 withdrawn
                     .iter()
-                    .map(|t| (t.message.clone(), t.mentions.clone()))
+                    .map(|t| (t.message.clone(), t.mentions.clone(), t.review.clone()))
                     .collect()
             } else {
                 Vec::new()
             };
         // A terminal target cannot take separate queued turns, so its carried
         // queued text rides on the persisted initial prompt (and opts.prompt).
-        if !is_json_channel {
-            prompt_parts.extend(carried_messages.iter().map(|(m, _)| m.clone()));
-        }
+        // Its review comments ride only the LAUNCH prompt (rendered, escaped into
+        // wire form), never the persisted one: comment text is not stored on the
+        // session record.
+        let launch_parts = if is_json_channel {
+            prompt_parts.clone()
+        } else {
+            let parts = crate::reset_carry::terminal_launch_parts(
+                &prompt_parts,
+                carried_messages
+                    .iter()
+                    .map(|(m, _, r)| (m.as_str(), r.as_ref())),
+            );
+            prompt_parts.extend(carried_messages.iter().map(|(m, _, _)| m.clone()));
+            parts
+        };
         let new_initial_prompt = if prompt_parts.is_empty() {
             None
         } else {
             Some(prompt_parts.join("\n\n---\n\n"))
+        };
+        let launch_prompt = if launch_parts.is_empty() {
+            None
+        } else {
+            Some(launch_parts.join(crate::reset_carry::LAUNCH_PART_SEP))
         };
 
         let mut new_session = SessionRecord {
@@ -3893,9 +4030,20 @@ impl SessionRoutes {
                 // (the same AgentPaths the carry used) to avoid leaking an orphaned
                 // store (plan 2.5).
                 let _ = tokio::fs::remove_dir_all(&new_dir).await;
+                // The old session stays: its stopped terminal rows go back to the
+                // poller, and the holds of carried (withdrawn) turns - kept for the
+                // replacement that will never exist - return to the panel. A
+                // restore of a hold step 5 already restored is a no-op.
                 self.terminal_delivery
                     .rearm_after_failed_reset(&session.id)
                     .await;
+                for review in withdrawn.iter().filter_map(|t| t.review.as_ref()) {
+                    self.restore_hold(
+                        &review.hold_id,
+                        vst_types::review::RestoreReason::SendFailed,
+                    )
+                    .await;
+                }
                 let msg = e.to_string();
                 return Err(if msg.contains("Session already archived") {
                     ResetError::Archived("Session already archived".to_string())
@@ -3990,7 +4138,11 @@ impl SessionRoutes {
             worktree: worktree.clone(),
             session: new_session,
             mode_id: effective_mode_id,
-            prompt: new_initial_prompt.clone(),
+            prompt: if is_json_channel {
+                new_initial_prompt.clone()
+            } else {
+                launch_prompt
+            },
             daemon_port: self.daemon_port,
             skip_auto_turn: false,
         };
@@ -4023,6 +4175,8 @@ impl SessionRoutes {
                 if prompt.is_some() || carried_messages.is_empty() {
                     start_json_create_turn(
                         StartJsonCreateTurnOpts {
+                            review: None,
+                            turn_id: None,
                             session_id: opts.session.id.clone(),
                             prompt,
                             silent: first_silent,
@@ -4036,41 +4190,31 @@ impl SessionRoutes {
                 }
                 // The user's own prompt follows the silent marker as an
                 // ordinary (visible) turn, FIFO.
-                let mut later: Vec<(String, Vec<vst_types::domain::Mention>)> = Vec::new();
+                let mut later: Vec<crate::reset_carry::CarriedMessage> = Vec::new();
                 if silent_marker.is_some() {
                     later.extend(
                         user_prompt
                             .filter(|p| !p.trim().is_empty())
-                            .map(|p| (p, Vec::new())),
+                            .map(|p| (p, Vec::new(), None)),
                     );
                 }
                 // Carried queued messages go FIFO strictly after turn 1.
                 later.extend(carried_messages);
-                for (message, mentions) in later {
-                    let res = enqueue_chat_turn(
-                        EnqueueChatTurnOpts {
-                            session_id: opts.session.id.clone(),
-                            message,
-                            attachments: vec![],
-                            mentions,
-                            daemon_port: opts.daemon_port,
-                            steer: Some(false),
-                            silent: false,
-                            store: routes.store.clone(),
-                            broadcaster: routes.broadcaster.clone(),
-                        },
-                        &routes.json_registry,
-                    )
-                    .await;
-                    if let Err(e) = res {
-                        eprintln!(
-                            "reset: carrying a queued message to {} failed: {e:?}",
-                            opts.session.id
-                        );
-                    }
-                }
+                crate::reset_carry::carry_to_json(
+                    &routes,
+                    &opts.session.id,
+                    opts.daemon_port,
+                    later,
+                )
+                .await;
             } else {
-                routes.spawn_new_session_for_channel(opts).await;
+                // A Terminal target receives carried comments inside its launch
+                // prompt: the holds follow the new session and are consumed once
+                // the spawn succeeded, restored if it failed.
+                let holds = crate::reset_carry::terminal_holds(&carried_messages);
+                crate::reset_carry::rehome_terminal_holds(&routes, &holds, &opts.session.id).await;
+                let spawned = routes.spawn_new_session_for_channel_checked(opts).await;
+                crate::reset_carry::settle_terminal_holds(&routes, &holds, &spawned).await;
             }
         });
 
@@ -4131,14 +4275,14 @@ impl SessionRoutes {
                         match wait_settled(&agent, STOP_FIRST_TIMEOUT, cancelled).await {
                             SettledWait::Settled => {}
                             SettledWait::Cancelled => {
-                                Self::restore_withdrawn(&agent, &withdrawn);
+                                self.restore_withdrawn(&agent, &withdrawn).await;
                                 return Err(ResetError::Cancelled(
                                     "The reset was cancelled; the old agent is unchanged."
                                         .to_string(),
                                 ));
                             }
                             SettledWait::TimedOut => {
-                                Self::restore_withdrawn(&agent, &withdrawn);
+                                self.restore_withdrawn(&agent, &withdrawn).await;
                                 return Err(ResetError::BusyTimeout(
                                     "The agent did not stop within 10 seconds; the messages this reset moved were restored."
                                         .to_string(),
@@ -4225,30 +4369,21 @@ impl SessionRoutes {
             if held.contains(turn_id) {
                 continue;
             }
-            if let Some((message, attachments, mentions, _)) = agent.begin_edit_queued_turn(turn_id)
-            {
+            if let Some(edit) = agent.begin_edit_queued_turn(turn_id) {
+                // Detach the review BEFORE any release: `release()` cancels the
+                // held turns and would otherwise restore comments that are about
+                // to be carried (both panel and agent would then have them).
+                let review = agent.take_review(turn_id);
                 out.push(WithdrawnTurn {
                     turn_id: turn_id.clone(),
-                    message,
-                    attachments,
-                    mentions,
+                    message: edit.message,
+                    attachments: edit.attachments,
+                    mentions: edit.mentions,
+                    review,
                 });
             }
         }
         out
-    }
-
-    /// Re-enqueue the turns this reset withdrew (failure / cancel restore).
-    fn restore_withdrawn(agent: &JsonAgentSession, withdrawn: &[WithdrawnTurn]) {
-        for turn in withdrawn {
-            agent.resubmit_queued_turn(
-                &turn.turn_id,
-                turn.message.clone(),
-                turn.attachments.clone(),
-                turn.mentions.clone(),
-                false,
-            );
-        }
     }
 
     /// Withdraw any turns queued after the stop step so the release does not
@@ -4269,7 +4404,7 @@ impl SessionRoutes {
         new_dir: &Path,
     ) {
         if let Some(agent) = self.json_registry.get(session_id) {
-            Self::restore_withdrawn(&agent, withdrawn);
+            self.restore_withdrawn(&agent, withdrawn).await;
         }
         let _ = tokio::fs::remove_dir_all(new_dir).await;
     }
@@ -4502,6 +4637,8 @@ impl SessionRoutes {
             // (A UI reset on a busy agent therefore waits for that turn, bounded
             // separately by HANDOFF_QUEUE_WAIT.)
             steer: Some(false),
+            turn_id: None,
+            review: None,
             store: self.store.clone(),
             broadcaster: self.broadcaster.clone(),
         };
@@ -4620,6 +4757,8 @@ impl SessionRoutes {
                     daemon_port: self.daemon_port,
                     // D8 — steer a running turn by default; `queue: true` opts out.
                     steer: Some(!body.queue.unwrap_or(false)),
+                    turn_id: None,
+                    review: None,
                     store: self.store.clone(),
                     broadcaster: self.broadcaster.clone(),
                 },
@@ -4726,6 +4865,51 @@ impl SessionRoutes {
         let attachments = self
             .resolve_attachments(id, body.attachment_ids.as_deref())
             .await?;
+
+        // Review comments: validated and held LAST (after every check that can
+        // refuse the send), so a refused send never moves a comment.
+        let review_ids: Vec<String> = body.review_comment_ids.clone().unwrap_or_default();
+        let mut review: Option<vst_agents::json_agent_session::ReviewTurn> = None;
+        let mut turn_id: Option<String> = None;
+        let mut port: Option<Arc<dyn vst_types::review::ReviewPort>> = None;
+        if !review_ids.is_empty() {
+            if pre_session.channel != Some(Channel::Json) {
+                return Err(ChatRouteError::NotJson(format!(
+                    "Session '{id}' is not a JSON session"
+                )));
+            }
+            let scope = match &pre_ctx {
+                SessionContext::Worktree { worktree, .. } => {
+                    vst_types::artifacts::ScopeKey::worktree(worktree.id.clone())
+                }
+                SessionContext::Direct { project, .. } => {
+                    vst_types::artifacts::ScopeKey::project(project.id.clone())
+                }
+                SessionContext::Global { .. } => unreachable!(),
+            };
+            let p = self.json_registry.review_port().ok_or_else(|| {
+                ChatRouteError::Internal("Review comments are unavailable".to_string())
+            })?;
+            let new_turn_id = vst_agents::util::new_uuid_v4();
+            let hold = p
+                .hold_for_turn(vst_types::review::HoldRequest {
+                    hold_id: vst_agents::util::new_uuid_v4(),
+                    scope,
+                    session_id: id.to_string(),
+                    turn_id: new_turn_id.clone(),
+                    comment_ids: review_ids,
+                    composer_key: Some(format!("session:{id}")),
+                })
+                .await
+                .map_err(ChatRouteError::Review)?;
+            review = Some(vst_agents::json_agent_session::ReviewTurn {
+                hold_id: hold.hold_id,
+                record: hold.record,
+            });
+            turn_id = Some(new_turn_id);
+            port = Some(p);
+        }
+        let hold_id = review.as_ref().map(|r| r.hold_id.clone());
         let result = enqueue_chat_turn(
             EnqueueChatTurnOpts {
                 silent: false,
@@ -4735,13 +4919,25 @@ impl SessionRoutes {
                 mentions: body.mentions.clone().unwrap_or_default(),
                 daemon_port: self.daemon_port,
                 steer: Some(!body.queue.unwrap_or(false)),
+                turn_id,
+                review,
                 store: self.store.clone(),
                 broadcaster: self.broadcaster.clone(),
             },
             &self.json_registry,
         )
-        .await
-        .map_err(ChatRouteError::from_enqueue)?;
+        .await;
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                // The comments already left the panel: put them back.
+                if let (Some(p), Some(h)) = (&port, &hold_id) {
+                    p.restore_hold(h, vst_types::review::RestoreReason::SendFailed)
+                        .await;
+                }
+                return Err(ChatRouteError::from_enqueue(e));
+            }
+        };
 
         // Mark the session working while the turn runs (JSON lifecycle, D11).
         self.persist_working(id).await;
@@ -4844,21 +5040,20 @@ impl SessionRoutes {
         let Some(agent) = self.json_registry.get(id) else {
             return Err(ChatRouteError::TurnNotQueued("not_queued".to_string()));
         };
-        let Some((message, attachments, mentions, queue_index)) =
-            agent.begin_edit_queued_turn(turn_id)
-        else {
+        let Some(edit) = agent.begin_edit_queued_turn(turn_id) else {
             return Err(ChatRouteError::TurnNotQueued("not_queued".to_string()));
         };
         Ok(EditQueuedResult {
             turn_id: turn_id.to_string(),
-            message,
-            attachments,
-            queue_index: queue_index as i64,
-            mentions: if mentions.is_empty() {
+            message: edit.message,
+            attachments: edit.attachments,
+            queue_index: edit.queue_index as i64,
+            mentions: if edit.mentions.is_empty() {
                 None
             } else {
-                Some(mentions)
+                Some(edit.mentions)
             },
+            review: edit.review.map(|r| r.record.summary()),
         })
     }
 
@@ -4900,7 +5095,14 @@ impl SessionRoutes {
             String::new()
         };
         let mentions = body.mentions.unwrap_or_default();
-        let ok = agent.resubmit_queued_turn(turn_id, message, attachments, mentions, body.edited);
+        let ok = agent.resubmit_queued_turn_with(
+            turn_id,
+            message,
+            attachments,
+            mentions,
+            body.edited,
+            body.keep_review.unwrap_or(true),
+        );
         if !ok {
             return Err(ChatRouteError::NotEditing("not_editing".to_string()));
         }
@@ -5289,7 +5491,10 @@ impl SessionRoutes {
                     // persist after it is a no-op. No-op for plugins without a
                     // `current_cursor()` (Decision 9).
                     agent.seal_native_watermark().await;
-                    agent.release().await;
+                    // Queued review turns put their comments back (`channel_changed`).
+                    agent
+                        .release_with(vst_types::review::RestoreReason::ChannelChanged)
+                        .await;
                 }
                 session.tmux_name = tty_tmux_name.clone();
                 session.channel = Some(new_channel);
@@ -5790,6 +5995,7 @@ impl SessionRoutes {
                 "Scheduling isn't available for plain terminal sessions".to_string(),
             ));
         }
+        let with_review = !body.review_comment_ids.is_empty();
         let (channel_col, message) =
             match session_channel(pre_session.channel, Some(pre_session.use_tmux)) {
                 Channel::Json => {
@@ -5799,7 +6005,10 @@ impl SessionRoutes {
                             MAX_SCHEDULED_MESSAGE_BYTES / 1024
                         )));
                     }
-                    if body.message.trim().is_empty() && body.attachment_ids.is_empty() {
+                    if body.message.trim().is_empty()
+                        && body.attachment_ids.is_empty()
+                        && !with_review
+                    {
                         return Err(ChatRouteError::BadRequest(
                             "A scheduled message needs text or an attachment".to_string(),
                         ));
@@ -5812,6 +6021,7 @@ impl SessionRoutes {
                         pre_session,
                         &body.message,
                         !body.attachment_ids.is_empty(),
+                        with_review,
                     )?,
                 ),
                 Channel::Pty => {
@@ -5855,20 +6065,51 @@ impl SessionRoutes {
         };
 
         let msg_id = uuid::Uuid::new_v4().to_string();
-        self.store
-            .insert_scheduled_message(
-                &msg_id,
-                id,
-                &message,
-                attachments_json.as_deref(),
-                &fire_at,
-                &now_str,
-                Some(channel_col),
-                None,
-                Some("schedule"),
-            )
+        if with_review {
+            // The comments leave the panel in the same transaction that inserts
+            // the row (nothing moves when the limit refuses).
+            let scope = match &pre_ctx {
+                SessionContext::Worktree { worktree, .. } => {
+                    vst_types::artifacts::ScopeKey::worktree(worktree.id.clone())
+                }
+                SessionContext::Direct { project, .. } => {
+                    vst_types::artifacts::ScopeKey::project(project.id.clone())
+                }
+                SessionContext::Global { .. } => unreachable!(),
+            };
+            let port = self.json_registry.review_port().ok_or_else(|| {
+                ChatRouteError::Internal("Review comments are unavailable".to_string())
+            })?;
+            port.take_for_schedule(vst_types::review::ScheduleTake {
+                scope,
+                comment_ids: body.review_comment_ids.clone(),
+                composer_key: Some(format!("session:{id}")),
+                row_id: msg_id.clone(),
+                session_id: id.to_string(),
+                message: message.clone(),
+                fire_at: fire_at.clone(),
+                now: now_str.clone(),
+                channel: channel_col.to_string(),
+                attachments: attachments_json.clone(),
+            })
             .await
-            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+            .map_err(ChatRouteError::Review)?;
+        } else {
+            self.store
+                .insert_scheduled_message(
+                    &msg_id,
+                    id,
+                    &message,
+                    attachments_json.as_deref(),
+                    &fire_at,
+                    &now_str,
+                    Some(channel_col),
+                    None,
+                    Some("schedule"),
+                )
+                .await
+                .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
+        }
 
         self.broadcast_scheduled_meta(id).await;
 
@@ -5888,12 +6129,21 @@ impl SessionRoutes {
         let internal = |e: StoreError| ChatRouteError::Internal(format!("store error: {e}"));
         // A tmux row's cancel goes through the delivery owner: it also stops the
         // job and tells the outcome observer. Everything else is a store delete.
-        let is_tmux_row = self
+        let row = self
             .store
             .get_scheduled_message(msg_id)
             .await
             .map_err(internal)?
-            .is_some_and(|r| r.session_id == session_id && r.channel.as_deref() == Some("tmux"));
+            .filter(|r| r.session_id == session_id);
+        // The delivery owner's own definition (channel OR delivery phase): a row
+        // made under Rich Chat can be waiting under a Terminal job.
+        let is_tmux_row = row.as_ref().is_some_and(vst_review::is_delivery_row);
+        // A Rich Chat row's comment snapshot goes back to the panel once the
+        // cancel actually deleted it (tmux rows: the delivery observer restores).
+        let held = row
+            .as_ref()
+            .filter(|_| !is_tmux_row)
+            .and_then(vst_review::held_snapshot);
         let outcome = if is_tmux_row {
             self.terminal_delivery
                 .cancel_row(session_id, msg_id)
@@ -5918,11 +6168,44 @@ impl SessionRoutes {
                 )));
             }
         }
+        if let Some((record, scope)) = held {
+            self.restore_schedule_snapshot(
+                record,
+                scope,
+                vst_types::review::RestoreReason::ScheduleCancelled,
+            )
+            .await;
+        }
         // The delivery owner already announced a tmux row's removal.
         if !is_tmux_row {
             self.broadcast_scheduled_meta(session_id).await;
         }
         Ok(())
+    }
+
+    /// Before a session's scheduled rows are purged: the Rich Chat rows that still
+    /// hold comments put them back (`session_removed`). Terminal rows are restored
+    /// by the delivery observer (`Gone`).
+    ///
+    /// `false` when a snapshot could not be restored: the caller keeps the rows
+    /// (the boot sweep restores them once the store answers again).
+    async fn restore_review_snapshots(&self, session_id: &str) -> bool {
+        match self.json_registry.review_port() {
+            Some(port) => port.restore_for_session(session_id).await,
+            None => true,
+        }
+    }
+
+    /// Put a scheduled row's snapshot back in the panel (the row is already gone).
+    async fn restore_schedule_snapshot(
+        &self,
+        record: vst_types::review::ReviewRecord,
+        scope: vst_types::artifacts::ScopeKey,
+        reason: vst_types::review::RestoreReason,
+    ) {
+        if let Some(port) = self.json_registry.review_port() {
+            port.restore_snapshot(None, record, scope, reason).await;
+        }
     }
 
     /// `GET /sessions/:id/schedule` — the session's whole scheduled-send state
@@ -6050,12 +6333,50 @@ impl SessionRoutes {
         session_id: &str,
         msg_id: &str,
     ) -> Result<(), ChatRouteError> {
+        // A failed row whose comments went back to the panel re-holds the ones
+        // still there (Retry never sends comments the user has since changed).
+        let row = self
+            .store
+            .get_scheduled_message(msg_id)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?
+            .filter(|r| r.session_id == session_id && r.status == "failed");
+        let restored_payload = row
+            .as_ref()
+            .and_then(|r| {
+                vst_types::review::ScheduledReviewPayload::parse(r.comments_snapshot.as_deref()?)
+            })
+            .filter(|p| p.state == vst_types::review::PayloadState::Restored);
+        let mut reheld = 0;
+        if restored_payload.is_some() {
+            if let Some(port) = self.json_registry.review_port() {
+                reheld = port
+                    .rehold_schedule(msg_id)
+                    .await
+                    .map_err(ChatRouteError::Review)?;
+            }
+        }
         let retried = self
             .store
             .retry_failed_scheduled_message(msg_id, session_id, &vst_lifecycle::util::now_iso())
             .await
             .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
         if !retried {
+            if let (true, Some(p)) = (reheld > 0, restored_payload) {
+                // Lost a race with a dismissal: the comments go back to the panel.
+                self.restore_schedule_snapshot(
+                    vst_types::review::ReviewRecord {
+                        name: p.name.clone(),
+                        comments: p.comments.clone(),
+                    },
+                    vst_types::artifacts::ScopeKey {
+                        scope_kind: p.scope_kind,
+                        scope_id: p.scope_id.clone(),
+                    },
+                    vst_types::review::RestoreReason::ScheduleCancelled,
+                )
+                .await;
+            }
             return Err(ChatRouteError::TurnNotFound(format!(
                 "Scheduled message '{msg_id}' not found or not failed"
             )));
@@ -6071,6 +6392,14 @@ impl SessionRoutes {
         session_id: &str,
         msg_id: &str,
     ) -> Result<(), ChatRouteError> {
+        let held = self
+            .store
+            .get_scheduled_message(msg_id)
+            .await
+            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?
+            .filter(|r| r.session_id == session_id && !vst_review::is_delivery_row(r))
+            .as_ref()
+            .and_then(vst_review::held_snapshot);
         let dismissed = self
             .store
             .dismiss_failed_scheduled_message(msg_id, session_id)
@@ -6080,6 +6409,14 @@ impl SessionRoutes {
             return Err(ChatRouteError::TurnNotFound(format!(
                 "Scheduled message '{msg_id}' not found or not failed"
             )));
+        }
+        if let Some((record, scope)) = held {
+            self.restore_schedule_snapshot(
+                record,
+                scope,
+                vst_types::review::RestoreReason::ScheduleCancelled,
+            )
+            .await;
         }
         self.broadcast_scheduled_meta(session_id).await;
         Ok(())
@@ -6186,7 +6523,10 @@ impl SessionRoutes {
         let on_clear_attachments: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
         release_session_runtime(
             session,
-            ReleaseOpts { clear_attachments },
+            ReleaseOpts {
+                clear_attachments,
+                ..Default::default()
+            },
             &self.json_registry,
             &direct_pty,
             &self.tmux,
@@ -6958,7 +7298,20 @@ pub enum StartError {
     NotDrafting(String),
     Validation(String),
     NotGit,
+    /// Starting with review comments would leave the comments' scope (409
+    /// `scope_changed`).
+    ScopeChanged(String),
+    /// A review refusal (409 `comments_changed`, 413 `review_too_large`, 403
+    /// `not_attached`, ...).
+    Review(vst_types::review::ReviewError),
     Internal(String),
+}
+
+/// Review comments held for a started draft's first turn.
+pub(crate) struct StartReview {
+    pub(crate) turn_id: String,
+    pub(crate) hold: vst_agents::json_agent_session::ReviewTurn,
+    pub(crate) json: bool,
 }
 
 /// Error for the pin/rename/reorder/delink handlers.
@@ -7058,6 +7411,9 @@ pub enum ResetError {
     BadRequest(String),
     /// 400 — the requested `channel: "json"` needs a CLI that can't run Rich Chat.
     JsonUnsupported(String),
+    /// 413 — the carried review comments do not fit a Terminal agent's launch
+    /// prompt; nothing changed.
+    Review(vst_types::review::ReviewError),
     Internal(String),
 }
 
@@ -7080,10 +7436,6 @@ pub struct ChatActionResult {
 /// session's whole scheduled state to its subscribers, so bodies are bounded.
 const MAX_SCHEDULED_MESSAGE_BYTES: usize = 64 * 1024;
 
-/// Largest Terminal schedule message, measured AFTER control-character
-/// stripping (the exact bytes that would be pasted).
-const MAX_TERMINAL_MESSAGE_BYTES: usize = vst_review::MAX_PASTE_BYTES;
-
 /// The Terminal-specific create rules, in order: not done, not exited, a mode
 /// whose plugin has proven Terminal delivery, no attachments, then the text
 /// itself (stripped, non-empty, ≤ 32 KB, single-line unless the CLI takes
@@ -7093,6 +7445,7 @@ fn terminal_schedule_message(
     session: &SessionRecord,
     raw: &str,
     has_attachments: bool,
+    with_review: bool,
 ) -> Result<String, ChatRouteError> {
     match session.lifecycle.state {
         LifecycleState::Done => {
@@ -7121,38 +7474,14 @@ fn terminal_schedule_message(
                 "Scheduling isn't supported for this agent yet".to_string(),
             )
         })?;
-    if has_attachments {
-        return Err(ChatRouteError::BadRequest(
-            "Attachments aren't supported on Terminal agents".to_string(),
-        ));
-    }
-    check_terminal_text(raw, caps)
-}
-
-/// Strip, then require: non-empty, ≤ 32 KB, and single-line unless the CLI
-/// takes multi-line pastes. Returns the text to store.
-fn check_terminal_text(
-    raw: &str,
-    caps: vst_types::terminal_delivery::TerminalDeliveryCaps,
-) -> Result<String, ChatRouteError> {
-    let text = vst_review::sanitize_paste_text(raw);
-    if text.trim().is_empty() {
-        return Err(ChatRouteError::BadRequest(
-            "A scheduled message needs text".to_string(),
-        ));
-    }
-    if text.len() > MAX_TERMINAL_MESSAGE_BYTES {
-        return Err(ChatRouteError::BadRequest(format!(
-            "A scheduled message for a Terminal agent can be at most {} KB",
-            MAX_TERMINAL_MESSAGE_BYTES / 1024
-        )));
-    }
-    if !caps.multiline_ok && text.contains('\n') {
-        return Err(ChatRouteError::BadRequest(
-            "Multi-line messages aren't supported for this agent yet".to_string(),
-        ));
-    }
-    Ok(text)
+    vst_review::validate_terminal_schedule(caps, raw, has_attachments, with_review).map_err(|e| {
+        match e {
+            vst_review::TerminalTextError::Unsupported(m) => {
+                ChatRouteError::TerminalDeliveryUnsupported(m)
+            }
+            vst_review::TerminalTextError::BadRequest(m) => ChatRouteError::BadRequest(m),
+        }
+    })
 }
 
 /// Parse an RFC 3339 timestamp (any UTC offset), normalise it to the
@@ -7216,6 +7545,9 @@ pub enum ChatRouteError {
     TerminalDeliveryUnsupported(String),
     /// 409 — cancel of a scheduled message whose paste is already in flight.
     AlreadyDelivering(String),
+    /// Review-comments refusal: 409 `comments_changed {remaining}`, 413
+    /// `review_too_large {limit, unit}`, 403 `not_attached`, 404 `not_found`.
+    Review(vst_types::review::ReviewError),
     /// 500 — internal failure.
     Internal(String),
 }
@@ -7294,6 +7626,7 @@ impl ChatRouteError {
             ChatRouteError::NotSchedulable(_) => "NOT_SCHEDULABLE",
             ChatRouteError::TerminalDeliveryUnsupported(_) => "TERMINAL_DELIVERY_UNSUPPORTED",
             ChatRouteError::AlreadyDelivering(_) => "ALREADY_DELIVERING",
+            ChatRouteError::Review(e) => crate::review_http::review_error_parts(e).code,
             ChatRouteError::Internal(_) => "INTERNAL",
         }
     }
@@ -7819,72 +8152,6 @@ mod schedule_fire_at_tests {
         // Textually "…T09:00:00+05:30" > NOW, but it is 03:30Z — in the past relative to 05:00Z.
         assert!(
             normalize_future_fire_at("2026-10-07T09:00:00+05:30", "2026-10-07T05:00:00Z").is_err()
-        );
-    }
-}
-
-#[cfg(test)]
-mod terminal_text_tests {
-    use super::{check_terminal_text, ChatRouteError, MAX_TERMINAL_MESSAGE_BYTES};
-    use vst_types::terminal_delivery::TerminalDeliveryCaps;
-
-    fn caps(multiline_ok: bool) -> TerminalDeliveryCaps {
-        TerminalDeliveryCaps {
-            settle_ms: 200,
-            multiline_ok,
-            raw_lf: false,
-        }
-    }
-
-    fn bad_request(r: Result<String, ChatRouteError>) -> String {
-        match r {
-            Err(ChatRouteError::BadRequest(m)) => m,
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn strips_control_characters_from_the_stored_text() {
-        assert_eq!(
-            check_terminal_text("a\u{1b}[0m b\u{7}", caps(true)).unwrap(),
-            "a[0m b"
-        );
-    }
-
-    #[test]
-    fn rejects_text_that_is_empty_after_stripping() {
-        for raw in ["", "   ", "\u{1b}\u{7}  \u{200b}"] {
-            assert!(bad_request(check_terminal_text(raw, caps(true))).contains("needs text"));
-        }
-    }
-
-    #[test]
-    fn cap_is_measured_after_stripping_and_exact_at_the_boundary() {
-        let exact = "x".repeat(MAX_TERMINAL_MESSAGE_BYTES);
-        assert_eq!(
-            check_terminal_text(&exact, caps(true)).unwrap().len(),
-            MAX_TERMINAL_MESSAGE_BYTES
-        );
-        let over = "x".repeat(MAX_TERMINAL_MESSAGE_BYTES + 1);
-        assert!(bad_request(check_terminal_text(&over, caps(true))).contains("32 KB"));
-        // Control characters do not count toward the cap.
-        let padded = format!(
-            "{}{}",
-            "x".repeat(MAX_TERMINAL_MESSAGE_BYTES),
-            "\u{1b}".repeat(100)
-        );
-        assert!(check_terminal_text(&padded, caps(true)).is_ok());
-    }
-
-    #[test]
-    fn multiline_only_when_the_cli_takes_it() {
-        assert_eq!(check_terminal_text("a\nb", caps(true)).unwrap(), "a\nb");
-        // CRLF is normalised to LF first, so it is still multi-line.
-        assert!(bad_request(check_terminal_text("a\r\nb", caps(false)))
-            .contains("Multi-line messages aren't supported"));
-        assert_eq!(
-            check_terminal_text("one line", caps(false)).unwrap(),
-            "one line"
         );
     }
 }

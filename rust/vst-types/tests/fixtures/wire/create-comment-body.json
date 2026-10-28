@@ -1,0 +1,14 @@
+{
+  "id": "c1",
+  "path": "src/lib.rs",
+  "pathKind": "repo",
+  "surface": "html-source",
+  "lineStart": 1,
+  "lineEnd": 2,
+  "quote": "q",
+  "prefix": "",
+  "suffix": "",
+  "occurrence": 0,
+  "text": "t",
+  "restorePin": 7
+}

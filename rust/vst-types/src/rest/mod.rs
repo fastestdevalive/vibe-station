@@ -20,6 +20,7 @@ pub mod oobe;
 pub mod open;
 pub mod ordered_lists;
 pub mod projects;
+pub mod review;
 pub mod sessions;
 pub mod settings;
 pub mod skills;

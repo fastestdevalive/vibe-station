@@ -6,14 +6,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The current UTC time, second precision.
 pub(crate) fn now_iso() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format_iso(secs)
+    format_iso(now_secs())
 }
 
-fn format_iso(secs: u64) -> String {
+/// Seconds since the Unix epoch.
+pub(crate) fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+pub(crate) fn format_iso(secs: u64) -> String {
     let (y, mo, d) = civil_from_days((secs / 86_400) as i64);
     let rem = secs % 86_400;
     format!(

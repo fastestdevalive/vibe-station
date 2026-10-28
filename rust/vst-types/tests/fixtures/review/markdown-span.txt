@@ -1,0 +1,6 @@
+Review comments (1) · main
+
+1) File: docs/guide.md
+   Lines: 12–14
+   Quote: "Install with cargo"
+   Comment: say which cargo version

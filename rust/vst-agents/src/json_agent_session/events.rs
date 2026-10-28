@@ -182,13 +182,15 @@ impl JsonAgentSession {
     }
 
     /// Synthesize + persist the daemon-owned `user` event for a new turn.
+    /// Returns whether the row reached the transcript (`false` once the session
+    /// is released or its store is closed).
     pub(super) fn emit_user_event(
         &self,
         turn_id: &str,
         message: &str,
         attachments: &[vst_types::Attachment],
         opts: EmitUserEventOpts,
-    ) {
+    ) -> bool {
         let mut ev = NormalizedEvent::default();
         ev.turn_id = Some(turn_id.to_string());
         ev.role = Some(Role::User);
@@ -208,9 +210,14 @@ impl JsonAgentSession {
         if opts.silent {
             ev.silent = Some(true);
         }
+        // Never set on a cancelled row: the comments went back to the panel.
+        if !opts.cancelled {
+            ev.review = opts.review;
+        }
         let mut ev = self.new_event(NormalizedEventKind::User, &mut ev);
-        self.persist_event(&mut ev);
+        let persisted = self.persist_event_checked(&mut ev);
         self.0.stream.emit_message(&ev);
+        persisted
     }
 
     /// Transition `turn_state` based on the kind of an in-band event.
@@ -235,6 +242,8 @@ pub(super) struct EmitUserEventOpts {
     pub cancelled: bool,
     pub silent: bool,
     pub mentions: Vec<Mention>,
+    /// The comments this turn carries (snapshot persisted on the row).
+    pub review: Option<vst_types::review::ReviewRecord>,
 }
 
 /// True when a usage record reflects a real model call (not a slash-command

@@ -24,9 +24,14 @@ to refactor it in an unrelated PR.
 
 ### Backend (Rust)
 
-- **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
-  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity`/`vst-review`/`vst-artifacts` (types, store, proc) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
-  `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by `vst-daemon` (hidden `agy-stream-acp` subcommand). No library crate depends on `vst-routes`/`vst-daemon`.
+- **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types, `Broadcaster`, the
+  `ReviewPort`/`TurnObserver` traits) ← `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks`/`vst-fswatch` ←
+  `vst-git`/`vst-activity`/`vst-artifacts` ← `vst-review` ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`; `vst-ws` re-exports `vst-fswatch`; `vst-review`
+  depends only on `vst-types`, `vst-store`, `vst-proc`, `vst-git`, `vst-fswatch`, `vst-artifacts` (the
+  `vst-review -> vst-artifacts` edge is one-way); `vst-routes` and `vst-daemon` also depend on
+  `vst-review`; `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by
+  `vst-daemon` (hidden `agy-stream-acp` subcommand); no library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
 - **New feature crates stay CLI-agnostic (target):** take per-CLI behaviour by injection (closure/trait
@@ -191,7 +196,7 @@ open side-by-side list's header carries them (`listHostsPane`). A new tool tab m
 `ToolActionsHost` in its header bar; a new top-row item must stay left of the reserve. The "..." menu is
 portaled to `usePortalRoot()` (`position: fixed`) because host rows clip overflow.
 
-The chip is an overlay: anything that ends up at the top-right of `#workspace-layout` is under it unless its row reserves. **New header row** that can be the window's top-right row: put the `actions-row` class on it and mount `ToolActionsHost`/`ActionsHost` as its LAST item, in a zone listed in Layout's `zones` (a new pane kind = a new `GroupZone` + `HOST_PRIORITY` entry). Without a host its right end silently slides under the chip. **New button in the chip:** add it in `WorkspaceActions` AND bump the button count in `--top-actions-w` (`workspace.css`) and `CHIP_W` (`anchorCss.test.ts`); the count test in `WorkspaceActions.test.tsx` fails until you do. **New tool tab:** mount a `ToolActionsHost` in its header bar (or rely on `ToolPanel`'s host bar). **Docked lists:** the Files list AND the VCS commit view's changed-file list use the one `DockedListLayout` (`components/layout/`: right dock, left-edge handle, shared persisted size, phone clamps); a new docked list reuses it (never a second resize/clamp copy) and its header mounts `ModeHeaderActionsHost` (`ListHeaderMode`; `ToolPanel` derives `isPanelOpen`/`filesMode` for it). Shared sizes: `--pane-row-h`/`--tools-toggle-size`/`--tools-rail-col-w` on `.app-shell`, mirrored in `lib/layoutSizes.ts`; phone breakpoint `MOBILE_QUERY`. Never render a second toggle; `HOST_PRIORITY` ranks competing hosts.
+The chip is an overlay: anything that ends up at the top-right of `#workspace-layout` is under it unless its row reserves. **New header row** that can be the window's top-right row: put the `actions-row` class on it and mount `ToolActionsHost`/`ActionsHost` as its LAST item, in a zone listed in Layout's `zones` (a new pane kind = a new `GroupZone` + `HOST_PRIORITY` entry). Without a host its right end silently slides under the chip. **New button in the chip:** add it in `WorkspaceActions` AND bump the button count in `--top-actions-w` (`workspace.css`) and `CHIP_W` (`anchorCss.test.ts`), and re-check `FILES_LEFT_PANE_MIN_WIDTH_DESKTOP` (`lib/layoutSizes.ts`; `anchorCss.test.ts` fails if the open list's header no longer fits beside the chip's reserve); the count test in `WorkspaceActions.test.tsx` fails until you do. **New tool tab:** mount a `ToolActionsHost` in its header bar (or rely on `ToolPanel`'s host bar). **Docked lists:** the Files list AND the VCS commit view's changed-file list use the one `DockedListLayout` (`components/layout/`: right dock, left-edge handle, shared persisted size, phone clamps); a new docked list reuses it (never a second resize/clamp copy) and its header mounts `ModeHeaderActionsHost` (`ListHeaderMode`; `ToolPanel` derives `isPanelOpen`/`filesMode` for it). Shared sizes: `--pane-row-h`/`--tools-toggle-size`/`--tools-rail-col-w` on `.app-shell`, mirrored in `lib/layoutSizes.ts` (`DockedListLayout` is the one owner of the list size var `--list-pane-w/h`); phone breakpoint `MOBILE_QUERY`. Never render a second toggle; `HOST_PRIORITY` ranks competing hosts.
 
 ---
 
@@ -572,7 +577,7 @@ There are three different "skill" concepts in this repo, two of which share a fi
 
 ## Artifacts — outside-the-root reads go through the artifact allowlist
 
-**Files:** `rust/vst-artifacts/src/paths.rs` (`is_denied`, `is_denied_prefix`) · `rust/vst-artifacts/src/service.rs` (`read_content`, `authorize_read`) · `rust/vst-routes/src/worktrees.rs` (`get_file`) · `rust/vst-lsp/src/manager.rs` (`is_sensitive_path`)
+**Files:** `rust/vst-artifacts/src/paths.rs` (`is_denied`, `is_denied_prefix`) · `rust/vst-artifacts/src/service.rs` (`read_content`, `authorize_read`) · `rust/vst-routes/src/artifact_gate.rs` (`gate_read`, `confine_only`, `artifact_open_path`) · `rust/vst-routes/src/worktrees.rs` / `projects.rs` (`get_file`) · `rust/vst-lsp/src/manager.rs` (`is_sensitive_path`)
 
 ### The invariant
 
@@ -586,10 +591,22 @@ external-peek token, authorized by `is_denied_prefix`. Nothing else may read a p
   `ArtifactsHandle::read_content`/`authorize_read`.
 - **`resolve_inside_*` alone is not a content gate** for artifact paths; gutter, tree and watchers stay confined to
   the root and reject absolute / `..` paths.
+- **In-root routes confine via `artifact_gate::confine_only` / `gate_read`;** never call `read_file_response` on an un-gated path.
 - **The denylist is canonical and case-folded:** compare canonicalized paths (symlinks resolved) with folding, never the
   user-typed spelling.
 
 ---
+
+## Review comments — rows leave on send, snapshots restore
+
+**Files:** `rust/vst-review/src/{service,holds,terminal,schedule,boot}.rs` · `rust/vst-store/src/{comments,comment_consumers}.rs` · `rust/vst-types/src/{review,review_format}.rs` · `rust/vst-daemon/src/review_routes.rs`
+
+- **A Rich Chat send marks the rows, a schedule/Terminal send moves them, in one transaction:** a Rich Chat turn's rows get `heldBy/heldSession/heldTurn/heldAt` on `comments` (deleted `WHERE heldBy=?` by `turn_persisted`, marker cleared by `turn_cancelled`; there is no hold table); a scheduled row keeps its `commentsSnapshot` (`ScheduledReviewPayload`, state `held`/`adopted`/`restored`; adopting inserts it as held rows), as does a Terminal send's `origin='immediate'` row. **A held row is "absent" for every reader** (`LIVE` = `heldBy IS NULL`; the guard test in `vst-store/tests/comment_holds.rs` fails on an unfiltered `comments` statement); only the purges, `list_comment_scopes` and the hold selects see it. The pin index is partial (`WHERE heldBy IS NULL`), so a restore renumbers a taken pin to max+1. Never a second copy: a failure path restores from the same marker/snapshot, once (the payload flip or the marker decides who wins).
+- **Single writer.** `vst-review` writes comments; `vst-agents`/`vst-routes` reach it only through `ReviewPort`/`TurnObserver` (`JsonAgentRegistry::set_review_hooks`). Every terminal transition of a `channel='tmux'` row, Terminal comment sends included, goes through `TerminalDeliveryHandle`; `vst-review` reads the outcome from its `OutcomeObserver` (`Failed`/`Cancelled`/`Gone` restore, `Sent`/`Rearmed` keep the hold) and never writes a tmux row's state itself. `RowCapture` copies a row's snapshot just before a cancel / session removal deletes it.
+- **Immediate rows** are inserted claimed + `waiting` (the 1 s poller never sees them), one pending per session (409 `delivery_in_flight`), never re-armed (reset or channel flip fail them), and the paste body is the Appendix A block built at fire time (`review_paste_body`, then `sanitize_paste_text` and the 32 KB cap).
+- **Bodies are never logged** (ids and counts only), control/bidi characters are stripped or shown as `<U+202E>`, and a quote can never forge a `2) File:` line (body lines are indented).
+- **Boot:** `reconcile_boot()` runs before `recover_orphans` (holds with a persisted user row are deleted, others restored; claimed json schedule rows and rows of vanished sessions restored; claimed immediate rows noted so their `error` reads `restart`).
+- **Rich Chat never steers a review turn**, and the hold id travels in `EnqueueSpec`; a reset carry rehomes the hold to the carried turn's NEW id.
 
 ## @-mentions — draft-form vs wire-form
 
@@ -600,7 +617,8 @@ external-peek token, authorized by `is_denied_prefix`. Nothing else may read a p
 Mentions inside the editor, drafts, and all UI components below `useChat` use **draft-form** strings containing `{@kind [id, label]}` tokens. Conversion to wire (plain text + `mentions[]` sidecar) happens strictly at send/promotion seams (`useChat.send`/`saveEdit`, `firstTurn.ts`, `ChatPane` schedule, and `DraftComposer` start calls via `toWire` or `toPlainText`).
 
 - **Hydrate with `fromWire` only at the 6 ingress points** (`MessageList.tsx` user items, `useChat` begin-edit, `QueuedTurnEditor`, `ChatPane` initial session load, history, retry).
-- **Convert with `toWire` (with sidecar) or `toPlainText` (sidecar-less)** only at the designated send/start sites. Never drop IDs where sidecars cannot travel; `toPlainText` appends `(id=...)` for non-file mentions.
+- **Convert with `toWire` (with sidecar) or `toPlainText` (sidecar-less)** only at the designated send/start sites (`ReviewPicker` is one). Never drop IDs where sidecars cannot travel; `toPlainText` appends `(id=...)` for non-file mentions.
+- **Plain text consumers use `renderDraftText`** (`lib/mentions.ts`, unescaped, files stay `@path`): stored comment text, the Terminal message, Copy message and a Terminal schedule's `text`. `toPlainText` is still `escapeSkillText`-escaped and would corrupt code in comments.
 - **Never resolve a mention by name.** Mention identity is `{kind, id}`; labels are untrusted hints.
 - **Key handlers register once and read refs.** `mentionStateRef` (`{ open, hasSelectable }`) is the single source of popover-open truth passed between plugins and handlers.
 - **Adding a new mention kind (Decision 8) touches exactly these places:**

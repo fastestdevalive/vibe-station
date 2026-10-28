@@ -9,6 +9,9 @@ license.workspace = true
 vst-types = { workspace = true }
 vst-store = { workspace = true }
 vst-proc = { workspace = true }
+vst-git = { workspace = true }
+vst-artifacts = { workspace = true }
+vst-fswatch = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -16,8 +19,10 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = "3"
+async-trait = "0.1"
 tracing-subscriber = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
