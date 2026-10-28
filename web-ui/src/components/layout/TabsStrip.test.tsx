@@ -1008,7 +1008,7 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(500);
       });
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1065,12 +1065,12 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(0);
       });
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
 
       firePointer("pointerup", tab, { clientX: 50, clientY: 20 });
       fireEvent.click(tab);
 
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1097,7 +1097,7 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(500);
       });
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
 
       // The browser's own long-press detector fires its native `contextmenu`
       // a short moment later — well within the guard window.
@@ -1106,7 +1106,7 @@ describe("TabsStrip", () => {
       });
       fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
 
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1127,10 +1127,25 @@ describe("TabsStrip", () => {
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
 
-    const freshItem = await screen.findByRole("menuitem", { name: /^Start fresh/ });
+    const freshItem = await screen.findByRole("menuitem", { name: /^Start fresh…$/ });
     await user.click(freshItem);
     expect(resetSpy).not.toHaveBeenCalled();
     expect(usePaneDialogs.getState().dialogs["sess-agent2"]).toBe("fresh");
+  });
+
+  it("'Start fresh with summary…' opens the fresh-summary dialog kind", async () => {
+    const localApi = createMockApi();
+    const user = userEvent.setup();
+    usePaneDialogs.getState()._reset();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
+    await user.click(await screen.findByRole("menuitem", { name: /Start fresh with summary/ }));
+    expect(usePaneDialogs.getState().dialogs["sess-agent2"]).toBe("fresh-summary");
   });
 
   it("2.T7 — 'Switch provider & mode…' opens the switch dialog kind", async () => {
@@ -1158,7 +1173,7 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
-    await screen.findByRole("menuitem", { name: /^Start fresh/ });
+    await screen.findByRole("menuitem", { name: /^Start fresh…$/ });
     expect(screen.queryByRole("menuitem", { name: /Previous sessions/ })).toBeNull();
   });
 
@@ -1872,7 +1887,7 @@ describe("TabsStrip", () => {
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
-    const item = await screen.findByRole("menuitem", { name: /^Start fresh/ });
+    const item = await screen.findByRole("menuitem", { name: /^Start fresh…$/ });
     expect(portalRoot.contains(item)).toBe(true);
     portalRoot.remove();
   });
@@ -1896,10 +1911,10 @@ describe("TabsStrip", () => {
       act(() => {
         vi.advanceTimersByTime(0);
       });
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
       // A click on the real document (outside the env root) is ignored.
       fireEvent.click(document.body);
-      expect(screen.getByRole("menuitem", { name: /^Start fresh/ })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /^Start fresh…$/ })).toBeInTheDocument();
       // A click inside the env root (outside the menu) closes it.
       fireEvent.click(host);
       expect(screen.queryByRole("menuitem", { name: /^Reset$/i })).toBeNull();

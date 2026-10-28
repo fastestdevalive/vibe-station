@@ -61,6 +61,14 @@ function lastChoice(onConfirm: ReturnType<typeof vi.fn>): FreshDialogChoice {
 }
 
 describe("FreshDialog — Start fresh", () => {
+
+  it("defaultCarryOver=summary preselects Summary and Enter confirms it", async () => {
+    const { onConfirm } = mount({ defaultCarryOver: "summary" });
+    await screen.findByText("opus-planner");
+    expect(screen.getByRole("radio", { name: /Summary/ })).toBeChecked();
+    await userEvent.keyboard("{Enter}");
+    expect(lastChoice(onConfirm).carryOver).toBe("summary");
+  });
   it("Escape cancels", async () => {
     const { onCancel } = mount();
     await screen.findByRole("radio", { name: /opus-planner/ });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type {
   CarryOver,
@@ -27,6 +27,8 @@ interface FreshDialogProps {
   open: boolean;
   /** "fresh" (Start fresh) or "switch" (Switch provider & mode). */
   kind: FreshDialogKind;
+  /** Preselected Carry over; defaults to Nothing (fresh) / Summary (switch). */
+  defaultCarryOver?: CarryOver;
   api: Pick<ApiInstance, "listModes" | "getSupportedClis">;
   /** The session being replaced — drives the current mode, the source
    *  channel and the terminal-only guards. */
@@ -77,6 +79,7 @@ const CARRY_OPTIONS: { value: CarryOver; name: string; sub: string }[] = [
 export function FreshDialog({
   open,
   kind,
+  defaultCarryOver,
   api,
   session,
   busy,
@@ -87,9 +90,9 @@ export function FreshDialog({
   const [supportedClis, setSupportedClis] = useState<SupportedCli[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedModeId, setSelectedModeId] = useState("");
-  const [carryOver, setCarryOver] = useState<CarryOver>(
-    kind === "switch" ? "summary" : "none",
-  );
+  const initialCarry: CarryOver =
+    defaultCarryOver ?? (kind === "switch" ? "summary" : "none");
+  const [carryOver, setCarryOver] = useState<CarryOver>(initialCarry);
   const [channel, setChannel] = useState<"tmux" | "json">(
     session.channel === "json" ? "json" : "tmux",
   );
@@ -106,11 +109,11 @@ export function FreshDialog({
   useEffect(() => {
     if (!open) return;
     setSelectedModeId(session.modeId ?? "");
-    setCarryOver(isSwitch ? "summary" : "none");
+    setCarryOver(initialCarry);
     setChannel(session.channel === "json" ? "json" : "tmux");
     setWhenBusy("stop");
     setCarryQueued(true);
-  }, [open, isSwitch, session.id, session.modeId, session.channel]);
+  }, [open, isSwitch, initialCarry, session.id, session.modeId, session.channel]);
 
   // Escape dismisses, like Cancel.
   useEffect(() => {
@@ -121,6 +124,30 @@ export function FreshDialog({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onCancel]);
+
+  // Enter confirms (the ref always holds the latest CTA action, or null when the
+  // CTA is disabled). Skipped on buttons/links so Enter still activates the
+  // focused control, e.g. Cancel.
+  const confirmRef = useRef<(() => void) | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+      if (e.defaultPrevented || e.keyCode === 229) return;
+      if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      // Only when focus is inside this dialog or nowhere (body): Enter in another
+      // pane's composer or any input must never reset this session.
+      const t = e.target as HTMLElement | null;
+      if (t && t !== document.body && !rootRef.current?.contains(t)) return;
+      if (t?.closest("button, a, textarea, [contenteditable]")) return;
+      if (!confirmRef.current) return;
+      e.preventDefault();
+      confirmRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -204,6 +231,18 @@ export function FreshDialog({
   const ctaDisabled =
     !selectedMode || !!loadFailed || (isSwitch && !pickedOther);
 
+  const confirm = () => {
+    if (!selectedMode || ctaDisabled) return;
+    onConfirm({
+      modeId: selectedMode.id,
+      channel: effectiveChannel,
+      carryOver,
+      whenBusy: showBusyBlock ? whenBusy : "stop",
+      queued: showQueuedCheckbox && !carryQueued ? "drop" : "carry",
+    });
+  };
+  confirmRef.current = ctaDisabled ? null : confirm;
+
   const hint = showBusyBlock
     ? whenBusy === "wait"
       ? "Waits for the current turn"
@@ -216,6 +255,7 @@ export function FreshDialog({
 
   return (
     <div
+      ref={rootRef}
       className="fresh-dialog"
       role="dialog"
       aria-modal="true"
@@ -415,16 +455,7 @@ export function FreshDialog({
           type="button"
           className="fresh-dialog__btn fresh-dialog__btn--primary"
           disabled={ctaDisabled}
-          onClick={() => {
-            if (!selectedMode) return;
-            onConfirm({
-              modeId: selectedMode.id,
-              channel: effectiveChannel,
-              carryOver,
-              whenBusy: showBusyBlock ? whenBusy : "stop",
-              queued: showQueuedCheckbox && !carryQueued ? "drop" : "carry",
-            });
-          }}
+          onClick={confirm}
         >
           {cta}
         </button>

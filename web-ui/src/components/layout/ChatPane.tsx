@@ -424,10 +424,11 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // hidden when the chain has none; its hint is the predecessor count.
   const modelActions = useMemo<ModelAction[]>(() => {
     if (!session) return [];
-    const open = (kind: "fresh" | "switch" | "previous") => () =>
+    const open = (kind: "fresh" | "fresh-summary" | "switch" | "previous") => () =>
       usePaneDialogs.getState().open(session.id, kind);
     return [
       { key: "fresh", label: "Start fresh…", onSelect: open("fresh") },
+      { key: "fresh-summary", label: "Start fresh with summary…", onSelect: open("fresh-summary") },
       { key: "switch", label: "Switch provider & mode…", onSelect: open("switch") },
       ...(predecessors.length > 0
         ? [

@@ -1060,6 +1060,20 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   e.stopPropagation();
                   const target = resetMenu.session;
                   setActiveSession(target.id);
+                  usePaneDialogs.getState().open(target.id, "fresh-summary");
+                  setResetMenu(null);
+                }}
+              >
+                Start fresh with summary…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const target = resetMenu.session;
+                  setActiveSession(target.id);
                   usePaneDialogs.getState().open(target.id, "switch");
                   setResetMenu(null);
                 }}

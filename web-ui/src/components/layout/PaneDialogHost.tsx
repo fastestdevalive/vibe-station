@@ -65,10 +65,11 @@ export function PaneDialogHost({ api, sessionId, session }: PaneDialogHostProps)
 
   return (
     <div className="pane-dialog-host" ref={rootRef}>
-      {dialog === "fresh" || dialog === "switch" ? (
+      {dialog === "fresh" || dialog === "fresh-summary" || dialog === "switch" ? (
         <FreshDialog
           open
-          kind={dialog}
+          kind={dialog === "switch" ? "switch" : "fresh"}
+          defaultCarryOver={dialog === "fresh-summary" ? "summary" : undefined}
           api={api}
           session={session}
           busy={busy}

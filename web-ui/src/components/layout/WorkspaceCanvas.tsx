@@ -1605,6 +1605,19 @@ export function WorkspaceCanvas({
                 onClick={(e) => {
                   e.stopPropagation();
                   useWorkspaceStore.getState().setActiveSession(tileMenuSession.id);
+                  usePaneDialogs.getState().open(tileMenuSession.id, "fresh-summary");
+                  setTileMenu(null);
+                }}
+              >
+                Start fresh with summary…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useWorkspaceStore.getState().setActiveSession(tileMenuSession.id);
                   usePaneDialogs.getState().open(tileMenuSession.id, "switch");
                   setTileMenu(null);
                 }}

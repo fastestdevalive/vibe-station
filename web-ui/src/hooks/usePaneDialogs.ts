@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { CarryOver, QueuedPolicy, WhenBusy } from "@/api/types";
 
 /** Which pane-scoped dialog is open for a session. */
-export type PaneDialogKind = "fresh" | "switch" | "previous";
+export type PaneDialogKind = "fresh" | "fresh-summary" | "switch" | "previous";
 
 /** Live busy shape the FreshDialog's busy block renders (written by the pane). */
 export interface PaneBusy {
