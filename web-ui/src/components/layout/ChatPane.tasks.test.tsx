@@ -49,7 +49,10 @@ beforeEach(() => {
   useTaskStore.setState(useTaskStore.getInitialState(), true);
   useWorkspaceStore.setState({ sessionStates: {} });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("ChatPane task view (2.T5)", () => {
   it("opening/closing keeps the SAME body and composer nodes and the draft text; chat is inert only while open", async () => {
@@ -119,9 +122,54 @@ describe("ChatPane task view (2.T5)", () => {
     localStorage.setItem("vst.taskView.c3", "t1");
     fireEvent.click(screen.getByTestId("task-tray-chip"));
     fireEvent.click(screen.getAllByTestId("task-row")[0]!);
-    fireEvent.click(screen.getByTestId("task-tray-head")); // collapse (inert: no focus, but state flips)
+    fireEvent.click(screen.getByTestId("task-tray-close")); // collapse the bar (footer inert: no focus, state flips)
     fireEvent.keyDown(screen.getByTestId("task-view"), { key: "Escape" });
-    expect(document.activeElement).toBe(screen.getByTestId("task-tray-chip"));
+    const chip = screen.getByTestId("task-tray-chip");
+    expect(chip.getAttribute("data-active")).toBe("true");
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("finished-only tasks: focus returns to the strip chip when the row is gone", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={session("c7")} visible />);
+    await screen.findByRole("textbox", { name: /message/i });
+    act(() => useTaskStore.getState().applySnapshot("c7", Date.now(), [mkTask({ id: "d1", state: "done" }), mkTask({ id: "d2", state: "done" })]));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("dot");
+    fireEvent.click(screen.getByTestId("task-tray-dot"));
+    fireEvent.click(screen.getByTestId("task-tray-chip"));
+    fireEvent.click(screen.getAllByTestId("task-row")[0]!);
+    expect(screen.getByTestId("task-view")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("task-tray-close")); // bar -> strip
+    fireEvent.keyDown(screen.getByTestId("task-view"), { key: "Escape" });
+    const chip = screen.getByTestId("task-tray-chip");
+    expect(chip.getAttribute("data-active")).toBe("true");
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("opening a task from the bar keeps the bar; collapsing it later returns strip -> dot after 5 s", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={session("c8")} visible />);
+    await screen.findByRole("textbox", { name: /message/i });
+    act(() => useTaskStore.getState().applySnapshot("c8", Date.now(), [mkTask({ id: "d1", state: "done" })]));
+    fireEvent.click(screen.getByTestId("task-tray-dot"));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("strip");
+    fireEvent.click(screen.getByTestId("task-tray-chip"));
+    const matches = Element.prototype.matches;
+    vi.spyOn(Element.prototype, "matches").mockImplementation(function (this: Element, sel: string) {
+      return sel === ":focus-visible" ? false : matches.call(this, sel);
+    });
+    vi.useFakeTimers();
+    fireEvent.click(screen.getAllByTestId("task-row")[0]!);
+    act(() => void vi.advanceTimersByTime(20_000));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("bar");
+    fireEvent.click(screen.getByTestId("task-back"));
+    act(() => void vi.advanceTimersByTime(20_000));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("bar");
+    fireEvent.click(screen.getByTestId("task-tray-close"));
+    act(() => void vi.advanceTimersByTime(4999));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("strip");
+    act(() => void vi.advanceTimersByTime(1));
+    expect(screen.getByTestId("task-tray").getAttribute("data-mode")).toBe("dot");
   });
 
   it("does not steal focus on touch / focusOnMount=false", async () => {

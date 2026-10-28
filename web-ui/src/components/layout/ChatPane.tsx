@@ -565,10 +565,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
         ) : null}
         {sessionId ? (
           <TaskTray
+            sessionId={sessionId}
             groups={tasks}
             total={tasks.tasks?.length ?? 0}
-            expanded={tasks.expanded}
-            onExpandedChange={tasks.setExpanded}
+            known={tasks.tasks !== undefined}
+            pref={tasks.expanded ? "bar" : "strip"}
+            onPrefChange={(v) => tasks.setExpanded(v === "bar")}
+            taskViewOpen={taskViewOpen}
             onOpenTask={tasks.open}
             focusComposer={() => composerRef.current?.focus()}
           />

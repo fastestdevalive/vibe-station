@@ -993,6 +993,7 @@ export function MessageList({
   useEffect(() => {
     const container = listRef.current?.parentElement;
     if (!container || typeof ResizeObserver === "undefined") return;
+    let prevClientHeight = container.clientHeight;
     const ro = new ResizeObserver((entries?: ResizeObserverEntry[]) => {
       // Re-attached after a DOM move (e.g. the agent/tool-panel orientation
       // flip): the browser zeroed `scrollTop` without a `scroll` event, and the
@@ -1003,17 +1004,24 @@ export function MessageList({
       // chat stranded at the top. The write fires a real `scroll` event, which
       // also re-syncs the tracked state and the virtualizer's own offset.
       if (container.scrollTop === 0 && lastScrollTopRef.current > 0) {
+        prevClientHeight = container.clientHeight;
         container.scrollTop = atBottomRef.current ? container.scrollHeight : lastScrollTopRef.current;
         return;
       }
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      // How far the scroller shrank since the last callback (footer grew in one big step, e.g. the task tray
+      // opening or reduced motion). The reader was near the bottom BEFORE the shrink if `distance - shrink`
+      // is small, even when the shrink alone pushed `distance` past the threshold.
+      const shrink = Math.max(0, prevClientHeight - container.clientHeight);
+      prevClientHeight = container.clientHeight;
+      const wasNearBeforeShrink = shrink > 0 && distance - shrink < 80;
       // The scroller itself changed size (not just its content) while the
       // reader was following the live edge (per the last `scroll` event): the
       // reflow — e.g. a narrower pane after the orientation flip — grows the
       // content under a `scrollTop` that no longer reaches the bottom, so the
       // fresh `distance` alone would drop them out of follow-mode.
       const resizedWhileFollowing = atBottomRef.current && !!entries?.some((e) => e.target === container);
-      if (distance < 80 || resizedWhileFollowing) {
+      if (distance < 80 || resizedWhileFollowing || wasNearBeforeShrink) {
         // Not `bottomRef.current.scrollIntoView(...)`: that walks EVERY
         // scrollable ancestor (including `overflow: hidden` boxes, which are
         // still programmatically scrollable), so an unrelated resize (a
