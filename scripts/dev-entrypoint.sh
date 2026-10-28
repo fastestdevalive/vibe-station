@@ -247,7 +247,9 @@ persist_cli_sessions /home/vst/.pi/agent/sessions /home/vst/.vibe-station/cli-se
 persist_cli_sessions /home/vst/.omp/agent/sessions /home/vst/.vibe-station/cli-sessions/omp
 # mkdir -p above (as root) may have created ~/.config / ~/.local / ~/.local/share
 # themselves; hand them to vst so CLIs can create their other XDG dirs.
-for d in /home/vst/.config /home/vst/.local /home/vst/.local/share; do
+# ~/.local/state/opencode is created root-owned in the image (opencode writes its
+# service.json there), so a non-root `opencode` fails with EACCES without this.
+for d in /home/vst/.config /home/vst/.local /home/vst/.local/share /home/vst/.local/state /home/vst/.local/state/opencode; do
   [ -d "$d" ] && chown vst:vst "$d"
 done
 
