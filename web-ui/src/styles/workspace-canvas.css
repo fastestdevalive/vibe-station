@@ -477,6 +477,12 @@
   cursor: default;
 }
 
+/* The tile header that hosts the chip reserve (toolbar hidden) is as tall as the chip, so the chip never overlaps the body. */
+.workspace-canvas__tile-header:has(.actions-host__reserve[data-active]) {
+  min-height: var(--pane-row-h);
+  box-sizing: border-box;
+}
+
 .workspace-canvas__free .workspace-canvas__tile-header,
 .workspace-canvas__tiled .workspace-canvas__tile-header {
   cursor: grab;

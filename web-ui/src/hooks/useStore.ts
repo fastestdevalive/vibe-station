@@ -6,11 +6,20 @@ import type { LspFailure } from "@/lib/lspApi";
 import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
 import { pickFirstDirectAgent, pickNextDirectAgent, pickWorktreeAgent, projectTabIds } from "@/lib/sessionVisibility";
 import { randomId } from "@/lib/uuid";
+import { LAYOUT_TRANSITION_HINT_MS } from "@/lib/layoutTransition";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
 export type ToolTab = "files" | "devices" | "artifacts" | "vcs" | "search";
 
 export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs", "search"];
+
+/**
+ * The tab a panel actually renders: legacy/removed tabs fold into Files (Decision 9: Search is a Files
+ * mode, Artifacts is a Files list mode, Devices has no active rail button). The ONE place this rule lives.
+ */
+export function effectiveToolTab(tab: ToolTab): ToolTab {
+  return tab === "search" || tab === "devices" || tab === "artifacts" ? "files" : tab;
+}
 
 /**
  * Per-worktree workspace layout.
@@ -29,14 +38,13 @@ export type ToolSplitOrientation = "horizontal" | "vertical";
  * Which layout transition an EXPLICIT user toggle just asked for — see
  * `WorkspaceState.layoutTransitionHint`.
  * - `"split"`: the agent/tools/terminal-dock PanelGroups in Layout.tsx.
+ * - `"tools"`: tools pane show/hide: the split animates like `"split"`, and the top actions hold still.
  * - `"files"`: the Files side-panel overlay's content padding in FilesPanel.tsx.
  */
-export type LayoutTransitionHint = "split" | "files";
+export type LayoutTransitionHint = "split" | "tools" | "files";
 
-/** How long a toggle's transition hint stays live. Comfortably longer than the
- *  0.15s (`--transition-fast`) CSS transitions it gates, so the hint never
- *  lapses mid-animation. */
-export const LAYOUT_TRANSITION_HINT_MS = 300;
+/** Re-exported: the hint window lives in `lib/layoutTransition.ts` (no store import). */
+export { LAYOUT_TRANSITION_HINT_MS };
 
 /**
  * A jump-to-line target. `column`/`endColumn` (0-based UTF-16, end exclusive)
@@ -371,10 +379,6 @@ export interface WorkspaceState {
   previewFontScaleByWorktree: Record<string, number>;
   /** Whether the Files tool shows its file-tree column (persisted, view pref). */
   fileTreeVisible: boolean;
-  /** Mobile only: the tools rail is slid out of the way (shared by every ToolPanel
-   *  instance — docked, fullscreen, canvas tiles — so they can't disagree). */
-  toolsRailHidden: boolean;
-  setToolsRailHidden: (hidden: boolean) => void;
   terminalFontScale: number;
   /** xterm line height multiplier: 1 = Compact (native-terminal feel), 1.1 = Relaxed. */
   terminalLineHeight: 1 | 1.1;
@@ -903,7 +907,6 @@ const initial = {
   previewFontScale: 1,
   previewFontScaleByWorktree: {} as Record<string, number>,
   fileTreeVisible: true,
-  toolsRailHidden: false,
   terminalFontScale: 1,
   terminalLineHeight: 1 as 1 | 1.1,
   leftSidebarCollapsed: false,
@@ -1021,9 +1024,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const next = patchLayout(s, { toolPanelVisible: !cur.toolPanelVisible });
             // Leaving fullscreen if we just hid the panel that was maximized.
             if (cur.toolPanelVisible && s.workspacePaneFullscreen === "tools") {
-              return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
+              return withTransitionHint("tools", { ...next, workspacePaneFullscreen: null });
             }
-            return withTransitionHint("split", next);
+            return withTransitionHint("tools", next);
           }),
         setToolPanelTab: (tab) =>
           set((s) => patchLayout(s, { toolPanelTab: tab, toolPanelVisible: true })),
@@ -1814,7 +1817,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               },
             });
           }),
-        setToolsRailHidden: (hidden) => set({ toolsRailHidden: hidden }),
         toggleFileTree: () =>
           set((s) => withTransitionHint("files", { fileTreeVisible: !s.fileTreeVisible })),
         setTerminalLineHeight: (v) => set({ terminalLineHeight: v }),

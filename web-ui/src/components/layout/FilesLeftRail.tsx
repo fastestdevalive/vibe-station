@@ -7,7 +7,7 @@ import {
   Package,
   Search,
 } from "lucide-react";
-import { isFilesLeftPaneOpen, useWorkspaceStore, type FilesLeftPaneMode } from "@/hooks/useStore";
+import { effectiveToolTab, isFilesLeftPaneOpen, useWorkspaceStore, type FilesLeftPaneMode } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 
 interface FilesLeftRailProps {
@@ -29,7 +29,8 @@ const FILE_MODES: FileModeItem[] = [
 ];
 
 /**
- * Consolidated vertical left rail (Revision 2):
+ * Consolidated tools rail (Revision 2): a right-edge vertical column (desktop window
+ * rail, canvas tile rail, phone in-pane rail); the host owns the border/stacking:
  * - Top group: Tree, Search, Outline, References (file tools and sub-modes)
  *   Clicking switches to Files tool and toggles/opens that sub-mode.
  * - Divider
@@ -37,7 +38,7 @@ const FILE_MODES: FileModeItem[] = [
  */
 export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   const { toolPanelTab, setToolPanelTab } = useLayout();
-  const effectiveTab = toolPanelTab === "search" ? "files" : toolPanelTab;
+  const effectiveTab = effectiveToolTab(toolPanelTab);
 
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId] ?? "tree");
   const setFilesLeftPaneMode = useWorkspaceStore((s) => s.setFilesLeftPaneMode);
@@ -92,7 +93,12 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   };
 
   return (
-    <div className="files-left-rail" role="toolbar" aria-label="Tools rail">
+    <div
+      className="files-left-rail files-left-rail--column"
+      role="toolbar"
+      aria-label="Tools rail"
+      aria-orientation="vertical"
+    >
       {/* Top group: Tree, Search, Outline, References */}
       <div
         className="files-left-rail__group"

@@ -1,8 +1,8 @@
 import { Triangle } from "lucide-react";
 import type { DiffScope } from "@/api/types";
-import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
-import { useToolBarInsets } from "@/hooks/useToolBarInsets";
+import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
 
 interface FileTreeHeaderProps {
   /** Browsing context id (worktree id, or project id for direct sessions) —
@@ -27,15 +27,6 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
   const setTreeScopeForWorktree = useWorkspaceStore((s) => s.setTreeScopeForWorktree);
 
-  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
-  // so this header reaches the top-right corner where the fullscreen +
-  // orientation-toggle buttons float (`ToolPanel.tsx`'s `.tool-panel__top-actions`).
-  // In left-side orientation the panel is a narrow left column that never
-  // reaches that corner, so the right inset only applies while stacked.
-  const masterDetailVertical = useWorkspaceStore(
-    (s) => !!(s.layoutByWorktree[contextId ?? ""] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
-  );
-
   const scopeRaw = useWorkspaceStore((s) =>
     contextId ? s.diffScopeByWorktree[contextId] : undefined,
   );
@@ -46,7 +37,7 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
   // its own store slice so picking "branch" here never flips `scope` (which
   // FilePreviewPane also reads) and switches the Files header into the flat
   // "Changes" list / full-diff-preview mode. That mode toggle stays the sole
-  // job of the "Diff view" (GitCompare) button, per Task A.2.
+  // job of the "Changes" toggle button, per Task A.2.
   const treeScopeRaw = useWorkspaceStore((s) =>
     contextId ? s.treeScopeByWorktree[contextId] : undefined,
   );
@@ -94,17 +85,14 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
     }
   }
 
-  const barInsets = useToolBarInsets(masterDetailVertical);
-
   return (
     <div
-      className="pane-header pane-header--compact file-tree-sidebar-header"
+      className="pane-header pane-header--compact file-tree-sidebar-header actions-row"
       style={{
         height: "35px",
         minHeight: "35px",
         maxHeight: "35px",
         boxSizing: "border-box",
-        ...barInsets,
       }}
     >
       {/* One scope selector, always visible in the Files header — not
@@ -124,20 +112,21 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
         </div>
       ) : null}
       <div className="file-tree-sidebar-header__tail">
-        {/* Diff view works for project scope too — it's always local scope
+        {/* Changes view works for project scope too — it's always local scope
             there (no branch concept), so only the chip selector above is
             gated on isProject, not this toggle. */}
         <button
           type="button"
           className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
           aria-pressed={diffMode}
-          aria-label={diffMode ? "Diff view on" : "Diff view off"}
-          title="Toggle diff view"
+          aria-label={diffMode ? "Changes view on" : "Changes view off"}
+          title="Toggle changes view"
           onClick={toggleDiffMode}
         >
-          Diff
+          Changes
         </button>
       </div>
+      <ModeHeaderActionsHost mode="tree" />
     </div>
   );
 }

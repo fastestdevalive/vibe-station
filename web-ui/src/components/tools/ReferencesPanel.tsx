@@ -18,8 +18,8 @@ import {
 import { ApiError } from "@/api/errors";
 import { useLspStatus } from "@/hooks/useLspStatus";
 import { LspInstallCommand, LspRemediationActions, LspServerOutput } from "../layout/LspRemediation";
-import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type PendingReferencesQuery } from "@/hooks/useStore";
-import { useToolBarInsets } from "@/hooks/useToolBarInsets";
+import { useWorkspaceStore, type PendingReferencesQuery } from "@/hooks/useStore";
+import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { languageForFilePath } from "../preview/codeHighlight";
@@ -87,16 +87,6 @@ export function ReferencesPanel({
 
   const layoutKey =
     worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "";
-
-  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
-  // so this panel's header reaches the top-right corner where the fullscreen +
-  // orientation-toggle buttons float. In left-side orientation it is a narrow
-  // left column that never reaches that corner, so the right inset only
-  // applies while stacked.
-  const masterDetailVertical = useWorkspaceStore(
-    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
-  );
-  const barInsets = useToolBarInsets(masterDetailVertical);
 
   const [activeQuery, setActiveQuery] = useState<PendingReferencesQuery | null>(
     null
@@ -748,12 +738,7 @@ export function ReferencesPanel({
       role="region"
       aria-label="References panel"
     >
-      <div
-        className="references-panel__header"
-        style={{
-          ...barInsets,
-        }}
-      >
+      <div className="references-panel__header actions-row">
         <Search size={12} className="references-panel__header-icon" aria-hidden />
         {activeQuery ? (
           <span className="references-panel__title" title={symbol}>
@@ -794,6 +779,7 @@ export function ReferencesPanel({
             <RotateCw size={12} />
           </button>
         )}
+        <ModeHeaderActionsHost mode="references" />
       </div>
 
       {renderBody()}

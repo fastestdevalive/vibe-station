@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { WorkspaceCanvas } from "./WorkspaceCanvas";
 import { PaneOutletProvider, ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "./paneOutlets";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type CanvasGeometry } from "@/hooks/useStore";
+import { createTopActionsStore, TopActionsProvider } from "@/context/TopActionsContext";
+import { TopActionsOwner } from "./TopActionsSlot";
 
 const W1 = "wt-1";
 
@@ -59,6 +61,44 @@ function renderCanvas(canvasToolbarVisible = true) {
   );
 }
 
+function oneTileCanvas(): CanvasGeometry {
+  return {
+    mode: "free",
+    tiles: [{ id: "tile-a", kind: "tools" }],
+    tree: null,
+    freeRects: { "tile-a": { x: 0, y: 0, w: 100, h: 50 } },
+  };
+}
+
+function renderHostedCanvas(canvasToolbarVisible: boolean) {
+  const store = createTopActionsStore();
+  return render(
+    <MemoryRouter>
+      <TopActionsProvider store={store}>
+        <PaneOutletProvider>
+          <WorkspaceCanvas
+            worktreeId={W1}
+            agentSessions={[]}
+            terminalSessions={[]}
+            hasTools
+            toolPanelVisible
+            terminalDockVisible
+            allSessions={[]}
+            worktrees={[]}
+            projects={[]}
+            canvasToolbarVisible={canvasToolbarVisible}
+          />
+        </PaneOutletProvider>
+        <TopActionsOwner zones={["canvas"]}>
+          <button type="button" data-testid="probe">
+            probe
+          </button>
+        </TopActionsOwner>
+      </TopActionsProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("WorkspaceCanvas - canvas toolbar disclosure", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -69,7 +109,8 @@ describe("WorkspaceCanvas - canvas toolbar disclosure", () => {
     });
   });
 
-  it("does not render its toolbar row when canvasToolbarVisible is false", () => {
+  it("does not render its toolbar row when canvasToolbarVisible is false and a tile can host the actions", () => {
+    useWorkspaceStore.setState({ layoutByWorktree: { [W1]: { scratchCanvas: oneTileCanvas() } as never } });
     renderCanvas(false);
     expect(screen.queryByRole("toolbar", { name: "Workspace canvas" })).not.toBeInTheDocument();
   });
@@ -109,6 +150,78 @@ describe("WorkspaceCanvas - canvas toolbar disclosure", () => {
     );
     const toolbar = screen.getByRole("toolbar", { name: "Workspace canvas" });
     expect(toolbar.parentElement).toHaveClass("workspace-canvas");
+  });
+});
+
+describe("WorkspaceCanvas - actions hosts (6.2)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({ layoutByWorktree: {}, workspaceDocs: {} });
+  });
+
+  function withTile() {
+    useWorkspaceStore.setState({ layoutByWorktree: { [W1]: { scratchCanvas: oneTileCanvas() } as never } });
+  }
+
+  /** The chip is rendered once outside the canvas; the registry marks exactly one reserve span under it. */
+  const activeReserves = () => Array.from(document.querySelectorAll<HTMLElement>(".actions-host__reserve[data-active]"));
+
+  it("toolbar visible: the active reserve is only in the toolbar", () => {
+    withTile();
+    renderHostedCanvas(true);
+    expect(screen.getAllByTestId("probe")).toHaveLength(1);
+    const reserves = activeReserves();
+    expect(reserves).toHaveLength(1);
+    expect(screen.getByRole("toolbar", { name: "Workspace canvas" }).contains(reserves[0]!)).toBe(true);
+  });
+
+  it("toolbar hidden with tiles: the active reserve is only in the top-right tile's header, after its remove button", () => {
+    withTile();
+    renderHostedCanvas(false);
+    expect(screen.getAllByTestId("probe")).toHaveLength(1);
+    const reserves = activeReserves();
+    expect(reserves).toHaveLength(1);
+    const header = reserves[0]!.closest(".workspace-canvas__tile-header") as HTMLElement;
+    expect(header).not.toBeNull();
+    // The reserve is the header's LAST item, so the remove/exit X is never under the chip.
+    const close = header.querySelector(".workspace-canvas__tile-close") as HTMLElement;
+    expect(close.compareDocumentPosition(reserves[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(header.lastElementChild!.contains(reserves[0]!)).toBe(true);
+    expect(screen.queryByRole("toolbar", { name: "Workspace canvas" })).toBeNull();
+  });
+
+  it.each([true, false])("a fullscreen tile (toolbar visible=%s): no reserve anywhere", (toolbarVisible) => {
+    withTile();
+    renderHostedCanvas(toolbarVisible);
+    const header = screen.getByTitle("Click to fullscreen · drag to move");
+    act(() => {
+      firePointer("pointerdown", header, { clientX: 0, clientY: 0 });
+      firePointer("pointerup", window, {});
+    });
+    expect(screen.getByTitle("Click to exit fullscreen")).toBeInTheDocument();
+    expect(activeReserves()).toHaveLength(0);
+  });
+
+  it("toolbar hidden with zero tiles: the toolbar row is forced back and holds the reserve", () => {
+    renderHostedCanvas(false);
+    const toolbar = screen.getByRole("toolbar", { name: "Workspace canvas" });
+    const reserves = activeReserves();
+    expect(reserves).toHaveLength(1);
+    expect(toolbar.contains(reserves[0]!)).toBe(true);
+  });
+
+  it("clicking the reserve in a tile header leaves the tile non-fullscreen", () => {
+    withTile();
+    const { container } = renderHostedCanvas(false);
+    const reserve = activeReserves()[0]!;
+    act(() => {
+      firePointer("pointerdown", reserve, { clientX: 0, clientY: 0 });
+      firePointer("pointerup", window, {});
+      fireEvent.click(reserve);
+    });
+    expect(container.querySelector(".workspace-canvas__tile--fullscreen")).toBeNull();
+    expect(screen.queryByTitle("Click to exit fullscreen")).toBeNull();
   });
 });
 

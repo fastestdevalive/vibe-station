@@ -7,6 +7,7 @@ import { VcsCommitView } from "@/components/tools/VcsCommitView";
 import { VcsSubmodules } from "@/components/tools/VcsSubmodules";
 import { useSubmoduleCommits } from "@/hooks/useSubmoduleCommits";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 
 interface VcsPanelProps {
   api: ApiInstance;
@@ -342,6 +343,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
             <RefreshCw size={13} className={loading ? "vcs-panel__spin" : undefined} />
           </button>
         </div>
+        <ToolActionsHost />
       </div>
       {branch || !isProject ? (
         <div className="vcs-panel__meta">

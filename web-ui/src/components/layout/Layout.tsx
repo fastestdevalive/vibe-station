@@ -4,14 +4,15 @@ import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from
 import { useLayout } from "@/hooks/useLayout";
 import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
 import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } from "@/hooks/useStore";
-import { TopRightInsetProvider, type TopRightInsetContextValue } from "@/context/TopRightInsetContext";
-
-const ZERO_INSET: TopRightInsetContextValue = { width: 0, height: 0 };
+import { ToolsRailColumn } from "@/components/layout/ToolsRailColumn";
+import { TopActionsProvider, createTopActionsStore } from "@/context/TopActionsContext";
+import { TopActionsOwner } from "@/components/layout/TopActionsSlot";
+import type { GroupZone } from "@/context/TopActionsContext";
 
 interface LayoutProps {
   topBar?: ReactNode;
-  /** Floating top-right widget for classic layout */
-  floatingTopBar?: ReactNode;
+  /** Search/"…"/toggle group; rendered once via `TopActionsOwner` (classic desktop only). */
+  actionsGroup?: ReactNode;
   /** Whether this is classic per-worktree layout (no shared full-width top bar) */
   isClassicLayout?: boolean;
   /** Bottom region — global status bar. Passed as a node (not rendered here)
@@ -47,7 +48,7 @@ interface LayoutProps {
 
 export function Layout({
   topBar,
-  floatingTopBar,
+  actionsGroup,
   isClassicLayout = false,
   globalStatusBar,
   leftSidebar,
@@ -83,7 +84,10 @@ export function Layout({
   const effectiveOrientation =
     !toolSplitOrientationUserSet && isMobile ? "vertical" : toolSplitOrientation;
 
-  const mainContentRef = useRef<HTMLDivElement>(null);
+  // Registry of actions hosts (TopActionsContext). Created once and handed to BOTH returns'
+  // providers so `div.app-shell` keeps its tree position across dashboard <-> worktree
+  // navigation (the sidebar must not remount). The context value is this stable store.
+  const [topActionsStore] = useState(createTopActionsStore);
 
   // Live width while dragging the sidebar's right-edge handle; null when not dragging.
   // Kept local (not round-tripped through the store) so drag motion is jank-free —
@@ -134,7 +138,8 @@ export function Layout({
   // `effectiveOrientation`/`dockInSplit` changing: a worktree switch flips
   // those same values whenever the destination's persisted layout differs,
   // and must snap instantly — see `layoutTransitionHint` in useStore.ts.
-  const animateSplit = useWorkspaceStore((s) => s.layoutTransitionHint === "split");
+  const layoutHint = useWorkspaceStore((s) => s.layoutTransitionHint);
+  const animateSplit = layoutHint === "split";
 
   // `null` slots mean the region is unavailable in this mode (direct sessions
   // are terminal-only) — treat them as hidden no matter what the persisted
@@ -180,44 +185,9 @@ export function Layout({
     }
   }, [dockInSplit]);
 
-  const [floatingInset, setFloatingInset] = useState<TopRightInsetContextValue>({
-    width: 140,
-    height: 35,
-  });
-  const floatingRef = useRef<HTMLDivElement>(null);
   // On mobile, always render the explicit top bar (classic = false) so the left
   // sidebar drawer toggle is accessible in all cases and panes don't overlap.
   const classic = isClassicLayout && !isMobile;
-
-  useEffect(() => {
-    if (!classic) return;
-    const el = floatingRef.current;
-    if (!el) return;
-    const update = () => {
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        // a demo stage is shown under a host `transform: scale(k)`: rects are scaled, CSS px are not
-        const k = env.demo && env.scale > 0 ? env.scale : 1;
-        const w = Math.round(rect.width / k);
-        const h = Math.round(rect.height / k);
-        setFloatingInset((prev) => (prev.width !== w || prev.height !== h ? { width: w, height: h } : prev));
-      }
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [classic, env.demo, env.scale]);
-
-  const isCanvasUnderTopRight = !paneFullscreen && classic && paneLayoutMode === "workspace";
-  const isToolsUnderTopRight =
-    !paneFullscreen && paneLayoutMode !== "workspace" && showToolPanel;
-  const isAgentUnderTopRight =
-    !paneFullscreen && paneLayoutMode !== "workspace" && !showToolPanel;
-
-  const agentInset = classic && isAgentUnderTopRight ? floatingInset : ZERO_INSET;
-  const toolsInset = classic && isToolsUnderTopRight ? floatingInset : ZERO_INSET;
-  const canvasInset = isCanvasUnderTopRight ? floatingInset : ZERO_INSET;
 
   const sidebarInner = (
     <div
@@ -293,6 +263,7 @@ export function Layout({
 
   if (dashboardPane != null) {
     return (
+      <TopActionsProvider store={topActionsStore}>
       <div className="app-shell">
         {topBar}
         <div
@@ -311,9 +282,13 @@ export function Layout({
             </div>,
           )}
         </div>
+        {/* Slot of the regions return's `fullscreenOverlay`: keeps `paneHostLayer` at the SAME child index (3)
+            in both returns, so going dashboard <-> worktree never remounts live agent/terminal panes. */}
+        {null}
         {paneHostLayer}
         {isMobile ? globalStatusBar : null}
       </div>
+      </TopActionsProvider>
     );
   }
 
@@ -326,6 +301,17 @@ export function Layout({
   // keys region visibility, so each context keeps its own split sizes instead
   // of every direct session sharing one "__none__" bucket.
   const wt = activeWorktreeId ?? activeDirectContextId ?? "__none__";
+
+  // Canvas mode is `workspace` WITH a canvas node. A project route can be in workspace mode
+  // with no canvas and renders the classic split, so `paneLayoutMode` alone is not enough.
+  const isCanvas = paneLayoutMode === "workspace" && workspaceCanvas != null;
+  // The desktop window rail is a trailing SIBLING of the main column (never a wrapper of `topRow`),
+  // rendered only while the tools pane is shown. Removing/adding a trailing child never changes the
+  // main column's tree position, so the agent PanelGroup / TerminalPane never remount (R92).
+  // Phones have no window rail: each ToolPanel carries its own right-edge rail.
+  // The actions chip (Search, "…", toggle) is the LAST child of `#workspace-layout` (absolute top-right; never
+  // re-parented, so it never remounts or moves); the rail's head cell is only a spacer under it.
+  const showRail = showToolPanel && !isMobile && !isCanvas;
 
   function wrap(node: ReactNode, placement: PaneFullscreenPlacement = "panel") {
     return <PaneFullscreenChrome placement={placement}>{node}</PaneFullscreenChrome>;
@@ -351,19 +337,11 @@ export function Layout({
   const agentFullscreen = paneFullscreen === "agent";
   const terminalFullscreen = paneFullscreen === "terminal";
 
-  const agentWrapper = () => (
-    <TopRightInsetProvider value={agentInset}>
-      {regionWrapper(agentPane, agentFullscreen)}
-    </TopRightInsetProvider>
-  );
+  const agentWrapper = () => regionWrapper(agentPane, agentFullscreen);
   const dockWrapper = () => regionWrapper(terminalDock, terminalFullscreen);
 
   function wrapTools(placement: PaneFullscreenPlacement = "panel") {
-    return (
-      <TopRightInsetProvider value={toolsInset}>
-        {wrap(toolPanel, placement)}
-      </TopRightInsetProvider>
-    );
+    return wrap(toolPanel, placement);
   }
 
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
@@ -476,18 +454,21 @@ export function Layout({
     topRow
   );
 
-  const mainColumnInner =
-    paneLayoutMode === "workspace" && workspaceCanvas != null ? (
-      <TopRightInsetProvider value={canvasInset}>
-        {workspaceCanvas}
-      </TopRightInsetProvider>
-    ) : (
-      classicMainColumnInner
-    );
+  const mainColumnInner = isCanvas ? workspaceCanvas : classicMainColumnInner;
+
+  // Which hosts may carry the Search / "..." group (first zone with a registered host wins).
+  // No zone in any fullscreen (the row shows only "Exit fullscreen").
+  const zones: GroupZone[] =
+    paneFullscreen != null
+      ? []
+      : isCanvas
+        ? ["canvas"]
+        : showToolPanel
+          ? ["tools", "agent"]
+          : ["agent"];
 
   const mainColumn = (
     <div
-      ref={mainContentRef}
       style={{
         flex: 1,
         minWidth: 0,
@@ -499,21 +480,6 @@ export function Layout({
       }}
     >
       {mainColumnInner}
-      {classic && floatingTopBar ? (
-        <div
-          ref={floatingRef}
-          className="top-bar-floating-actions-container"
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            zIndex: 50,
-            pointerEvents: "auto",
-          }}
-        >
-          {floatingTopBar}
-        </div>
-      ) : null}
     </div>
   );
 
@@ -525,27 +491,40 @@ export function Layout({
   // mount a second outlet for the same pane key and leave one of them an
   // empty ghost window.
   const fullscreenOverlay =
-    !(paneLayoutMode === "workspace" && workspaceCanvas != null) && paneFullscreen === "tools" && hasToolPanel ? (
-      <div className="pane-viewport-fullscreen" key="viewport-fs-tools">
+    !isCanvas && paneFullscreen === "tools" && hasToolPanel ? (
+      <div
+        className={`pane-viewport-fullscreen${showRail ? " pane-viewport-fullscreen--keep-rail" : ""}`}
+        key="viewport-fs-tools"
+      >
         {wrapTools("viewport")}
       </div>
     ) : null;
 
   return (
+    <TopActionsProvider store={topActionsStore}>
     <div className="app-shell">
       {!classic ? topBar : null}
       <div
         id="workspace-layout"
         className="layout-main"
         data-ide="regions"
+        data-rail={showRail || undefined}
+        data-pane-fullscreen={paneFullscreen ?? undefined}
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "row", position: "relative" }}
       >
         {isMobile ? sidebarMobile : sidebarDesktop}
         {mainWithStatusBar(mainColumn)}
+        {showRail ? <ToolsRailColumn contextId={wt} /> : null}
+        {/* LAST child: appending it changes no earlier sibling's tree position. One absolute top-right chip, never
+            re-parented, so it never remounts, moves or hides while the tools pane / rail / list animate. */}
+        {classic && actionsGroup ? (
+          <TopActionsOwner zones={zones}>{actionsGroup}</TopActionsOwner>
+        ) : null}
       </div>
       {fullscreenOverlay}
       {paneHostLayer}
       {isMobile ? globalStatusBar : null}
     </div>
+    </TopActionsProvider>
   );
 }

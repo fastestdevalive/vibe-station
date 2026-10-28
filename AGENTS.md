@@ -157,6 +157,44 @@ The terminal is **never** rendered in `fullscreenOverlay`. Only the preview pane
 
 ---
 
+## Tools rail — a stable sibling of the main column, never a wrapper
+
+**Files:** `web-ui/src/components/layout/Layout.tsx` · `ToolsRailColumn.tsx`
+
+`ToolsRailColumn` is a trailing child of `#workspace-layout` (phones: each `ToolPanel` carries its own
+vertical rail instead). It must stay a *sibling* of the main column: wrapping or reparenting
+`topRow`/the agent `PanelGroup` changes its tree path and remounts `TerminalPane` (see "Terminal" above).
+It renders only while the tools pane is shown (`showRail`), and Layout marks that with `data-rail` on
+`#workspace-layout`. Its head cell is an empty 35px spacer under the actions chip's toggle (below).
+`Layout.test.tsx` asserts `agentChildMounts === 1` across hide/show, orientation and fullscreen; keep it
+green. Both `Layout` returns sit under the same `TopActionsProvider` with `#workspace-layout` at child index 1
+**and `paneHostLayer` at index 3** (the dashboard return holds a `{null}` in the regions return's
+`fullscreenOverlay` slot) so `div.app-shell`/the sidebar and every live agent/terminal pane do not remount on
+dashboard <-> worktree navigation; keep a test (`Layout.test.tsx`) if you add a child before `paneHostLayer`.
+
+## Search / "..." / toggle chip — one stable box, hosts only reserve its width
+
+**Files:** `web-ui/src/context/TopActionsContext.tsx` · `components/layout/TopActionsSlot.tsx` · `Layout.tsx` · `styles/workspace.css` (`.top-actions-anchor`, `.top-bar-floating-actions`, `.actions-host__reserve`)
+
+The chip renders exactly once: `Layout` renders `<TopActionsOwner zones>` as the LAST child of
+`#workspace-layout`, an absolute top-right box (`main`'s chrome: `--bg-elevated`, 1px left border, 6px
+bottom-left radius, soft shadow) that is never re-parented, so it never remounts, moves or hides during
+tools / rail / list transitions (hidden only by `#workspace-layout[data-pane-fullscreen]`). Do not portal
+it into rows, do not add transition holds (visibility/opacity timers, `data-*-transition` attributes) and
+do not measure it: portaling it into rows remounted it on every host change, and the transition hold that hid that was the flicker.
+
+Panes mount `ActionsHost`/`ToolActionsHost`/`ModeHeaderActionsHost` in their top row. The registry picks
+the ONE row under the chip (`reserveHost()`), whose empty `.actions-host__reserve` span takes the chip's
+width from tokens (`--top-actions-w` = 105px, minus the rail's 36px under `[data-rail]`, plus the offline
+pill). Pane controls (layout toggle, Fullscreen) portal into the host's pane span by scope; on phones an
+open side-by-side list's header carries them (`listHostsPane`). A new tool tab must mount a
+`ToolActionsHost` in its header bar; a new top-row item must stay left of the reserve. The "..." menu is
+portaled to `usePortalRoot()` (`position: fixed`) because host rows clip overflow.
+
+The chip is an overlay: anything that ends up at the top-right of `#workspace-layout` is under it unless its row reserves. **New header row** that can be the window's top-right row: put the `actions-row` class on it and mount `ToolActionsHost`/`ActionsHost` as its LAST item, in a zone listed in Layout's `zones` (a new pane kind = a new `GroupZone` + `HOST_PRIORITY` entry). Without a host its right end silently slides under the chip. **New button in the chip:** add it in `WorkspaceActions` AND bump the button count in `--top-actions-w` (`workspace.css`) and `CHIP_W` (`anchorCss.test.ts`); the count test in `WorkspaceActions.test.tsx` fails until you do. **New tool tab:** mount a `ToolActionsHost` in its header bar (or rely on `ToolPanel`'s host bar). **Docked lists:** the Files list AND the VCS commit view's changed-file list use the one `DockedListLayout` (`components/layout/`: right dock, left-edge handle, shared persisted size, phone clamps); a new docked list reuses it (never a second resize/clamp copy) and its header mounts `ModeHeaderActionsHost` (`ListHeaderMode`; `ToolPanel` derives `isPanelOpen`/`filesMode` for it). Shared sizes: `--pane-row-h`/`--tools-toggle-size`/`--tools-rail-col-w` on `.app-shell`, mirrored in `lib/layoutSizes.ts`; phone breakpoint `MOBILE_QUERY`. Never render a second toggle; `HOST_PRIORITY` ranks competing hosts.
+
+---
+
 ## Session status in a pane — always `sessionStates[id] ?? session.state`, never `session.lifecycleState`
 
 **Files:** `web-ui/src/components/layout/TerminalPane.tsx` · `ChatPane.tsx` · `LeftSidebar.tsx` · `DashboardPanel.tsx` · `SubagentRow.tsx` · `TabsStrip.tsx` · `useServerSync.ts`

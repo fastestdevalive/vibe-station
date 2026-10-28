@@ -1,23 +1,15 @@
-import { useDemoEnv } from "../../context/DemoEnv";
 import { ArrowUpRight, FileText, List, ListTree, Plus, Search, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { useWorkspaceStore, type PeekFileValue } from "@/hooks/useStore";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { FilesLeftPane, type FilesLeftPaneHandle } from "@/components/layout/FilesLeftPane";
+import { DockedListLayout } from "@/components/layout/DockedListLayout";
 import { usePendingFileOpens } from "@/hooks/usePendingFileOpens";
+import { HOST_PRIORITY } from "@/context/TopActionsContext";
 import { useToolsInset } from "@/context/ToolsInsetContext";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
-import {
-  FILES_LEFT_PANE_DEFAULT_WIDTH,
-  FILES_LEFT_PANE_MIN_WIDTH,
-  FILES_LEFT_PANE_MAX_WIDTH,
-  FILES_LEFT_PANE_DEFAULT_HEIGHT,
-  FILES_LEFT_PANE_MIN_HEIGHT,
-  FILES_LEFT_PANE_MAX_HEIGHT,
-} from "@/components/layout/ToolPanel";
-import { DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 
 interface FilesPanelProps {
   api: ApiInstance;
@@ -32,6 +24,8 @@ interface FilesPanelProps {
 }
 
 const NO_TABS: string[] = [];
+
+export { mobileListSize } from "@/components/layout/DockedListLayout";
 
 /** Last path segment — the file name shown on the tab. */
 function baseName(path: string): string {
@@ -56,9 +50,13 @@ function sourceIcon(source: PeekFileValue["source"]) {
 /**
  * Files tool (R4, R5, §4):
  * Overlays FilesLeftPane over FilePreviewPane rather than splitting via MasterDetailShell.
- * The content pane pads itself by the expanded panel width when open.
- * Drag-to-resize is supported on the panel's right edge (§4a).
- * The rail has zero content-side inset so FilePreviewPane renders full width underneath (§4b).
+ * The list panel is docked on the RIGHT of the preview (left of the window rail column); the
+ * content pane pads its right edge by the panel width when open.
+ * Drag-to-resize is on the panel's LEFT edge (§4a): dragging left grows it.
+ * Stacked (`masterDetailVertical`) keeps its top overlay. At <=768px the layout is the desktop one: the list
+ * is full height on the right, the tab bar spans only the content column, its width clamped so the content keeps
+ * >=144px; while it is open on a phone its header carries the pane controls. Stacked height is clamped so the
+ * preview keeps >=96px.
  */
 export function FilesPanel({
   api,
@@ -70,7 +68,6 @@ export function FilesPanel({
   onWidthDrag,
   onHeightDrag,
 }: FilesPanelProps) {
-  const env = useDemoEnv();
   const wt = worktreeId ?? "__none__";
 
   const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
@@ -82,146 +79,9 @@ export function FilesPanel({
   const clearPeekFile = useWorkspaceStore((s) => s.clearPeekFile);
   const peekActive = !!peekFile && peekFile.worktreeId === wt;
 
-  const { isPanelOpen: insetPanelOpen } = useToolsInset();
+  const { isPanelOpen: insetPanelOpen, listHostsGlobal, listHostsPane } = useToolsInset();
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const isPanelOpen = insetPanelOpen || fileTreeVisible;
-
-  const masterDetailVertical = useWorkspaceStore(
-    (s) => !!(s.layoutByWorktree[wt] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
-  );
-  const storedWidth = useWorkspaceStore(
-    (s) => s.filesLeftPaneWidthByWorktree[wt] ?? FILES_LEFT_PANE_DEFAULT_WIDTH,
-  );
-  const storedHeight = useWorkspaceStore(
-    (s) => s.filesLeftPaneHeightByWorktree[wt] ?? FILES_LEFT_PANE_DEFAULT_HEIGHT,
-  );
-  const [localDragWidth, setLocalDragWidth] = useState<number | null>(null);
-  const [localDragHeight, setLocalDragHeight] = useState<number | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  // Padding transition only for an explicit toggle (toggleFileTree /
-  // setMasterDetailVertical raise this hint for ~300ms) — never derived from
-  // `isPanelOpen`/`masterDetailVertical`/width changing, which a worktree
-  // switch to a differently-persisted layout also does. See
-  // `layoutTransitionHint` in useStore.ts.
-  const animatePadding = useWorkspaceStore((s) => s.layoutTransitionHint === "files");
-  const activeWidth = currentWidth ?? localDragWidth ?? storedWidth;
-  const activeHeight = currentHeight ?? localDragHeight ?? storedHeight;
-
-  // The panel is an overlay on this pane; clamp its size to the pane's OWN
-  // measured width/height (not window.innerWidth/innerHeight), so dragging can
-  // never push the preview off-screen or leave a persisted size unreachable
-  // when the pane later narrows (split-drag, exiting fullscreen, a mobile
-  // stacked split).
-  const paneRef = useRef<HTMLDivElement>(null);
-  const clampDim = useCallback(
-    (px: number) => {
-      const rect = paneRef.current?.getBoundingClientRect();
-      if (masterDetailVertical) {
-        const paneH = rect?.height ?? window.innerHeight;
-        const max = Math.min(FILES_LEFT_PANE_MAX_HEIGHT, paneH - 80);
-        return Math.min(max, Math.max(FILES_LEFT_PANE_MIN_HEIGHT, px));
-      } else {
-        const paneW = rect?.width ?? window.innerWidth;
-        const max = Math.min(FILES_LEFT_PANE_MAX_WIDTH, paneW - 80);
-        return Math.min(max, Math.max(FILES_LEFT_PANE_MIN_WIDTH, px));
-      }
-    },
-    [masterDetailVertical],
-  );
-
-  const cleanupDragRef = useRef<(() => void) | null>(null);
-  // Empty deps: run the cleanup (and release any mid-drag width/height
-  // override) only on unmount.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    return () => {
-      if (cleanupDragRef.current) {
-        cleanupDragRef.current();
-      }
-      // If we unmount mid-drag (dragWidth/dragHeight still overriding the
-      // stored size), release the override so ToolPanel doesn't stay stuck
-      // on the dragged value.
-      onWidthDrag?.(null);
-      onHeightDrag?.(null);
-    };
-  }, []);
-
-  // Pointer Events resize (mouse + touch + pen unified via setPointerCapture) —
-  // same mechanism the terminal/agent PanelResizeHandle divider uses, which is
-  // why that one already works on a phone while this hand-rolled handle didn't.
-  const startResize = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault();
-      const startPos = masterDetailVertical ? e.clientY : e.clientX;
-      const startDim = masterDetailVertical ? activeHeight : activeWidth;
-      const prevUserSelect = document.body.style.userSelect;
-      const prevCursor = document.body.style.cursor;
-      if (!env.demo) {
-        document.body.style.userSelect = 'none';
-        document.body.style.cursor = masterDetailVertical ? 'row-resize' : 'col-resize';
-      }
-      setIsDragging(true);
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-
-      function onMove(ev: PointerEvent) {
-        const currentPos = masterDetailVertical ? ev.clientY : ev.clientX;
-        const nextDim = clampDim(startDim + (currentPos - startPos));
-        if (masterDetailVertical) {
-          if (onHeightDrag) {
-            onHeightDrag(nextDim);
-          } else {
-            setLocalDragHeight(nextDim);
-          }
-        } else {
-          if (onWidthDrag) {
-            onWidthDrag(nextDim);
-          } else {
-            setLocalDragWidth(nextDim);
-          }
-        }
-      }
-
-      function cleanup() {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onUp);
-        if (!env.demo) {
-        document.body.style.userSelect = prevUserSelect;
-        document.body.style.cursor = prevCursor;
-      }
-        cleanupDragRef.current = null;
-      }
-
-      function onUp(ev: PointerEvent) {
-        cleanup();
-        const currentPos = masterDetailVertical ? ev.clientY : ev.clientX;
-        const finalDim = clampDim(startDim + (currentPos - startPos));
-        if (masterDetailVertical) {
-          useWorkspaceStore.getState().setFilesLeftPaneHeight(wt, finalDim);
-          setIsDragging(false);
-          if (onHeightDrag) {
-            onHeightDrag(null);
-          } else {
-            setLocalDragHeight(null);
-          }
-        } else {
-          useWorkspaceStore.getState().setFilesLeftPaneWidth(wt, finalDim);
-          setIsDragging(false);
-          if (onWidthDrag) {
-            onWidthDrag(null);
-          } else {
-            setLocalDragWidth(null);
-          }
-        }
-      }
-
-      cleanupDragRef.current = cleanup;
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-      window.addEventListener("pointercancel", onUp);
-    },
-    [masterDetailVertical, activeHeight, activeWidth, onHeightDrag, onWidthDrag, wt, clampDim],
-  );
 
   // Handle to FilesLeftPane's active-mode tabbable row
   const leftPaneFocusHandle = useRef<FilesLeftPaneHandle | null>(null);
@@ -240,7 +100,12 @@ export function FilesPanel({
       return;
     }
     if (!isPanelOpen) return;
-    requestAnimationFrame(() => refocusLeftPane());
+    requestAnimationFrame(() => {
+      // A keyboard user who just showed the pane from the actions chip's toggle keeps focus on it (the chip never
+      // moves, so focus never has to follow it); Tab then enters the list.
+      if (document.activeElement?.closest(".top-actions-anchor")) return;
+      refocusLeftPane();
+    });
   }, [isPanelOpen, refocusLeftPane]);
 
   usePendingFileOpens(api, worktreeId);
@@ -362,140 +227,27 @@ export function FilesPanel({
     </>
   );
 
-  const outerInset = useTopRightInset();
-
   return (
-    <div
-      ref={paneRef}
-      className="files-panel"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        minWidth: 0,
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        position: "relative",
-      }}
-    >
-      {/* Expanded left pane as an overlay (R4). Always mounted (R16), hidden via display:none when closed */}
-      <div
-        className={`files-left-pane-overlay${isPanelOpen ? " files-left-pane-overlay--open" : ""}`}
-        style={{
-          position: "absolute",
-          top: 0,
-          bottom: masterDetailVertical ? undefined : 0,
-          left: masterDetailVertical ? "var(--tools-rail-w, 36px)" : 0,
-          right: masterDetailVertical ? 0 : undefined,
-          width: masterDetailVertical ? undefined : "calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))",
-          height: masterDetailVertical ? "var(--tools-rail-panel-h, 240px)" : undefined,
-          zIndex: 20,
-          background: "var(--bg-sidebar-secondary)",
-          borderRight: masterDetailVertical ? undefined : "var(--border-width) solid var(--border-default)",
-          borderBottom: masterDetailVertical ? "var(--border-width) solid var(--border-default)" : undefined,
-          display: isPanelOpen ? "flex" : "none",
-          flexDirection: "column",
-          overflow: "visible",
-        }}
-      >
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden", marginLeft: masterDetailVertical ? undefined : "var(--tools-rail-w, 36px)" }}>
-          <FilesLeftPane ref={leftPaneFocusHandle} api={api} worktreeId={worktreeId} scope={scope} />
-        </div>
-        <div
-          className={`files-left-pane-resize-handle${masterDetailVertical ? " files-left-pane-resize-handle--horizontal" : ""}`}
-          role="separator"
-          aria-orientation={masterDetailVertical ? "horizontal" : "vertical"}
-          aria-label={masterDetailVertical ? "Resize files top panel" : "Resize files side panel"}
-          aria-valuenow={masterDetailVertical ? activeHeight : activeWidth}
-          aria-valuemin={masterDetailVertical ? FILES_LEFT_PANE_MIN_HEIGHT : FILES_LEFT_PANE_MIN_WIDTH}
-          aria-valuemax={masterDetailVertical ? FILES_LEFT_PANE_MAX_HEIGHT : FILES_LEFT_PANE_MAX_WIDTH}
-          tabIndex={0}
-          data-dragging={isDragging || undefined}
-          onPointerDown={startResize}
-          onKeyDown={(e) => {
-            if (masterDetailVertical) {
-              if (e.key === "ArrowUp") {
-                e.preventDefault();
-                const next = clampDim(activeHeight - 10);
-                useWorkspaceStore.getState().setFilesLeftPaneHeight(wt, next);
-                onHeightDrag?.(null);
-              } else if (e.key === "ArrowDown") {
-                e.preventDefault();
-                const next = clampDim(activeHeight + 10);
-                useWorkspaceStore.getState().setFilesLeftPaneHeight(wt, next);
-                onHeightDrag?.(null);
-              }
-            } else {
-              if (e.key === "ArrowLeft") {
-                e.preventDefault();
-                const next = clampDim(activeWidth - 10);
-                useWorkspaceStore.getState().setFilesLeftPaneWidth(wt, next);
-                onWidthDrag?.(null);
-              } else if (e.key === "ArrowRight") {
-                e.preventDefault();
-                const next = clampDim(activeWidth + 10);
-                useWorkspaceStore.getState().setFilesLeftPaneWidth(wt, next);
-                onWidthDrag?.(null);
-              }
-            }
-          }}
-        />
-      </div>
-
-      {/* Content pane (R4, R5, §4b): full width underneath, padded left/top to avoid overlay only when open */}
-      <div
-        className="files-panel__content"
-        style={{
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-          paddingLeft: !masterDetailVertical && isPanelOpen ? "calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))" : "0px",
-          paddingTop: masterDetailVertical && isPanelOpen ? "var(--tools-rail-panel-h, 240px)" : "0px",
-          transition: isDragging || !animatePadding
-            ? "none"
-            : masterDetailVertical
-              ? "padding-top 0.15s ease"
-              : "padding-left 0.15s ease",
-        }}
-      >
-        {/* Topbar: open file tabs, height matching desktop TopBar (35px), padded right to clear ToolFullscreenButton + orientation toggle + floating controls.
-            Padded left by rail width only when panel is closed or stacked so tabs avoid the rail icons (§4b). */}
-        <div
-          className="files-topbar"
-          data-tauri-drag-region="deep"
-          style={{
-            height: "35px",
-            minHeight: "35px",
-            maxHeight: "35px",
-            boxSizing: "border-box",
-            display: "flex",
-            alignItems: "stretch",
-            // Closed: the bar is at the very top, so it must clear the rail AND the mobile
-            // toggle. Open + stacked: it sits below the tree panel, clear of the toggle
-            // (only the rail can still be beside it). Open + side-by-side: right of the panel.
-            paddingLeft: !isPanelOpen
-              ? "max(var(--tools-rail-w, 36px), var(--tools-toggle-w, 0px))"
-              : masterDetailVertical
-                ? "var(--tools-rail-w, 36px)"
-                : "0px",
-            // Only reserve room for the floating top-right buttons when the topbar
-            // actually sits at the top; in stacked mode with the tree open it is
-            // pushed below the tree panel, clear of them, so let it span the width.
-            paddingRight: masterDetailVertical && isPanelOpen
-              ? "0px"
-              : outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px",
-          }}
-        >
+    <DockedListLayout
+      wt={wt}
+      open={isPanelOpen}
+      handleLabel="files"
+      currentWidth={currentWidth}
+      currentHeight={currentHeight}
+      onWidthDrag={onWidthDrag}
+      onHeightDrag={onHeightDrag}
+      topbar={
+        <>
           {rightPaneTopbar}
-        </div>
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-          <FilePreviewPane api={api} worktreeId={worktreeId} scope={scope} />
-        </div>
-      </div>
-    </div>
+          {/* Pane controls live here except under an open list that hosts them (stacked, or side-by-side on a
+              phone: then the mode header does); the chip's reserve moves to the list header while the desktop
+              side-by-side list is open (HOST_PRIORITY.filesBarFallback = fallback if that header has no host). */}
+          <ToolActionsHost when={!listHostsPane} priority={listHostsGlobal ? HOST_PRIORITY.filesBarFallback : HOST_PRIORITY.default} />
+        </>
+      }
+      list={<FilesLeftPane ref={leftPaneFocusHandle} api={api} worktreeId={worktreeId} scope={scope} />}
+    >
+      <FilePreviewPane api={api} worktreeId={worktreeId} scope={scope} />
+    </DockedListLayout>
   );
 }

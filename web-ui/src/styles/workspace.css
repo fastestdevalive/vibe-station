@@ -1,4 +1,13 @@
 .app-shell {
+  --tools-rail-col-w: 36px;
+  /* Shared sizes, declared ONCE (JS twins: lib/layoutSizes.ts; anchorCss.test.ts pins them equal). */
+  --pane-row-h: 35px; /* every pane top row: Files bar, tool-panel bar, rail head, actions group */
+  --tools-toggle-size: 28px; /* Search/"…"/tools-toggle buttons */
+  /* Tools toggle centred in the rail column; Search/"…" keep the same inset left of it. */
+  --tools-toggle-inset: calc((var(--tools-rail-col-w) - var(--tools-toggle-size)) / 2);
+  /* Actions chip (Search, "…", toggle): main's floating chrome, width from tokens (no measurement). */
+  --top-actions-w: calc(var(--border-width) + var(--space-2) + 3 * var(--tools-toggle-size) + 2 * var(--space-1) + var(--tools-toggle-inset));
+  --conn-pill-max: 72px;
   --global-status-bar-h: 24px;
   display: flex;
   flex-direction: column;
@@ -133,8 +142,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding-right: var(--space-2);
+  container: file-tree-header / inline-size;
 }
+
+/* Narrow phone list: the trim lives with its desktop twin at the end of this file (`@container file-tree-header`):
+   it must come AFTER the base `.file-tree-scope-slot` / tail rules below, or their min-width / flex values win. */
 
 .file-tree-sidebar-header__tail {
   margin-left: auto;
@@ -170,7 +182,7 @@
   padding: 0 var(--space-2);
   border: none;
   border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   font-family: inherit;
   background: transparent;
   color: var(--fg-muted);
@@ -187,7 +199,19 @@
 
 .file-tree-diff-toggle--on {
   color: var(--fg-primary);
+  background: transparent;
+}
+
+.file-tree-diff-toggle--on:hover {
   background: var(--bg-hover);
+}
+
+.files-left-pane-overlay [tabindex="-1"]:focus {
+  outline: none;
+}
+
+.tool-panel:focus {
+  outline: none;
 }
 
 .file-tree-scope-chips {
@@ -2089,13 +2113,6 @@
   min-width: 0;
 }
 
-.top-bar__pane-toggles {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
 .top-bar__pane-btn {
   display: inline-flex;
   align-items: center;
@@ -2121,10 +2138,8 @@
 }
 
 .top-bar__overflow-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 200;
+  /* portaled to the portal root; top/right/z-index are set inline from the trigger's rect */
+  position: fixed;
   min-width: 200px;
   background: var(--bg-card);
   border: var(--border-width) solid var(--border-default);
@@ -2278,31 +2293,56 @@
   overflow: hidden;
 }
 
-/* Floating top-right controls widget in classic per-worktree layout */
+/* Top-right actions chip (classic desktop). One element, last child of #workspace-layout, never re-parented:
+   same box whether the tools pane/rail is shown or not (main's look; toggle centred on the rail column). */
+.top-actions-anchor {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 50;
+  pointer-events: auto;
+}
+#workspace-layout[data-pane-fullscreen] > .top-actions-anchor {
+  visibility: hidden;
+}
 .top-bar-floating-actions {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  height: 35px;
-  padding: 0 var(--space-2);
+  height: var(--pane-row-h);
+  padding: 0 var(--tools-toggle-inset) 0 var(--space-2);
   flex-shrink: 0;
-  pointer-events: auto;
+  box-sizing: border-box;
   background: var(--bg-elevated);
   border-bottom: var(--border-width) solid var(--border-default);
   border-left: var(--border-width) solid var(--border-default);
   border-bottom-left-radius: var(--radius-md);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-  box-sizing: border-box;
+  box-shadow: var(--shadow-sm);
 }
-
-.top-bar-floating-actions .icon-btn {
-  width: 28px;
-  height: 28px;
-}
-
+.top-bar-floating-actions .icon-btn,
 .top-bar-floating-actions .top-bar__pane-btn {
-  width: 28px;
-  height: 28px;
+  width: var(--tools-toggle-size);
+  height: var(--tools-toggle-size);
+  margin: 0;
+}
+.top-bar-floating-actions .conn-pill {
+  max-width: var(--conn-pill-max);
+  position: relative;
+  margin-right: 0;
+  padding: 2px 6px;
+  overflow: hidden;
+}
+.top-bar-floating-actions .conn-pill__retry {
+  padding: 2px 6px;
+}
+/* Inside the chip the pill is dot + Retry; the label stays for AT (role=status) and on hover (title). */
+.top-bar-floating-actions .conn-pill__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .icon-btn {
@@ -2673,15 +2713,6 @@
  * <button>, since HTML forbids nesting interactive controls). More visible
  * by default than `.tab__close` (0.6 vs 0) since it's a real, frequently-used
  * control rather than an incidental dismiss action. */
-/* Wraps the "Files" tab button + its layout-toggle button as one visual
- * unit — a real sibling <button>, not a descendant of `.tab`, since the
- * toggle needs its own independently-focusable control (see the JSX
- * comment in ToolPanel.tsx for why nesting inside `.tab` was rejected). */
-.tool-panel__files-tab-wrap {
-  display: flex;
-  align-items: stretch;
-}
-
 .tab__layout-toggle {
   display: inline-flex;
   align-items: center;
@@ -2706,7 +2737,6 @@
  * when the Files tab itself is active — `~` targets the toggle as the
  * active tab BUTTON's general sibling (they're siblings inside the wrap,
  * not parent/child, so a descendant selector wouldn't match). */
-.tool-panel__files-tab-wrap:hover .tab__layout-toggle,
 .tab[data-active="true"] ~ .tab__layout-toggle {
   opacity: 1;
 }
@@ -2726,7 +2756,6 @@
  */
 .tabs-strip__zoom .tab.tab--icon,
 .tabs-strip__fs .tab.tab--icon,
-.files-topbar__controls .tab.tab--icon,
 .tab.tab--icon.tool-bar-btn {
   box-sizing: border-box;
   display: inline-flex;
@@ -2746,6 +2775,26 @@
   max-width: 28px;
   max-height: 28px;
   padding: 0;
+}
+
+/* Phone tap targets for the tools pane's layout toggle + Fullscreen: full bar
+   height (the fixed 35px files bar) and 44px wide. Scoped to .tool-panel so the
+   agent pane's PaneTools button keeps its size. */
+@media (max-width: 768px) {
+  .tool-panel .tab.tab--icon.tool-bar-btn {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 35px;
+    min-height: 35px;
+    max-height: 35px;
+  }
+  /* In the open list's header (phone side-by-side) the content column is narrow: tighter controls. */
+  .files-left-pane-overlay .actions-host .tab.tab--icon.tool-bar-btn {
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+  }
 }
 
 .tab--new {
@@ -2976,6 +3025,11 @@
   background: var(--bg-primary);
   display: flex;
   flex-direction: column;
+}
+
+/* Tools fullscreen on desktop keeps the window rail visible (R7): stop short of its column. */
+.pane-viewport-fullscreen--keep-rail {
+  right: var(--tools-rail-col-w, 36px);
 }
 
 .pane-shell.pane-shell--viewport {
@@ -3761,7 +3815,6 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 var(--space-2);
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-sidebar-secondary);
   flex-shrink: 0;
@@ -6462,20 +6515,6 @@ button.dashboard-card {
   overflow: hidden;
 }
 
-.tool-panel__tabs-scroll {
-  display: flex;
-  align-items: stretch;
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.tool-panel__tabs-scroll::-webkit-scrollbar {
-  display: none;
-}
-
 .tool-panel__body {
   flex: 1;
   min-width: 0;
@@ -8162,6 +8201,42 @@ button.dashboard-card {
   user-select: none;
 }
 
+/* Column: the host (ToolsRailColumn, tile rail) owns border and stacking. */
+.files-left-rail--column {
+  border-right: none;
+  z-index: auto;
+  width: 100%;
+}
+
+/* Canvas tile rail (board C): full-height column on the tile's right edge. */
+.tool-panel__tile-rail {
+  flex: none;
+  box-sizing: border-box;
+  width: 36px;
+  display: flex;
+  flex-direction: column;
+  padding-top: 6px;
+  background: var(--bg-secondary);
+  border-left: var(--border-width) solid var(--border-default);
+}
+
+/* Phone (<=768px): the classic tools pane carries its own right-edge rail (no window column, no strip).
+   If `viewport-fit=cover` is ever added, this needs `padding-right: env(safe-area-inset-right)`. */
+.tool-panel__tile-rail--touch {
+  width: calc(44px + var(--border-width));
+  padding-top: 0;
+  min-height: 0;
+}
+
+.tool-panel__tile-rail--touch .files-left-rail {
+  flex: 1 1 auto; /* fill; scroll when 7 x 44px does not fit (keyboard open, short pane) */
+  overscroll-behavior: contain;
+}
+
+.tool-panel__tile-rail--touch .files-left-rail__btn {
+  height: 44px;
+}
+
 .files-left-rail__group {
   display: flex;
   flex-direction: column;
@@ -8207,31 +8282,6 @@ button.dashboard-card {
   cursor: not-allowed;
 }
 
-/* Mobile-only rail show/hide toggle: the top bar's left slot, above the rail. */
-.tool-panel__rail-toggle {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 31;
-  width: var(--tools-toggle-w, 36px);
-  height: 35px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: var(--bg-secondary);
-  border: none;
-  border-right: var(--border-width) solid var(--border-default);
-  border-bottom: var(--border-width) solid var(--border-default);
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.tool-panel__rail-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--fg-primary);
-}
-
 .files-left-pane {
   background: var(--bg-sidebar-secondary);
   position: relative;
@@ -8241,37 +8291,6 @@ button.dashboard-card {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-
-.files-left-pane__overlay-chrome {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  z-index: 25;
-  display: flex;
-  align-items: center;
-}
-
-.files-left-pane__layout-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  opacity: 0.7;
-  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-}
-
-.files-left-pane__layout-toggle:hover {
-  opacity: 1;
-  background: var(--bg-hover);
-  color: var(--fg-primary);
 }
 
 /* Phase 3 (Requirement 9) — always-mounted tree/search bodies inside
@@ -8295,7 +8314,8 @@ button.dashboard-card {
 .files-left-pane-resize-handle {
   position: absolute;
   top: 0;
-  right: -5px;
+  left: -5px;
+  right: auto;
   width: 10px;
   height: 100%;
   z-index: 30;
@@ -8321,6 +8341,20 @@ button.dashboard-card {
   cursor: row-resize;
 }
 
+/* Coarse pointers get a wider resize grip. */
+@media (pointer: coarse) {
+  .files-left-pane-resize-handle {
+    left: -10px;
+    width: 20px;
+  }
+  .files-left-pane-resize-handle--horizontal {
+    left: 0;
+    bottom: -10px;
+    width: 100%;
+    height: 20px;
+  }
+}
+
 .files-panel__preview-only {
   flex: 1;
   min-height: 0;
@@ -8340,20 +8374,14 @@ button.dashboard-card {
   overflow: hidden;
 }
 
-/* VCS commit view's topbar (Revision 4) — same 35px + right inset as the
-   Files topbar and VCS bar so the back-arrow breadcrumb never sits under the
-   floating top-right fullscreen/orientation buttons plus outer inset. */
+/* VCS commit view's topbar (Revision 4) — same 35px as the Files topbar; hosts the
+   pane controls via ToolActionsHost; may reserve the actions chip. */
 .vcs-topbar {
   background: var(--bg-sidebar-secondary);
   height: 35px;
   min-height: 35px;
   max-height: 35px;
   box-sizing: border-box;
-  /* The VCS tab's only floating control is fullscreen (the orientation toggle is
-     Files-only), so reserve just that. Left: clear the mobile rail toggle once the
-     rail is hidden (the body's own rail offset is gone then). */
-  padding-left: max(0px, calc(var(--tools-toggle-w, 0px) - var(--tools-rail-w, 36px)));
-  padding-right: calc(40px + var(--tools-top-right-inset, 0px));
 }
 
 .vcs-topbar__refresh {
@@ -8509,6 +8537,25 @@ button.dashboard-card {
   transition: opacity var(--transition-fast), background var(--transition-fast);
 }
 
+/* Phones: a 28px touch target for the tab's close (12px icon centred in it), and tabs capped at the strip width with
+   tighter chrome so the name ellipsises while the "Outside project" tag and the close stay on screen in the narrow
+   content column (list open beside it). */
+@media (max-width: 768px) {
+  .files-topbar__tab-close {
+    min-width: 28px;
+    min-height: 28px;
+  }
+  .files-topbar__tab {
+    max-width: 100%;
+    gap: var(--space-1);
+    padding: var(--space-2);
+  }
+  .files-topbar__tab > svg,
+  .files-topbar__tab-close {
+    flex: none;
+  }
+}
+
 .files-topbar__tab-close:hover {
   opacity: 1;
   background: var(--bg-hover);
@@ -8538,24 +8585,6 @@ button.dashboard-card {
 .files-topbar__add:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.files-topbar__controls {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 0;
-  flex-shrink: 0;
-  border-left: var(--border-width) solid var(--border-default);
-}
-
-.files-topbar__zoom-label {
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  padding: 0 var(--space-1) 0 var(--space-2);
-  user-select: none;
 }
 
 /* Font size overlay — top-right corner of the file/diff preview pane. */
@@ -8747,16 +8776,6 @@ button.dashboard-card {
 .preview-diffinfo__view-source:hover {
   background: var(--bg-hover);
   color: var(--fg-primary);
-}
-
-/* Panel-level actions (fullscreen + close) on the tool-selector bar. */
-.tool-panel__tabs-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  padding: 0 2px;
-  border-left: var(--border-width) solid var(--border-default);
 }
 
 /* Creation-time "initial context" dropzone (New worktree / New agent) */
@@ -9357,4 +9376,117 @@ body[data-tauri-os="macos"] .sidebar-header {
 .menu-pop__item {
   display: flex;
   align-items: center;
+}
+
+/* Actions host: in-flow slot in a pane's top row (pane controls, then the reserve). See TopActionsSlot.tsx. */
+.actions-host {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+  align-items: center;
+  align-self: stretch;
+}
+.actions-host > span:first-child {
+  display: contents;
+}
+/* Reserve: empty spacer in the ONE row under the actions chip (registry pick), sized from tokens. */
+.actions-host__reserve {
+  display: none;
+}
+.actions-host__reserve[data-active] {
+  display: block;
+  flex: none;
+  align-self: stretch;
+  width: calc(var(--top-actions-w) + var(--top-actions-pill, 0px) - var(--top-actions-under, 0px));
+}
+#workspace-layout[data-rail] {
+  --top-actions-under: var(--tools-rail-col-w);
+}
+#workspace-layout:has(> .top-actions-anchor .conn-pill) {
+  --top-actions-pill: calc(var(--conn-pill-max) + var(--space-1));
+}
+
+/* Host bar of a ToolPanel surface that has no top row of its own (empty state, non-Files/VCS tabs). */
+.tool-panel__bar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: var(--pane-row-h);
+  min-height: var(--pane-row-h);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+
+/* A top row that can sit under the actions chip (mounts a ToolActionsHost / ModeHeaderActionsHost / ActionsHost, whose
+   reserve spans the chip): flush right on desktop (the reserve is the only right inset); phones have no chip, so
+   the row keeps a normal right padding. EVERY such row uses this class: do not list rows in a selector. A row that
+   needs a different gutter overrides --actions-row-pad on itself (e.g. .artifacts-head). */
+.actions-row {
+  padding: 0 0 0 var(--actions-row-pad, var(--space-2));
+}
+@media (max-width: 768px) {
+  .actions-row {
+    padding-right: var(--actions-row-pad, var(--space-2));
+  }
+}
+
+/* Desktop twin of the "Narrow phone list" trim near `.file-tree-sidebar-header` (same rules, wider threshold; keep both).
+   The side-by-side list header's right end is reserved for the actions chip (~69px), so the same trim
+   applies up to a wider list; phones use the 200/260px blocks right below. */
+@media (min-width: 769px) {
+  @container file-tree-header (max-width: 320px) {
+    .file-tree-scope-delta { display: none; }
+    .file-tree-scope-slot { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+    .file-tree-scope-chips { gap: 0; }
+    .file-tree-scope-chip { padding: 2px var(--space-1); }
+    .file-tree-diff-toggle { padding: 0 var(--space-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-tree-sidebar-header__tail { flex-shrink: 1; min-width: 0; }
+  }
+}
+/* Phones: the open list's header also carries the pane controls (layout toggle + Fullscreen, ~72px), so the same trim
+   applies up to 260px; at the default phone list widths (<=200px) the scope chips give way entirely so the controls
+   and "Changes" stay whole (widen the list and they return). */
+@media (max-width: 768px) {
+  @container file-tree-header (max-width: 200px) {
+    .file-tree-scope-slot { display: none; }
+  }
+  @container file-tree-header (max-width: 260px) {
+    .file-tree-scope-delta { display: none; }
+    .file-tree-scope-slot { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+    .file-tree-scope-chips { gap: 0; }
+    .file-tree-scope-chip { padding: 2px var(--space-1); }
+    .file-tree-diff-toggle { padding: 0 var(--space-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-tree-sidebar-header__tail { flex-shrink: 1; min-width: 0; }
+  }
+}
+
+/* VCS commit view: the docked changed-file list (header row mirrors .artifacts-head). */
+.commit-files {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-sidebar-secondary);
+}
+.commit-files__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  height: var(--pane-row-h);
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  border-bottom: var(--border-width) solid var(--border-default);
+  --actions-row-pad: 10px;
+}
+.commit-files__title {
+  font-weight: 500;
+  font-size: var(--fs-ui);
+  color: var(--fg-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

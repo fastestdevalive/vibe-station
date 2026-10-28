@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import type { ApiInstance } from "@/api";
-import type { Mode, Session, SupportedCli } from "@/api/types";
+import type { Mode, Session } from "@/api/types";
 import { ChannelToggleButton } from "@/components/chat/ChannelToggleButton";
+import { useSupportedClis } from "@/hooks/useSupportedClis";
 import { isSessionModeMissing } from "@/lib/modeIcon";
 import { ensureLoaded, retainSubscription, useModesStore } from "@/store/modesStore";
 
@@ -33,8 +34,6 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
   const modes = useModesStore((s) => s.modes);
   const modesLoaded = useModesStore((s) => s.loaded);
 
-  const [clis, setClis] = useState<SupportedCli[] | null>(null);
-  const [clisFailed, setClisFailed] = useState(false);
 
   const channel = session.channel ?? "tmux";
   const structurallyEligible = session.type === "agent" && channel !== "json";
@@ -45,25 +44,7 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
     return retainSubscription(api);
   }, [api, structurallyEligible]);
 
-  useEffect(() => {
-    if (!structurallyEligible) return undefined;
-    let live = true;
-    setClis(null);
-    setClisFailed(false);
-    api
-      .getSupportedClis()
-      .then((c) => {
-        if (!live) return;
-        setClis(c);
-      })
-      .catch(() => {
-        if (!live) return;
-        setClisFailed(true);
-      });
-    return () => {
-      live = false;
-    };
-  }, [api, structurallyEligible]);
+  const { clis, failed: clisFailed } = useSupportedClis(api, structurallyEligible);
 
   const modeMissing = isSessionModeMissing(session, modes);
 

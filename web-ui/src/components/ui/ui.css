@@ -1,0 +1,32 @@
+/* Shared UI primitives. Colours come from theme tokens only. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: var(--h-chip);
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--chip-border, var(--border-default));
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--chip-fg, var(--fg-secondary));
+  font-size: var(--fs-meta);
+  line-height: 1;
+  white-space: nowrap;
+}
+.chip--neutral {
+  --chip-fg: var(--fg-secondary);
+  --chip-border: var(--border-default);
+}
+.chip--warn {
+  --chip-fg: var(--fg-warning);
+  --chip-border: color-mix(in srgb, var(--fg-warning) 40%, transparent);
+}
+.chip--sm {
+  height: 16px;
+  padding: 0 6px;
+}
+.chip--md {
+  height: var(--h-chip);
+}

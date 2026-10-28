@@ -8,7 +8,7 @@ test("markdown file preview shows heading", async ({ page }) => {
 
 test("branch diff scope shows diff markers", async ({ page }) => {
   await page.goto("/worktree");
-  await page.getByRole("button", { name: /Diff view off/i }).click();
+  await page.getByRole("button", { name: /Changes view off/i }).click();
   await page.getByRole("button", { name: /^src$/ }).click();
   await page.getByText("App.tsx").click();
   await page.getByRole("button", { name: /^branch$/i }).click();

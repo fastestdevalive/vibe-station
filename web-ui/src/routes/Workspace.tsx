@@ -6,6 +6,7 @@ import { Layout } from "@/components/layout/Layout";
 import { GlobalStatusBar } from "@/components/layout/GlobalStatusBar";
 import { TopBar } from "@/components/layout/TopBar";
 import { LeftSidebar } from "@/components/layout/LeftSidebar";
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { TerminalPane } from "@/components/layout/TerminalPane";
 import { AgentPaneSlot } from "@/components/layout/AgentPaneSlot";
@@ -20,7 +21,7 @@ import { useWorkspaceStore, removeTileFromCanvas } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
 import { useProjectWorkspaceUrlSync } from "@/hooks/useProjectWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
@@ -94,7 +95,7 @@ export function Workspace() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  const isMobile = useMediaQuery("(max-width: 768px)");
+  const isMobile = useIsMobile();
 
   // Derive direct session context from URL
   const directSession = useMemo(() => {
@@ -885,9 +886,10 @@ export function Workspace() {
           <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
         )
       ) : null}
+      <KeyboardShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <Layout
         isClassicLayout={isClassicLayout}
-        floatingTopBar={
+        actionsGroup={
           isClassicLayout ? (
             <TopBar
               variant="floating"
@@ -904,9 +906,7 @@ export function Workspace() {
               leftSidebarCollapsed={leftSidebarCollapsed}
               mobileSidebarOpen={mobileSidebarOpen}
               onOpenQuickOpen={() => setQuickOpen(true)}
-              shortcutsOpen={shortcutsOpen}
               onOpenShortcuts={() => setShortcutsOpen(true)}
-              onCloseShortcuts={() => setShortcutsOpen(false)}
             />
           ) : undefined
         }
@@ -926,9 +926,7 @@ export function Workspace() {
               leftSidebarCollapsed={leftSidebarCollapsed}
               mobileSidebarOpen={mobileSidebarOpen}
               onOpenQuickOpen={() => setQuickOpen(true)}
-              shortcutsOpen={shortcutsOpen}
               onOpenShortcuts={() => setShortcutsOpen(true)}
-              onCloseShortcuts={() => setShortcutsOpen(false)}
               settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
               onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
             />
