@@ -25,7 +25,7 @@ to refactor it in an unrelated PR.
 ### Backend (Rust)
 
 - **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types + `Broadcaster`) ←
-  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity` (types, store) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
+  `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks` ← `vst-git`/`vst-activity`/`vst-review` (types, store, proc) ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
   `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`. `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by `vst-daemon` (hidden `agy-stream-acp` subcommand). No library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
@@ -296,6 +296,8 @@ else if (mode.cli === "opencode") { ... }
 | `native_history_importer?()` | optional (default `None`) | At-rest history importer for this harness's native store (`None` ⇒ toggle reports `historyImported:false` and the UI warns). Implement once the store is readable — importing terminal history into Rich Chat is preferred for every harness, so a plugin that omits it carries a comment saying why not |
 | `acp_ext_notification_event(method, params)` | optional (default `None`) | Turns an ACP ext notification for the current session into a persisted, never-rendered `task_signal` row (claude: raw SDK `task_*` messages, opted into via `acp_meta` `emitRawSDKMessages`); vendor parsing in the harness's one task file. **Never declare `_meta.jetbrains.air` in `initialize`**: it flips the claude adapter into AIR-client mode, which rewrites every tool-call shape we normalize |
 | `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id`, returns `TurnSettled` from a `Result` row (its adapter holds a turn open until background subagents settle), and maps `task_signal` rows (see `acp_ext_notification_event`) to `Confirmed`/`Ended` — structured state that beats the OS liveness probe |
+| `terminal_delivery()` | optional (default `None`) | `Some(TerminalDeliveryCaps)` once this CLI's terminal readiness probe is proven: enables Terminal scheduling / sends to a tmux agent (`settle_ms`, `multiline_ok`, `raw_lf`). `None` ⇒ "Scheduling isn't supported for this agent yet" (`rust/vst-agents/src/plugin.rs`) |
+| `terminal_readiness(pane)` | optional (default `Unknown`) | Classify a captured `PaneSnapshot` as `Ready` / `AwaitingApproval` / `Unknown`; the delivery job pastes only after two consecutive `Ready` reads and never answers an approval dialog |
 
 ### The two session identities (ACP)
 
@@ -320,6 +322,22 @@ in full in [`docs/RICH-CHAT-ACP.md`](docs/RICH-CHAT-ACP.md) (§ Two session iden
 - **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `daemon/src/agent-plugins/registry.ts`. Routes are allowed to import it. Services (`daemon/src/services/spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
 - **`CliId` type:** defined in `daemon/src/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.
 - **Importing history is preferred for every harness:** a new plugin either implements `native_history_importer?()` once its store is readable or adds a comment on the plugin explaining why not; defaulting to `None` silently keeps terminal turns invisible after a toggle.
+
+---
+
+## Terminal delivery safety — scheduled pastes into a tmux agent
+
+**Files:** `rust/vst-review/src/{delivery,probe,sanitize}.rs` · `rust/vst-proc/src/tmux.rs` · `rust/vst-agents/src/plugin.rs` (`terminal_delivery`, `terminal_readiness`)
+
+- **Stdin buffer only.** Text reaches tmux through a named buffer fed on stdin (`paste_buffer`/`paste_buffer_with`); never write a `/tmp` buffer file.
+- **Exact targets.** Address tmux as `=name:`; a bare `-t name` prefix-matches another session.
+- **Never answer approvals.** `AwaitingApproval`/`Unknown` keep waiting (then fail `timed_out`); the job never sends keys to dismiss a dialog.
+- **The probe lives in the plugin.** `terminal_readiness(pane)` and `terminal_delivery()` are `AgentPlugin` methods (default `Unknown`/`None`); `vst-review` is CLI-agnostic and gets them by injected closure.
+- **Sanitize every body.** `sanitize_paste_text` strips C0/C1/bidi/zero-width, normalises CR, caps 32 KB; multi-line only if `caps.multiline_ok`.
+- **One in flight per session.** Per-session FIFO; the 10-minute timeout starts when a job heads its queue.
+- **`deliveryPhase` is set only by `vst-review`** (`waiting`/`pasting`); store transitions clear it.
+- **Every terminal transition of a `channel='tmux'` row goes through `TerminalDeliveryHandle`** (sent, failed, cancelled, re-armed, gone: job, poller, cancel route, session delete, boot recovery) so the outcome observer fires exactly once. A direct store write skips it.
+- **Not serialized with jobs:** the immediate `/input` paste and the handoff paste. They share the pane but not the FIFO.
 
 ---
 

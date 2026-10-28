@@ -490,6 +490,16 @@ pub struct EditScheduledMessageBody {
     pub fire_at: String, // ISO-8601 / RFC 3339
 }
 
+/// `GET /sessions/:id/schedule` response: the session's whole scheduled-send
+/// state (same lists the `session:scheduled` event carries).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleSnapshotDto {
+    pub scheduled_sends: Vec<crate::domain::ScheduledMessageMeta>,
+    pub scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
+    pub scheduled_sent: Vec<crate::domain::ScheduledSentMeta>,
+}
+
 /// A row from `scheduled_messages`.
 #[derive(Debug, Clone)]
 pub struct ScheduledMessageRow {
@@ -504,4 +514,16 @@ pub struct ScheduledMessageRow {
     pub sent_at: Option<String>,
     pub sent_turn_id: Option<String>,
     pub failure_reason: Option<String>,
+    /// Set while a delivery is in flight (claimed by the poller / "send now").
+    pub claimed_at: Option<String>,
+    /// `'json'` | `'tmux'`; `None` = legacy row, behaves as json.
+    pub channel: Option<String>,
+    /// Terminal rows only: `'waiting'` | `'pasting'`; `None` = not delivering.
+    pub delivery_phase: Option<String>,
+    /// `FailureKind::as_str` value of a failed row; `None` = legacy.
+    pub failure_kind: Option<String>,
+    /// JSON object owned by the review-comments feature; `None` = no comments.
+    pub comments_snapshot: Option<String>,
+    /// `'schedule'` (or `None`) | `'immediate'`.
+    pub origin: Option<String>,
 }

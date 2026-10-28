@@ -38,4 +38,4 @@ pub use pty::{
 pub use raw_fd_write::write_borrowed_fd;
 pub use resolve_use_tmux::resolve_use_tmux;
 pub use shell::sq;
-pub use tmux::{ListErrorClass, NewSessionOptions, Tmux};
+pub use tmux::{ListErrorClass, NewSessionOptions, PaneFlags, Tmux};

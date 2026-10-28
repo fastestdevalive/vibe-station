@@ -47,6 +47,7 @@ import type {
   SearchResult,
   Session,
   SessionBreakKind,
+  ScheduleSnapshot,
   SessionMeta,
   Settings,
   SkillsResponse,
@@ -1752,6 +1753,14 @@ export function createClientApi() {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript?all=1`);
       return parseJson<TranscriptResponse>(res);
+    },
+
+    /** A session's scheduled-send state: pending (incl. waiting/pasting), failed,
+     *  and recently pasted Terminal sends. The daemon route is `GET /sessions/:id/schedule`. */
+    async getScheduledMessages(sessionId: string): Promise<ScheduleSnapshot> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/schedule`);
+      return parseJson<ScheduleSnapshot>(res);
     },
 
     /** Schedule a message for future delivery. */

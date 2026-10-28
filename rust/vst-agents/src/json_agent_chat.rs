@@ -13,8 +13,8 @@ use vst_store::transcript::{SincePage, TranscriptMeta, TranscriptPage};
 use vst_store::StoreHandle;
 use vst_types::domain::{
     Attachment, Channel, CliId, LifecycleState, Mention, NormalizedEventProvider, ProjectRecord,
-    ScheduledFailedMeta, ScheduledMessageMeta, SessionLifecycle, SessionMeta, SessionRecord,
-    WorktreeRecord,
+    ScheduledFailedMeta, ScheduledMessageMeta, ScheduledPhase, ScheduledSentMeta, SessionLifecycle,
+    SessionMeta, SessionRecord, WorktreeRecord,
 };
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::shared::Mode;
@@ -591,6 +591,8 @@ pub struct ScheduleState {
     pub sends: Vec<ScheduledMessageMeta>,
     pub failed: Vec<ScheduledFailedMeta>,
     pub turn_ids: Vec<String>,
+    /// Terminal rows pasted in the last 10 minutes (at most 3).
+    pub sent: Vec<ScheduledSentMeta>,
 }
 
 pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> ScheduleState {
@@ -602,6 +604,7 @@ pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> Sched
             pending: vec![],
             failed: vec![],
             sent_turn_ids: vec![],
+            pasted: vec![],
         });
     ScheduleState {
         sends: snap
@@ -609,6 +612,18 @@ pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> Sched
             .into_iter()
             .map(|r| ScheduledMessageMeta {
                 attachments: parse_attachments_json(r.attachments.as_deref()),
+                phase: Some(match r.delivery_phase.as_deref() {
+                    Some("waiting") => ScheduledPhase::Waiting,
+                    Some("pasting") => ScheduledPhase::Pasting,
+                    _ => ScheduledPhase::Scheduled,
+                }),
+                comment_count: r
+                    .comments_snapshot
+                    .as_deref()
+                    .and_then(vst_types::review::snapshot_meta)
+                    .map(|m| m.count),
+                channel: r.channel,
+                origin: r.origin,
                 id: r.id,
                 message: r.message,
                 fire_at: r.fire_at,
@@ -625,9 +640,26 @@ pub async fn read_schedule_state(store: &StoreHandle, session_id: &str) -> Sched
                 failure_reason: r
                     .failure_reason
                     .unwrap_or_else(|| "Delivery failed".to_string()),
+                failure_kind: r.failure_kind,
+                channel: r.channel,
+                origin: r.origin,
             })
             .collect(),
         turn_ids: snap.sent_turn_ids,
+        sent: snap
+            .pasted
+            .into_iter()
+            .filter_map(|r| {
+                Some(ScheduledSentMeta {
+                    sent_at: r.sent_at?,
+                    id: r.id,
+                    message: r.message,
+                    fire_at: r.fire_at,
+                    channel: r.channel,
+                    origin: r.origin,
+                })
+            })
+            .collect(),
     }
 }
 
@@ -705,6 +737,7 @@ pub async fn broadcast_scheduled_meta(
         scheduled_sends: st.sends,
         scheduled_failed: st.failed,
         scheduled_turn_ids: st.turn_ids,
+        scheduled_sent: Some(st.sent),
     });
 }
 

@@ -1,0 +1,35 @@
+{
+  "type": "session:scheduled",
+  "sessionId": "vs-141-a-5853aa1a",
+  "scheduledSends": [
+    {
+      "id": "m1",
+      "message": "/review src/auth",
+      "fireAt": "2026-01-01T15:00:00Z",
+      "channel": "tmux",
+      "phase": "waiting",
+      "commentCount": 2,
+      "origin": "schedule"
+    }
+  ],
+  "scheduledFailed": [
+    {
+      "id": "m2",
+      "message": "later",
+      "fireAt": "2026-01-01T12:00:00Z",
+      "failureReason": "Not ready within 10 min",
+      "channel": "tmux",
+      "failureKind": "timed_out"
+    }
+  ],
+  "scheduledTurnIds": ["t-1"],
+  "scheduledSent": [
+    {
+      "id": "m3",
+      "message": "done",
+      "fireAt": "2026-01-01T09:00:00Z",
+      "sentAt": "2026-01-01T09:00:07Z",
+      "channel": "tmux"
+    }
+  ]
+}

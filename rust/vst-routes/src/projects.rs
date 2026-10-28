@@ -158,6 +158,10 @@ pub struct ProjectRoutes {
     pub file_list: Arc<FileList>,
     pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
+    /// The Terminal delivery owner: a delete tells it which sessions are going
+    /// so jobs stop and held comments are restored (`None` in tests that never
+    /// schedule into a Terminal agent).
+    pub terminal_delivery: Option<vst_review::TerminalDeliveryHandle>,
 }
 
 impl ProjectRoutes {
@@ -179,7 +183,13 @@ impl ProjectRoutes {
             file_list: file_list.clone(),
             file_search: Arc::new(FileSearchIndex::new(file_list)),
             paths: Paths::default(),
+            terminal_delivery: None,
         }
+    }
+
+    pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
+        self.terminal_delivery = Some(td);
+        self
     }
 
     pub fn with_file_search(mut self, idx: Arc<FileSearchIndex>) -> Self {
@@ -1423,11 +1433,19 @@ impl ProjectRoutes {
             .ok_or_else(|| ProjectRouteError::NotFound(format!("Project '{id}' not found")))?;
 
         for session in &project.direct_sessions {
+            if let Some(td) = &self.terminal_delivery {
+                td.on_session_removed(&session.id).await;
+            }
             self.release_project_session(session, true).await;
         }
 
         for wt in &project.worktrees {
             for session in &wt.sessions {
+                // Terminal deliveries: stop the jobs and report `Gone` before the
+                // rows are purged below.
+                if let Some(td) = &self.terminal_delivery {
+                    td.on_session_removed(&session.id).await;
+                }
                 self.release_project_session(session, true).await;
             }
             let wt_path = self.paths.worktree_path(id, &wt.id);

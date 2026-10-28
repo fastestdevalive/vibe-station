@@ -574,6 +574,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Delete exited plain terminals: sweep stale ones now, then follow events.
     let terminal_reaper_handle =
         vst_routes::terminal_reaper::spawn_exited_terminal_reaper(state.session_routes.clone());
+    // The single Terminal delivery owner (built in `build_state`, shared with the
+    // routes): the schedule poller hands tmux rows to it, boot reports to it.
+    let terminal_delivery = state.session_routes.terminal_delivery.clone();
     let router = router_from_state(state);
 
     // ── Pollers ───────────────────────────────────────────────────────────────
@@ -586,14 +589,24 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let pr_poller = Arc::new(PrPollerHandle::new(store.clone(), broadcaster.clone()));
     let pr_handle = pr_poller.clone().start();
 
-    let schedule_poller = Arc::new(SchedulePollerHandle::new(
-        store.clone(),
-        broadcaster.clone(),
-        json_registry.clone(),
-        port,
-    ));
-    // Before the listener serves: fail rows a previous daemon left mid-delivery.
-    schedule_poller.recover_orphans().await;
+    let fire_target = terminal_delivery.clone();
+    let schedule_poller = Arc::new(
+        SchedulePollerHandle::new(
+            store.clone(),
+            broadcaster.clone(),
+            json_registry.clone(),
+            port,
+        )
+        .with_terminal_fire(Arc::new(move |row| {
+            let delivery = fire_target.clone();
+            Box::pin(async move { delivery.fire(row).await })
+        })),
+    );
+    // Before the listener serves: re-arm waiting Terminal rows and fail rows a
+    // previous daemon left mid-delivery, then tell the delivery owner so its
+    // outcome observer hears about each one.
+    let recovery = schedule_poller.recover_orphans().await;
+    terminal_delivery.report_recovery(recovery).await;
     let schedule_handle = schedule_poller.clone().start();
     let limits_handle = limits.start();
 
@@ -625,6 +638,8 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         lifecycle_handle.abort();
         pr_handle.abort();
         schedule_handle.abort();
+        // Jobs mid-wait leave their rows `waiting`; the next boot re-arms them.
+        terminal_delivery.shutdown();
         limits_handle.abort();
         terminal_reaper_handle.abort();
         background_boot_for_shutdown.abort_all().await;

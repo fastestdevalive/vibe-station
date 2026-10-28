@@ -580,28 +580,36 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
   });
 });
 
-describe("ChatPane failed scheduled sends", () => {
+describe("ChatPane scheduled strip", () => {
   const failed = [{ id: "f1", message: "failed msg", fireAt: "2026-01-01T00:00:00Z", failureReason: "Session was archived" }];
+  const scheduled = (sessionId: string, over: object = {}): Parameters<ReturnType<typeof createMockApi>["__test"]["emit"]>[0] => ({
+    type: "session:scheduled",
+    sessionId,
+    scheduledSends: [],
+    scheduledFailed: [],
+    scheduledTurnIds: [],
+    ...over,
+  });
 
-  it("shows failed rows from meta, keeps them across a meta event that omits the field, clears on []", async () => {
+  it("shows failed rows from session:scheduled in the strip (not the tray), clears on []", async () => {
     const api = createMockApi();
     render(<ChatPane api={api} session={jsonSession("js-fail")} visible />);
     act(() => {
-      api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { scheduledFailed: failed }) });
+      api.__test.emit(scheduled("js-fail", { scheduledFailed: failed }));
     });
-    const tray = await screen.findByRole("list", { name: "Queued messages" });
-    expect(within(tray).getByText("failed msg")).toBeTruthy();
-    expect(within(tray).getByText("Session was archived")).toBeTruthy();
+    const strip = await screen.findByRole("list", { name: "Scheduled messages" });
+    expect(within(strip).getByText("failed msg")).toBeTruthy();
+    expect(within(strip).getByText("Session was archived")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Queued messages" })).toBeNull();
 
-    // A regular turn/drain meta event doesn't carry scheduledFailed — keep the rows.
+    // A meta event never carries scheduled rows now — the strip keeps them.
     act(() => {
       api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { turnState: "thinking" }) });
     });
     expect(screen.getByText("failed msg")).toBeTruthy();
 
-    // An explicit empty array is authoritative — the rows (and tray) go away.
     act(() => {
-      api.__test.emit({ type: "session:meta", sessionId: "js-fail", meta: meta("js-fail", { scheduledFailed: [] }) });
+      api.__test.emit(scheduled("js-fail", { scheduledFailed: [] }));
     });
     await waitFor(() => expect(screen.queryByText("failed msg")).toBeNull());
   });
@@ -612,13 +620,103 @@ describe("ChatPane failed scheduled sends", () => {
     const dismiss = vi.spyOn(api, "dismissScheduledMessage");
     render(<ChatPane api={api} session={jsonSession("js-fail2")} visible />);
     act(() => {
-      api.__test.emit({ type: "session:meta", sessionId: "js-fail2", meta: meta("js-fail2", { scheduledFailed: failed }) });
+      api.__test.emit(scheduled("js-fail2", { scheduledFailed: failed }));
     });
     const user = userEvent.setup();
     await user.click(await screen.findByLabelText("Retry scheduled send"));
     await user.click(screen.getByLabelText("Dismiss failed scheduled send"));
     expect(retry).toHaveBeenCalledWith("js-fail2", "f1");
     expect(dismiss).toHaveBeenCalledWith("js-fail2", "f1");
+  });
+
+  it("8.T4 — DOM order is QueuedTray, StatusBar, SubagentRow, ScheduleStrip, then the composer block", async () => {
+    const api = createMockApi();
+    const session: Session = { ...jsonSession("js-order"), parentSessionId: "parent-x" };
+    const parent: Session = { ...jsonSession("parent-x"), id: "parent-x" };
+    useServerStore.setState({ sessions: [parent, session] });
+    api.__test.pushChatEvent("js-order", ev("u1", { kind: "user", role: "user", text: "queued msg", turnId: "q1" }));
+    const { container } = render(<ChatPane api={api} session={session} visible />);
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-order",
+        meta: meta("js-order", { turnState: "thinking", queueDepth: 1, queuedTurnIds: ["q1"] }),
+      });
+      api.__test.emit(
+        scheduled("js-order", {
+          scheduledSends: [{ id: "s1", message: "later", fireAt: new Date(Date.now() + 3_600_000).toISOString() }],
+        }),
+      );
+    });
+    await screen.findByRole("list", { name: "Scheduled messages" });
+    const sel = [
+      ".chat-queued-tray",
+      ".chat-statusbar",
+      ".chat-subagent-row",
+      ".sched-strip",
+      ".chat-pane__composer",
+    ].map((q) => container.querySelector(q));
+    sel.forEach((el, i) => expect(el, `selector #${i}`).toBeTruthy());
+    for (let i = 0; i < sel.length - 1; i++) {
+      expect(sel[i]!.compareDocumentPosition(sel[i + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(container.querySelector(".chat-pane__composer .sched-strip")).toBeNull();
+    useServerStore.setState({ sessions: [] });
+  });
+
+  it("the composer clock posts and the row appears in the strip; reschedule works", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    const edit = vi.spyOn(api, "editScheduledMessage");
+    api.__test.addSession(jsonSession("js-sched"));
+    render(<ChatPane api={api} session={jsonSession("js-sched")} visible />);
+    const fireAt = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    await act(async () => {
+      await latestComposerScheduleSend?.("ping later", [], fireAt);
+    });
+    const strip = await screen.findByRole("list", { name: "Scheduled messages" });
+    expect(within(strip).getByText("ping later")).toBeTruthy();
+    expect(within(strip).getByText(/· pending$/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Queued messages" })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.click(within(strip).getByRole("button", { name: "Reschedule message" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reschedule" });
+    await user.click(within(dialog).getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(edit).toHaveBeenCalledWith("js-sched", expect.any(String), { fireAt: expect.any(String) }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reschedule" })).toBeNull());
+  });
+
+  it("L4-06 — Send now is disabled on a pending row once the agent is done (sessionStates[id] ?? session.state)", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    api.__test.addSession(jsonSession("js-done"));
+    render(<ChatPane api={api} session={jsonSession("js-done")} visible />);
+    const fireAt = new Date(Date.now() + 2 * 3_600_000).toISOString();
+    await act(async () => {
+      await latestComposerScheduleSend?.("later", [], fireAt);
+    });
+    const strip = await screen.findByRole("list", { name: "Scheduled messages" });
+    expect((within(strip).getByRole("button", { name: "Send now" }) as HTMLButtonElement).disabled).toBe(false);
+    act(() => useWorkspaceStore.setState({ sessionStates: { "js-done": "done" } }));
+    expect((within(strip).getByRole("button", { name: "Send now" }) as HTMLButtonElement).disabled).toBe(true);
+    act(() => useWorkspaceStore.setState({ sessionStates: {} }));
+  });
+
+  it("9.T7 — issues exactly one GET /schedule and one subscribe per mount", async () => {
+    const api = createMockApi();
+    const get = vi.spyOn(api, "getScheduledMessages");
+    const sub = vi.spyOn(api, "subscribe");
+    render(<ChatPane api={api} session={jsonSession("js-once")} visible />);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    expect(get).toHaveBeenCalledWith("js-once");
+    expect(sub.mock.calls.filter(([ids]) => ids.includes("js-once"))).toHaveLength(1);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("a hidden pane (idle ChatPane of a Terminal agent) neither fetches nor subscribes", () => {
+    const api = createMockApi();
+    const get = vi.spyOn(api, "getScheduledMessages");
+    render(<ChatPane api={api} session={jsonSession("js-hid")} visible={false} />);
+    expect(get).not.toHaveBeenCalled();
   });
 });
 

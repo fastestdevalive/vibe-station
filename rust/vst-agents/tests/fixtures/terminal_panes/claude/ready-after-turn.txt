@@ -1,0 +1,45 @@
+
+ ▐▛███▛█   Claude Code v2.1.312
+▝▜██████▀  Sonnet 5.5 · Claude Max
+ ▝▝   ▝▝   /private/tmp/claude-501/spike-claude-paTr
+
+▎ Auto mode is now Claude Code's default permission mode.
+▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for risky actions and prompt injection before
+▎ executing, runs the ones it assesses as lower-risk, and blocks the rest.
+▎ https://code.claude.com/docs/en/permission-modes
+
+❯ Run the bash command: sleep 25 ; then reply with just the word done
+
+  Ran 2 shell commands
+
+⏺ Waiting for it to finish.
+
+✻ Churned for 8s · done 6:26 PM
+
+⏺ Background command "Wait 25 seconds in background" completed (exit code 0)
+
+⏺ done
+
+✻ Churned for 1s · done 6:27 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 3 agents

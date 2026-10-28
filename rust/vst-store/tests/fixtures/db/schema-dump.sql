@@ -40,7 +40,7 @@ CREATE TABLE scheduled_messages (
       sentTurnId    TEXT,
       failureReason TEXT,
       claimedAt     TEXT
-    );
+    , channel TEXT, deliveryPhase TEXT, failureKind TEXT, commentsSnapshot TEXT, origin TEXT);
 CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       worktreeId TEXT REFERENCES worktrees(id) ON DELETE CASCADE,

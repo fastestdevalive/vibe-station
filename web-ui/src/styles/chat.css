@@ -76,6 +76,27 @@
 .agent-pane-header > * {
   pointer-events: auto;
 }
+/* Terminal overlay stack: the header and the scheduled strip share ONE absolute
+   container so the strip flows directly under the (content-height) header with
+   no measuring. The stack ignores pointer events; only the header's controls,
+   the strip rows and the error line take them, so the terminal stays clickable. */
+.agent-pane-overlay-stack {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+.agent-pane-overlay-stack > * {
+  pointer-events: auto;
+}
+.agent-pane-overlay-stack > .agent-pane-header {
+  position: static;
+  pointer-events: none;
+}
 .agent-pane-header__left {
   display: flex;
   align-items: center;
@@ -259,7 +280,8 @@
 .terminal-exited-toggle {
   flex-shrink: 0;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-2);
 }
 .terminal-exited-toggle .channel-toggle-button,
@@ -271,6 +293,7 @@
 .terminal-exited-toggle .terminal-font-overlay {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
 }
 
@@ -1398,9 +1421,6 @@
   color: var(--chat-accent);
   font-style: italic;
 }
-.chat-queued-tray__row--scheduled {
-  border-left: 2px solid var(--chat-accent);
-}
 .chat-queued-tray__schedule-icon {
   display: inline-flex;
   align-items: center;
@@ -1416,33 +1436,6 @@
   flex-shrink: 0;
   color: var(--fg-muted);
   opacity: 0.6;
-}
-.chat-queued-tray__time-label {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  margin-left: 6px;
-  flex-shrink: 0;
-}
-
-/* A scheduled send the daemon failed to deliver — an exception state, kept quiet. */
-.chat-queued-tray__row--failed {
-  border-left: 2px solid var(--destructive-soft);
-}
-.chat-queued-tray__failed-icon {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  color: var(--destructive-soft);
-}
-.chat-queued-tray__failed-reason {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-xs);
-  color: var(--destructive-soft);
 }
 /* Lucide icons inside the glyph-sized action buttons. */
 .chat-queued-tray__action svg {
@@ -2476,7 +2469,8 @@
   left: 0;
   right: 0;
   bottom: calc(100% + 4px);
-  max-height: 320px;
+  /* --chat-popover-room: measured space above the editor inside its clipping ancestor (usePopoverRoom). */
+  max-height: min(320px, var(--chat-popover-room, 320px));
   overflow-y: auto;
   background: var(--bg-card);
   border: var(--border-width) solid var(--border-default);
@@ -2485,6 +2479,11 @@
   /* Sits above the composer chrome. */
   z-index: 60;
   padding: var(--space-1);
+}
+/* No room above (usePopoverRoom): open downward, between the shell and the visible bottom / sticky bar. */
+.chat-skill-editor-shell[data-popover-side="below"] .chat-skill-popover {
+  bottom: auto;
+  top: calc(100% + 4px);
 }
 /* Group header — inserted only where the group changes (Vibe Station,
    Skills, Agent commands). Values from ScreenSlash.dc.html's `.grp`. */

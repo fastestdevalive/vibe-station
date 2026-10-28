@@ -2,7 +2,7 @@ import { Minus, Plus } from "lucide-react";
 import { FontResetButton } from "./FontResetButton";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, FileScope, Session } from "@/api/types";
+import type { Attachment, FileScope, ScheduledPendingMessage, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -10,9 +10,11 @@ import { listPredecessors } from "@/lib/sessionVisibility";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
-import { QueuedTray, type QueuedTrayRow, type ScheduledRow } from "@/components/chat/QueuedTray";
+import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
 import { ScheduleSendPopover } from "@/components/chat/ScheduleSendPopover";
+import { ScheduleStrip } from "@/components/schedule/ScheduleStrip";
+import { useScheduledSends } from "@/components/schedule/useScheduledSends";
 import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { usePaneDialogs } from "@/hooks/usePaneDialogs";
@@ -192,6 +194,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     sendNow,
     setCanTrim,
   } = useChat(api, sessionId, enabled);
+  // The only client copy of this session's scheduled sends (one fetch + one
+  // subscribe per pane); the strip below renders it. A hidden pane (a Terminal
+  // agent's idle ChatPane) must not subscribe, so it gets no session id.
+  const { rows: scheduledRows, hideSent: hideScheduledSent } = useScheduledSends(
+    api,
+    enabled ? sessionId : null,
+  );
 
   // Salvaged draft from a failed queued-turn Save (A9): remounts the composer
   // (via `composerKey`) so its initial text/attachments apply.
@@ -261,7 +270,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     ackLostNotice();
   }, [lostNotice, ackLostNotice]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
-  const [editingScheduled, setEditingScheduled] = useState<{ id: string; row: ScheduledRow } | null>(null);
+  const [editingScheduled, setEditingScheduled] = useState<{ id: string; row: ScheduledPendingMessage } | null>(null);
   const editScheduledAnchorRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
@@ -551,16 +560,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             onSendNoticeNow={() => {
               if (sessionId) void api.promoteNotice(sessionId);
             }}
-            scheduledRows={meta?.scheduledSends}
-            onScheduledSendNow={(id) => void api.sendScheduledNow(sessionId, id).catch(reportScheduleError)}
-            onScheduledCancel={(id) => void api.cancelScheduledMessage(sessionId, id).catch(reportScheduleError)}
-            failedRows={meta?.scheduledFailed}
-            onFailedRetry={(id) => void api.retryScheduledMessage(sessionId, id).catch(reportScheduleError)}
-            onFailedDismiss={(id) => void api.dismissScheduledMessage(sessionId, id).catch(reportScheduleError)}
-            onScheduledEdit={(id, row, anchor) => {
-              editScheduledAnchorRef.current = anchor;
-              setEditingScheduled({ id, row });
-            }}
           />
         ) : null}
         {sessionId ? (
@@ -630,6 +629,21 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 setActiveTerminalSession,
               })
             }
+          />
+        ) : null}
+        {sessionId ? (
+          <ScheduleStrip
+            variant="chat"
+            rows={scheduledRows}
+            api={api}
+            sessionId={sessionId}
+            sessionLive
+            onHideSent={hideScheduledSent}
+            onError={reportScheduleError}
+            onEdit={(id, row, anchor) => {
+              editScheduledAnchorRef.current = anchor;
+              setEditingScheduled({ id, row });
+            }}
           />
         ) : null}
         {sessionId && archived ? (

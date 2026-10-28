@@ -10,8 +10,11 @@
 //! against a dedicated server so they never clobber a live user session.
 
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::error::TmuxError;
 
@@ -78,6 +81,100 @@ pub struct CapturePaneOptions {
 pub struct Tmux {
     /// Optional `-L <socket>` name; `None` runs bare `tmux`.
     socket: Option<String>,
+    /// Per-call bound; `None` = [`TMUX_CALL_TIMEOUT`].
+    call_timeout: Option<Duration>,
+}
+
+/// Upper bound for one tmux invocation. tmux answers in milliseconds; a call
+/// that outlives this is hung (wedged server, stuck pty) and is killed.
+pub const TMUX_CALL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `wait_with_output` with a deadline: stdout/stderr are drained on their own
+/// threads (a full pipe must not stall the child), and a child still running at
+/// the deadline is killed and reaped. The error is `TimedOut`.
+fn wait_bounded(mut child: Child, timeout: Duration) -> std::io::Result<Output> {
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out = drain(child.stdout.take());
+    let err = drain(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+    // Start with a sub-millisecond nap (tmux usually answers at once) and back
+    // off to 5 ms, so a quick call costs no fixed 5 ms floor.
+    let mut nap = Duration::from_micros(250);
+    let status = loop {
+        if let Some(st) = child.try_wait()? {
+            break st;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            // The readers end when the pipes close; do not wait on a grandchild
+            // that kept them open.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("tmux did not finish within {timeout:?}"),
+            ));
+        }
+        std::thread::sleep(nap);
+        nap = (nap * 2).min(Duration::from_millis(5));
+    };
+    Ok(Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
+/// Map a finished tmux process to trimmed stdout or a [`TmuxError`].
+fn finish(args: &[&str], out: &std::process::Output) -> Result<String, TmuxError> {
+    if !out.status.success() {
+        return Err(TmuxError {
+            args: args.join(" "),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Process-wide suffix so two pastes with the same caller `buffer_id` never
+/// share a tmux buffer.
+static BUFFER_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Pane state read by one `display -p`: copy-mode and dead-pane flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneFlags {
+    /// `#{pane_in_mode}`: the pane is in copy/view mode (the web terminal
+    /// enters copy-mode on scroll), where `Enter` is swallowed.
+    pub in_mode: bool,
+    /// `#{pane_dead}`: the pane's command exited but `remain-on-exit` keeps
+    /// the session listed.
+    pub dead: bool,
+}
+
+/// Parse the `"<in_mode> <dead>"` output of the `pane_flags` format.
+pub fn parse_pane_flags(out: &str) -> Option<PaneFlags> {
+    let mut it = out.split_whitespace();
+    let in_mode = it.next()?;
+    let dead = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    let flag = |v: &str| match v {
+        "0" => Some(false),
+        "1" => Some(true),
+        _ => None,
+    };
+    Some(PaneFlags {
+        in_mode: flag(in_mode)?,
+        dead: flag(dead)?,
+    })
 }
 
 impl Tmux {
@@ -90,7 +187,29 @@ impl Tmux {
     pub fn with_socket(socket: impl Into<String>) -> Self {
         Self {
             socket: Some(socket.into()),
+            call_timeout: None,
         }
+    }
+
+    /// Override the per-call timeout (tests use a short one).
+    pub fn with_call_timeout(mut self, t: Duration) -> Self {
+        self.call_timeout = Some(t);
+        self
+    }
+
+    fn timeout(&self) -> Duration {
+        self.call_timeout.unwrap_or(TMUX_CALL_TIMEOUT)
+    }
+
+    /// Spawn with piped output and wait for it, bounded.
+    fn output_bounded(&self, args: &[&str]) -> std::io::Result<Output> {
+        let child = self
+            .command(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        wait_bounded(child, self.timeout())
     }
 
     /// Run `tmux` with the given argv, returning trimmed stdout.
@@ -98,23 +217,58 @@ impl Tmux {
     /// Env is inherited from the daemon process (PATH, HOME, SHELL, NVM bits,
     /// etc.) so shell launchers can resolve binaries like `claude`.
     fn run(&self, args: &[&str]) -> Result<String, TmuxError> {
+        let out = self.output_bounded(args).map_err(|e| TmuxError {
+            args: args.join(" "),
+            stderr: format!("io: {e}"),
+        })?;
+        finish(args, &out)
+    }
+
+    /// Like [`Self::run`] but feeds `data` to the child's stdin.
+    ///
+    /// Order matters: the writer runs on its own thread and drops (closes)
+    /// stdin when done, and only then does the parent `wait`. Writing inline
+    /// would deadlock once `data` exceeds the pipe buffer while tmux is still
+    /// blocked writing its own output.
+    fn run_with_stdin(&self, args: &[&str], data: &[u8]) -> Result<String, TmuxError> {
+        let io_err = |e: std::io::Error| TmuxError {
+            args: args.join(" "),
+            stderr: format!("io: {e}"),
+        };
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(io_err)?;
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(TmuxError {
+                args: args.join(" "),
+                stderr: "io: child stdin was not piped".to_string(),
+            });
+        };
+        let payload = data.to_vec();
+        // A write error (child exited early) surfaces through its exit status.
+        let writer = std::thread::spawn(move || {
+            let _ = stdin.write_all(&payload);
+        });
+        let out = wait_bounded(child, self.timeout());
+        // The writer ends once the child is gone (EPIPE) or has read it all.
+        let _ = writer.join();
+        finish(args, &out.map_err(io_err)?)
+    }
+
+    /// The `tmux [-L socket] <args>` command, env inherited.
+    fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new("tmux");
         if let Some(sock) = &self.socket {
             cmd.arg("-L").arg(sock);
         }
         cmd.args(args);
-
-        let out = cmd.output().map_err(|e| TmuxError {
-            args: args.join(" "),
-            stderr: format!("io: {e}"),
-        })?;
-        if !out.status.success() {
-            return Err(TmuxError {
-                args: args.join(" "),
-                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        cmd
     }
 
     /// True if the named tmux session exists. A failing `has-session` (session
@@ -242,33 +396,141 @@ impl Tmux {
         }
     }
 
-    /// Load `data` into a named tmux buffer via a temp file and paste it into
-    /// the target pane. Avoids the shell argument-length limit `send-keys`
-    /// hits with large prompts.
+    /// Load `data` into a unique named tmux buffer through stdin (no temp
+    /// file) and paste it into the target pane. Avoids the shell
+    /// argument-length limit `send-keys` hits with large prompts and the
+    /// predictable world-readable `/tmp` file the old implementation wrote.
     ///
     /// `-p` enables bracketed paste (`\e[200~`/`\e[201~`), which TUI editors
     /// honour and treat as a paste rather than individual keystrokes — so
     /// embedded newlines stay in the editor instead of being submitted as
-    /// separate messages.
+    /// separate messages. Equivalent to
+    /// [`paste_buffer_with`](Self::paste_buffer_with) with `raw_lf = false`.
     pub fn paste_buffer(&self, target: &str, buffer_id: &str, data: &str) -> Result<(), TmuxError> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let tmp_file = format!("/tmp/vr-buf-{buffer_id}-{nanos}");
+        self.paste_buffer_with(target, buffer_id, data, false)
+    }
 
-        let result = (|| -> Result<(), TmuxError> {
-            std::fs::write(&tmp_file, data).map_err(|e| TmuxError {
-                args: "load-buffer".to_string(),
-                stderr: format!("write tmp file: {e}"),
-            })?;
-            self.run(&["load-buffer", "-b", buffer_id, &tmp_file])?;
-            self.run(&["paste-buffer", "-b", buffer_id, "-d", "-p", "-t", target])?;
-            Ok(())
-        })();
+    /// [`paste_buffer`](Self::paste_buffer) with control over LF handling:
+    /// `raw_lf = true` passes `-r` so LF is not converted to CR by tmux.
+    ///
+    /// The tmux buffer name is `<buffer_id>-<pid>-<seq>`, unique per call, and
+    /// is deleted best-effort when the paste fails (`-d` deletes it on success).
+    /// `target` is passed verbatim: callers that must not prefix-match use the
+    /// exact form `=<name>:`.
+    pub fn paste_buffer_with(
+        &self,
+        target: &str,
+        buffer_id: &str,
+        data: &str,
+        raw_lf: bool,
+    ) -> Result<(), TmuxError> {
+        let seq = BUFFER_SEQ.fetch_add(1, Ordering::Relaxed);
+        let name = format!("{buffer_id}-{}-{seq}", std::process::id());
+        self.run_with_stdin(&["load-buffer", "-b", &name, "-"], data.as_bytes())?;
+        let mut args = vec!["paste-buffer", "-b", &name, "-d", "-p"];
+        if raw_lf {
+            args.push("-r");
+        }
+        args.extend(["-t", target]);
+        if let Err(e) = self.run(&args) {
+            let _ = self.run(&["delete-buffer", "-b", &name]);
+            return Err(e);
+        }
+        Ok(())
+    }
 
-        // Best-effort cleanup regardless of success.
-        let _ = std::fs::remove_file(&tmp_file);
-        result
+    /// One `display -p` of copy-mode and dead-pane state for `target`.
+    ///
+    /// `None` = the target is missing or the output is not understood; callers
+    /// treat that as "unknown, try again", never as "dead".
+    pub fn pane_flags(&self, target: &str) -> Option<PaneFlags> {
+        self.run(&[
+            "display-message",
+            "-p",
+            "-t",
+            target,
+            "#{pane_in_mode} #{pane_dead}",
+        ])
+        .ok()
+        .and_then(|out| parse_pane_flags(&out))
+    }
+
+    /// The visible screen of `target` exactly as tmux prints it (`capture-pane
+    /// -p`, no scrollback, stdout NOT trimmed): leading blank rows are kept so
+    /// line indices match [`pane_cursor`](Self::pane_cursor)'s row.
+    pub fn capture_screen(&self, target: &str) -> Result<String, TmuxError> {
+        let args = ["capture-pane", "-p", "-t", target];
+        let out = self.output_bounded(&args).map_err(|e| TmuxError {
+            args: args.join(" "),
+            stderr: format!("io: {e}"),
+        })?;
+        if !out.status.success() {
+            return Err(TmuxError {
+                args: args.join(" "),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// 0-based `(cursor_x, cursor_y)` on the visible screen of `target`;
+    /// `None` when the target is missing or the output is not understood.
+    pub fn pane_cursor(&self, target: &str) -> Option<(u16, u16)> {
+        let out = self
+            .run(&[
+                "display-message",
+                "-p",
+                "-t",
+                target,
+                "#{cursor_x} #{cursor_y}",
+            ])
+            .ok()?;
+        let mut it = out.split_whitespace();
+        let x = it.next()?.parse().ok()?;
+        let y = it.next()?.parse().ok()?;
+        if it.next().is_some() {
+            return None;
+        }
+        Some((x, y))
+    }
+
+    /// Press `Enter` in `target` (no other keys).
+    pub fn send_enter(&self, target: &str) -> Result<(), TmuxError> {
+        self.run(&["send-keys", "-t", target, "Enter"])?;
+        Ok(())
+    }
+
+    /// Leave copy/view mode (`send-keys -X cancel`). Errors when the pane is
+    /// not in a mode, so callers check [`pane_flags`](Self::pane_flags) first.
+    pub fn cancel_mode(&self, target: &str) -> Result<(), TmuxError> {
+        self.run(&["send-keys", "-t", target, "-X", "cancel"])?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod wait_bounded_tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn quick_children_do_not_pay_a_fixed_floor() {
+        let start = Instant::now();
+        for _ in 0..20 {
+            let child = Command::new("true")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            assert!(wait_bounded(child, Duration::from_secs(5))
+                .unwrap()
+                .status
+                .success());
+        }
+        assert!(
+            start.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

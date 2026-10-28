@@ -142,7 +142,7 @@ fn make_project(id: &str) -> ProjectRecord {
 
 fn routes(store: StoreHandle) -> SessionRoutes {
     SessionRoutes {
-        store,
+        store: store.clone(),
         broadcaster: Broadcaster::new(16),
         json_registry: Arc::new(JsonAgentRegistry::new()),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
@@ -157,6 +157,13 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         model_catalog: Default::default(),
         handoff_timeout: Duration::from_secs(120),
         reset_cancels: Default::default(),
+        // Inert: these tests never schedule onto a Terminal agent.
+        terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
+            store,
+            Broadcaster::new(16),
+            std::sync::Arc::new(vst_proc::tmux::Tmux::new()),
+            None,
+        ),
     }
 }
 

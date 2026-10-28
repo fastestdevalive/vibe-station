@@ -200,6 +200,9 @@ pub enum ServerEvent {
         scheduled_sends: Vec<crate::domain::ScheduledMessageMeta>,
         scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
         scheduled_turn_ids: Vec<String>,
+        /// Recently pasted terminal rows; `None` = keep what you have.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduled_sent: Option<Vec<crate::domain::ScheduledSentMeta>>,
     },
     /// A session's background-task list changed. Full snapshot (replace, not
     /// diff); `rev` is monotonic per session (`max(prev + 1, unix_ms)`) so a

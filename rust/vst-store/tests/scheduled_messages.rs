@@ -1,6 +1,6 @@
 //! Scheduled-send persistence: atomic claim, boot recovery, retry / dismiss.
 
-use vst_store::StoreHandle;
+use vst_store::{CancelOutcome, RecoveryOutcome, StoreHandle};
 use vst_types::{LifecycleState, ProjectRecord, SessionRecord, SessionType, WorktreeRecord};
 
 fn session(id: &str, project_id: &str, worktree_id: Option<&str>) -> SessionRecord {
@@ -105,6 +105,9 @@ async fn add(store: &StoreHandle, id: &str, fire_at: &str) {
             None,
             fire_at,
             "2026-01-01T00:00:00Z",
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -180,7 +183,10 @@ async fn a_claimed_row_cannot_be_claimed_again_cancelled_or_edited() {
         .unwrap()
         .is_none());
     // In-flight delivery can no longer be cancelled or edited.
-    assert!(!store.cancel_scheduled_message("a", "sess-1").await.unwrap());
+    assert_eq!(
+        store.cancel_scheduled_message("a", "sess-1").await.unwrap(),
+        CancelOutcome::NotFound
+    );
     assert!(!store
         .reschedule_scheduled_message("a", "sess-1", "2030-01-01T00:00:00Z", NOW)
         .await
@@ -239,9 +245,14 @@ async fn orphaned_claims_fail_visibly_on_boot_and_unclaimed_rows_survive() {
         .await
         .unwrap();
 
+    // A claimed json row (no channel) is failed with today's text; it is not a
+    // tmux row, so it is in none of the id lists.
     assert_eq!(
-        store.fail_orphaned_scheduled_messages(NOW).await.unwrap(),
-        1
+        store
+            .recover_orphaned_scheduled_messages(NOW)
+            .await
+            .unwrap(),
+        RecoveryOutcome::default()
     );
 
     let failed = store
@@ -281,11 +292,11 @@ async fn failed_rows_can_be_retried_or_dismissed_only_by_their_session() {
     add(&store, "b", PAST).await;
     claim_all_due(&store, NOW).await;
     store
-        .mark_scheduled_message_failed("a", "boom", NOW)
+        .mark_scheduled_message_failed("a", "boom", None, NOW)
         .await
         .unwrap();
     store
-        .mark_scheduled_message_failed("b", "boom", NOW)
+        .mark_scheduled_message_failed("b", "boom", None, NOW)
         .await
         .unwrap();
 
@@ -376,7 +387,7 @@ async fn reset_moves_undelivered_rows_to_the_replacement_session_but_not_in_flig
         .await
         .unwrap();
     store
-        .mark_scheduled_message_failed("failed", "boom", NOW)
+        .mark_scheduled_message_failed("failed", "boom", None, NOW)
         .await
         .unwrap();
     store
@@ -446,7 +457,7 @@ async fn only_a_claimed_row_can_be_marked_sent_or_failed() {
         .await
         .unwrap();
     store
-        .mark_scheduled_message_failed("a", "boom", NOW)
+        .mark_scheduled_message_failed("a", "boom", None, NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -530,7 +541,17 @@ async fn rows_of_deleted_sessions_are_purged_but_live_ones_kept() {
     let store = store_with_session(dir.path()).await;
     add(&store, "live", FUTURE).await;
     store
-        .insert_scheduled_message("ghost", "deleted-session", "x", None, FUTURE, NOW)
+        .insert_scheduled_message(
+            "ghost",
+            "deleted-session",
+            "x",
+            None,
+            FUTURE,
+            NOW,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -629,9 +650,13 @@ async fn cancel_deletes_the_row_and_reschedule_changes_only_the_time() {
         "text untouched"
     );
 
-    assert!(store.cancel_scheduled_message("b", "sess-1").await.unwrap());
-    assert!(
-        !store.cancel_scheduled_message("b", "sess-1").await.unwrap(),
+    assert_eq!(
+        store.cancel_scheduled_message("b", "sess-1").await.unwrap(),
+        CancelOutcome::Deleted
+    );
+    assert_eq!(
+        store.cancel_scheduled_message("b", "sess-1").await.unwrap(),
+        CancelOutcome::NotFound,
         "already gone"
     );
     assert_eq!(
@@ -655,11 +680,21 @@ async fn deleting_a_session_removes_all_its_scheduled_rows() {
         .await
         .unwrap();
     store
-        .mark_scheduled_message_failed("b", "boom", NOW)
+        .mark_scheduled_message_failed("b", "boom", None, NOW)
         .await
         .unwrap();
     store
-        .insert_scheduled_message("other", "another-session", "x", None, FUTURE, NOW)
+        .insert_scheduled_message(
+            "other",
+            "another-session",
+            "x",
+            None,
+            FUTURE,
+            NOW,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -704,7 +739,7 @@ async fn due_rows_of_excluded_sessions_are_skipped_not_lost() {
         ("healthy", "sess-2"),
     ] {
         store
-            .insert_scheduled_message(id, sess, "m", None, PAST, NOW)
+            .insert_scheduled_message(id, sess, "m", None, PAST, NOW, None, None, None)
             .await
             .unwrap();
     }
@@ -742,7 +777,7 @@ async fn the_snapshot_returns_pending_failed_and_sent_together() {
         .await
         .unwrap();
     store
-        .mark_scheduled_message_failed("failed", "boom", NOW)
+        .mark_scheduled_message_failed("failed", "boom", None, NOW)
         .await
         .unwrap();
     store

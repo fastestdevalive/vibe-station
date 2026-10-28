@@ -1,8 +1,10 @@
 import { useEffect, type ReactNode } from "react";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ApiInstance } from "@/api";
+import { createMockApi } from "@/api/mock";
 import type { Session } from "@/api/types";
+import { __resetForDemo, useModesStore } from "@/store/modesStore";
 
 // Instrument TerminalPane to count mounts/unmounts and expose its sessionId prop.
 let terminalMounts = 0;
@@ -59,7 +61,9 @@ import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { useResetProgress } from "@/hooks/useResetProgress";
 import userEvent from "@testing-library/user-event";
 
-const api = {} as unknown as ApiInstance;
+// A real mock API: the pane now owns one `useScheduledSends` call and hosts the
+// Schedule button, both of which talk to the API on mount.
+const api = createMockApi({ simulateOutput: false }) as unknown as ApiInstance;
 
 function session(id: string, channel: "tmux" | "pty" | "json"): Session {
   return {
@@ -321,7 +325,7 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
   it("shows the summary Cancel bar in the terminal header overlay and calls cancelReset", async () => {
     useResetProgress.setState({ active: {} });
     const cancelReset = vi.fn().mockResolvedValue({ ok: true, cancelled: true });
-    const localApi = { cancelReset } as unknown as ApiInstance;
+    const localApi = Object.assign(createMockApi({ simulateOutput: false }), { cancelReset }) as unknown as ApiInstance;
     useResetProgress.getState().start("tty1", "summary");
     const { container } = render(
       <AgentPaneSlot api={localApi} sessionId="tty1" session={session("tty1", "tmux")} />,
@@ -357,5 +361,169 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(await screen.findByRole("dialog", { name: "Previous sessions" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Show summary/ })).toBeTruthy();
     expect(terminalMounts).toBe(1);
+  });
+});
+
+describe("AgentPaneSlot scheduled sends (Terminal)", () => {
+  const fireAt = () => new Date(Date.now() + 3_600_000).toISOString();
+  const pendingRow = (id: string, extra: object = {}) => ({ id, message: `msg ${id}`, fireAt: fireAt(), channel: "tmux", ...extra });
+  const emitScheduled = (a: ReturnType<typeof createMockApi>, sessionId: string, over: object = {}) =>
+    a.__test.emit({
+      type: "session:scheduled",
+      sessionId,
+      scheduledSends: [],
+      scheduledFailed: [],
+      scheduledTurnIds: [],
+      ...over,
+    } as Parameters<typeof a.__test.emit>[0]);
+
+  beforeEach(() => {
+    terminalMounts = 0;
+    terminalUnmounts = 0;
+    useModesStore.getState()._reset();
+    __resetForDemo();
+  });
+
+  it("9.T5 — the strip sits under the header inside one overlay stack, with no measured offset", async () => {
+    const a = createMockApi({ simulateOutput: false });
+    const { container } = render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={session("tty1", "tmux")} />);
+    act(() => emitScheduled(a, "tty1", { scheduledSends: [pendingRow("a")] }));
+    const stack = container.querySelector(".agent-pane-overlay-stack")!;
+    expect(stack).not.toBeNull();
+    // The strip's visually hidden status node (absolutely positioned) is not a layout row.
+    expect(Array.from(stack.children).map((c) => c.className.split(" ")[0]).filter((c) => c !== "sched-strip__live")).toEqual([
+      "agent-pane-header",
+      "sched-strip",
+    ]);
+    expect(stack.getAttribute("style")).toBeNull();
+    expect(stack.querySelector(".sched-strip")!.getAttribute("style")).toBeNull();
+    expect(stack.querySelector(".sched-strip")!.className).toContain("sched-strip--overlay");
+  });
+
+  it("9.T3 — TerminalPane keeps its element and mount count when rows appear, the button toggles, and the agent exits and resumes", async () => {
+    const a = createMockApi({ simulateOutput: false });
+    const live = session("tty1", "tmux");
+    const { container, rerender } = render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={live} />);
+    const term = container.querySelector('[data-testid="terminal"]');
+    expect(terminalMounts).toBe(1);
+
+    act(() => emitScheduled(a, "tty1", { scheduledSends: [pendingRow("a")] }));
+    expect(container.querySelector('[data-testid="terminal"]')).toBe(term);
+
+    const button = await screen.findByRole("button", { name: "Schedule message (1 scheduled)" });
+    await userEvent.click(button);
+    expect(await screen.findByRole("dialog", { name: "Schedule message" })).toBeTruthy();
+    await userEvent.click(button);
+    expect(container.querySelector('[data-testid="terminal"]')).toBe(term);
+
+    rerender(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={{ ...live, state: "exited" }} />);
+    expect(container.querySelector(".agent-pane-overlay-stack")).toBeNull();
+    expect(container.querySelector('[data-testid="terminal"] .sched-strip--inline')).not.toBeNull();
+    rerender(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={{ ...live, state: "idle" }} />);
+    expect(container.querySelector(".agent-pane-overlay-stack .sched-strip--overlay")).not.toBeNull();
+
+    expect(container.querySelector('[data-testid="terminal"]')).toBe(term);
+    expect(terminalMounts).toBe(1);
+    expect(terminalUnmounts).toBe(0);
+  });
+
+  it.each(["exited", "done"] as const)(
+    "9.T3 — a %s agent shows the inline strip: pending (Edit, Cancel, Send now disabled), failed (Retry disabled, Copy as text)",
+    async (state) => {
+      const a = createMockApi({ simulateOutput: false });
+      const { container } = render(
+        <AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={{ ...session("tty1", "tmux"), state, lifecycleState: state }} />,
+      );
+      act(() =>
+        emitScheduled(a, "tty1", {
+          scheduledSends: [pendingRow("p1")],
+          scheduledFailed: [
+            { id: "f1", message: "failed text", fireAt: fireAt(), failureReason: "Agent exited, not delivered", failureKind: "agent_exited", channel: "tmux" },
+          ],
+        }),
+      );
+      const strip = container.querySelector(".sched-strip--inline") as HTMLElement;
+      expect(strip).not.toBeNull();
+      expect(container.querySelector(".agent-pane-overlay-stack")).toBeNull();
+      const send = within(strip).getByRole("button", { name: "Send now" }) as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+      expect(send.title).toBe("Agent isn't running");
+      expect((within(strip).getByRole("button", { name: "Reschedule message" }) as HTMLButtonElement).disabled).toBe(false);
+      expect((within(strip).getByRole("button", { name: "Cancel scheduled message" }) as HTMLButtonElement).disabled).toBe(false);
+      expect((within(strip).getByRole("button", { name: "Retry scheduled send" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(within(strip).getByRole("button", { name: "Copy as text" })).toBeTruthy();
+      expect(terminalMounts).toBe(1);
+      expect(terminalUnmounts).toBe(0);
+    },
+  );
+
+  it("uses the live sessionStates entry, not the session record, for the not-running gate", () => {
+    const a = createMockApi({ simulateOutput: false });
+    // Record says exited, so the inline strip renders; the live map says it is
+    // working again (resume in flight), so Send now is enabled.
+    return import("@/hooks/useStore").then(({ useWorkspaceStore }) => {
+      useWorkspaceStore.setState({ sessionStates: { tty1: "working" } });
+      const { container } = render(
+        <AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={{ ...session("tty1", "tmux"), state: "exited" }} />,
+      );
+      act(() => emitScheduled(a, "tty1", { scheduledSends: [pendingRow("p1")] }));
+      const strip = container.querySelector(".sched-strip--inline") as HTMLElement;
+      expect((within(strip).getByRole("button", { name: "Send now" }) as HTMLButtonElement).disabled).toBe(false);
+      useWorkspaceStore.setState({ sessionStates: {} });
+    });
+  });
+
+  it("9.T3 — Edit on a pending Terminal row opens the Reschedule popover and reschedules", async () => {
+    // Pin Date only (timers stay real): `fireAt` = now + 1h must not land in a DST-repeated hour of the run's zone.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-15T12:00:00Z") });
+    try {
+    const a = createMockApi({ simulateOutput: false });
+    const edit = vi.spyOn(a, "editScheduledMessage");
+    const { container } = render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={session("tty1", "tmux")} />);
+    act(() => emitScheduled(a, "tty1", { scheduledSends: [pendingRow("p1")] }));
+    await userEvent.click(within(container.querySelector(".sched-strip") as HTMLElement).getByRole("button", { name: "Reschedule message" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reschedule" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(edit).toHaveBeenCalledWith("tty1", "p1", { fireAt: expect.any(String) }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reschedule" })).toBeNull());
+    expect(terminalMounts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("9.T3 — a failed Cancel shows its error on the inline line under the strip", async () => {
+    const a = createMockApi({ simulateOutput: false });
+    vi.spyOn(a, "cancelScheduledMessage").mockRejectedValue(new Error(JSON.stringify({ error: "Message is already being pasted", code: "ALREADY_DELIVERING" })));
+    const { container } = render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={session("tty1", "tmux")} />);
+    act(() => emitScheduled(a, "tty1", { scheduledSends: [pendingRow("p1", { phase: "waiting" })] }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel scheduled message" }));
+    const line = await waitFor(() => {
+      const el = container.querySelector(".agent-pane-overlay-stack .sched-strip-error");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(line.textContent).toContain("Message is already being pasted");
+    await userEvent.click(within(line).getByRole("button", { name: "Dismiss error" }));
+    expect(container.querySelector(".sched-strip-error")).toBeNull();
+  });
+
+  it("9.T7 — one GET /schedule and one subscribe per mount (button and strip share the instance)", async () => {
+    const a = createMockApi({ simulateOutput: false });
+    const get = vi.spyOn(a, "getScheduledMessages");
+    const sub = vi.spyOn(a, "subscribe");
+    render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="tty1" session={session("tty1", "tmux")} />);
+    await screen.findByRole("button", { name: "Schedule message" });
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("tty1");
+    expect(sub.mock.calls.filter(([ids]) => ids.includes("tty1"))).toHaveLength(1);
+  });
+
+  it("does not fetch or render a strip for a Rich Chat session (ChatPane owns that)", () => {
+    const a = createMockApi({ simulateOutput: false });
+    const get = vi.spyOn(a, "getScheduledMessages");
+    const { container } = render(<AgentPaneSlot api={a as unknown as ApiInstance} sessionId="js1" session={session("js1", "json")} />);
+    expect(get).not.toHaveBeenCalled();
+    expect(container.querySelector(".sched-strip")).toBeNull();
   });
 });

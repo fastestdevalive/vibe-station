@@ -721,3 +721,77 @@ describe("mock reset carry modes / cancel (2.T6)", () => {
     expect(await api.cancelReset("sess-main")).toEqual({ ok: true, cancelled: false });
   });
 });
+
+describe("mock api scheduled sends", () => {
+  const future = () => new Date(Date.now() + 3_600_000).toISOString();
+
+  it("getScheduledMessages is empty, schedule pushes a tmux row, cancel removes it", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    expect(await api.getScheduledMessages("sess-main")).toEqual({
+      scheduledSends: [],
+      scheduledFailed: [],
+      scheduledSent: [],
+    });
+    const events: unknown[] = [];
+    const off = api.on("session:scheduled", (e) => events.push(e));
+    const { id } = await api.scheduleMessage("sess-main", "/review", future());
+    const snap = await api.getScheduledMessages("sess-main");
+    expect(snap.scheduledSends).toEqual([
+      expect.objectContaining({ id, message: "/review", channel: "tmux", phase: "scheduled" }),
+    ]);
+    expect(events).toHaveLength(1);
+    await api.cancelScheduledMessage("sess-main", id);
+    expect((await api.getScheduledMessages("sess-main")).scheduledSends).toEqual([]);
+    off();
+  });
+
+  it("rejects a past time and an unsupported CLI with a typed code", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    await expect(api.scheduleMessage("sess-main", "x", new Date(Date.now() - 1000).toISOString())).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    const modes = await api.listModes();
+    const other = modes.find((m) => m.cli !== "claude");
+    if (other) {
+      api.__test.addSession({ ...(await api.listSessions("wt-1"))[0]!, id: "sess-other", modeId: other.id });
+      await expect(api.scheduleMessage("sess-other", "x", future())).rejects.toMatchObject({
+        code: "TERMINAL_DELIVERY_UNSUPPORTED",
+      });
+    }
+  });
+
+  it("scheduling support follows the CLI list's supportsTerminalDelivery flag, not a CLI name (review 25c)", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    const modes = await api.listModes();
+    const other = modes.find((m) => m.cli !== "claude")!;
+    api.__test.addSession({ ...(await api.listSessions("wt-1"))[0]!, id: "sess-flag", modeId: other.id });
+    const clis = await api.getSupportedClis();
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue(
+      clis.map((c) => (c.id === other.cli ? { ...c, supportsTerminalDelivery: true } : c)),
+    );
+    await expect(api.scheduleMessage("sess-flag", "x", future())).resolves.toMatchObject({ id: expect.any(String) });
+  });
+
+  it("send-now on a tmux row finishes as a pasted row; retry and dismiss work on failed rows", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    const { id } = await api.scheduleMessage("sess-main", "go", future());
+    await api.sendScheduledNow("sess-main", id);
+    const snap = await api.getScheduledMessages("sess-main");
+    expect(snap.scheduledSends).toEqual([]);
+    expect(snap.scheduledSent).toEqual([expect.objectContaining({ id, message: "go", channel: "tmux" })]);
+
+    api.mockSetScheduleSnapshot("sess-main", {
+      scheduledSends: [],
+      scheduledFailed: [
+        { id: "f1", message: "a", fireAt: future(), failureReason: "x", failureKind: "timed_out", channel: "tmux" },
+        { id: "f2", message: "b", fireAt: future(), failureReason: "y" },
+      ],
+      scheduledSent: [],
+    });
+    await api.retryScheduledMessage("sess-main", "f1");
+    await api.dismissScheduledMessage("sess-main", "f2");
+    const after = await api.getScheduledMessages("sess-main");
+    expect(after.scheduledFailed).toEqual([]);
+    expect(after.scheduledSends).toEqual([expect.objectContaining({ id: "f1", channel: "tmux", phase: "scheduled" })]);
+  });
+});

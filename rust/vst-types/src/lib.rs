@@ -17,10 +17,15 @@ pub mod domain;
 pub mod events;
 pub mod limits;
 pub mod rest;
+pub mod review;
 pub mod serde_ext;
+pub mod terminal_delivery;
 pub mod ws;
 
 pub use domain::*;
 pub use events::{Broadcaster, ServerEvent};
 pub use limits::*;
+pub use terminal_delivery::{
+    FailureKind, PaneSnapshot, TerminalDeliveryCaps, TerminalOutcome, TerminalReadiness,
+};
 pub use ws::*;

@@ -13,6 +13,10 @@ pub struct SupportedCli {
     pub id: CliId,
     pub default_model: String,
     pub supports_json: bool,
+    /// The CLI's plugin can deliver a scheduled message into a Terminal agent
+    /// (`terminal_delivery()` is `Some`). Absent from older daemons = false.
+    #[serde(default)]
+    pub supports_terminal_delivery: bool,
     pub imports_native_history: bool,
     pub supports_json_to_terminal_resume: bool,
     pub detected: bool,

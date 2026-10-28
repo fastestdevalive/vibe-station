@@ -329,6 +329,7 @@ async fn send_schedule_state(conn: &WsConnection, store: &StoreHandle, session_i
         scheduled_sends: st.sends,
         scheduled_failed: st.failed,
         scheduled_turn_ids: st.turn_ids,
+        scheduled_sent: Some(st.sent),
     });
 }
 

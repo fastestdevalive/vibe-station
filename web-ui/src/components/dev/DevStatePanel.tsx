@@ -5,6 +5,12 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import type { PrStatus, SessionState } from "@/api/types";
 import { useTaskStore } from "@/hooks/useTaskStore";
 import { buildSeedTasks, SEED_SCENARIOS, type SeedScenario } from "@/components/tasks/seedTasks";
+import {
+  SCHEDULE_DEV_SCENARIOS,
+  devScheduleSnapshot,
+  useScheduleDevOverride,
+  type ScheduleDevScenario,
+} from "@/components/schedule/scheduleDevOverride";
 
 /**
  * Dev-only floating popup for faking `session:state` transitions on real
@@ -45,6 +51,7 @@ export function DevStatePanel(): ReactNode {
   const [sessionId, setSessionId] = useState<string>("");
   const [state, setState] = useState<SessionState>("working");
   const [prState, setPrState] = useState<PrChoice>("(unset)");
+  const [scheduleScenario, setScheduleScenario] = useState<ScheduleDevScenario>("all states");
 
   const [seedScenario, setSeedScenario] = useState<SeedScenario>(SEED_SCENARIOS[0]);
   const [alternating, setAlternating] = useState(false);
@@ -139,6 +146,17 @@ export function DevStatePanel(): ReactNode {
     }
     useServerStore.getState().applySessionUpdated(sessionId, patch);
     useWorkspaceStore.getState().patchSessionState(sessionId, state);
+  }
+
+  // Terminal scheduled-send rows (R100): client-only, shown by `useScheduledSends`
+  // instead of the fetched state until cleared or the page reloads.
+  function handleApplySchedule() {
+    if (!sessionId) return;
+    useScheduleDevOverride.getState().set(sessionId, devScheduleSnapshot(scheduleScenario));
+  }
+  function handleClearSchedule() {
+    if (!sessionId) return;
+    useScheduleDevOverride.getState().clear(sessionId);
   }
 
   return (
@@ -303,6 +321,59 @@ export function DevStatePanel(): ReactNode {
           </div>
           <button onClick={() => setAlternating((a) => !a)} disabled={!sessionId} style={{ padding: "4px 6px" }}>
             {alternating ? "Stop alternating" : "Alternate Working/Waiting"}
+          </button>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          Terminal scheduled sends
+          <select
+            value={scheduleScenario}
+            onChange={(e) => setScheduleScenario(e.target.value as ScheduleDevScenario)}
+            style={{
+              background: "var(--bg-input)",
+              color: "var(--fg-primary)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 4,
+              padding: "4px 6px",
+            }}
+          >
+            {SCHEDULE_DEV_SCENARIOS.map((sc) => (
+              <option key={sc} value={sc}>
+                {sc}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={handleApplySchedule}
+            disabled={!sessionId}
+            style={{
+              flex: 1,
+              background: sessionId ? "var(--accent)" : "var(--border-strong)",
+              color: "var(--fg-inverse)",
+              border: "none",
+              borderRadius: 4,
+              padding: "6px 8px",
+              cursor: sessionId ? "pointer" : "not-allowed",
+              fontWeight: 600,
+            }}
+          >
+            Apply schedule
+          </button>
+          <button
+            onClick={handleClearSchedule}
+            disabled={!sessionId}
+            style={{
+              background: "var(--bg-tertiary)",
+              color: "var(--fg-primary)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 4,
+              padding: "6px 8px",
+              cursor: sessionId ? "pointer" : "not-allowed",
+            }}
+          >
+            Clear
           </button>
         </div>
 

@@ -9,6 +9,7 @@ function cli(over: Partial<SupportedCli>): SupportedCli {
     id: "claude",
     defaultModel: "sonnet",
     supportsJson: true,
+    supportsTerminalDelivery: false,
     importsNativeHistory: true,
     supportsJsonToTerminalResume: true,
     detected: false,

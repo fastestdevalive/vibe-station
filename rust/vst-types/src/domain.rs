@@ -700,6 +700,28 @@ pub struct ScheduledMessageMeta {
     pub message: String,
     pub attachments: Option<Vec<Attachment>>,
     pub fire_at: String, // ISO-8601 UTC
+    /// `"json"` | `"tmux"`; absent = legacy row (behaves as json).
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// Where the row is in its life; absent from older daemons (= `scheduled`).
+    #[serde(default)]
+    pub phase: Option<ScheduledPhase>,
+    /// Number of review comments attached to the row, when there are any.
+    #[serde(default)]
+    pub comment_count: Option<u32>,
+    /// `"schedule"` | `"immediate"`; absent = `"schedule"`.
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+
+/// Where a pending scheduled row is: waiting for its time, held by a terminal
+/// delivery job until the agent is ready, or mid-paste.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduledPhase {
+    Scheduled,
+    Waiting,
+    Pasting,
 }
 
 /// A scheduled send that could not be delivered, surfaced in `SessionMeta` so
@@ -713,6 +735,29 @@ pub struct ScheduledFailedMeta {
     pub attachments: Option<Vec<Attachment>>,
     pub fire_at: String, // ISO-8601 UTC
     pub failure_reason: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// `FailureKind::as_str` value; absent = legacy failure.
+    #[serde(default)]
+    pub failure_kind: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+
+/// A terminal scheduled message that was pasted recently, shown briefly as
+/// "pasted at 3:00 PM". Only terminal-pasted rows (no Rich Chat turn) appear.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledSentMeta {
+    pub id: String,
+    pub message: String,
+    pub fire_at: String, // ISO-8601 UTC
+    pub sent_at: String, // ISO-8601 UTC
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 /// Cross-harness session meta feeding the composer status bar.

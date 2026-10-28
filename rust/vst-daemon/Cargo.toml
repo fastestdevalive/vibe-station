@@ -16,6 +16,7 @@ path = "src/main.rs"
 vst-types = { workspace = true }
 vst-store = { workspace = true }
 vst-proc = { workspace = true }
+vst-review = { workspace = true }
 vst-git = { workspace = true }
 vst-rpc = { workspace = true }
 vst-agents = { workspace = true }
