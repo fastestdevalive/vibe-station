@@ -19,56 +19,40 @@ set -e
 mkdir -p /home/vst/.vibe-station /home/vst/projects
 chown -R vst:vst /home/vst/.vibe-station /home/vst/projects
 
-# Symlink cursor-agent's REAL wrapper script into place from the mounted
-# `versions/` directory (see docker-compose.dev.yml's CURSOR_AGENT_VERSIONS
-# comment for the full root-cause writeup). cursor-agent's own launcher does
-# `realpath "$0"` and expects its bundled `node` binary + numbered chunk
-# `.js` files to sit in the SAME directory as itself — a single-file bind
-# mount of just the launcher script (the old approach) breaks that: Docker
-# resolves a host symlink to its target's CONTENTS at mount time, so the
-# container never sees a real path back to those sibling files, and the
-# launcher fails with `Cannot find module '.../index.js'`. Mounting the
-# whole `versions/` tree read-only and symlinking from INSIDE the container
-# preserves the sibling-file relationship the launcher relies on.
-if [ -d /opt/cursor-agent-versions ]; then
-  # Version dirs are date-prefixed (e.g. `2026.08.25-<sha>`) and sort
-  # lexicographically in chronological order — no need to know which one
-  # the host's own `~/.local/bin/cursor-agent` symlink currently points at.
-  cursor_agent_version_dir="$(find /opt/cursor-agent-versions -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
+# Every agent CLI binary is installed in the image (dev.Dockerfile). On a Linux
+# host, scripts/dev-sandbox.sh additionally mounts the host's own opencode/agy/
+# codex/cursor-agent under /opt/host-bins (only those that exist); point
+# /usr/local/bin at each one ONLY when the expected file is really there, so an
+# absent or empty mount (Docker turns a missing bind source into an empty dir)
+# leaves the image's pinned copy in place instead of a broken command.
+hb=/opt/host-bins
+for cli in opencode agy; do
+  if [ -f "$hb/$cli" ]; then
+    ln -sf "$hb/$cli" "/usr/local/bin/$cli"
+    echo "$cli: using host binary ($hb/$cli)"
+  fi
+done
+# codex — the host's platform-package vendor dir (static ELF + codex-resources/
+# siblings it resolves relative to its own path), not the Node.js launcher.
+if [ -f "$hb/codex-platform/bin/codex" ]; then
+  ln -sf "$hb/codex-platform/bin/codex" /usr/local/bin/codex
+  echo "codex: using host binary ($hb/codex-platform/bin/codex)"
+fi
+# cursor-agent — its launcher does `realpath "$0"` and loads its bundled node +
+# chunk files from beside itself, so the whole host versions/ dir is mounted and
+# the newest (date-prefixed, so lexicographic = chronological) is linked here.
+if [ -d "$hb/cursor-agent-versions" ]; then
+  cursor_agent_version_dir="$(find "$hb/cursor-agent-versions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -1)"
   if [ -n "$cursor_agent_version_dir" ] && [ -f "$cursor_agent_version_dir/cursor-agent" ]; then
     ln -sf "$cursor_agent_version_dir/cursor-agent" /usr/local/bin/cursor-agent
-    echo "cursor-agent: symlinked to $cursor_agent_version_dir/cursor-agent"
-  else
-    echo 'cursor-agent: WARNING — /opt/cursor-agent-versions is mounted but no version dir with a `cursor-agent` launcher was found; cursor-agent will not run' >&2
+    ln -sf "$cursor_agent_version_dir/cursor-agent" /usr/local/bin/agent
+    echo "cursor-agent: using host binary ($cursor_agent_version_dir/cursor-agent)"
   fi
-fi
-
-# codex — the real binary is a static-pie ELF inside the platform package vendor
-# dir, NOT the Node.js launcher script (which needs its 427MB @openai/codex-linux-x64
-# optional dep alongside it). The vendor dir also holds codex-resources/ (bwrap,
-# voice, zsh) that codex looks for relative to its own path. Mount the whole
-# x86_64-unknown-linux-musl/ dir at /opt/codex-platform and symlink bin/codex.
-if [ -d /opt/codex-platform ] && [ -f /opt/codex-platform/bin/codex ]; then
-  ln -sf /opt/codex-platform/bin/codex /usr/local/bin/codex
-  echo "codex: symlinked to /opt/codex-platform/bin/codex"
-elif [ -d /opt/codex-platform ]; then
-  echo 'codex: WARNING — /opt/codex-platform is mounted but bin/codex not found; codex will not run' >&2
-fi
-
-# pi — same sibling-file problem as cursor-agent: cli.js loads ./cli-runtime.js
-# at runtime, so a single-file mount breaks it. Mount the whole dist/bundle/
-# dir at /opt/pi-bundle and symlink cli.js into /usr/local/bin/pi so the
-# loader can resolve siblings relative to the real path.
-if [ -d /opt/pi-bundle ] && [ -f /opt/pi-bundle/cli.js ]; then
-  ln -sf /opt/pi-bundle/cli.js /usr/local/bin/pi
-  echo "pi: symlinked to /opt/pi-bundle/cli.js"
-elif [ -d /opt/pi-bundle ]; then
-  echo 'pi: WARNING — /opt/pi-bundle is mounted but cli.js not found; pi will not run' >&2
 fi
 
 # No stubs for missing CLI binaries: a stub on PATH makes the daemon report the
 # CLI as "detected" (it just runs `which`), which is a lie on a machine that
-# doesn't have it installed. Only binaries the host actually mounts count.
+# doesn't have it installed. Only binaries the image actually installs count.
 
 # Seed a writable ~/<name> dir from a read-only /seed/<name> mount, if one is
 # present, skipping any basenames listed in $3 (space-separated) — bulk,
@@ -109,11 +93,49 @@ seed_writable_home() {
   fi
 }
 
+# Like seed_writable_home, but the writable dir lives in the persistent data
+# volume (/home/vst/.vibe-station/cli-home/<name>, symlinked to from ~/<name>)
+# instead of the container fs, and the host seed is re-copied ON TOP at every
+# start (no `.seeded` marker). Used for the CLIs whose login can't come from the
+# host on macOS (Keychain) or may need an in-sandbox login: a `cursor-agent login`/
+# `agy`/`codex login`/`opencode auth login` run inside the sandbox writes into the
+# volume and survives the `--force-recreate` every `dev-sandbox.sh up` does, while
+# a credential the host DOES have on disk still wins and is refreshed each start
+# (the old re-seed-on-recreate behaviour). Only the small non-excluded files are
+# copied, so re-copying every start is cheap.
+seed_persistent_home() {
+  seed_src="$1"; target="$2"; store="$3"; excludes="$4"
+  mkdir -p "$store" "$(dirname "$target")"
+  # A real dir here is an older image's container-fs seed — replace with the link.
+  if [ ! -L "$target" ]; then rm -rf "$target"; ln -s "$store" "$target"; fi
+  if [ -d "$seed_src" ]; then
+    echo "Seeding persistent $target ($store) from $seed_src..."
+    for item in "$seed_src"/* "$seed_src"/.[!.]* "$seed_src"/..?*; do
+      [ -e "$item" ] || continue
+      base="$(basename "$item")"
+      skip=0
+      for ex in $excludes; do
+        if [ "$base" = "$ex" ]; then skip=1; break; fi
+      done
+      [ "$skip" = 1 ] && continue
+      cp -a "$item" "$store/" 2>/dev/null || true
+    done
+  fi
+  chown -R vst:vst "$store"
+  chown vst:vst "$(dirname "$store")"
+  chown -h vst:vst "$target"
+}
+
 # gemini/agy — writes logs/cache/conversations under
 # ~/.gemini/antigravity-cli and fails hard on a read-only mount; the bulky
 # `antigravity`/`antigravity-browser-profile` dirs (~1.9G, the desktop IDE +
 # its browser profile) are excluded — agy-cli needs neither.
-seed_writable_home /seed/gemini /home/vst/.gemini "antigravity antigravity-browser-profile"
+# Persistent: on macOS agy's login is in the Keychain, so it must sign in inside
+# the sandbox (it prints a URL and takes the pasted code); with no Secret Service
+# in this container agy falls back to file token storage under its own dirs,
+# which must survive a recreate. (A Linux host's login is in ITS Secret Service,
+# not in ~/.gemini, so it can't be seeded either.)
+seed_persistent_home /seed/gemini /home/vst/.gemini /home/vst/.vibe-station/cli-home/gemini "antigravity antigravity-browser-profile"
 
 # claude — `.credentials.json` (OAuth token) lives directly under `~/.claude`
 # alongside gigabytes of past-conversation transcripts (`projects/`) and file
@@ -164,7 +186,10 @@ fi
 # `extensions/`, `acp-sessions/`, all excluded here as bulk/non-auth). Small
 # CLI preference files (`cli-config.json`, `argv.json`, `mcp.json`) are kept
 # since cursor-agent reads them for permission/editor/display settings.
-seed_writable_home /seed/cursor-config /home/vst/.config/cursor ""
+# ~/.config/cursor is persistent: on macOS the login is in the Keychain (the host
+# dir is empty), so `cursor-agent login` inside the sandbox — or CURSOR_API_KEY,
+# see docker-compose.dev.yml — is the only way in.
+seed_persistent_home /seed/cursor-config /home/vst/.config/cursor /home/vst/.vibe-station/cli-home/cursor-config ""
 seed_writable_home /seed/cursor-home /home/vst/.cursor "chats projects extensions acp-sessions sandbox-policies"
 
 # opencode — the credential is `~/.local/share/opencode/auth.json`; that same
@@ -172,15 +197,20 @@ seed_writable_home /seed/cursor-home /home/vst/.cursor "chats projects extension
 # store, routinely 500MB-1GB+) and `snapshot/`/`repos/` working-copy caches,
 # none of which a fresh sandbox needs. `~/.config/opencode` (small) carries
 # opencode's own config/skills and is kept in full.
-seed_writable_home /seed/opencode-data /home/vst/.local/share/opencode "opencode.db opencode.db-shm opencode.db-wal snapshot repos"
+# The data dir is persistent (so an `opencode auth login` inside survives, and the
+# sandbox's OWN opencode.db with it — which also keeps its sessions resumable).
+seed_persistent_home /seed/opencode-data /home/vst/.local/share/opencode /home/vst/.vibe-station/cli-home/opencode-data "opencode.db opencode.db-shm opencode.db-wal snapshot repos"
 seed_writable_home /seed/opencode-config /home/vst/.config/opencode ""
 
 # codex — `auth.json` carries the OPENAI_API_KEY; `config.toml` carries TUI
 # prefs. Exclude bulk runtime state: sqlite DBs, sessions/, cache/, tmp/,
 # packages/, plugins/, shell_snapshots/, and lock dirs — the sandbox only
 # needs auth and config to start a fresh codex session.
-seed_writable_home /seed/codex /home/vst/.codex \
-  "sessions cache tmp packages plugins shell_snapshots thread-writer-locks tui-thread-reference-capabilities \
+# Persistent, for `codex login --device-auth` inside the sandbox — needed when the
+# host keeps its login in the Keychain (`cli_auth_credentials_store = "keyring"`/
+# "auto"), where no auth.json exists to seed.
+seed_persistent_home /seed/codex /home/vst/.codex /home/vst/.vibe-station/cli-home/codex \
+  "sessions archived_sessions cache tmp .tmp app-server-control app-server-daemon packages plugins shell_snapshots thread-writer-locks tui-thread-reference-capabilities \
    goals_1.sqlite goals_1.sqlite-shm goals_1.sqlite-wal \
    logs_2.sqlite logs_2.sqlite-shm logs_2.sqlite-wal \
    memories_1.sqlite memories_1.sqlite-shm memories_1.sqlite-wal \
@@ -215,6 +245,11 @@ persist_cli_sessions() {
 persist_cli_sessions /home/vst/.codex/sessions /home/vst/.vibe-station/cli-sessions/codex
 persist_cli_sessions /home/vst/.pi/agent/sessions /home/vst/.vibe-station/cli-sessions/pi
 persist_cli_sessions /home/vst/.omp/agent/sessions /home/vst/.vibe-station/cli-sessions/omp
+# mkdir -p above (as root) may have created ~/.config / ~/.local / ~/.local/share
+# themselves; hand them to vst so CLIs can create their other XDG dirs.
+for d in /home/vst/.config /home/vst/.local /home/vst/.local/share; do
+  [ -d "$d" ] && chown vst:vst "$d"
+done
 
 
 # VST_SEED_MODE selects what gets seeded into this sandbox:
