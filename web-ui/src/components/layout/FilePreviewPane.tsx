@@ -1,11 +1,11 @@
 import { Minus, Plus, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
 import { copyText } from "@/lib/copyText";
-import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import { removeArtifactRow } from "@/components/artifacts/artifactActions";
 import { fetchArtifactScope, useArtifactScope } from "@/components/artifacts/useArtifactsSync";
 import { useArtifactRow, useArtifactSource } from "@/components/artifacts/useArtifactSource";
 import { ArtifactStripItems } from "@/components/artifacts/ArtifactStrip";
@@ -15,7 +15,11 @@ import {
   panelForReadError,
   type ArtifactPanelState,
 } from "@/components/artifacts/ArtifactStatePanels";
-import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
+import { segmentMarkdownWithLines } from "@/preview/mdSegments";
+import { CommentSurfaceProvider } from "@/components/comments/CommentSurfaceProvider";
+import { CommentStripButton } from "@/components/comments/CommentStripButton";
+import { Banner } from "@/components/ui/Banner";
+import { useServerStore } from "@/hooks/useServerStore";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
@@ -25,9 +29,9 @@ import { CodeView, type CodeViewHandle, type GutterMarkKind } from "@/components
 import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
 import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
-import { HtmlView, isOverHtmlCap } from "@/components/preview/HtmlView";
+import { HtmlView, isOverHtmlCap, isOverHtmlCapBytes } from "@/components/preview/HtmlView";
 import { HtmlModeToggle, useHtmlPreviewMode } from "@/components/preview/HtmlModeToggle";
-import { HTML_FILE_MAX_BYTES, isHtmlPath } from "@/components/preview/htmlDocument";
+import { isHtmlPath } from "@/components/preview/htmlDocument";
 import { isImagePath } from "@/lib/imageFile";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
@@ -59,6 +63,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const previewInfo = usePreviewedPath(worktreeId, fileScope, controlled);
   const { path, scope, external } = previewInfo;
   const isExternalPeek = Boolean(external);
+  const baseSha = useServerStore((s) => s.worktrees.find((w) => w.id === worktreeId)?.baseSha);
   // Artifact seam (plan 8.4): an ABSOLUTE path with no LSP token is only readable through an artifact row, so
   // its bytes come from `getArtifactContent` and every worktree-relative pipeline (watch, gutter, diff, LSP,
   // outline) is off for it. `none` keeps today's behaviour (relative paths, LSP external peeks).
@@ -217,6 +222,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
+  const [artifactRemoveError, setArtifactRemoveError] = useState<{ path: string; text: string } | null>(null);
 
   useEffect(() => {
     // An artifact path whose row is not (yet) known fetches nothing: `loading` waits for the list, `evicted`
@@ -300,6 +306,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             setTooLarge(true);
             setLoaded(null);
           }
+        } else if (e instanceof ApiError && e.status === 404) {
+          // A comment's file can be gone (deleted, renamed): say so plainly instead of the daemon's raw text.
+          if (!cancelled) setError("File not found");
         } else if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load");
         }
@@ -764,11 +773,22 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const truncatedTotal = truncated?.key === bodyKey ? truncated.total : null;
   const htmlTooLarge =
     isHtml &&
-    ((truncatedTotal != null && truncatedTotal > HTML_FILE_MAX_BYTES) || (fileBody != null && isOverHtmlCap(fileBody, "file")));
+    ((truncatedTotal != null && isOverHtmlCapBytes(truncatedTotal, "file")) || (fileBody != null && isOverHtmlCap(fileBody, "file")));
   const copyPath = () => void copyText(artifactRow?.path ?? path);
   const htmlForcedSource = effectiveLineKey != null && renderOverrideKey !== effectiveLineKey;
   const showHtmlRendered =
     isHtml && htmlMode === "rendered" && !htmlForcedSource && !htmlTooLarge && fileBody != null;
+
+  // Review comments (R41): not on commits, images, binaries or LSP peeks of files outside the workspace.
+  const commentDisabledReason: string | null =
+    viewScope === "commit" || controlled
+      ? "Comments aren’t available on commits"
+      : isImagePath(path)
+        ? "Comments aren’t available on images"
+        : isExternalPeek
+          ? "Comments aren’t available on this file"
+          : null;
+  const commentPathKind = artifactSourced && !artifactRow?.inRepo ? ("artifact" as const) : ("repo" as const);
 
   // Slim, content-scoped strip — line counts + which baseline. The
   // local/branch scope toggle itself lives only in the Files header
@@ -826,12 +846,37 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         : artifactFailure?.key === bodyKey
           ? artifactFailure.state
           : null;
+  const bump = (delta: number) => {
+    if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
+    else bumpPreviewFont(delta);
+  };
+  const fontOverlay = (
+    <div className="preview-font-overlay">
+      <button type="button" className="preview-font-overlay__btn" aria-label="Decrease preview font" onClick={() => bump(-0.05)}>
+        <Minus size={11} />
+      </button>
+      <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
+        <Plus size={11} />
+      </button>
+      <button
+        type="button"
+        className="preview-font-overlay__btn"
+        aria-label="Reset preview font size"
+        title="Reset font size"
+        disabled={previewFontScale === 1}
+        onClick={() => (worktreeId ? resetPreviewFontForWorktree(worktreeId) : resetPreviewFont())}
+      >
+        <RotateCcw size={11} />
+      </button>
+    </div>
+  );
+
   // Artifact strip (`Main.dc.html` `.vstrip`): mono display path, writer chip, `outside repo` chip, pin. Shown for
   // artifact-sourced paths (no diff stats: there is no git baseline) — an in-repo file that is also an artifact
   // keeps its diff strip and gains the same tail.
   const scopeLabel =
     viewScope === "branch" ? "Compared to fork base" : viewScope === "commit" ? "Commit diff" : "Compared to HEAD";
-  const artifactStrip = artifactSourced ? (
+  const diffInfoWith = (tail: ReactNode) => artifactSourced ? (
     <div className="preview-diffinfo artifact-strip">
       {previewNav}
       <span className="artifact-strip__path" title={path}>
@@ -843,9 +888,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         <span className="artifact-strip__spacer" />
       )}
       {artifactPanel ? null : htmlToggle}
+      {artifactPanel ? null : <CommentStripButton disabledReason={commentDisabledReason} />}
+      {tail}
     </div>
-  ) : null;
-  const diffInfo = artifactStrip ?? (
+  ) : (
     <div className="preview-diffinfo">
       {previewNav}
       {diffStats ? (
@@ -876,6 +922,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       ) : null}
       {htmlToggle}
       {stripRow ? <ArtifactStripItems api={api} scopeId={worktreeId} row={stripRow} /> : null}
+      <CommentStripButton disabledReason={commentDisabledReason} />
+      {tail}
     </div>
   );
 
@@ -887,16 +935,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     };
     const removeRow = () => {
       if (!artifactRow) return;
-      void api
-        .removeArtifact(artifactRow.id)
-        .then(() => useArtifactsStore.getState().hideRow(worktreeId, artifactRow.id))
-        .catch((e: unknown) => {
-          if ((e as { code?: string }).code === "ARTIFACT_NOT_FOUND") useArtifactsStore.getState().hideRow(worktreeId, artifactRow.id);
-        });
+      setArtifactRemoveError(null);
+      void removeArtifactRow(api, worktreeId, artifactRow).then((r) => {
+        if (r === "failed") setArtifactRemoveError({ path, text: "Couldn’t remove this artifact" });
+      });
     };
     return (
       <div className="pane pane-stack">
-        {diffInfo}
+        {diffInfoWith(null)}
+        {artifactRemoveError?.path === path ? (
+          <Banner tone="error">
+            {artifactRemoveError.text}
+          </Banner>
+        ) : null}
         <ArtifactStatePanel state={artifactPanel} onCopyPath={copyPath} onCloseTab={closeTab} onRemove={artifactRow ? removeRow : undefined} onRetry={() => void fetchArtifactScope(api, fileScope, worktreeId)} />
       </div>
     );
@@ -905,7 +956,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   if (tooLarge) {
     return (
       <div className="pane pane-stack">
-        {diffInfo}
+        {diffInfoWith(null)}
         <div className="empty-state">File too large to preview</div>
       </div>
     );
@@ -914,7 +965,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   if (error) {
     return (
       <div className="pane pane-stack">
-        {diffInfo}
+        {diffInfoWith(null)}
         <div className="empty-state">{error}</div>
       </div>
     );
@@ -964,12 +1015,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       return <HtmlView source={fileBody} variant="file" title={path} />;
     }
     if (isMd) {
-      const segments = segmentMarkdownWithMermaid(fileBody);
+      const segments = segmentMarkdownWithLines(fileBody);
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           {segments.map((seg, i) =>
             seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={submodule && path ? `${submodule}/${path}` : path} external={artifactSourced && !artifactRow?.inRepo} />
+              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={submodule && path ? `${submodule}/${path}` : path} external={artifactSourced && !artifactRow?.inRepo} commentSource={{ startLine: seg.startLine }} />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={themeMode} />
             ),
@@ -1001,46 +1052,46 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const useCodeChrome = viewScope === "local" || viewScope === "branch" || viewScope === "commit" || (!isMd && !isImage && viewScope === "none");
 
-  const bump = (delta: number) => {
-    if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
-    else bumpPreviewFont(delta);
-  };
-  const fontOverlay = (
-    <div className="preview-font-overlay">
-      <button type="button" className="preview-font-overlay__btn" aria-label="Decrease preview font" onClick={() => bump(-0.05)}>
-        <Minus size={11} />
-      </button>
-      <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
-        <Plus size={11} />
-      </button>
-      <button
-        type="button"
-        className="preview-font-overlay__btn"
-        aria-label="Reset preview font size"
-        title="Reset font size"
-        disabled={previewFontScale === 1}
-        onClick={() => (worktreeId ? resetPreviewFontForWorktree(worktreeId) : resetPreviewFont())}
-      >
-        <RotateCcw size={11} />
-      </button>
-    </div>
-  );
-
   const showFontOverlay = !showHtmlRendered;
 
   return (
+    <CommentSurfaceProvider
+      api={api}
+      scopeKind={fileScope}
+      scopeId={worktreeId}
+      path={path}
+      pathKind={commentPathKind}
+      rootEl={scrollEl}
+      disabledReason={commentDisabledReason}
+      diffScope={viewScope}
+      baseSha={baseSha}
+      fileText={fileBody}
+    >
     <div
       className={`pane pane-stack preview-pane${showFontOverlay ? " preview-pane--font-overlay" : ""}`}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{ position: "relative" }}
     >
-      {diffInfo}
+      {diffInfoWith(showFontOverlay ? fontOverlay : null)}
+      {showHtmlRendered && !commentDisabledReason ? (
+        <Banner
+          tone="info"
+          actions={
+            <button type="button" className="comment-btn" onClick={() => setHtmlMode("source")}>
+              Switch to source to comment
+            </button>
+          }
+        >
+          Rendered HTML runs in a sandbox with no script access, so selections can’t be read.
+        </Banner>
+      ) : null}
       {truncatedTotal != null ? <TruncatedBanner total={truncatedTotal} onCopyPath={copyPath} /> : null}
-      {showFontOverlay ? fontOverlay : null}
       <div
         ref={setBodyRef}
         onScroll={handleScroll}
+        data-comment-surface={commentDisabledReason || showHtmlRendered ? undefined : ""}
+        tabIndex={-1}
         className={`preview-body${useCodeChrome ? " preview-body--code" : ""}${showHtmlRendered ? " preview-body--html" : ""}`}
         style={previewScaleStyle}
       >
@@ -1052,5 +1103,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         onClose={() => setImageFullscreen(false)}
       />
     </div>
+    </CommentSurfaceProvider>
   );
 }

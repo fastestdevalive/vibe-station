@@ -1,12 +1,13 @@
 import { memo, useState } from "react";
 import { Clock } from "lucide-react";
-import type { Attachment } from "@/api/types";
+import type { Attachment, ReviewRecord } from "@/api/types";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { parseDraftSegments } from "@/lib/mentions";
 import { MentionChipView } from "@/components/mentions/MentionChipView";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { AttachmentChip } from "./AttachmentChip";
+import { ReviewFooter } from "@/components/comments/ReviewFooter";
 
 interface TextMessageProps {
   role: "user" | "assistant";
@@ -24,6 +25,13 @@ interface TextMessageProps {
   rowKey?: string;
   /** ISO timestamp of the message; clicking the bubble toggles showing it. */
   ts?: string;
+  /** User bubbles: the review comments this turn carried (footer `N review comments · M files`). */
+  review?: ReviewRecord;
+  /** The footer's record came from parsing imported history: no stored snapshot, nothing to restore. */
+  reviewParsed?: boolean;
+  /** Session and turn of a sent bubble: `Restore to comments` needs both. */
+  sessionId?: string;
+  turnId?: string;
 }
 
 /** "14:32" for today, "Oct 22, 14:32" otherwise (seconds in the tooltip). */
@@ -41,7 +49,7 @@ function formatSentTime(ts: string): { label: string; full: string } | null {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey, ts }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey, ts, review, reviewParsed, sessionId, turnId }: TextMessageProps) {
   const isUser = role === "user";
   const [showTime, setShowTime] = useState(false);
   const sent = ts ? formatSentTime(ts) : null;
@@ -61,7 +69,7 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
       data-role={role}
     >
       <div className={`chat-bubble chat-bubble--${role}${sent ? " chat-bubble--clickable" : ""}`} onClick={onBubbleClick}>
-        {isUser ? (
+        {isUser && (text.length > 0 || !review) ? (
           // Phase 7B.10: a sent user message still carries the internal
           // `{/name args}` wire encoding (Decision 2) — never surface it.
           // Tokens render as a styled inline chip so the skill name and its
@@ -90,15 +98,25 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
               ),
             )}
           </div>
-        ) : (
+        ) : !isUser ? (
           <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} renderHtml rowKey={rowKey} />
-        )}
+        ) : null}
         {attachments && attachments.length > 0 ? (
           <div className="chat-bubble__attachments">
             {attachments.map((a) => (
               <AttachmentChip key={a.id} attachment={a} />
             ))}
           </div>
+        ) : null}
+        {isUser && review ? (
+          <ReviewFooter
+            record={review}
+            scopeId={worktreeId ?? null}
+            api={api ?? null}
+            {...(reviewParsed ? { parsed: true } : {})}
+            {...(sessionId ? { sessionId } : {})}
+            {...(turnId ? { turnId } : {})}
+          />
         ) : null}
         {isUser && scheduled ? (
           <div className="chat-bubble__scheduled" title="This message was sent via schedule">

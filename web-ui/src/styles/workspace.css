@@ -214,6 +214,10 @@
   outline: none;
 }
 
+.preview-body:focus {
+  outline: none;
+}
+
 .file-tree-scope-chips {
   display: inline-flex;
   align-items: center;
@@ -1807,6 +1811,7 @@
   font-size: var(--fs-body);
   flex: 1;
   min-height: 0;
+  contain: inline-size;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2114,6 +2119,7 @@
 }
 
 .top-bar__pane-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2194,6 +2200,14 @@
    different tone from the selected state so an unselected button never looks
    selected while pointed at — important for the same-icon toggles (terminal,
    tool panel) whose glyph doesn't change between states. */
+/* Comments count on the tools toggle while the pane is hidden. */
+.top-bar__pane-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  pointer-events: none;
+}
+
 .top-bar__pane-btn:hover {
   color: var(--fg-secondary);
   background: var(--bg-hover);
@@ -2343,6 +2357,10 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+/* The chip sits at the window top: keep the comments badge fully inside it. */
+.top-bar-floating-actions .top-bar__pane-badge {
+  top: -2px;
 }
 
 .icon-btn {
@@ -2707,45 +2725,6 @@
   background: var(--bg-hover);
 }
 
-/* Layout-orientation toggle attached to the "Files" tab button itself — a
- * separately-clickable icon on its right edge (same `role="button"` +
- * stopPropagation span pattern as `.tab__close` above, not a nested
- * <button>, since HTML forbids nesting interactive controls). More visible
- * by default than `.tab__close` (0.6 vs 0) since it's a real, frequently-used
- * control rather than an incidental dismiss action. */
-.tab__layout-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  opacity: 0.6;
-  margin: auto var(--space-2) auto 0;
-  padding: 2px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  border-radius: 2px;
-  cursor: pointer;
-  transition: opacity var(--transition-fast), background var(--transition-fast);
-}
-
-.tab__layout-toggle svg {
-  flex-shrink: 0;
-}
-
-/* Reveal at full opacity when hovering anywhere in the grouped tab item, or
- * when the Files tab itself is active — `~` targets the toggle as the
- * active tab BUTTON's general sibling (they're siblings inside the wrap,
- * not parent/child, so a descendant selector wouldn't match). */
-.tab[data-active="true"] ~ .tab__layout-toggle {
-  opacity: 1;
-}
-
-.tab__layout-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--fg-primary);
-}
-
 .tab--icon {
   padding: 0;
 }
@@ -2785,15 +2764,15 @@
     width: 44px;
     min-width: 44px;
     max-width: 44px;
-    height: 35px;
-    min-height: 35px;
-    max-height: 35px;
+    height: var(--pane-row-h);
+    min-height: var(--pane-row-h);
+    max-height: var(--pane-row-h);
   }
   /* In the open list's header (phone side-by-side) the content column is narrow: tighter controls. */
   .files-left-pane-overlay .actions-host .tab.tab--icon.tool-bar-btn {
-    width: 36px;
-    min-width: 36px;
-    max-width: 36px;
+    width: var(--tools-rail-col-w);
+    min-width: var(--tools-rail-col-w);
+    max-width: var(--tools-rail-col-w);
   }
 }
 
@@ -3029,7 +3008,7 @@
 
 /* Tools fullscreen on desktop keeps the window rail visible (R7): stop short of its column. */
 .pane-viewport-fullscreen--keep-rail {
-  right: var(--tools-rail-col-w, 36px);
+  right: var(--tools-rail-col-w);
 }
 
 .pane-shell.pane-shell--viewport {
@@ -3050,9 +3029,9 @@
 
 /* Secondary sidebar tone (a little lighter than --bg-sidebar, still darker
    than the main content/preview area) for the tree/list side of every
-   MasterDetailShell instance -- the Files tab's file tree and the VCS tab's
-   commit-view file tree both land here (leftPane is always wrapped in
-   .pane-fill-host; rightPane, the preview side, is deliberately excluded). */
+   docked list -- the Files tab's file tree and the VCS tab's commit-view
+   file tree both land here (the list is always wrapped in .pane-fill-host;
+   the preview side is deliberately excluded). */
 .pane-fill-host .pane {
   background: var(--bg-sidebar-secondary);
 }
@@ -7958,7 +7937,7 @@ button.dashboard-card {
 }
 
 /* Phase 3 (B8) — outer row: the full-height FilesLeftRail to the LEFT of the
- * whole MasterDetailShell column, a structural sibling not a nested child. */
+ * whole Files column, a structural sibling not a nested child. */
 .files-panel__row {
   flex: 1;
   min-height: 0;
@@ -7974,8 +7953,7 @@ button.dashboard-card {
 
 /* Phase 3 (B8) — the 3-icon rail: panel-visibility toggle · ⊟ tree · 🔍
  * search. (The layout-orientation icon originally sketched into this rail
- * has since moved to the top-level "Files" tab button — see
- * `.tab__layout-toggle`.) */
+ * has since moved to the pane controls.) */
 .files-left-rail {
   display: flex;
   flex-direction: column;
@@ -7985,7 +7963,7 @@ button.dashboard-card {
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  width: 36px;
+  width: var(--tools-rail-col-w);
   padding: 0 0 var(--space-1);
   background: var(--bg-secondary);
   border-right: var(--border-width) solid var(--border-default);
@@ -8004,7 +7982,7 @@ button.dashboard-card {
 .tool-panel__tile-rail {
   flex: none;
   box-sizing: border-box;
-  width: 36px;
+  width: var(--tools-rail-col-w);
   display: flex;
   flex-direction: column;
   padding-top: 6px;
@@ -8106,9 +8084,10 @@ button.dashboard-card {
 .files-left-pane-resize-handle {
   position: absolute;
   top: 0;
-  left: -5px;
+  /* Inside the list (not straddling its edge): the preview's scrollbar sits right against the list. */
+  left: 0;
   right: auto;
-  width: 10px;
+  width: 8px;
   height: 100%;
   z-index: 30;
   cursor: col-resize;
@@ -8136,8 +8115,8 @@ button.dashboard-card {
 /* Coarse pointers get a wider resize grip. */
 @media (pointer: coarse) {
   .files-left-pane-resize-handle {
-    left: -10px;
-    width: 20px;
+    left: 0;
+    width: 14px;
   }
   .files-left-pane-resize-handle--horizontal {
     left: 0;
@@ -8145,14 +8124,6 @@ button.dashboard-card {
     width: 100%;
     height: 20px;
   }
-}
-
-.files-panel__preview-only {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 /* ── Files bar: tree toggle + open-file tabs + panel controls ───────────── */
@@ -8170,9 +8141,9 @@ button.dashboard-card {
    pane controls via ToolActionsHost; may reserve the actions chip. */
 .vcs-topbar {
   background: var(--bg-sidebar-secondary);
-  height: 35px;
-  min-height: 35px;
-  max-height: 35px;
+  height: var(--pane-row-h);
+  min-height: var(--pane-row-h);
+  max-height: var(--pane-row-h);
   box-sizing: border-box;
 }
 
@@ -8202,39 +8173,8 @@ button.dashboard-card {
   padding: 0 var(--space-3);
 }
 
-.files-topbar__tree-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  flex-shrink: 0;
-  border: none;
-  border-right: var(--border-width) solid var(--border-default);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-/* The icon is a flex item of a `display: flex` button sitting in an
- * otherwise tightly-packed topbar row — without an explicit flex-shrink
- * override it can get visually squashed (observed shrinking a 15x15 icon
- * down to ~9px wide) even though the button itself has plenty of room to
- * show it at full size. Refusing to shrink keeps it at the size its own
- * width/height attributes (set via lucide-react's `size` prop) specify,
- * regardless of how constrained the row is. */
-.files-topbar__tree-toggle svg,
 .files-topbar__add svg {
   flex-shrink: 0;
-}
-
-.files-topbar__tree-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--fg-primary);
-}
-
-.files-topbar__tree-toggle--on {
-  color: var(--fg-primary);
 }
 
 .files-topbar__tabs {
@@ -8379,22 +8319,13 @@ button.dashboard-card {
   cursor: default;
 }
 
-/* Font size overlay — top-right corner of the file/diff preview pane. */
+/* Font size controls — last item of the preview strip (in flow, right-aligned). */
 .preview-font-overlay {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  z-index: 10;
+  flex: none;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 2px;
-}
-/* Reserve the overlay's width (3 x 24px buttons + 2 x 2px gaps) in the strip. */
-.preview-pane {
-  --preview-font-overlay-w: calc(3 * 24px + 2 * 2px);
-}
-.preview-pane--font-overlay > .preview-diffinfo {
-  padding-right: calc(var(--preview-font-overlay-w) + 2 * var(--space-2));
 }
 .preview-font-overlay__btn {
   display: inline-flex;
@@ -8479,6 +8410,20 @@ button.dashboard-card {
   .preview-diffinfo .file-tree-scope-chips {
     display: none;
   }
+}
+
+/* Very narrow strip (phone list open): drop back/forward so stats, Comment and
+ * the font group fit instead of overlapping. */
+@container preview-diffinfo (max-width: 160px) {
+  .preview-diffinfo .preview-nav {
+    display: none;
+  }
+}
+
+/* Phones: leftover strip items scroll rather than overlap. */
+@media (max-width: 768px) {
+  .preview-diffinfo { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .preview-diffinfo::-webkit-scrollbar { display: none; }
 }
 
 /* Decision 3 — commit-mode breadcrumb rendered by `DiffScopeSelector`
@@ -8583,6 +8528,11 @@ button.dashboard-card {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+@container preview-diffinfo (max-width: 300px) {
+  .comment-btn--strip .comment-btn__label {
+    display: none;
+  }
 }
 
 .preview-diffinfo__view-source {

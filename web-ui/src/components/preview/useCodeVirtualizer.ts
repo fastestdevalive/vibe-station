@@ -54,6 +54,8 @@ export interface UseCodeVirtualizerOptions {
   enabled: boolean;
   /** 1-based target line to force into the rendered range (jump-to-line). */
   highlightLine: number | null;
+  /** 1-based lines kept mounted wherever they scroll (an open comment box must not lose its editor). */
+  pinnedLines?: readonly number[];
   tabSize: number;
 }
 
@@ -84,6 +86,7 @@ export function useCodeVirtualizer({
   scrollEl,
   enabled,
   highlightLine,
+  pinnedLines,
   tabSize,
 }: UseCodeVirtualizerOptions): UseCodeVirtualizerResult {
   const measureRef = useRef<HTMLSpanElement | null>(null);
@@ -160,6 +163,9 @@ export function useCodeVirtualizer({
       const set = new Set(idxs);
       if (highlightLine != null && highlightLine >= 1 && highlightLine <= lines.length) {
         set.add(highlightLine - 1);
+      }
+      for (const n of pinnedLines ?? []) {
+        if (n >= 1 && n <= lines.length) set.add(n - 1);
       }
       return Array.from(set).sort((a, b) => a - b);
     },

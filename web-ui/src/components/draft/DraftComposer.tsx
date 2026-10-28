@@ -4,7 +4,11 @@ import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { DraftAttachment } from "@/hooks/useAttachmentDrafts";
 import type { CreateWorktreeBody, DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
-import { ApiError } from "@/api/errors";
+import { ApiError, ReviewApiError } from "@/api/errors";
+import { ReviewAttachButton, ReviewChip } from "@/components/comments/ReviewAttachButton";
+import { reviewErrorText } from "@/components/comments/reviewActions";
+import { useCommentStore } from "@/components/comments/useCommentStore";
+import { useComposerReview } from "@/components/comments/useComposerReview";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "../chat/SkillEditor";
@@ -219,6 +223,15 @@ function DraftComposerInner({
 
   const { skillCommands, editorSeq, editorReady } = useSkillCommands(true, api);
   const softKeyboardVisible = useSoftKeyboardVisible();
+
+  // Review comments (R131-R134): the same Attach button as a Rich Chat composer, on a Tier-1 worktree-tab /
+  // direct-tab draft only (`/draft/new` has no worktree to hold comments, so it renders none). A draft's id is
+  // its future session id, so the lease key is `session:<draftId>` and survives a tab switch.
+  const composerRootRef = useRef<HTMLDivElement | null>(null);
+  const review = useComposerReview(api, draftSessionId ?? "", composerRootRef);
+  const reviewOn = isTier1 && entryPoint === "tab" && !!draftSessionId;
+  const reviewIds = reviewOn ? review.attachedIds : [];
+  const hasReview = reviewIds.length > 0;
 
   // ── Short-pane fold (Phase 2). ────────────────────────────────────────────
   const rootRef = useRef<HTMLDivElement>(null);
@@ -542,7 +555,7 @@ function DraftComposerInner({
   // ── Start handlers. ───────────────────────────────────────────────────────
   async function startTier1() {
     if (!draftSessionId) return;
-    if (!prompt.trim()) {
+    if (!prompt.trim() && !hasReview) {
       setError("Enter a prompt before starting.");
       return;
     }
@@ -551,12 +564,19 @@ function DraftComposerInner({
     try {
       let res: Awaited<ReturnType<typeof api.startDraft>>;
       try {
-        res = await api.startDraft(draftSessionId, {
-          draftPrompt: toPlainText(prompt),
-          draftConfig: currentConfig,
-          skipAutoTurn: isJson,
-        });
+        // With comments attached the DAEMON enqueues the first turn (message + the comments held for it), so
+        // the client's own first-turn send is skipped; the empty message is allowed (R63).
+        res = await api.startDraft(
+          draftSessionId,
+          hasReview
+            ? { draftPrompt: toPlainText(prompt), draftConfig: currentConfig, reviewCommentIds: reviewIds }
+            : { draftPrompt: toPlainText(prompt), draftConfig: currentConfig, skipAutoTurn: isJson },
+        );
       } catch (err) {
+        if (err instanceof ReviewApiError) {
+          review.setError(reviewErrorText(err, api, review.scope ?? undefined));
+          return;
+        }
         // The daemon ALSO gates Tier-1 startDraft on the project being git
         // (mirrors POST /worktrees's NOT_GIT). Route it to the same recovery
         // dialog (CUJ 3) instead of the generic error. `finally` below resets
@@ -598,7 +618,9 @@ function DraftComposerInner({
         channel: currentConfig.channel,
         ...(currentConfig.modeId ? { modeId: currentConfig.modeId } : {}),
       });
-      if (isJson) {
+      if (hasReview) {
+        if (review.scope) useCommentStore.getState().removeLocal(review.scope.scopeId, reviewIds);
+      } else if (isJson) {
         await sendJsonFirstTurn(api, draftSessionId, prompt, files);
       }
       committedRef.current = true;
@@ -1224,13 +1246,28 @@ function DraftComposerInner({
               {editorReady ? (
                 <ComposerShell
                   className="chat-composer--draft"
+                  rootRef={composerRootRef}
+                  extraChips={hasReview ? <ReviewChip review={review} /> : undefined}
                   attachments={stagedChips}
                   onRemoveAttachment={(id) => setFiles((prev) => prev.filter((_, i) => stagedId(i) !== id))}
                   onFocusEditor={() => editorRef.current?.focus()}
-                  error={attachmentNotice}
+                  error={
+                    attachmentNotice || review.error ? (
+                      <>
+                        {attachmentNotice}
+                        {review.error ? <span role="alert">{review.error}</span> : null}
+                      </>
+                    ) : undefined
+                  }
                   onFiles={(added) => setFiles((prev) => [...prev, ...added])}
-                  attachDisabled={submitting || !isJson}
-                  attachTitle={isJson ? "Attach files" : "Attachments are only sent to Rich Chat agents"}
+                  attachDisabled={submitting || !isJson || hasReview}
+                  attachTitle={
+                    hasReview
+                      ? "Detach the comments to attach files"
+                      : isJson
+                        ? "Attach files"
+                        : "Attachments are only sent to Rich Chat agents"
+                  }
                   toolbarStart={
                     <RichChatToggle
                       checked={isJson}
@@ -1258,7 +1295,7 @@ function DraftComposerInner({
                         type="button"
                         className="btn btn--primary chat-composer__send"
                         onClick={() => void handleStart()}
-                        disabled={submitting || !prompt.trim()}
+                        disabled={submitting || (!prompt.trim() && !hasReview)}
                         aria-label="Start agent"
                       >
                         <Play size={12} />
@@ -1279,6 +1316,16 @@ function DraftComposerInner({
                     onChangeText={handlePromptChange}
                     onSubmit={() => void handleStart()}
                     disabled={submitting}
+                    {...(reviewOn
+                      ? {
+                          topRight: (
+                            <ReviewAttachButton
+                              review={review}
+                              {...(files.length > 0 ? { blockedReason: "Remove the staged files first: comments and files can't start an agent together" } : {})}
+                            />
+                          ),
+                        }
+                      : {})}
                   />
                 </ComposerShell>
               ) : null}

@@ -1,0 +1,1067 @@
+/* Review comments: tray, list, send picker, composer Attach, chat footer (`.comment-*` only).
+   Tokens only (no bare hexes); metrics from design-artifacts-annotations/ann.css and the Send, CommentsList,
+   Attach, ChatMessage and Mobile boards. */
+
+.comment-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── tray (`.tray`, 40px strip, `.cp` expanded list) ── */
+.comment-tray {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 22;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-strong);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui, 1.4);
+  color: var(--fg-primary);
+}
+
+.comment-tray__list {
+  /* The inline `height` (useTrayHeight) wins; this is the pre-hydration default. */
+  height: min(424px, 60vh);
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* Top-edge resize handle: a 10px hit area on the tray's top border (44px on touch), grabber 36x4. */
+.comment-tray__handle {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.comment-tray__grabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.comment-tray__handle:hover .comment-tray__grabber,
+.comment-tray__handle[data-dragging="true"] .comment-tray__grabber,
+.comment-tray__handle:focus-visible .comment-tray__grabber {
+  opacity: 1;
+}
+
+.comment-tray__handle:focus-visible {
+  outline: none;
+}
+
+.comment-tray__handle:focus-visible .comment-tray__grabber {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse), (max-width: 768px) {
+  .comment-tray__handle {
+    top: -12px;
+    height: 44px;
+    align-items: flex-end;
+    padding-bottom: 8px;
+    box-sizing: border-box;
+  }
+  .comment-tray__grabber {
+    opacity: 1;
+  }
+  .comment-tray--expanded .comment-tray__list {
+    padding-top: 20px;
+    box-sizing: border-box;
+  }
+}
+
+.comment-tray__strip {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 10px 6px 12px;
+}
+
+.comment-tray__strip--warn {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-warning) 40%, transparent);
+}
+
+.comment-tray__strip--danger {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-danger) 40%, transparent);
+}
+
+.comment-tray__strip--compact {
+  min-height: 48px;
+  gap: 8px;
+}
+
+.comment-tray__strip--compact .comment-tray__count {
+  min-height: 44px;
+}
+
+.comment-tray__strip--compact .comment-btn:not(.comment-tray__send),
+.comment-tray__strip--compact .comment-icon-btn {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.comment-tray__strip--compact .comment-tray__send {
+  height: 36px;
+  padding: 0 var(--space-4, 16px);
+  font-size: var(--fs-ui);
+}
+
+.comment-tray__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.comment-tray__count:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.comment-tray__icon {
+  color: var(--comment);
+}
+
+.comment-tray__files {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.comment-tray__fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: var(--fs-meta);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.comment-tray__fname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comment-tray__fchip--more {
+  flex: none;
+}
+
+.comment-tray__fchip b {
+  flex: none;
+  font-weight: 600;
+  color: var(--fg-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.comment-tray__spacer,
+.comment-tray__grow {
+  flex: 1;
+}
+
+.comment-tray__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.comment-tray__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-primary);
+}
+
+.comment-tray__meta {
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-tray__warn {
+  color: var(--fg-warning);
+  font-weight: 500;
+}
+
+.comment-tray__danger {
+  color: var(--fg-danger);
+  font-weight: 500;
+}
+
+.comment-tray__error {
+  flex-basis: 100%;
+  font-size: var(--fs-meta);
+  color: var(--fg-danger);
+}
+
+.comment-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.comment-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.comment-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.comment-icon-btn:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .comment-tray {
+    animation: comment-tray-in 0.14s ease-out;
+  }
+}
+
+@keyframes comment-tray-in {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ── expanded list (`CommentsList` board) ── */
+.comment-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px;
+}
+
+.comment-list__sec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 4px;
+  font-size: var(--fs-micro);
+  line-height: var(--lh-micro, 1.3);
+  font-weight: 500;
+  letter-spacing: var(--ls-caps, 0.04em);
+  text-transform: uppercase;
+  color: var(--comment-muted);
+}
+
+.comment-list__sec-n {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.comment-cb {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  appearance: none;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 3px;
+  background: transparent;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+
+.comment-cb:checked,
+.comment-cb:indeterminate {
+  background: var(--fg-primary);
+  border-color: var(--fg-primary);
+}
+
+.comment-cb:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border: solid var(--fg-inverse);
+  border-width: 0 0 2px 2px;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+.comment-cb:indeterminate::after {
+  content: "";
+  width: 7px;
+  height: 2px;
+  background: var(--fg-inverse);
+}
+
+.comment-cb:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 2px;
+}
+
+.comment-list__item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 10px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 0 4px;
+}
+
+@media (max-width: 768px) {
+  .comment-list__item { grid-template-columns: 44px minmax(0, 1fr); column-gap: 2px; }
+  .comment-list__item > .comment-cb-hit { align-self: start; margin-top: -12px; }
+}
+
+.comment-list__b {
+  min-width: 0;
+}
+
+.comment-list__f {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+  min-width: 0;
+}
+
+/* The pin number as an id (`#9`): plain text, never a filled circle (that shape means "comment" / "count"). */
+.comment-list__pin {
+  flex: none;
+  font-family: var(--font-ui, sans-serif);
+  font-weight: 600;
+  color: var(--comment-muted);
+}
+
+.comment-list__item--out .comment-list__pin {
+  color: var(--fg-warning);
+}
+
+.comment-list__link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.comment-list__link:focus-visible {
+  outline: none;
+}
+
+/* The whole row is one tap target: the path button's hit area is stretched over it, and the checkbox and
+   Detach sit above it. One tab stop per row; the focus ring is the row's. */
+.comment-list__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.comment-list__item {
+  position: relative;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.comment-list__item:hover,
+.comment-list__item:active {
+  background: var(--bg-hover);
+}
+
+.comment-list__item:has(.comment-list__link:focus-visible) {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -2px;
+}
+
+.comment-list__item > .comment-cb-hit,
+.comment-list__detach {
+  position: relative;
+  z-index: 1;
+}
+
+.comment-list__sp {
+  flex: 1;
+}
+
+.comment-list__muted {
+  font-family: var(--font-ui, sans-serif);
+  color: var(--comment-muted);
+  white-space: nowrap;
+}
+
+.comment-list__q {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta, 1.4);
+  color: var(--comment-muted);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  margin: 3px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-list__item--out .comment-list__q {
+  border-left-color: var(--fg-warning);
+}
+
+.comment-list__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-list__detach {
+  height: 20px;
+}
+
+.comment-list__attached-ico {
+  width: 14px;
+  display: inline-flex;
+  color: var(--comment-muted);
+}
+
+.comment-list__skeleton {
+  padding: 16px 0;
+  color: var(--comment-muted);
+  font-size: var(--fs-meta);
+}
+
+.comment-list__cap {
+  padding: 8px 0;
+  font-size: var(--fs-meta);
+  color: var(--fg-warning);
+}
+
+.comment-list__virtual {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+/* ── send picker (`Send` board A `.pk`) ── */
+.comment-picker {
+  z-index: var(--z-popover);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 4px 0;
+  font-size: var(--fs-ui);
+}
+
+.comment-picker__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.comment-picker__title {
+  padding: 6px 12px 2px;
+  font-weight: 500;
+}
+
+.comment-picker__cap {
+  padding: 6px 10px 4px;
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--ls-caps, 0.04em);
+  text-transform: uppercase;
+  color: var(--comment-muted);
+}
+
+.comment-picker__cap--sep {
+  border-top: 1px solid var(--border-default);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+.comment-picker__field {
+  padding: 0 10px 8px;
+}
+
+.comment-picker__editor {
+  min-height: 54px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  /* No padding here: the editor content carries its own (--space-2) and the Lexical placeholder is absolutely
+     positioned against THIS box, so padding on the box offset typed text from the placeholder. */
+  position: relative;
+  padding: 0;
+}
+
+.comment-picker__meta {
+  margin-top: 4px;
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-picker__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.comment-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.comment-picker__row:hover:not(.comment-picker__row--disabled) {
+  background: var(--bg-hover);
+}
+
+.comment-picker__row--selected {
+  background: var(--bg-hover);
+}
+
+.comment-picker__row--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.comment-picker__row:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -2px;
+}
+
+.comment-picker__dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  display: inline-grid;
+  place-content: center;
+}
+
+.comment-picker__row--selected .comment-picker__dot {
+  border-color: var(--fg-primary);
+}
+
+.comment-picker__dot-fill {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-primary);
+}
+
+.comment-picker__name {
+  flex: 1 1 6em;
+  min-width: 6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.comment-picker__why {
+  white-space: nowrap;
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-picker__why--warn {
+  color: var(--fg-warning);
+}
+
+/* Desktop: about six rows, the rest scrolls inside the list. */
+@media (min-width: 769px) {
+  .comment-picker__rows {
+    max-height: 216px;
+    overflow-y: auto;
+  }
+}
+
+.comment-picker__when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 6px;
+}
+
+.comment-picker__seg {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.comment-picker__seg-btn {
+  min-height: 28px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.comment-picker__seg-btn + .comment-picker__seg-btn {
+  border-left: 1px solid var(--border-default);
+}
+
+.comment-picker__seg-btn--on,
+.comment-picker__seg-btn--on:hover {
+  background: var(--fg-primary);
+  color: var(--bg-primary);
+}
+
+.comment-picker__seg-btn:not(.comment-picker__seg-btn--on):hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.comment-picker__seg-btn:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -4px;
+}
+
+.comment-picker__datetime {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* iOS Safari zooms the page when a focused input's font is under 16px, which leaves the sheet in a zoomed layout. */
+@media (any-pointer: coarse) and (any-hover: none) {
+  .input.comment-picker__datetime {
+    font-size: 16px;
+  }
+}
+
+.comment-picker__fires {
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-picker__when-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-meta);
+  color: var(--fg-danger);
+}
+
+/* Primary Send / Schedule: sticky at the bottom of the popup (and the phone sheet). */
+.comment-picker__bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-default);
+}
+
+.comment-picker__bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.comment-picker__bar-sp {
+  flex: 1;
+}
+
+.comment-picker__block {
+  margin-top: 6px;
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-picker__empty {
+  padding: 8px 10px;
+  color: var(--comment-muted);
+  font-size: var(--fs-meta);
+}
+
+.comment-picker__sep {
+  height: 1px;
+  background: var(--border-default);
+  margin: 4px 0;
+}
+
+.comment-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.comment-picker__item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.comment-picker__item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.comment-picker__item:focus-visible,
+.comment-btn:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -2px;
+}
+
+.comment-picker__warn {
+  margin: 4px 10px 6px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta, 1.4);
+  color: var(--fg-warning);
+}
+
+.comment-picker__error {
+  margin: 0 10px 4px;
+  font-size: var(--fs-meta);
+  color: var(--fg-danger);
+}
+
+.comment-picker__bar .comment-picker__error {
+  margin: 0 0 8px;
+}
+
+/* ── composer Attach button and chip (`Attach` board `.att`, `.spill`) ── */
+.comment-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  font: 500 var(--fs-meta) / 1 var(--font-ui, sans-serif);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.comment-attach:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--fg-primary);
+}
+
+.comment-attach:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.comment-attach--on {
+  background: var(--bg-active);
+  border-color: var(--border-strong);
+  color: var(--fg-primary);
+}
+
+.comment-attach:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+.comment-attach__icon {
+  color: var(--comment);
+}
+
+.comment-attach__plus {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+/* Narrow composer: only icon and count (+N) remain. */
+@container composer (max-width: 360px) {
+  .comment-attach__label {
+    display: none;
+  }
+}
+
+.comment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--fg-primary) 8%, var(--bg-input));
+  color: var(--fg-primary);
+  font-size: var(--fs-meta);
+}
+
+.comment-chip__detach {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--comment-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.comment-chip__detach:hover:not(:disabled) {
+  color: var(--fg-primary);
+}
+
+.comment-chip__detach:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+/* ── chat bubble footer and queued summary (`ChatMessage` boards B, C) ── */
+.comment-footer {
+  margin: var(--space-2) calc(-1 * var(--space-3)) calc(-1 * var(--space-2));
+  font-family: var(--font-ui, sans-serif);
+}
+
+.comment-footer__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 12px;
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--fg-primary) 4%, var(--bg-elevated));
+  color: var(--fg-primary);
+  font: 400 var(--fs-meta) / var(--lh-meta, 1.4) var(--font-ui, sans-serif);
+  text-align: left;
+  cursor: pointer;
+}
+
+.comment-footer__bar:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: -2px;
+}
+
+.comment-footer__icon {
+  color: var(--comment);
+  flex: none;
+}
+
+.comment-footer__count {
+  font-weight: 500;
+}
+
+.comment-footer__muted {
+  color: var(--comment-muted);
+}
+
+.comment-footer__spacer {
+  flex: 1;
+}
+
+.comment-footer__body {
+  padding: 0 12px 8px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-default);
+  font-size: var(--fs-ui);
+}
+
+.comment-footer__item {
+  border-top: 1px solid var(--border-subtle);
+  padding: 6px 0 0;
+  margin-top: 6px;
+}
+
+.comment-footer__item:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 8px;
+}
+
+.comment-footer__file {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+  min-width: 0;
+}
+
+.comment-footer__link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.comment-footer__quote {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  margin: 3px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-footer__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-footer__restore {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-footer__note {
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-footer__note--err {
+  color: var(--fg-danger);
+}
+
+.comment-queued-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+/* ── mobile: the picker is a BottomSheet, the tray strip is 48px with a 36px Send… ── */
+@media (max-width: 768px) {
+  .comment-picker__row {
+    min-height: 44px;
+  }
+
+  .comment-picker__seg-btn {
+    min-height: 44px;
+    padding: 0 20px;
+  }
+
+  .comment-picker__datetime {
+    min-height: 44px;
+  }
+
+  .comment-picker__item {
+    min-height: 44px;
+  }
+
+  /* The sheet scrolls as a whole; the bar stays at its bottom edge, above the home indicator. */
+  .bottom-sheet:has(.comment-picker__bar) {
+    padding-bottom: 0;
+  }
+
+  .comment-picker__why {
+    white-space: normal;
+    min-width: 0;
+    flex: 0 1 auto;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  /* The warnings sit inside the bar on phones, so the Terminal notice is visible when Send is tapped. */
+  .comment-picker__bar .comment-picker__warn {
+    margin: 0 0 8px;
+    font-size: 13px;
+  }
+
+  .comment-picker__bar {
+    margin-bottom: 0;
+    padding: 8px 0 calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .comment-picker__bar .comment-btn {
+    min-height: 44px;
+  }
+
+  .comment-picker__rows {
+    max-height: none;
+  }
+}

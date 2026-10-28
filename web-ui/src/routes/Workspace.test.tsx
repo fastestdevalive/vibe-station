@@ -11,6 +11,8 @@ import { Workspace } from "./Workspace";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { projectTabIds } from "@/lib/sessionVisibility";
+import { useCommentStore } from "@/components/comments/useCommentStore";
+import { makeComment } from "@/components/comments/testFixtures";
 
 // Workspace mounts the full app shell (Layout, TopBar, LeftSidebar, the
 // terminal/chrome panes, ...). Stub out the libraries that need real DOM/canvas
@@ -258,6 +260,37 @@ describe("Workspace keyboard-shortcuts dialog (2.T4)", () => {
       await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).not.toBeInTheDocument());
     }
+  });
+});
+
+describe("Workspace tools toggle (top bar)", () => {
+  it("the classic top bar carries the single tools toggle; with tools hidden it shows the comments count", async () => {
+    const user = userEvent.setup();
+    act(() => {
+      useWorkspaceStore.setState({ activeWorktreeId: "wt-1", activeSessionId: null });
+      useCommentStore.getState().replace("wt-1", "worktree", {
+        comments: [makeComment({ id: "a" }), makeComment({ id: "b", pin: 2 })],
+        nextPin: 3,
+        terminalDeliveries: [],
+      });
+    });
+    render(
+      <MemoryRouter initialEntries={["/worktree/wt-1/sess-agent2"]}>
+        <Workspace />
+      </MemoryRouter>,
+    );
+    const toggle = await screen.findByRole("button", { name: /^Toggle tool panel/ });
+    expect(screen.getAllByRole("button", { name: /^Toggle tool panel/ })).toHaveLength(1);
+    if (toggle.getAttribute("aria-pressed") === "true") await user.click(toggle);
+    const hidden = screen.getByRole("button", { name: /^Toggle tool panel/ });
+    expect(hidden).toHaveAttribute("aria-pressed", "false");
+    expect(hidden.querySelector(".comment-rail-badge")).not.toBeNull();
+    expect(hidden).toHaveAccessibleName("Toggle tool panel, 2 unsent comments");
+    expect(screen.queryByTestId("tools-rail-column")).not.toBeInTheDocument();
+    await user.click(hidden);
+    expect(screen.getByRole("button", { name: /^Toggle tool panel/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Toggle tool panel/ }).querySelector(".comment-rail-badge")).toBeNull();
+    expect(screen.getByTestId("tools-rail-column")).toBeInTheDocument();
   });
 });
 

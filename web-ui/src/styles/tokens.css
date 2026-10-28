@@ -147,8 +147,25 @@
   /* Review-comment accent (schedule strip rows, comment pins). Follows the
      theme's primary foreground, so it needs no per-theme or light override. */
   --comment: var(--fg-primary);
+  /* Text highlight + pin aliases of `--comment` (components/comments/comments.css). */
+  --comment-hl: color-mix(in srgb, var(--comment) 24%, transparent);
+  --comment-pin: var(--comment);
+  /* A commented row (every row of the span: code, diff) and the span under the pointer / focused pin. */
+  --comment-row: color-mix(in srgb, var(--comment) 14%, transparent);
+  --comment-hl-active: color-mix(in srgb, var(--comment) 38%, transparent);
+  /* Added-line git mark on the code gutter (was a bare rgb in workspace.css). */
+  --git-added: rgb(22, 163, 74);
+  /* Muted comment meta (counts, hints, quotes): `--fg-muted` is 4.3:1 on the elevated / secondary surfaces,
+     so the comment UI mixes 25% of the primary foreground in to clear 4.5:1 in both themes (contrast.test.ts). */
+  --comment-muted: color-mix(in srgb, var(--fg-muted) 75%, var(--fg-primary));
+  /* Portaled popovers (send picker, selection popover) sit above `.pane-viewport-fullscreen` (200) so a fullscreen
+     tools pane cannot hide them; BottomSheet (300/301) is a separate, deliberately higher layer. */
+  --z-popover: 320;
 }
 [data-appearance="light"] {
+  /* Dark text on a pale ground: a touch less ink keeps syntax colours readable under the span, the hover link still reads clearly. */
+  --comment-row: color-mix(in srgb, var(--comment) 12%, transparent);
+  --comment-hl-active: color-mix(in srgb, var(--comment) 30%, transparent);
   --ctx-warn: #c2410c;
   --ctx-danger: #dc2626;
 }

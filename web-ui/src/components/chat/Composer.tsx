@@ -3,7 +3,7 @@ import { Clock, SendHorizontal, Square } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Command, UsageInfo } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
-import { loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
+import { COMPOSER_DRAFT_EXTERNAL_EVENT, loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { vibeCommandFromText, withVibeStationCommands } from "@/lib/composerCommands";
 import { migrateV1Draft } from "@/lib/skillInvocation";
@@ -13,6 +13,11 @@ import { ModelSwitch, type ModelAction } from "./ModelSwitch";
 import { ScheduleSendPopover } from "./ScheduleSendPopover";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "./SkillEditor";
 import { useMentionConfig } from "@/components/mentions/useMentionConfig";
+import { ReviewApiError } from "@/api/errors";
+import { ReviewAttachButton, ReviewChip } from "@/components/comments/ReviewAttachButton";
+import { reviewErrorText } from "@/components/comments/reviewActions";
+import { useCommentStore } from "@/components/comments/useCommentStore";
+import { useComposerReview } from "@/components/comments/useComposerReview";
 
 /** How long the Send button is held (disabled) at its position after OUR OWN
  *  send emptied the box while a turn is still running — see `justSent`. */
@@ -22,8 +27,15 @@ interface ComposerProps {
   api: ApiInstance;
   sessionId: string;
   /** Enqueue a turn (message + resolved attachment ids). `queue: true` forces
-   *  a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. */
-  onSend: (message: string, attachmentIds: string[], queue?: boolean) => Promise<"queued" | "steered" | undefined | void> | void;
+   *  a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. `reviewCommentIds`
+   *  is passed (4th argument) ONLY while a comments chip is attached; such a turn
+   *  always queues. Typing alone never includes comments (R127). */
+  onSend: (
+    message: string,
+    attachmentIds: string[],
+    queue?: boolean,
+    reviewCommentIds?: string[],
+  ) => Promise<"queued" | "steered" | undefined | void> | void;
   /** A turn is active — show Stop instead of disabling. */
   busy?: boolean;
   onStop?: () => void;
@@ -73,7 +85,7 @@ interface ComposerProps {
   /** Session usage — drives the context-window meter in the status row. */
   usage?: UsageInfo;
   /** Called when the user confirms a scheduled send. If not provided, the schedule button is hidden. */
-  onScheduleSend?: (message: string, attachmentIds: string[], fireAt: string) => Promise<void>;
+  onScheduleSend?: (message: string, attachmentIds: string[], fireAt: string, reviewCommentIds?: string[]) => Promise<void>;
 }
 
 /** Rich Chat message composer: skill-aware editor + send/stop/schedule, with
@@ -130,6 +142,9 @@ export function Composer({
     initialAttachments,
   );
   const [sending, setSending] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const review = useComposerReview(api, sessionId, rootRef);
+  const hasReview = review.attached.length > 0;
   const scheduleAnchorRef = useRef<HTMLButtonElement | null>(null);
   const [schedulePopoverOpen, setSchedulePopoverOpen] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -142,7 +157,21 @@ export function Composer({
     [textareaRef],
   );
 
-  const hasAnyContent = hasContent || readyAttachments.length > 0;
+  // The review picker's row Attach hands its message to this composer: claim the event and insert into the live
+  // editor (no remount, so staged files and the newest keystrokes survive).
+  useEffect(() => {
+    const onExternal = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId?: string; text?: string }>).detail;
+      // `defaultPrevented`: another composer for this session already took it (two panes, one agent).
+      if (e.defaultPrevented || d?.sessionId !== sessionId || !d.text || !internalEditorRef.current) return;
+      e.preventDefault();
+      internalEditorRef.current.appendText(d.text);
+    };
+    window.addEventListener(COMPOSER_DRAFT_EXTERNAL_EVENT, onExternal);
+    return () => window.removeEventListener(COMPOSER_DRAFT_EXTERNAL_EVENT, onExternal);
+  }, [sessionId]);
+
+  const hasAnyContent = hasContent || readyAttachments.length > 0 || hasReview;
   const canSend = !disabled && !sending && hasAnyContent;
 
   // A successful send CLEARS the box while the turn may still be busy —
@@ -186,6 +215,7 @@ export function Composer({
 
   async function handleSend(queue: boolean) {
     if (!canSend) return;
+    review.clearError(); // a stale refusal must not outlive this attempt
     const message = internalEditorRef.current?.getText().trim() ?? text.trim();
     // A typed `/start-fresh` or `/switch` opens the pane dialog and sends
     // nothing (the popover path is handled by SkillEditor's selectCommand).
@@ -201,18 +231,27 @@ export function Composer({
       }
     }
     const ids = readyAttachments.map((a) => a.id);
+    const reviewIds = review.attachedIds;
     setSending(true);
     try {
       // `queue` is passed only for the Ctrl/Cmd+Enter path, keeping the plain
-      // Enter/button call identical (2 args) for existing callers/tests.
-      if (queue) await onSend(message, ids, true);
+      // Enter/button call identical (2 args) for existing callers/tests; the
+      // review ids ride as the 4th argument only while a chip is attached.
+      if (reviewIds.length > 0) await onSend(message, ids, queue || undefined, reviewIds);
+      else if (queue) await onSend(message, ids, true);
       else await onSend(message, ids);
+      if (reviewIds.length > 0 && review.scope) useCommentStore.getState().removeLocal(review.scope.scopeId, reviewIds);
       internalEditorRef.current?.clear();
       setText("");
       setHasContent(false);
       draft.clear();
       reset();
       setJustSent(true);
+    } catch (e) {
+      // A review refusal (comments changed elsewhere, over the limit, lease lost) keeps the text and says why;
+      // the chip re-derives from the refreshed store. Any other failure behaves as before.
+      if (!(e instanceof ReviewApiError)) throw e;
+      review.setError(reviewErrorText(e, api, review.scope ?? undefined));
     } finally {
       setSending(false);
     }
@@ -220,18 +259,29 @@ export function Composer({
 
   async function handleSchedule(fireAt: string) {
     if (!onScheduleSend || sending) return;
+    review.clearError();
     const message = internalEditorRef.current?.getText().trim() ?? text.trim();
     const ids = readyAttachments.map((a) => a.id);
+    const reviewIds = review.attachedIds;
     // `sending` also blocks Enter-to-send while the request is in flight, so
     // the same text can't be both scheduled and sent.
     setSending(true);
     setScheduleError(null);
     try {
-      await onScheduleSend(message, ids, fireAt);
+      if (reviewIds.length > 0) {
+        await onScheduleSend(message, ids, fireAt, reviewIds);
+        if (review.scope) useCommentStore.getState().removeLocal(review.scope.scopeId, reviewIds);
+      } else {
+        await onScheduleSend(message, ids, fireAt);
+      }
     } catch (e) {
       // Keep the popover open and the text untouched so the user can fix the
       // time and try again — never leave them believing it was scheduled.
-      setScheduleError(apiErrorText(e, "Couldn't schedule the message."));
+      setScheduleError(
+        e instanceof ReviewApiError
+          ? reviewErrorText(e, api, review.scope ?? undefined)
+          : apiErrorText(e, "Couldn't schedule the message."),
+      );
       return;
     } finally {
       setSending(false);
@@ -265,9 +315,18 @@ export function Composer({
 
   return (
     <ComposerShell
+      rootRef={rootRef}
       attachments={drafts}
       onRemoveAttachment={removeDraft}
-      error={error}
+      extraChips={hasReview ? <ReviewChip review={review} /> : undefined}
+      error={
+        error || review.error ? (
+          <>
+            {error}
+            {review.error ? <span role="alert">{review.error}</span> : null}
+          </>
+        ) : undefined
+      }
       onFiles={(files) => void uploadFiles(files)}
       onFocusEditor={() => internalEditorRef.current?.focus()}
       attachDisabled={disabled}
@@ -326,6 +385,7 @@ export function Composer({
                 anchorRef={scheduleAnchorRef}
                 error={scheduleError}
                 busy={sending}
+                {...(hasReview ? { commentChip: <ReviewChip review={review} /> } : {})}
                 onSchedule={(fireAt) => void handleSchedule(fireAt)}
                 onClose={() => {
                   setSchedulePopoverOpen(false);
@@ -385,6 +445,7 @@ export function Composer({
         disabled={disabled}
         topRight={
           <>
+            <ReviewAttachButton review={review} />
             <ContextMeter usage={usage} />
             {/* Always rendered (dimmed + disabled when nothing is running) so the
                 meter beside it never shifts when a turn starts or ends. */}

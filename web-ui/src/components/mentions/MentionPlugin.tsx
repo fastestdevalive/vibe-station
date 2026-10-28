@@ -85,8 +85,13 @@ export function MentionPlugin({
 
   const rows = useMemo(() => {
     if (!uiState.open) return [];
-    return buildMentionRows(parsed, sources, { limitReached, fileScope, currentProjectId: config.projectId });
-  }, [uiState.open, parsed, sources, limitReached, fileScope, config.projectId]);
+    return buildMentionRows(parsed, sources, {
+      limitReached,
+      fileScope,
+      currentProjectId: config.projectId,
+      kinds: config.kinds,
+    });
+  }, [uiState.open, parsed, sources, limitReached, fileScope, config.projectId, config.kinds]);
 
   const rowsRef = useRef<MentionRow[]>(rows);
   rowsRef.current = rows;
@@ -106,6 +111,7 @@ export function MentionPlugin({
             limitReached: isLimit,
             fileScope: fileScopeRef.current,
             currentProjectId: configRef.current.projectId,
+            kinds: configRef.current.kinds,
           })
         : [];
       const hasSelectable =

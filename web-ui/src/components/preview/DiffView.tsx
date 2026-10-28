@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { DiffLine } from "@/preview/diffParser";
+import type { DiffHunk, DiffLine } from "@/preview/diffParser";
 import { parseUnifiedDiff, syntheticUntrackedHunks } from "@/preview/diffParser";
 import { diffLinesToHunks } from "@/preview/diffFromTexts";
 import { computeGaps, type DiffGap } from "@/preview/diffGaps";
-import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
+import { segmentMarkdownWithLines } from "@/preview/mdSegments";
 import { registerActiveDiffView, type DiffViewController } from "@/preview/diffViewRegistry";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -11,6 +11,11 @@ import { themeById } from "@/theme/registry";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { MarkdownView } from "./MarkdownView";
+import { HunkCommentChip } from "@/components/comments/HunkCommentChip";
+import { PinRow } from "@/components/comments/PinRow";
+import { CommentRowStack } from "@/components/comments/CommentRows";
+import { markHtmlRanges, markPlainRanges } from "@/components/comments/markHtmlRanges";
+import { diffRowKeys, useDiffComments } from "@/components/comments/useDiffComments";
 import { MermaidView } from "./MermaidView";
 import { DiffSideBySide } from "./DiffSideBySide";
 import { languageForFilePath } from "./codeHighlight";
@@ -115,7 +120,7 @@ export function DiffView({
   const isMd = filePath?.toLowerCase().endsWith(".md") ?? false;
   const canRenderMarkdown = isMd && !!fileContentFallback;
   const mdSegments = useMemo(
-    () => (canRenderMarkdown ? segmentMarkdownWithMermaid(fileContentFallback!) : []),
+    () => (canRenderMarkdown ? segmentMarkdownWithLines(fileContentFallback!) : []),
     [canRenderMarkdown, fileContentFallback],
   );
 
@@ -133,6 +138,9 @@ export function DiffView({
   }, [diffText, fileContentFallback, oldText, newText, oldStart, newStart]);
 
   const flatRows = useMemo(() => flattenHunks(hunks), [hunks]);
+
+  // Review comments: rows, pins, marks, collapsed-hunk chips (null outside a comment surface).
+  const dc = useDiffComments(filePath, interactive, hunks, "diff");
 
   // Gap computation (diff-view-shortcuts-expand-context): the omitted line
   // ranges git trims between/around hunks. `fileLines` is null on paths with
@@ -395,7 +403,7 @@ export function DiffView({
         {interactive ? (
           <button
             type="button"
-            className="preview-diff-gap-header"
+            className={`preview-diff-gap-header${!expanded && dc?.gapCommented(gap) ? " preview-diff-gap-header--commented" : ""}`}
             aria-expanded={expanded}
             aria-label={
               expanded ? `Collapse ${gap.lineCount} hidden lines` : `Expand ${gap.lineCount} hidden lines`
@@ -453,6 +461,7 @@ export function DiffView({
                 worktreeId={worktreeId ?? null}
                 scope={scope ?? "worktree"}
                 filePath={filePath ?? null}
+                commentSource={interactive ? { startLine: seg.startLine } : undefined}
               />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={mode} />
@@ -485,6 +494,7 @@ export function DiffView({
           expandedGaps={expandedGaps}
           fileLines={fileLines}
           onToggleGap={toggleGap}
+          comments={dc}
         />
       </>
     );
@@ -496,6 +506,7 @@ export function DiffView({
         <pre className="preview-diff-root">
           {hunks.map((hunk, i) => {
             const collapsed = collapsedHunks.has(i);
+            const inlineCovers = dc && !collapsed ? dc.inlineCovers(hunk.lines) : undefined;
             const gapBefore = gaps.find((g) => (i === 0 ? g.id === "gap-start" : g.id === `gap-${i - 1}`));
             return (
               <Fragment key={i}>
@@ -523,27 +534,62 @@ export function DiffView({
                     <span>{hunk.header}</span>
                   </div>
                   {collapsed ? (
-                    <div className="preview-diff-hunk-collapsed">{`${hunk.header} — ${hunk.lines.length} lines collapsed`}</div>
+                    <div className="preview-diff-hunk-collapsed">
+                      {`${hunk.header} — ${hunk.lines.length} lines collapsed`}
+                      <HunkCommentChip dc={dc} hunk={hunk} onExpand={() => toggleHunk(i)} />
+                    </div>
                   ) : (
                     hunk.lines.map((line, j) => {
                       const key = `${i}-${j}`;
                       const html = highlightedByKey?.[key];
+                      const keys = dc ? diffRowKeys(line, true) : [];
+                      const covers = dc?.covers(keys);
+                      const inline = inlineCovers?.[j];
+                      const pins = dc?.pins(keys);
+                      const marks = dc ? dc.marks(keys, line.content) : [];
+                      const shown = marks.length
+                        ? html !== undefined
+                          ? markHtmlRanges(html, marks)
+                          : markPlainRanges(line.content, marks)
+                        : (html ?? escapeHtml(line.content));
                       return (
-                        <div
-                          key={key}
-                          className={`diff-line diff-line--${line.type}`}
-                          data-line={line.newLineNumber ?? undefined}
-                        >
-                          <span className="diff-gutter">{line.oldLineNumber ?? ""}</span>
-                          <span className="diff-gutter">{line.newLineNumber ?? ""}</span>
-                          <span className="diff-marker">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
-                          <span
-                            className={`diff-line-text diff-line-text--${line.type}${html ? " diff-line-text--shiki" : ""}`}
-                            dangerouslySetInnerHTML={{
-                              __html: html ?? escapeHtml(line.content),
-                            }}
-                          />
-                        </div>
+                        <Fragment key={key}>
+                          <PinRow
+                            className={`diff-line diff-line--${line.type}${covers?.length || inline?.length ? " diff-line--commented" : ""}`}
+                            data-line={line.newLineNumber ?? undefined}
+                            data-old-line={line.oldLineNumber ?? undefined}
+                            data-side={line.type === "removed" ? "old" : "new"}
+                            rowText={line.content}
+                            pins={pins}
+                            draft={dc?.draftEndsAt(keys)}
+                            activeId={dc?.activeId}
+                            measurer={dc?.measurer}
+                            pinLabel={dc?.surface.pinLabel}
+                            onPinOpen={dc?.onPinOpen}
+                            contentKey={shown}
+                          >
+                            <span className="diff-gutter">{line.oldLineNumber ?? ""}</span>
+                            <span className="diff-gutter">
+                              {line.newLineNumber ?? ""}
+                              {dc ? (
+                                <button
+                                  type="button"
+                                  className="comment-plus"
+                                  data-comment-plus
+                                  tabIndex={-1}
+                                  aria-label={`Add comment on line ${line.type === "removed" ? line.oldLineNumber : line.newLineNumber}`}
+                                  onClick={(e) => dc.onPlus(e.currentTarget)}
+                                />
+                              ) : null}
+                            </span>
+                            <span className="diff-marker">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>
+                            <span
+                              className={`diff-line-text diff-line-text--${line.type}${html || marks.length ? " diff-line-text--shiki" : ""}`}
+                              dangerouslySetInnerHTML={{ __html: shown }}
+                            />
+                          </PinRow>
+                          {dc ? keys.map((k) => <CommentRowStack key={`${k.side}${k.n}`} surface={dc.surface} view={dc.view} side={k.side} n={k.n} />) : null}
+                        </Fragment>
                       );
                     })
                   )}

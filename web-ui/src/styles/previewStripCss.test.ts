@@ -4,6 +4,16 @@ import { describe, expect, it } from "vitest";
 
 const css = readFileSync(resolve(__dirname, "workspace.css"), "utf8");
 
+describe("workspace.css preview strip (R1F-01)", () => {
+  it("no longer reserves padding for an absolute font overlay", () => {
+    expect(css).not.toContain("--preview-font-overlay-w");
+    expect(css).toMatch(/\.preview-font-overlay \{\s*flex: none;\s*margin-left: auto;/);
+  });
+  it("phones scroll leftover strip items instead of overlapping them", () => {
+    expect(css).toMatch(/@media \(max-width: 768px\) \{\s*\.preview-diffinfo \{ overflow-x: auto/);
+  });
+});
+
 describe("workspace.css tree header (R1F-03)", () => {
   it("the header is a query container that trims itself when narrow", () => {
     expect(css).toContain("container: file-tree-header / inline-size");

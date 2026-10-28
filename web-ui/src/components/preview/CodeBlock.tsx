@@ -61,7 +61,8 @@ export function CodeBlock({ children }: { children?: ReactNode }) {
 
   return (
     <div className="workspace-md-code-block">
-      <div className="workspace-md-code-block-header">
+      {/* UI chrome ("ts", "Copy"): not part of the text a review comment quotes (`surfaceText`). */}
+      <div className="workspace-md-code-block-header" data-comment-ignore="">
         <span className="workspace-md-code-block-lang">{displayLang}</span>
         <button
           type="button"

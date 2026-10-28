@@ -10,6 +10,7 @@ function cli(over: Partial<SupportedCli>): SupportedCli {
     defaultModel: "sonnet",
     supportsJson: true,
     supportsTerminalDelivery: false,
+    supportsTerminalComments: false,
     importsNativeHistory: true,
     supportsJsonToTerminalResume: true,
     detected: false,

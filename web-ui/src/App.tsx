@@ -134,7 +134,6 @@ function AppShell() {
         <TopBar
           layoutMode="login"
           projects={[]}
-          worktrees={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -153,7 +152,6 @@ function AppShell() {
           layoutMode="login"
           loginStatus="● reconnecting…"
           projects={[]}
-          worktrees={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -171,7 +169,6 @@ function AppShell() {
         <TopBar
           layoutMode="login"
           projects={[]}
-          worktrees={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -191,7 +188,6 @@ function AppShell() {
         <TopBar
           layoutMode="login"
           projects={[]}
-          worktrees={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}

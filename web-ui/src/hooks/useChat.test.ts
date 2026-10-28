@@ -995,3 +995,56 @@ describe("useChat mentions (1.T8)", () => {
     });
   });
 });
+
+describe("useChat review comments (6.4 / 6.5)", () => {
+  it("send with review ids always queues, passes them last, and records the summary on the optimistic turn", async () => {
+    const api = makeApi({ turnId: "t9", queuePosition: 1 });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.send("see these", [], undefined, { ids: ["c1", "c2"], summary: { count: 2, files: 1 } });
+    });
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "see these", [], true, undefined, ["c1", "c2"]);
+    expect(result.current.pending[0]).toMatchObject({ turnId: "t9", queued: true, review: { count: 2, files: 1 } });
+  });
+
+  it("an empty message with review ids is sent as such", async () => {
+    const api = makeApi({ turnId: "t9", queuePosition: 1 });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.send("", [], undefined, { ids: ["c1"], summary: { count: 1, files: 1 } });
+    });
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "", [], true, undefined, ["c1"]);
+  });
+
+  it("a plain send keeps its old call shape (no review argument)", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.send("hi", []);
+    });
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "hi", [], undefined);
+  });
+
+  it("editQueued keeps the held turn's review summary and saveEdit(.., false) tells the daemon to restore it", async () => {
+    const api = makeApi();
+    api.beginEditQueuedTurn.mockResolvedValueOnce({ turnId: "t1", message: "m", attachments: [], queueIndex: 0, review: { count: 3, files: 2 } });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.editQueued("t1");
+    });
+    expect(result.current.editingDrafts.t1).toEqual({ message: "m", attachments: [], review: { count: 3, files: 2 } });
+    await act(async () => {
+      await result.current.saveEdit("t1", "m2", [], false);
+    });
+    expect(api.resubmitQueuedTurn).toHaveBeenCalledWith("s1", "t1", { edited: true, message: "m2", attachmentIds: [], keepReview: false });
+  });
+
+  it("saveEdit without the flag omits keepReview (the daemon keeps the comments)", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.saveEdit("t1", "m2", []);
+    });
+    expect((api.resubmitQueuedTurn.mock.calls.at(-1) as unknown as unknown[])[2]).not.toHaveProperty("keepReview");
+  });
+});

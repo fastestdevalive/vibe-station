@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, CircleAlert, Clock, Copy, Loader2, Paperclip } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { ScheduledFailedMessage, ScheduledPendingMessage, ScheduledSentMessage } from "@/api/types";
 import { Chip } from "@/components/ui/Chip";
 import { renderDraftText } from "@/lib/mentions";
+import { SCHEDULE_COPY, commentCountLabel } from "./scheduleCopy";
 import { formatClock, formatScheduleTime, isCountdown } from "./formatScheduleTime";
 import type { ScheduleRowData } from "./useScheduledSends";
 import "./schedule.css";
@@ -27,7 +28,7 @@ interface ScheduleStripProps {
   onError: (e: unknown) => void;
 }
 
-const NOT_RUNNING = "Agent isn't running";
+const NOT_RUNNING = SCHEDULE_COPY.agentNotRunning;
 
 function displayMessage(row: ScheduleRowData): string {
   // Terminal rows hold plain text; only Rich Chat rows carry `{/name args}` chip tokens.
@@ -44,8 +45,9 @@ function rowClass(row: ScheduleRowData): string {
  * The scheduled-sends strip: one row per pending, waiting, pasting, failed and
  * recently pasted message. Rich Chat renders it below the Subagents row
  * (`chat`), Terminal directly under the header overlay (`overlay`) or inside
- * the exited/done pane (`inline`). Rows with `origin = "immediate"` are never
- * drawn (they belong to an immediate send, not a schedule).
+ * the exited/done pane (`inline`). `rows` must come from `useScheduledSends`,
+ * which leaves out `origin = "immediate"` sends (they belong to an immediate
+ * send, not a schedule).
  */
 export function ScheduleStrip({
   rows,
@@ -58,7 +60,8 @@ export function ScheduleStrip({
   onHideSent,
   onError,
 }: ScheduleStripProps) {
-  const visible = rows.filter((r) => r.origin !== "immediate");
+  // `rows` is `useScheduledSends().rows`, which already excludes `origin = "immediate"` sends: the one gate.
+  const visible = rows;
 
   // Keep the "in 4m 12s" countdown live: every second while the next send is
   // under 10 minutes away, otherwise every 30s (still catches the switch).
@@ -70,6 +73,28 @@ export function ScheduleStrip({
     const id = window.setInterval(() => setTick((n) => n + 1), imminent ? 1000 : 30_000);
     return () => window.clearInterval(id);
   }, [nextFireAt, imminent]);
+
+  // Phase changes are announced from a status node that only changes text on a transition: the countdown above
+  // re-renders every second and must never be inside a live region.
+  const seen = useRef<Map<string, string> | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    const prev = seen.current;
+    const next = new Map<string, string>();
+    let say = "";
+    for (const r of visible) {
+      const key = r.kind === "pending" ? (r.phase ?? "scheduled") : r.kind;
+      next.set(r.id, key);
+      if (prev && prev.get(r.id) !== key) {
+        if (key === "failed") say = "A scheduled message failed";
+        else if (key === "sent") say = "A scheduled message was pasted";
+        else if (key === "waiting") say = "A scheduled message is waiting for the agent";
+      }
+    }
+    seen.current = next;
+    if (say) setAnnouncement(say);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   if (visible.length === 0) return null;
 
@@ -84,20 +109,23 @@ export function ScheduleStrip({
   }
 
   return (
-    <div
-      className={`sched-strip sched-strip--${variant}`}
-      role="list"
-      aria-label="Scheduled messages"
-      aria-live="polite"
-    >
+    <>
+    <span className="sched-strip__live" role="status">
+      {announcement}
+    </span>
+    <div className={`sched-strip sched-strip--${variant}`} role="list" aria-label="Scheduled messages">
       {visible.map((row) => {
         const text = displayMessage(row);
-        const shown = text || "(attachments only)";
+        const comments = row.kind === "sent" ? 0 : (row.commentCount ?? 0);
+        const commentsOnly = !text && comments > 0;
+        const emptyShown =
+          row.kind === "sent" ? "(no message)" : comments > 0 ? `${comments} review comment${comments === 1 ? "" : "s"}` : "(attachments only)";
+        const shown = text || emptyShown;
         const attachmentCount = row.kind === "sent" ? 0 : (row.attachments?.length ?? 0);
         const textEl = (
           <>
             <div className="sched-strip__text" title={text}>
-              {shown}
+              {commentsOnly ? "" : shown}
             </div>
             {attachmentCount > 0 ? (
               <span
@@ -140,6 +168,11 @@ export function ScheduleStrip({
         }
 
         const phase = row.phase ?? "scheduled";
+        const commentChip = row.commentCount ? (
+          <Chip tone="neutral" size="sm">
+            {commentCountLabel(row.commentCount ?? 0)}
+          </Chip>
+        ) : null;
         return (
           <div
             key={row.id}
@@ -152,12 +185,9 @@ export function ScheduleStrip({
             ) : (
               <Loader2 className="sched-strip__icon sched-strip__icon--accent sched-strip__spin" size={13} aria-hidden />
             )}
+            {commentsOnly ? commentChip : null}
             {textEl}
-            {row.commentCount ? (
-              <Chip tone="neutral" size="sm">
-                {row.commentCount === 1 ? "1 comment" : `${row.commentCount} comments`}
-              </Chip>
-            ) : null}
+            {commentsOnly ? null : commentChip}
             <span className="sched-strip__time">
               {phase === "scheduled"
                 ? `${formatScheduleTime(row.fireAt)} · pending`
@@ -205,6 +235,7 @@ export function ScheduleStrip({
         );
       })}
     </div>
+    </>
   );
 }
 
@@ -226,11 +257,13 @@ function FailedRow({
   onDismiss: () => void;
 }) {
   const warn = row.failureKind === "timed_out";
+  const hasComments = (row.commentCount ?? 0) > 0;
+  const reason = hasComments ? `${row.failureReason} · comments restored` : row.failureReason;
   return (
     <div
       className={`sched-strip__row sched-strip__row--failed ${rowClass(row)}`}
       role="listitem"
-      aria-label={`Failed scheduled message: ${shown} — ${row.failureReason}`}
+      aria-label={`Failed scheduled message: ${shown} — ${reason}`}
     >
       {warn ? (
         <Clock className="sched-strip__icon sched-strip__icon--warn" size={13} aria-hidden />
@@ -238,6 +271,11 @@ function FailedRow({
         <CircleAlert className="sched-strip__icon sched-strip__icon--fail" size={13} aria-hidden />
       )}
       {textEl}
+      {hasComments ? (
+        <Chip tone="neutral" size="sm">
+          {commentCountLabel(row.commentCount ?? 0)}
+        </Chip>
+      ) : null}
       <div className="sched-strip__actions sched-strip__actions--solid">
         <button
           type="button"
@@ -263,7 +301,7 @@ function FailedRow({
         </button>
       </div>
       <span className={`sched-strip__reason ${warn ? "sched-strip__reason--warn" : "sched-strip__reason--fail"}`}>
-        {row.failureReason}
+        {reason}
       </span>
     </div>
   );

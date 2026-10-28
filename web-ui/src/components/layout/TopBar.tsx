@@ -1,7 +1,7 @@
 import { ArrowLeft, Keyboard, PanelLeft, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useLayout } from "@/hooks/useLayout";
-import type { Project, Worktree } from "@/api/types";
+import type { Project } from "@/api/types";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { WorkspaceActions } from "@/components/layout/WorkspaceActions";
 import { Logo } from "@/components/shared/Logo";
@@ -18,7 +18,6 @@ interface TopBarProps {
    *  a pinned Project tab + one tab per open direct agent, one shared tools pane. */
   layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "workspace-view" | "project-workspace";
   projects: Project[];
-  worktrees: Worktree[];
   /** Viewed WorkspaceDoc's name for breadcrumb (when layoutMode === "workspace-view") */
   viewedWorkspaceName?: string;
   isMobile: boolean;
@@ -43,13 +42,14 @@ interface TopBarProps {
   variant?: "bar" | "floating" | "sidebar-header";
   /** Chip text shown in `layoutMode="login"` (default "● not signed in"). */
   loginStatus?: string;
+  /** Shown on the tools toggle while the pane is hidden, e.g. the unsent comments count. */
+  toolsToggleCount?: number;
 }
 
 export function TopBar({
   layoutMode = "workspace",
   loginStatus = "● not signed in",
   projects,
-  worktrees,
   viewedWorkspaceName,
   isMobile,
   onToggleLeftSidebar,
@@ -61,6 +61,7 @@ export function TopBar({
   onSettingsBack,
   onOpenShortcuts,
   variant = "bar",
+  toolsToggleCount,
 }: TopBarProps) {
   const navigate = useNavigate();
   const { activeProjectId, activeWorktreeId } = useLayout();
@@ -171,6 +172,7 @@ export function TopBar({
             isMobile={isMobile}
             onOpenQuickOpen={onOpenQuickOpen}
             canvasWorktreeId={canvasChipWorktreeId}
+            toggleBadgeCount={toolsToggleCount}
           />
         ) : null}
       </div>
@@ -273,6 +275,7 @@ export function TopBar({
             isMobile={isMobile}
             onOpenQuickOpen={onOpenQuickOpen}
             canvasWorktreeId={canvasChipWorktreeId}
+            toggleBadgeCount={toolsToggleCount}
           />
         ) : null}
       </div>

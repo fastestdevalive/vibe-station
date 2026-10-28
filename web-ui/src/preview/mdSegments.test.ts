@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { segmentMarkdown, segmentMarkdownWithMermaid } from "./mdSegments";
+import { segmentMarkdown } from "./mdSegments";
 
-describe("segmentMarkdownWithMermaid", () => {
+describe("segmentMarkdown (html:false)", () => {
   it("returns a single markdown segment when there are no mermaid blocks", () => {
     const src = "# Hello\n\nJust prose.";
-    expect(segmentMarkdownWithMermaid(src)).toEqual([{ type: "markdown", content: src }]);
+    expect(segmentMarkdown(src, { html: false })).toEqual([{ type: "markdown", content: src }]);
   });
 
   it("splits a single mermaid block out of surrounding prose", () => {
     const src = "Before\n\n```mermaid\ngraph TD; A-->B\n```\n\nAfter";
-    const segs = segmentMarkdownWithMermaid(src);
+    const segs = segmentMarkdown(src, { html: false });
     expect(segs).toHaveLength(3);
     expect(segs[0]).toEqual({ type: "markdown", content: "Before\n\n" });
     expect(segs[1]).toEqual({ type: "mermaid", content: "graph TD; A-->B" });
@@ -18,14 +18,14 @@ describe("segmentMarkdownWithMermaid", () => {
 
   it("handles multiple mermaid blocks in one document", () => {
     const src = "A\n\n```mermaid\ngraph TD; A-->B\n```\n\nB\n\n```mermaid\nflowchart LR; X-->Y\n```\n\nC";
-    const segs = segmentMarkdownWithMermaid(src);
+    const segs = segmentMarkdown(src, { html: false });
     expect(segs.filter((s) => s.type === "mermaid")).toHaveLength(2);
     expect(segs.filter((s) => s.type === "markdown")).toHaveLength(3);
   });
 
   it("does not confuse plain code fences with mermaid fences", () => {
     const src = "```ts\nconst x = 1;\n```\n\n```mermaid\ngraph TD; A-->B\n```";
-    const segs = segmentMarkdownWithMermaid(src);
+    const segs = segmentMarkdown(src, { html: false });
     expect(segs.filter((s) => s.type === "mermaid")).toHaveLength(1);
     expect(segs[0]).toEqual({ type: "markdown", content: "```ts\nconst x = 1;\n```\n\n" });
     expect(segs[1]).toEqual({ type: "mermaid", content: "graph TD; A-->B" });
@@ -75,7 +75,7 @@ describe("segmentMarkdownWithMermaid", () => {
       "```",
     ].join("\n");
 
-    const segs = segmentMarkdownWithMermaid(src);
+    const segs = segmentMarkdown(src, { html: false });
     const mermaidSegs = segs.filter((s) => s.type === "mermaid");
     expect(mermaidSegs).toHaveLength(1);
     expect(mermaidSegs[0]?.content).toContain("flowchart LR");
@@ -86,7 +86,7 @@ describe("segmentMarkdownWithMermaid", () => {
 
   it("trims whitespace from the mermaid block content", () => {
     const src = "```mermaid\n  graph TD; A-->B  \n```";
-    const segs = segmentMarkdownWithMermaid(src);
+    const segs = segmentMarkdown(src, { html: false });
     expect(segs[0]?.type).toBe("mermaid");
     expect(segs[0]?.content).toBe("graph TD; A-->B");
   });
@@ -101,12 +101,10 @@ describe("segmentMarkdown (4.T1)", () => {
     expect(segs[2]).toEqual({ type: "markdown", content: "\nb" });
   });
 
-  it("keeps html fences as plain markdown with html:false and via segmentMarkdownWithMermaid", () => {
+  it("keeps html fences as plain markdown with html:false", () => {
     const src = "a\n```html\n<b>x</b>\n```\nb";
     const viaFalse = segmentMarkdown(src, { html: false });
-    const viaWith = segmentMarkdownWithMermaid(src);
     expect(viaFalse).toEqual([{ type: "markdown", content: src }]);
-    expect(viaWith).toEqual([{ type: "markdown", content: src }]);
   });
 
   it("keeps an unclosed html fence as one markdown segment with html:true", () => {

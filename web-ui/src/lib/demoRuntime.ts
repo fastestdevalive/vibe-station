@@ -4,6 +4,7 @@
  * must therefore be returned to its freshly-imported state before the next mount.
  */
 import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import { useCommentStore } from "@/components/comments/useCommentStore";
 import { useWorkspaceStore, __resetForDemo as resetWorkspaceModule } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useTaskStore } from "@/hooks/useTaskStore";
@@ -42,6 +43,7 @@ export const APP_STORES = [
   useTaskStore,
   useScheduleDevOverride,
   useArtifactsStore,
+  useCommentStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

@@ -1,0 +1,599 @@
+/* Review comments (`.comment-*` only). Tokens only: `--comment` / `--comment-hl` / `--comment-pin` (tokens.css),
+   `--fg-warning`, `--bg-*`, `--border-*`. Metrics from design-artifacts-annotations/ann.css. */
+
+/* ── the surface ── */
+/* The footer file link is a <button> (it navigates in-app, so it is not an <a href="#">). */
+button.comment-footer__link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.preview-body[data-comment-surface] {
+  position: relative;
+}
+
+.preview-body[data-comment-surface]:focus {
+  outline: none;
+}
+
+.preview-body .diff-line,
+.preview-body .workspace-code-line {
+  position: relative;
+}
+
+/* ── gutter "+" (16x16, bg --comment, glyph --fg-inverse; on row hover / focus) ── */
+.comment-plus {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  /* Always laid out and in the accessibility tree (a `display:none` button can't take keyboard focus or be
+     swiped to by a touch screen reader, R85 / R102); only invisible and inert for the pointer until the row
+     is hovered or the button focused. */
+  display: inline-flex;
+  opacity: 0;
+  pointer-events: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 3px;
+  background: var(--comment);
+  color: var(--fg-inverse);
+  cursor: pointer;
+  user-select: none;
+}
+
+.comment-plus::before {
+  content: "+";
+  font: 600 13px/15px var(--font-ui, sans-serif);
+}
+
+.diff-line:hover > .diff-gutter > .comment-plus,
+.workspace-code-line:hover > .workspace-code-gutter > .comment-plus,
+.comment-plus:focus,
+.comment-plus:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.comment-plus:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+.diff-gutter {
+  position: relative;
+}
+
+/* The "+" sits beside the line number, never over it: in the diff's +/- glyph cell, in the code gutter's padding. */
+.diff-gutter > .comment-plus {
+  right: auto;
+  left: 100%;
+}
+
+.workspace-code-gutter > .comment-plus {
+  right: auto;
+  left: 0;
+}
+
+.preview-body[data-comment-surface] .diff-marker {
+  min-width: 16px;
+}
+
+.changed-file-list-file .comment-count-chip {
+  flex: none;
+}
+
+/* ── row + text highlights ──
+   Every row of a commented span gets the same treatment: a tint LAYERED over the row's own colour (hover,
+   jump target, added / removed / context all keep theirs) and a 2px bar on the left edge, so blank and indented
+   rows of the span read as part of it. `--comment-row` / `--comment-hl-active` / `--git-added`: tokens.css. */
+.workspace-code-line--commented,
+.workspace-code-line--commented:hover,
+.workspace-code-line.workspace-code-line--target.workspace-code-line--commented,
+.diff-line--commented {
+  background-image: linear-gradient(var(--comment-row), var(--comment-row));
+  box-shadow: inset 2px 0 0 var(--comment);
+}
+
+/* The code gutter is opaque and sticky, so the bar is drawn on it too (and keeps the git mark on its right edge). */
+.workspace-code-line--commented > .workspace-code-gutter {
+  box-shadow: inset 2px 0 0 var(--comment);
+}
+
+.workspace-code-line--commented.workspace-code-line--added > .workspace-code-gutter {
+  box-shadow: inset 2px 0 0 var(--comment), inset -2px 0 0 var(--git-added);
+}
+
+.workspace-code-line--commented.workspace-code-line--modified > .workspace-code-gutter {
+  box-shadow: inset 2px 0 0 var(--comment), inset -2px 0 0 var(--accent);
+}
+
+/* A collapsed gap a comment span runs through. */
+.preview-diff-gap-header--commented {
+  background-image: linear-gradient(var(--comment-row), var(--comment-row));
+  box-shadow: inset 2px 0 0 var(--comment);
+}
+
+mark.comment-hl {
+  background: var(--comment-hl);
+  border-bottom: 1.5px solid var(--comment);
+  border-radius: 2px;
+  color: inherit;
+}
+
+/* The open (unsaved) box's span: same tint, dashed underline. */
+mark.comment-hl--draft {
+  background: var(--comment-hl);
+  border-bottom-style: dashed;
+}
+
+mark.comment-hl--outdated {
+  background: color-mix(in srgb, var(--fg-warning) 18%, transparent);
+  border-bottom: 1.5px dashed var(--fg-warning);
+}
+
+/* ── pins (16px circle holding a comment icon; the number is `data-pin` and the accessible name, never drawn) ── */
+.comment-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0 0 0 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--comment-pin);
+  color: var(--fg-inverse);
+  vertical-align: 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.comment-pin__icon {
+  width: calc(var(--comment-pin-size, 16px) * 0.625);
+  height: calc(var(--comment-pin-size, 16px) * 0.625);
+  flex: none;
+  pointer-events: none;
+}
+
+.comment-pin--outdated {
+  background: var(--fg-warning);
+}
+
+/* The app's global `button:hover` background must not hollow the pin out. */
+.comment-pin:hover {
+  background: var(--comment-pin);
+}
+
+.comment-pin--outdated:hover {
+  background: var(--fg-warning);
+}
+
+.comment-pin:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+/* ── right gutter: pins sit beside the text on the visual line of the quote's last character ──
+   The gutter width is reserved while the surface is enabled (saving the first comment never reflows a wrap). */
+.preview-body[data-comment-surface] {
+  --comment-gutter-w: 24px;
+  --comment-pin-size: 16px;
+}
+
+@media (pointer: coarse) {
+  .preview-body[data-comment-surface] {
+    --comment-gutter-w: 28px;
+    --comment-pin-size: 20px;
+  }
+}
+
+.preview-body[data-comment-surface] .workspace-code-line {
+  padding-right: var(--comment-gutter-w);
+}
+
+.preview-body[data-comment-surface] .diff-line {
+  padding-right: var(--comment-gutter-w);
+}
+
+.preview-body[data-comment-surface] .workspace-markdown-preview {
+  position: relative;
+}
+
+/* z-index 3: above the sticky code gutter (2). Only the pins take the pointer. */
+.comment-pin-stack {
+  position: absolute;
+  top: var(--top, 0px);
+  right: 4px;
+  z-index: 3;
+  display: flex;
+  flex-direction: row-reverse;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Code rows scroll sideways: the measurer writes --x so the stack stays at the viewport's right edge. */
+.workspace-code-line > .comment-pin-stack {
+  right: auto;
+  left: 0;
+  transform: translateX(var(--x, 0px));
+}
+
+.comment-pin-stack > .comment-pin {
+  position: relative;
+  flex: none;
+  width: var(--comment-pin-size, 16px);
+  height: var(--comment-pin-size, 16px);
+  min-width: var(--comment-pin-size, 16px);
+  margin: 0;
+  vertical-align: baseline;
+  line-height: var(--comment-pin-size, 16px);
+  pointer-events: auto;
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+/* Two comments on one line overlap (the second tucked under the first); from three the rest hide behind it. */
+.comment-pin-stack > .comment-pin + .comment-pin {
+  margin-right: calc(var(--comment-pin-size, 16px) * -0.625);
+}
+
+.comment-pin-stack[data-count]:not([data-count="2"]) > .comment-pin + .comment-pin {
+  margin-right: calc(var(--comment-pin-size, 16px) * -1);
+}
+
+.comment-pin-stack > .comment-pin:focus-visible {
+  z-index: 10 !important;
+}
+
+/* Total count of the stack (2+), top-right of the front pin; the only digit a marker ever shows. */
+.comment-pin-stack[data-count]::before {
+  content: attr(data-count);
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  left: auto;
+  z-index: 11;
+  min-width: 12px;
+  padding: 0 3px;
+  text-align: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  font: 600 9px/12px var(--font-ui, sans-serif);
+  pointer-events: none;
+}
+
+.comment-pin--draft {
+  color: var(--comment);
+  background: transparent;
+  border: 1.5px dashed var(--comment);
+  box-sizing: border-box;
+}
+
+.comment-pin--active {
+  box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--fg-primary) !important;
+}
+
+/* Touch: 20px pins, and a hit area at least 28px wide that never reaches the next line's pin. */
+@media (pointer: coarse) {
+  .comment-pin-stack > .comment-pin::before {
+    content: "";
+    position: absolute;
+    inset: 0 -4px;
+  }
+}
+
+/* ── inline comment row (`.cmt`) ── */
+.comment-rowstack {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 12px 8px 108px;
+  white-space: normal;
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--fs-ui, 13px);
+  line-height: var(--lh-ui, 1.4);
+  color: var(--fg-primary);
+  cursor: default;
+}
+
+.preview-diff-side-by-side__hunk > .comment-rowstack {
+  margin-left: 12px;
+}
+
+.comment-box {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 8px 10px;
+  user-select: text;
+}
+
+.comment-box--new,
+.comment-box--edit {
+  border-color: var(--fg-primary);
+}
+
+.comment-box .banner {
+  margin: -8px -10px 8px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.comment-box__q {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comment-box__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-primary);
+}
+
+.comment-box__note {
+  margin-top: 4px;
+  font-size: var(--fs-meta);
+  color: var(--fg-warning);
+}
+
+.comment-box__editor {
+  min-height: 44px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  padding: 6px 8px;
+}
+
+.comment-box__error {
+  margin-top: 6px;
+  font-size: var(--fs-meta);
+  color: var(--fg-danger);
+}
+
+.comment-box__row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* A narrow card (a phone's docked-list layout leaves ~140-280px) wraps the row instead of spilling past its border. */
+.comment-box__meta {
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+}
+
+.comment-box__meta--strong {
+  color: var(--fg-primary);
+}
+
+.comment-box__spacer {
+  flex: 1;
+}
+
+.comment-float {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  max-width: 560px;
+  z-index: 30;
+  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--fs-ui, 13px);
+}
+
+/* ── buttons (24px) ── */
+.comment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card, transparent);
+  color: var(--fg-primary);
+  font-size: var(--fs-meta);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.comment-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.comment-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.comment-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.comment-btn--primary {
+  background: var(--accent, var(--fg-primary));
+  border-color: var(--accent, var(--fg-primary));
+  color: var(--bg-primary);
+}
+
+.comment-btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, var(--fg-primary)) 88%, var(--bg-primary));
+}
+
+.comment-btn--danger {
+  color: var(--fg-danger);
+}
+
+.comment-btn--strip {
+  flex: none;
+  margin-left: 8px;
+}
+
+.comment-btn:focus-visible {
+  outline: 2px solid var(--fg-primary);
+  outline-offset: 1px;
+}
+
+.comment-kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  font: 500 10px/14px var(--font-mono);
+  color: var(--comment-muted);
+}
+
+/* ── selection popover (`.sel-pop`) ── */
+.comment-selpop {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.comment-selpop--touch {
+  padding: 4px;
+}
+
+.comment-selpop--touch .comment-btn {
+  height: 36px;
+  font-size: var(--fs-ui);
+}
+
+/* ── strip hint, collapsed hunk chip ── */
+.comment-hint {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: auto;
+  font-size: var(--fs-meta);
+  color: var(--comment-muted);
+  white-space: nowrap;
+}
+
+.comment-hint__plus {
+  font-family: var(--font-mono);
+  color: var(--comment);
+}
+
+.comment-hunk-chip {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--comment-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.comment-hunk-chip__hint {
+  margin-left: 4px;
+}
+
+.comment-rail-badge {
+  background: var(--bg-elevated);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .diff-line--commented,
+  .workspace-code-line--commented {
+    transition: background-color 0.2s ease;
+  }
+}
+
+/* Several view cards under one markdown pin stack (a merged pin opens them all). */
+.comment-float > * + * {
+  margin-top: 6px;
+}
+
+/* Desktop: the 14px box keeps its layout; its label gets a 44x44 hit area (and sits above the row's stretched open button). */
+@media (min-width: 769px) {
+  .comment-cb-hit {
+    position: relative;
+    display: inline-grid;
+    align-self: start;
+    place-content: center;
+    cursor: pointer;
+  }
+  .comment-cb-hit::before {
+    content: "";
+    position: absolute;
+    /* 44x44 around the 14px box; the list's scroller clips 3px on the left, so the right side takes them. */
+    inset: -15px -18px -15px -12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .comment-rowstack {
+    margin-left: 12px;
+  }
+  .comment-btn--strip {
+    min-height: 44px;
+  }
+  .comment-box .comment-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .comment-cb-hit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* A failed delete: the comment came back, say why (fixed, so surface overflow never clips it). */
+.comment-delete-error {
+  position: fixed;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  max-width: min(92vw, 520px);
+}
+
+/* Count of comments in a list row (icon + number): a count, never an id. */
+.comment-count-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--comment-muted);
+  font: 600 var(--fs-meta)/1 var(--font-ui, sans-serif);
+}
+
+.comment-count-chip svg {
+  width: 12px;
+  height: 12px;
+}

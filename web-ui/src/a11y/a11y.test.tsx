@@ -18,7 +18,6 @@ describe("a11y smoke", () => {
         <PaneOutletProvider>
           <TopBar
             projects={[]}
-            worktrees={[]}
             isMobile={false}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}

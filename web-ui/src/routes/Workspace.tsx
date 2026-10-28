@@ -1,4 +1,5 @@
 import { useArtifactsSync } from "@/components/artifacts/useArtifactsSync";
+import { useCommentsSync } from "@/components/comments/useCommentsSync";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useDemoEnv } from "../context/DemoEnv";
@@ -6,6 +7,7 @@ import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
 import { GlobalStatusBar } from "@/components/layout/GlobalStatusBar";
 import { TopBar } from "@/components/layout/TopBar";
+import { useCommentCount } from "@/components/comments/commentSelectors";
 import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { TabsStrip } from "@/components/layout/TabsStrip";
@@ -70,6 +72,7 @@ export function Workspace() {
   // and gives us the `bundleLoaded` boundary used by URL sync.
   useServerSync(api);
   useArtifactsSync(api);
+  useCommentsSync(api);
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
@@ -77,6 +80,9 @@ export function Workspace() {
 
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
+  const toolsBadgeScope = useWorkspaceStore((s) => s.activeWorktreeId ?? s.activeDirectContextId) ?? "__none__";
+  // Unsent comments count on the top-bar tools toggle while tools are hidden (same scope as Layout's `wt`).
+  const toolsToggleCount = useCommentCount(toolsBadgeScope === "__none__" ? null : toolsBadgeScope);
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
   // `session.state` (not `.lifecycleState`) — see AgentPaneSlot.tsx:74-80 for why:
   // the live WS handlers only patch `.state`, so `.lifecycleState` goes stale.
@@ -871,6 +877,7 @@ export function Workspace() {
   const collapsedPx = isMacTauri && isClassicLayout ? 114 : 52;
   const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? collapsedPx : leftSidebarWidthPx;
 
+
   return (
     <PaneOutletProvider>
     <div className="workspace-route">
@@ -897,7 +904,6 @@ export function Workspace() {
               variant="floating"
               layoutMode={layoutMode}
               projects={projects}
-              worktrees={worktrees}
               viewedWorkspaceName={viewedWorkspace?.name}
               dashboardTitle={isDraft ? "New agent" : undefined}
               isMobile={isMobile}
@@ -909,6 +915,7 @@ export function Workspace() {
               mobileSidebarOpen={mobileSidebarOpen}
               onOpenQuickOpen={() => setQuickOpen(true)}
               onOpenShortcuts={() => setShortcutsOpen(true)}
+              toolsToggleCount={toolsToggleCount}
             />
           ) : undefined
         }
@@ -917,7 +924,6 @@ export function Workspace() {
             <TopBar
               layoutMode={layoutMode}
               projects={projects}
-              worktrees={worktrees}
               viewedWorkspaceName={viewedWorkspace?.name}
               dashboardTitle={isDraft ? "New agent" : undefined}
               isMobile={isMobile}
@@ -931,6 +937,7 @@ export function Workspace() {
               onOpenShortcuts={() => setShortcutsOpen(true)}
               settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
               onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
+              toolsToggleCount={toolsToggleCount}
             />
           ) : undefined
         }
@@ -946,7 +953,6 @@ export function Workspace() {
                   variant="sidebar-header"
                   layoutMode={layoutMode}
                   projects={projects}
-                  worktrees={worktrees}
                   viewedWorkspaceName={viewedWorkspace?.name}
                   dashboardTitle={isDraft ? "New agent" : undefined}
                   isMobile={isMobile}

@@ -1,4 +1,5 @@
 import { DEFAULT_WORKTREE_LAYOUT, effectiveToolTab, isFilesLeftPaneOpen, useWorkspaceStore } from "@/hooks/useStore";
+import { dismissTop } from "@/lib/escapeLayers";
 
 /**
  * R16: Escape-key handling order when both the expanded files panel and tools
@@ -16,6 +17,11 @@ import { DEFAULT_WORKTREE_LAYOUT, effectiveToolTab, isFilesLeftPaneOpen, useWork
  */
 export function handleToolsEsc(e: KeyboardEvent, wt: string, focusFallback?: HTMLElement | null): void {
   if (e.key !== "Escape") return;
+  // Review-comment layers (picker, comment box, expanded tray) take the key before anything else (Decision 15).
+  if (dismissTop(e.target)) {
+    e.stopPropagation();
+    return;
+  }
   const s = useWorkspaceStore.getState();
   // The panel's OWN context (`wt`), not the active one: a canvas tools tile may show another worktree.
   // Same resolution as useLayout(): the layout may have no persisted entry yet (fresh view), in which

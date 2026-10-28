@@ -37,7 +37,6 @@ function renderTopBar() {
       <PaneOutletProvider>
         <TopBar
           projects={projects}
-          worktrees={worktrees}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -117,7 +116,6 @@ describe("TopBar - canvas mode pane toggles", () => {
         <PaneOutletProvider>
           <TopBar
             projects={projects}
-            worktrees={worktrees}
             isMobile={false}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}
@@ -146,6 +144,41 @@ describe("TopBar - canvas mode pane toggles", () => {
     expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.toolPanelVisible).toBe(!before);
     expect(screen.getByLabelText("Toggle tool panel")).toHaveAttribute("aria-pressed", String(!before));
     expect(screen.queryByLabelText("Add Tools tile to canvas")).not.toBeInTheDocument();
+  });
+
+  it("floating classic under an owner: the toggle (with its badge) is inline in the chip group and keeps aria-pressed", () => {
+    setClassicMode();
+    act(() => useWorkspaceStore.setState({ layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, layoutMode: "classic", toolPanelVisible: false } } }));
+    const { container } = render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopActionsProvider store={createTopActionsStore()}>
+            <div data-testid="row">
+              <ActionsHost zone="agent" />
+            </div>
+            <TopActionsOwner zones={["agent"]}>
+              <TopBar
+                variant="floating"
+                projects={projects}
+                isMobile={false}
+                onToggleLeftSidebar={() => {}}
+                leftSidebarCollapsed={false}
+                mobileSidebarOpen={false}
+                onOpenQuickOpen={() => {}}
+                toolsToggleCount={3}
+              />
+            </TopActionsOwner>
+          </TopActionsProvider>
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+    const toggle = screen.getByLabelText(/^Toggle tool panel/);
+    expect(screen.getAllByLabelText(/^Toggle tool panel/)).toHaveLength(1);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(container.querySelector(".top-bar-floating-actions")).toContainElement(toggle);
+    expect(container.querySelector(".actions-host")).not.toContainElement(toggle);
+    expect(toggle).toHaveAccessibleName("Toggle tool panel, 3 unsent comments");
+    expect(container.querySelectorAll(".top-bar-floating-actions")).toHaveLength(1);
   });
 
   it("bar, mobile: the last button of .top-bar__end is the tools toggle with the PanelTop icon (vertical default split)", () => {
@@ -177,6 +210,30 @@ describe("TopBar - canvas mode pane toggles", () => {
     expect(container.querySelectorAll(".top-bar__pane-btn")).toHaveLength(1);
     expect(screen.getByLabelText("Add Tools tile to canvas")).toBeInTheDocument();
     expect(screen.queryByLabelText("Toggle tool panel")).not.toBeInTheDocument();
+  });
+
+  it("toolsToggleCount is shown and announced on the toggle only while the tools pane is hidden, never in canvas mode; none at 0", () => {
+    setClassicMode();
+    act(() => useWorkspaceStore.setState({ layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, layoutMode: "classic", toolPanelVisible: false } } }));
+    const { container, unmount } = renderVariant({ variant: "floating", toolsToggleCount: 3 });
+    expect(screen.getByRole("button", { name: "Toggle tool panel, 3 unsent comments" })).toBeInTheDocument();
+    expect(container.querySelector(".top-bar__pane-badge")).toHaveTextContent("3");
+    unmount();
+
+    const zero = renderVariant({ variant: "floating", toolsToggleCount: 0 });
+    expect(screen.getByRole("button", { name: "Toggle tool panel" })).toBeInTheDocument();
+    expect(zero.container.querySelector(".top-bar__pane-badge")).toBeNull();
+    zero.unmount();
+
+    act(() => useWorkspaceStore.setState({ layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, layoutMode: "classic", toolPanelVisible: true } } }));
+    const second = renderVariant({ variant: "floating", toolsToggleCount: 3 });
+    expect(second.container.querySelector(".top-bar__pane-badge")).toBeNull();
+    expect(screen.getByRole("button", { name: "Toggle tool panel" })).toBeInTheDocument();
+    second.unmount();
+
+    setCanvasMode();
+    const canvas = renderVariant({ variant: "floating", toolsToggleCount: 3 });
+    expect(canvas.container.querySelector(".top-bar__pane-badge")).toBeNull();
   });
 
   // The dedicated canvas toolbar itself lives in WorkspaceCanvas now (its own
@@ -251,7 +308,6 @@ describe("TopBar - project workspace", () => {
           <TopBar
             layoutMode="project-workspace"
             projects={projects}
-            worktrees={worktrees}
             isMobile={false}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}
@@ -278,7 +334,6 @@ describe("TopBar - project workspace", () => {
           <TopBar
             layoutMode="project-workspace"
             projects={projects}
-            worktrees={worktrees}
             isMobile={true}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}
@@ -312,7 +367,6 @@ describe("TopBar - dashboardTitle (R2F-04)", () => {
             layoutMode="dashboard"
             dashboardTitle={title}
             projects={[]}
-            worktrees={[]}
             isMobile={isMobile}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}
@@ -377,7 +431,6 @@ describe("TopBar - portaled overflow menu (7.T4)", () => {
                 <TopBar
                   variant="floating"
                   projects={projects}
-                  worktrees={worktrees}
                   isMobile={false}
                   onToggleLeftSidebar={() => {}}
                   leftSidebarCollapsed={false}

@@ -71,6 +71,11 @@ const GENERIC_KIND_DEF: MentionKindDef = {
 };
 
 /** Never throws: unknown kinds get a generic icon and plain `@label`. */
+/** Is `k` offered under a `kinds` restriction (omitted = every kind)? The one rule for rows AND source gating. */
+export function kindAllowed(kinds: readonly MentionKind[] | undefined, k: MentionKind): boolean {
+  return !kinds || kinds.includes(k);
+}
+
 export function mentionKindDef(kind: string): MentionKindDef {
   return MENTION_KINDS.find((k) => k.kind === kind) ?? GENERIC_KIND_DEF;
 }

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type RefObject, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Paperclip } from "lucide-react";
 import type { DraftAttachment } from "@/hooks/useAttachmentDrafts";
 import { AttachmentChip } from "./AttachmentChip";
@@ -43,6 +43,10 @@ interface ComposerShellProps {
   toolbarEnd?: ReactNode;
   /** Hint row under the shell (see `ComposerHint`). */
   hint?: ReactNode;
+  /** Extra chips beside the attachment chips (the review-comments chip). */
+  extraChips?: ReactNode;
+  /** The outer `.chat-composer` element (the review lease refresh listens on it). */
+  rootRef?: RefObject<HTMLDivElement | null>;
   /** Extra rows after the hint (e.g. "Skills loading…"). */
   footer?: ReactNode;
 }
@@ -68,6 +72,8 @@ export function ComposerShell({
   toolbarEnd,
   hint,
   footer,
+  extraChips,
+  rootRef,
 }: ComposerShellProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -134,6 +140,7 @@ export function ComposerShell({
 
   return (
     <div
+      ref={rootRef}
       className={`chat-composer${className ? ` ${className}` : ""}${dragOver ? " chat-composer--dragover" : ""}`}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
@@ -146,8 +153,9 @@ export function ComposerShell({
             Drop files to attach
           </div>
         ) : null}
-        {attachments.length > 0 ? (
+        {attachments.length > 0 || extraChips ? (
           <div className="chat-composer__chips">
+            {extraChips}
             {attachments.map((d) => (
               <AttachmentChip
                 key={d.attachment.id}

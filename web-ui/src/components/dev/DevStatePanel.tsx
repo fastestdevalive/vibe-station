@@ -6,6 +6,12 @@ import type { PrStatus, SessionState } from "@/api/types";
 import { useTaskStore } from "@/hooks/useTaskStore";
 import { buildSeedTasks, SEED_SCENARIOS, type SeedScenario } from "@/components/tasks/seedTasks";
 import {
+  COMMENTS_DEV_SCENARIOS,
+  applyCommentsDevScenario,
+  clearCommentsDevScenario,
+  type CommentsDevScenario,
+} from "@/components/comments/commentsDevOverride";
+import {
   SCHEDULE_DEV_SCENARIOS,
   devScheduleSnapshot,
   useScheduleDevOverride,
@@ -52,6 +58,7 @@ export function DevStatePanel(): ReactNode {
   const [state, setState] = useState<SessionState>("working");
   const [prState, setPrState] = useState<PrChoice>("(unset)");
   const [scheduleScenario, setScheduleScenario] = useState<ScheduleDevScenario>("all states");
+  const [commentsScenario, setCommentsScenario] = useState<CommentsDevScenario>("normal");
 
   const [seedScenario, setSeedScenario] = useState<SeedScenario>(SEED_SCENARIOS[0]);
   const [alternating, setAlternating] = useState(false);
@@ -157,6 +164,15 @@ export function DevStatePanel(): ReactNode {
   function handleClearSchedule() {
     if (!sessionId) return;
     useScheduleDevOverride.getState().clear(sessionId);
+  }
+
+  // Review comments (tray / list / picker states): client-only, written into `useCommentStore` for the
+  // selected agent's scope until the next `comments:changed`, refetch or reload.
+  function handleApplyComments() {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    if (session.worktreeId) applyCommentsDevScenario(commentsScenario, "worktree", session.worktreeId, session.id);
+    else if (session.projectId) applyCommentsDevScenario(commentsScenario, "project", session.projectId, session.id);
   }
 
   return (
@@ -374,6 +390,58 @@ export function DevStatePanel(): ReactNode {
             }}
           >
             Clear
+          </button>
+        </div>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          Review comments
+          <select
+            value={commentsScenario}
+            onChange={(e) => setCommentsScenario(e.target.value as CommentsDevScenario)}
+            style={{
+              background: "var(--bg-input)",
+              color: "var(--fg-primary)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 4,
+              padding: "4px 6px",
+            }}
+          >
+            {COMMENTS_DEV_SCENARIOS.map((sc) => (
+              <option key={sc} value={sc}>
+                {sc}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={handleApplyComments}
+            disabled={!sessionId}
+            style={{
+              flex: 1,
+              background: sessionId ? "var(--accent)" : "var(--border-strong)",
+              color: "var(--fg-inverse)",
+              border: "none",
+              borderRadius: 4,
+              padding: "6px 8px",
+              cursor: sessionId ? "pointer" : "not-allowed",
+              fontWeight: 600,
+            }}
+          >
+            Apply comments
+          </button>
+          <button
+            onClick={clearCommentsDevScenario}
+            style={{
+              background: "var(--bg-tertiary)",
+              color: "var(--fg-primary)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 4,
+              padding: "6px 8px",
+              cursor: "pointer",
+            }}
+          >
+            Reset
           </button>
         </div>
 

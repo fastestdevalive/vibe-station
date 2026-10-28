@@ -2,7 +2,7 @@ import { Minus, Plus } from "lucide-react";
 import { FontResetButton } from "./FontResetButton";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, FileScope, ScheduledPendingMessage, Session } from "@/api/types";
+import type { Attachment, FileScope, ReviewSummary, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -12,7 +12,7 @@ import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
-import { ScheduleSendPopover } from "@/components/chat/ScheduleSendPopover";
+import { RescheduleHost, type EditingScheduled } from "@/components/schedule/RescheduleHost";
 import { ScheduleStrip } from "@/components/schedule/ScheduleStrip";
 import { useScheduledSends } from "@/components/schedule/useScheduledSends";
 import { TodoStrip } from "@/components/chat/TodoStrip";
@@ -33,6 +33,8 @@ import { useSessionTasks } from "@/hooks/useSessionTasks";
 import { TaskTray } from "@/components/tasks/TaskTray";
 import { TaskView } from "@/components/tasks/TaskView";
 import { useTaskFocusReturn } from "@/components/tasks/useTaskFocusReturn";
+import { summarizeReview } from "@/components/comments/commentSelectors";
+import { useCommentStore } from "@/components/comments/useCommentStore";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -254,9 +256,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     setCanTrim(atBottom);
   }, [atBottom, setCanTrim]);
   const [steerNotice, setSteerNotice] = useState<string | null>(null);
-  const [editScheduleError, setEditScheduleError] = useState<string | null>(null);
-  const [editScheduleBusy, setEditScheduleBusy] = useState(false);
-  // Tray actions on scheduled rows (send now / cancel / retry / dismiss) report
+  // Strip actions on scheduled rows (send now / cancel / retry / dismiss) report
   // a daemon rejection in the shared notice strip instead of failing silently.
   const reportScheduleError = (e: unknown) =>
     setSteerNotice(apiErrorText(e, "Couldn't update the scheduled message."));
@@ -270,7 +270,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     ackLostNotice();
   }, [lostNotice, ackLostNotice]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
-  const [editingScheduled, setEditingScheduled] = useState<{ id: string; row: ScheduledPendingMessage } | null>(null);
+  const [editingScheduled, setEditingScheduled] = useState<EditingScheduled | null>(null);
   const editScheduledAnchorRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
@@ -318,9 +318,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // Sourced from the daemon's live queue + edit-hold map — covers a turn that
   // hasn't run yet (no transcript user event) for a REMOTE tab or after reload.
   const queuedTurnsMeta = useMemo(() => {
-    const map = new Map<string, { text: string; attachments?: Attachment[] }>();
+    const map = new Map<string, { text: string; attachments?: Attachment[]; review?: ReviewSummary }>();
     for (const qt of meta?.queuedTurns ?? []) {
-      map.set(qt.turnId, { text: fromWire(qt.message, qt.mentions), ...(qt.attachments ? { attachments: qt.attachments } : {}) });
+      map.set(qt.turnId, {
+        text: fromWire(qt.message, qt.mentions),
+        ...(qt.attachments ? { attachments: qt.attachments } : {}),
+        ...(qt.review ? { review: qt.review } : {}),
+      });
     }
     return map;
   }, [meta?.queuedTurns]);
@@ -345,12 +349,14 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
       const info = queuedTurnsMeta.get(turnId) ?? userEvents.map.get(turnId);
       const fallback = pending.find((p) => p.turnId === turnId);
       const attachments = info?.attachments ?? fallback?.attachments;
+      const review = queuedTurnsMeta.get(turnId)?.review ?? fallback?.review;
       rows.push({
         turnId,
         text: info?.text ?? fallback?.message ?? "",
         status: "queued",
         ...(scheduledTurnSet?.has(turnId) ? { scheduled: true } : {}),
         ...(attachments && attachments.length ? { attachments } : {}),
+        ...(review ? { review } : {}),
       });
       seen.add(turnId);
     }
@@ -358,12 +364,14 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
       if (seen.has(turnId)) continue;
       const info = queuedTurnsMeta.get(turnId) ?? userEvents.map.get(turnId);
       const draft = editingDrafts[turnId];
+      const review = draft?.review ?? queuedTurnsMeta.get(turnId)?.review;
       rows.push({
         turnId,
         text: info?.text ?? "",
         status: "editing",
         ...(info?.attachments && info.attachments.length ? { attachments: info.attachments } : {}),
         ...(draft ? { draft } : {}),
+        ...(review ? { review } : {}),
       });
       seen.add(turnId);
     }
@@ -374,6 +382,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
         text: p.message,
         status: "pending",
         ...(p.attachments.length ? { attachments: p.attachments } : {}),
+        ...(p.review ? { review: p.review } : {}),
       });
       seen.add(p.turnId);
     }
@@ -548,7 +557,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             onEdit={(turnId) => void editQueued(turnId)}
             onSendNow={(turnId) => void sendNow(turnId)}
             onCancel={(turnId) => void cancelQueued(turnId)}
-            onSave={(turnId, message, attachmentIds) => saveEdit(turnId, message, attachmentIds)}
+            onSave={(turnId, message, attachmentIds, keepReview) => saveEdit(turnId, message, attachmentIds, keepReview)}
             onDiscard={(turnId) => void discardEdit(turnId)}
             onSalvage={onSalvage}
             focusComposer={() => composerRef.current?.focus()}
@@ -575,29 +584,15 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             focusComposer={() => composerRef.current?.focus()}
           />
         ) : null}
-        <ScheduleSendPopover
-          open={editingScheduled !== null}
-          anchorRef={editScheduledAnchorRef}
-          initialFireAt={editingScheduled?.row.fireAt}
-          title="Reschedule"
-          error={editScheduleError}
-          busy={editScheduleBusy}
-          onSchedule={(fireAt) => {
-            if (!editingScheduled) return;
-            setEditScheduleBusy(true);
-            setEditScheduleError(null);
-            api
-              .editScheduledMessage(sessionId, editingScheduled.id, { fireAt })
-              .then(() => setEditingScheduled(null))
-              // Keep the popover open with the reason so the user can pick another time.
-              .catch((e) => setEditScheduleError(apiErrorText(e, "Couldn't reschedule the message.")))
-              .finally(() => setEditScheduleBusy(false));
-          }}
-          onClose={() => {
-            setEditingScheduled(null);
-            setEditScheduleError(null);
-          }}
-        />
+        {sessionId ? (
+          <RescheduleHost
+            api={api}
+            sessionId={sessionId}
+            editing={editingScheduled}
+            anchorRef={editScheduledAnchorRef}
+            onClose={() => setEditingScheduled(null)}
+          />
+        ) : null}
         <StatusBar
           meta={meta}
           queueDepth={trayRows.length}
@@ -637,7 +632,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             rows={scheduledRows}
             api={api}
             sessionId={sessionId}
-            sessionLive
+            sessionLive={liveState !== "exited" && liveState !== "done" && !archived}
             onHideSent={hideScheduledSent}
             onError={reportScheduleError}
             onEdit={(id, row, anchor) => {
@@ -685,10 +680,11 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             {...(startedAsMode ? { startedAsMode } : {})}
             {...(resetPending ? { disabled: true } : {})}
             usage={meta?.usage}
-            onScheduleSend={async (message, ids, fireAt) => {
-              await api.scheduleMessage(sessionId, toPlainText(message), fireAt, ids);
+            onScheduleSend={async (message, ids, fireAt, reviewIds) => {
+              if (reviewIds?.length) await api.scheduleMessage(sessionId, toPlainText(message), fireAt, ids, reviewIds);
+              else await api.scheduleMessage(sessionId, toPlainText(message), fireAt, ids);
             }}
-            onSend={async (message, ids, queue) => {
+            onSend={async (message, ids, queue, reviewIds) => {
               setSalvage(null);
               setSteerNotice(null);
               // Mirrors the daemon's OTHER can_attempt_steer conditions
@@ -703,9 +699,20 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                 !queue &&
                 ids.length === 0 &&
                 (meta?.queueDepth ?? 0) === 0 &&
+                !reviewIds?.length &&
                 toWire(message).mentions.length === 0;
               const requestSessionId = sessionId;
-              const delivery = await send(message, ids, queue);
+              // A turn carrying comments always queues: the card shows "N review comments · M files · queued".
+              const review = reviewIds?.length
+                ? {
+                    ids: reviewIds,
+                    summary: summarizeReview(
+                      useCommentStore.getState().byScope[contextId ?? ""]?.comments ?? [],
+                      reviewIds,
+                    ),
+                  }
+                : undefined;
+              const delivery = review ? await send(message, ids, queue, review) : await send(message, ids, queue);
               if (requestSessionId !== sessionId) return; // switched sessions mid-send
               if (expectedSteer && delivery === "queued") {
                 setSteerNotice("Couldn't steer this turn — queued instead");

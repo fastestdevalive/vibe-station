@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command } from "@/api/types";
+import { MessageSquare, X } from "lucide-react";
+import type { Attachment, Command, ReviewSummary } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
 import { AttachmentChip } from "./AttachmentChip";
 import { SkillEditor, type SkillEditorHandle } from "./SkillEditor";
@@ -19,12 +20,14 @@ interface QueuedTurnEditorProps {
   /** Attachment records to prefill as chips. */
   initialAttachments: Attachment[];
   /** Save the edit → resubmit `{edited:true}` at the original queue index. */
-  onSave: (message: string, attachments: Attachment[]) => Promise<void> | void;
+  onSave: (message: string, attachments: Attachment[], keepReview?: boolean) => Promise<void> | void;
   /** Discard → resubmit `{edited:false}` (restore unchanged). */
   onDiscard: () => Promise<void> | void;
   /** Session's slash-command/skill catalog (`session:meta.commands`) — threaded
    *  from `QueuedTray.tsx`/`MessageList.tsx`, both mount sites of this editor. */
   commands?: Command[];
+  /** Comments the held turn carries: shown as a chip the user keeps or detaches (detached ones return to the panel). */
+  review?: ReviewSummary;
 }
 
 /**
@@ -48,6 +51,7 @@ export function QueuedTurnEditor({
   onSave,
   onDiscard,
   commands,
+  review,
 }: QueuedTurnEditorProps) {
   const mentions = useMentionConfig(api, sessionId);
   const [text, setText] = useState(initialText);
@@ -62,7 +66,10 @@ export function QueuedTurnEditor({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<SkillEditorHandle | null>(null);
 
-  const hasAnyContent = hasContent || readyAttachments.length > 0;
+  // The turn's comments stay on it unless the user detaches them (then they go back to the panel on Save).
+  const [keepReview, setKeepReview] = useState(true);
+  const reviewKept = !!review && keepReview;
+  const hasAnyContent = hasContent || readyAttachments.length > 0 || reviewKept;
   const canSave = !busy && hasAnyContent;
 
   async function save() {
@@ -70,7 +77,9 @@ export function QueuedTurnEditor({
     setBusy(true);
     try {
       const message = editorRef.current?.getText().trim() ?? text.trim();
-      await onSave(message, readyAttachments);
+      // `keepReview` is passed only when the user detached the chip, so every other save keeps its old call shape.
+      if (review && !keepReview) await onSave(message, readyAttachments, false);
+      else await onSave(message, readyAttachments);
     } finally {
       setBusy(false);
     }
@@ -100,6 +109,30 @@ export function QueuedTurnEditor({
         void uploadFiles(Array.from(e.dataTransfer.files));
       }}
     >
+      {review ? (
+        <div className="chat-queued-editor__chips">
+          <span className="comment-chip" data-testid="queued-review-chip">
+            <MessageSquare size={12} className="comment-attach__icon" aria-hidden />
+            <span>
+              {keepReview
+                ? `${review.count} ${review.count === 1 ? "comment" : "comments"} attached`
+                : `${review.count} ${review.count === 1 ? "comment returns" : "comments return"} to the panel`}
+            </span>
+            <button
+              type="button"
+              className="comment-chip__detach"
+              aria-label={keepReview ? "Detach comments" : "Keep comments"}
+              onClick={() => setKeepReview((v) => !v)}
+            >
+              <span className="comment-chip__sep" aria-hidden>
+                ·
+              </span>
+              {keepReview ? "Detach" : "Keep"}
+              {keepReview ? <X size={10} aria-hidden /> : null}
+            </button>
+          </span>
+        </div>
+      ) : null}
       {drafts.length > 0 ? (
         <div className="chat-queued-editor__chips">
           {drafts.map((d) => (
