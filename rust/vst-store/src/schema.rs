@@ -136,6 +136,14 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     // databases that already created the table pick it up.
     add_column_if_missing(db, "scheduled_messages", "claimedAt", "TEXT")?;
     drop_scheduled_messages_session_fk(db)?;
+    // Terminal-delivery columns. MUST come after the FK rebuild above: that
+    // rebuild copies a fixed column list, so a column added before it would be
+    // dropped on a legacy database.
+    add_column_if_missing(db, "scheduled_messages", "channel", "TEXT")?;
+    add_column_if_missing(db, "scheduled_messages", "deliveryPhase", "TEXT")?;
+    add_column_if_missing(db, "scheduled_messages", "failureKind", "TEXT")?;
+    add_column_if_missing(db, "scheduled_messages", "commentsSnapshot", "TEXT")?;
+    add_column_if_missing(db, "scheduled_messages", "origin", "TEXT")?;
     // The poller's due-scan: `status = 'pending' AND fireAt <= now`.
     db.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_scheduled_messages_due ON scheduled_messages(status, fireAt);",

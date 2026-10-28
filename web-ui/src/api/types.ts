@@ -633,7 +633,29 @@ export interface ScheduledPendingMessage {
   message: string;
   attachments?: Attachment[];
   fireAt: string; // ISO-8601 UTC
+  /** `"tmux"` for a Terminal agent's schedule, `"json"` for Rich Chat; absent = legacy (json). */
+  channel?: ScheduledChannel;
+  /** `scheduled` = waiting for its time; `waiting` = due, held until the Terminal
+   *  agent is ready; `pasting` = being pasted now. Absent = `scheduled`. */
+  phase?: ScheduledPhase;
+  /** Number of review comments attached, only when there are any. */
+  commentCount?: number;
+  /** `"immediate"` rows are part of an immediate send, not a schedule; absent = `"schedule"`. */
+  origin?: ScheduledOrigin;
 }
+
+export type ScheduledChannel = "json" | "tmux";
+export type ScheduledPhase = "scheduled" | "waiting" | "pasting";
+export type ScheduledOrigin = "schedule" | "immediate";
+
+/** Why a scheduled delivery failed (`failureKind`); absent on a legacy failure. */
+export type ScheduledFailureKind =
+  | "timed_out"
+  | "agent_exited"
+  | "archived"
+  | "restarted_mid_paste"
+  | "channel_unsupported"
+  | "error";
 
 /** A scheduled send that failed to deliver; the user can retry or dismiss it. */
 export interface ScheduledFailedMessage {
@@ -643,6 +665,27 @@ export interface ScheduledFailedMessage {
   fireAt: string; // ISO-8601 UTC
   /** Human-readable reason from the daemon — shown as-is. */
   failureReason: string;
+  /** Machine-readable kind, so the UI never string-matches `failureReason`. */
+  failureKind?: ScheduledFailureKind;
+  channel?: ScheduledChannel;
+  origin?: ScheduledOrigin;
+}
+
+/** A Terminal scheduled message pasted recently ("pasted at 3:00 PM"). */
+export interface ScheduledSentMessage {
+  id: string;
+  message: string;
+  fireAt: string; // ISO-8601 UTC
+  sentAt: string; // ISO-8601 UTC
+  channel?: ScheduledChannel;
+  origin?: ScheduledOrigin;
+}
+
+/** `GET /sessions/:id/schedule` — a session's whole scheduled-send state. */
+export interface ScheduleSnapshot {
+  scheduledSends: ScheduledPendingMessage[];
+  scheduledFailed: ScheduledFailedMessage[];
+  scheduledSent: ScheduledSentMessage[];
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -653,6 +696,9 @@ export interface SupportedCli {
   defaultModel: string;
   /** Whether this CLI can run the JSON agent-chat channel. */
   supportsJson: boolean;
+  /** Whether a scheduled message can be delivered into this CLI's Terminal (tmux)
+   *  pane (its plugin's `terminal_delivery()` is set). */
+  supportsTerminalDelivery: boolean;
   /**
    * Whether this CLI ships a native-history importer — i.e. a terminal→JSON
    * switch can backfill the terminal-phase turns into the JSON view. When
@@ -1016,6 +1062,8 @@ export type WSEvent =
       scheduledSends: ScheduledPendingMessage[];
       scheduledFailed: ScheduledFailedMessage[];
       scheduledTurnIds: string[];
+      /** Recently pasted Terminal rows. ABSENT = keep what you have; `[]` clears. */
+      scheduledSent?: ScheduledSentMessage[];
     }
   | {
       /** Full replace-not-diff snapshot of a session's background tasks.

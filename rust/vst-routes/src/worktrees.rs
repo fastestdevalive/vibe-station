@@ -456,6 +456,10 @@ pub struct WorktreeRoutes {
     pub file_list: Arc<FileList>,
     pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
+    /// The Terminal delivery owner: a delete tells it which sessions are going
+    /// so jobs stop and held comments are restored (`None` in tests that never
+    /// schedule into a Terminal agent).
+    pub terminal_delivery: Option<vst_review::TerminalDeliveryHandle>,
 }
 
 impl WorktreeRoutes {
@@ -478,7 +482,13 @@ impl WorktreeRoutes {
             file_list: file_list.clone(),
             file_search: Arc::new(FileSearchIndex::new(file_list.clone())),
             paths: Paths::default(),
+            terminal_delivery: None,
         }
+    }
+
+    pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
+        self.terminal_delivery = Some(td);
+        self
     }
 
     fn build_direct_pty_registry(&self) -> DirectPtyRegistry {
@@ -1378,6 +1388,11 @@ impl WorktreeRoutes {
 
         // Release runtime and remove session directories
         for session in &worktree.sessions {
+            // Terminal deliveries: stop the jobs and report `Gone` (comments are
+            // restored) BEFORE the rows are purged below.
+            if let Some(td) = &self.terminal_delivery {
+                td.on_session_removed(&session.id).await;
+            }
             self.release_worktree_session(session, true).await;
             let dir = self.paths.session_data_dir(&project.id, wt_id, &session.id);
             let _ = tokio::fs::remove_dir_all(&dir).await;

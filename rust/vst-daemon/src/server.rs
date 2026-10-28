@@ -465,6 +465,12 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         model_catalog: model_catalog.clone(),
         handoff_timeout: vst_routes::sessions::DEFAULT_HANDOFF_TIMEOUT,
         reset_cancels: Default::default(),
+        terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
+            opts.store.clone(),
+            opts.broadcaster.clone(),
+            Arc::new(opts.tmux.clone()),
+            None,
+        ),
     };
 
     let attachment_routes =
@@ -831,7 +837,10 @@ pub fn router_from_state(state: AppState) -> Router {
             get(tasks_route::handle_get_task_output),
         )
         // Scheduled messages
-        .route("/sessions/:id/schedule", post(handle_schedule_create))
+        .route(
+            "/sessions/:id/schedule",
+            post(handle_schedule_create).get(handle_schedule_list),
+        )
         .route(
             "/sessions/:id/schedule/:msgId",
             delete(handle_schedule_cancel),
@@ -3736,6 +3745,21 @@ async fn handle_schedule_create(
         .map_err(chat_err_to_response)
 }
 
+async fn handle_schedule_list(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<
+    Json<vst_types::rest::sessions::ScheduleSnapshotDto>,
+    (StatusCode, Json<serde_json::Value>),
+> {
+    state
+        .session_routes
+        .schedule_list(&id)
+        .await
+        .map(Json)
+        .map_err(chat_err_to_response)
+}
+
 async fn handle_schedule_cancel(
     State(state): State<AppState>,
     axum::extract::Path((id, msg_id)): axum::extract::Path<(String, String)>,
@@ -3797,42 +3821,35 @@ async fn handle_schedule_send_now(
         .map_err(chat_err_to_response)
 }
 
+/// Every chat/schedule error ships as `{ error, code }` (`code` is the stable
+/// SCREAMING_SNAKE name of the variant) so the UI never string-matches.
 fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Value>) {
-    match err {
-        ChatRouteError::NotFound(m) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": m })),
-        ),
+    let code = err.code();
+    let (status, message) = match err {
+        ChatRouteError::NotFound(m) => (StatusCode::NOT_FOUND, m),
         ChatRouteError::BadRequest(m)
         | ChatRouteError::Archived(m)
         | ChatRouteError::AttachmentNotFound(m)
         | ChatRouteError::AttachmentsRequireJson(m)
         | ChatRouteError::NotJson(m)
-        | ChatRouteError::UnknownModel(m) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": m })),
-        ),
+        | ChatRouteError::UnknownModel(m)
+        | ChatRouteError::AgentExited(m)
+        | ChatRouteError::NotSchedulable(m)
+        | ChatRouteError::TerminalDeliveryUnsupported(m) => (StatusCode::BAD_REQUEST, m),
         ChatRouteError::NotRunning(m)
         | ChatRouteError::NoActiveTurn(m)
-        | ChatRouteError::Done(m) => (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": m })),
-        ),
+        | ChatRouteError::Done(m)
+        | ChatRouteError::AlreadyDelivering(m) => (StatusCode::CONFLICT, m),
         ChatRouteError::TurnNotFound(m)
         | ChatRouteError::NotEditing(m)
-        | ChatRouteError::TurnNotQueued(m) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": m })),
-        ),
-        ChatRouteError::ModelListUnavailable(m) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": m })),
-        ),
-        ChatRouteError::Internal(m) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": m })),
-        ),
-    }
+        | ChatRouteError::TurnNotQueued(m) => (StatusCode::NOT_FOUND, m),
+        ChatRouteError::ModelListUnavailable(m) => (StatusCode::BAD_GATEWAY, m),
+        ChatRouteError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+    };
+    (
+        status,
+        Json(serde_json::json!({ "error": message, "code": code })),
+    )
 }
 
 // ── Attachments ───────────────────────────────────────────────────────────

@@ -298,11 +298,13 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             scheduled_sends,
             scheduled_failed,
             scheduled_turn_ids,
+            scheduled_sent,
         } => ServerMessage::SessionScheduled {
             session_id,
             scheduled_sends,
             scheduled_failed,
             scheduled_turn_ids,
+            scheduled_sent,
         },
         ServerEvent::SessionTasksChanged {
             session_id,

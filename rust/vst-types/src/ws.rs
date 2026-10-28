@@ -288,6 +288,9 @@ pub enum ServerMessage {
         scheduled_sends: Vec<crate::domain::ScheduledMessageMeta>,
         scheduled_failed: Vec<crate::domain::ScheduledFailedMeta>,
         scheduled_turn_ids: Vec<String>,
+        /// Recently pasted terminal rows; absent = keep what you have.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduled_sent: Option<Vec<crate::domain::ScheduledSentMeta>>,
     },
     /// Background-task snapshot for a session — see
     /// `ServerEvent::SessionTasksChanged`. Client drops `rev <=` current.

@@ -49,6 +49,7 @@ import type {
   SendChatResponse,
   Session,
   SessionBreakKind,
+  ScheduleSnapshot,
   SessionMeta,
   Settings,
   SkillsResponse,
@@ -480,6 +481,38 @@ export function createMockApi(seed: MockSeed = {}) {
   function emit(ev: WSEvent) {
     for (const l of listeners.get("*") ?? []) l(ev);
     for (const l of listeners.get(ev.type) ?? []) l(ev);
+  }
+
+  /** Per-session scheduled-send state (mock of the daemon's `scheduled_messages`
+   *  rows). Mutated by the schedule calls below and by `mockSetScheduleSnapshot`
+   *  (the dev state simulator), and pushed as `session:scheduled`. */
+  const scheduleState = new Map<string, ScheduleSnapshot>();
+  function scheduleOf(sessionId: string): ScheduleSnapshot {
+    let snap = scheduleState.get(sessionId);
+    if (!snap) {
+      snap = { scheduledSends: [], scheduledFailed: [], scheduledSent: [] };
+      scheduleState.set(sessionId, snap);
+    }
+    return snap;
+  }
+  function pushSchedule(sessionId: string) {
+    const snap = scheduleOf(sessionId);
+    emit({
+      type: "session:scheduled",
+      sessionId,
+      scheduledSends: structuredClone(snap.scheduledSends),
+      scheduledFailed: structuredClone(snap.scheduledFailed),
+      scheduledTurnIds: [],
+      scheduledSent: structuredClone(snap.scheduledSent),
+    });
+  }
+  /** A Terminal (tmux) agent schedules into its pane; everything else is Rich Chat. */
+  function scheduleChannelOf(sessionId: string): "json" | "tmux" {
+    const ch = sessions.find((x) => x.id === sessionId)?.channel;
+    return ch === "json" ? "json" : "tmux";
+  }
+  function mockScheduleError(message: string, status: number, code: string): ApiError {
+    return new ApiError(JSON.stringify({ error: message, code }), status, code);
   }
 
   function startOutputSimulation(sessionId: string) {
@@ -1650,6 +1683,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "claude",
           defaultModel: "",
           supportsJson: true,
+          supportsTerminalDelivery: true,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: true,
@@ -1662,6 +1696,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "cursor",
           defaultModel: "auto",
           supportsJson: true,
+          supportsTerminalDelivery: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: false,
           detected: true,
@@ -1674,6 +1709,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "opencode",
           defaultModel: "opencode/big-pickle",
           supportsJson: true,
+          supportsTerminalDelivery: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1695,6 +1731,7 @@ export function createMockApi(seed: MockSeed = {}) {
           // Mirrors the daemon's agy `supports_json() == true` (stream-json
           // ACP agent); agy still defaults to Terminal.
           supportsJson: true,
+          supportsTerminalDelivery: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1707,6 +1744,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "codex",
           defaultModel: "",
           supportsJson: true,
+          supportsTerminalDelivery: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -1726,6 +1764,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "pi",
           defaultModel: "",
           supportsJson: false,
+          supportsTerminalDelivery: false,
           importsNativeHistory: false,
           supportsJsonToTerminalResume: false,
           detected: false,
@@ -1745,6 +1784,7 @@ export function createMockApi(seed: MockSeed = {}) {
           id: "omp",
           defaultModel: "",
           supportsJson: true,
+          supportsTerminalDelivery: false,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
           detected: false,
@@ -2480,37 +2520,124 @@ export function createMockApi(seed: MockSeed = {}) {
       };
     },
 
+    async getScheduledMessages(sessionId: string): Promise<ScheduleSnapshot> {
+      return structuredClone(scheduleOf(sessionId));
+    },
+
     async scheduleMessage(
-      _sessionId: string,
-      _message: string,
+      sessionId: string,
+      message: string,
       fireAt: string,
       _attachmentIds?: string[],
     ): Promise<{ id: string; fireAt: string }> {
-      return { id: `sched-${Date.now()}`, fireAt };
+      const session = sessions.find((x) => x.id === sessionId);
+      const channel = scheduleChannelOf(sessionId);
+      if (channel === "tmux") {
+        const cli = modes.find((m) => m.id === session?.modeId)?.cli;
+        // Driven by the CLI list's `supportsTerminalDelivery` (the same flag the UI reads), never by a CLI name.
+        const supported = (await this.getSupportedClis()).find((c) => c.id === cli)?.supportsTerminalDelivery === true;
+        if (!supported) {
+          throw mockScheduleError(
+            "Scheduling isn't supported for this agent yet",
+            400,
+            "TERMINAL_DELIVERY_UNSUPPORTED",
+          );
+        }
+        if (session?.state === "exited") {
+          throw mockScheduleError("The agent has exited", 400, "AGENT_EXITED");
+        }
+        if (session?.state === "done") {
+          throw mockScheduleError("Agent is marked done", 409, "DONE");
+        }
+      }
+      if (Date.parse(fireAt) <= Date.now()) {
+        throw mockScheduleError("Pick a time in the future.", 400, "BAD_REQUEST");
+      }
+      const id = `sched-${Date.now()}-${scheduleOf(sessionId).scheduledSends.length}`;
+      scheduleOf(sessionId).scheduledSends.push({ id, message, fireAt, channel, phase: "scheduled", origin: "schedule" });
+      pushSchedule(sessionId);
+      return { id, fireAt };
     },
 
-    async cancelScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+    async cancelScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const snap = scheduleOf(sessionId);
+      snap.scheduledSends = snap.scheduledSends.filter((r) => r.id !== scheduleId);
+      pushSchedule(sessionId);
       return { ok: true };
     },
 
     async editScheduledMessage(
-      _sessionId: string,
-      _scheduleId: string,
-      _patch: { fireAt: string },
+      sessionId: string,
+      scheduleId: string,
+      patch: { fireAt: string },
     ): Promise<{ ok: true }> {
+      const row = scheduleOf(sessionId).scheduledSends.find((r) => r.id === scheduleId);
+      if (row) {
+        row.fireAt = patch.fireAt;
+        pushSchedule(sessionId);
+      }
       return { ok: true };
     },
 
-    async sendScheduledNow(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+    async sendScheduledNow(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const snap = scheduleOf(sessionId);
+      const row = snap.scheduledSends.find((r) => r.id === scheduleId);
+      if (!row) throw mockScheduleError("Scheduled message not found", 404, "TURN_NOT_FOUND");
+      const finish = () => {
+        snap.scheduledSends = snap.scheduledSends.filter((r) => r.id !== scheduleId);
+        if (row.channel === "tmux") {
+          snap.scheduledSent = [
+            ...snap.scheduledSent,
+            { id: row.id, message: row.message, fireAt: row.fireAt, sentAt: nowIso(), channel: "tmux", origin: "schedule" },
+          ];
+        }
+        pushSchedule(sessionId);
+      };
+      if (row.channel === "tmux" && seed.simulateOutput !== false) {
+        // Terminal delivery: held until the agent is ready, then pasted.
+        row.phase = "waiting";
+        pushSchedule(sessionId);
+        setTimeout(() => {
+          row.phase = "pasting";
+          pushSchedule(sessionId);
+          setTimeout(finish, 1200);
+        }, 1500);
+      } else {
+        finish();
+      }
       return { ok: true };
     },
 
-    async retryScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+    async retryScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const snap = scheduleOf(sessionId);
+      const failed = snap.scheduledFailed.find((r) => r.id === scheduleId);
+      if (failed) {
+        snap.scheduledFailed = snap.scheduledFailed.filter((r) => r.id !== scheduleId);
+        snap.scheduledSends.push({
+          id: failed.id,
+          message: failed.message,
+          fireAt: new Date().toISOString(),
+          ...(failed.channel ? { channel: failed.channel } : {}),
+          phase: "scheduled",
+          origin: "schedule",
+        });
+        pushSchedule(sessionId);
+      }
       return { ok: true };
     },
 
-    async dismissScheduledMessage(_sessionId: string, _scheduleId: string): Promise<{ ok: true }> {
+    async dismissScheduledMessage(sessionId: string, scheduleId: string): Promise<{ ok: true }> {
+      const snap = scheduleOf(sessionId);
+      snap.scheduledFailed = snap.scheduledFailed.filter((r) => r.id !== scheduleId);
+      pushSchedule(sessionId);
       return { ok: true };
+    },
+
+    /** Test/dev hook: replace a session's scheduled-send state and push it, e.g. to
+     *  simulate Terminal waiting / pasting / sent / failed rows without a daemon. */
+    mockSetScheduleSnapshot(sessionId: string, snapshot: ScheduleSnapshot): void {
+      scheduleState.set(sessionId, structuredClone(snapshot));
+      pushSchedule(sessionId);
     },
 
     subscribe(sessionIds: string[]): () => void {

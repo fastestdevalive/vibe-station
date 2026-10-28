@@ -317,6 +317,21 @@ impl AgentPlugin for ClaudePlugin {
         }
     }
 
+    /// Claude is the one CLI whose pane probe is proven (see `claude_terminal`).
+    /// `settle_ms` is a margin: Enter 0/100/300 ms after a 30 KB paste all
+    /// submitted. `-r` made no difference, so LF is not kept raw.
+    fn terminal_delivery(&self) -> Option<vst_types::TerminalDeliveryCaps> {
+        Some(vst_types::TerminalDeliveryCaps {
+            settle_ms: 200,
+            multiline_ok: true,
+            raw_lf: false,
+        })
+    }
+
+    fn terminal_readiness(&self, pane: &vst_types::PaneSnapshot) -> vst_types::TerminalReadiness {
+        crate::claude_terminal::readiness(pane)
+    }
+
     fn default_channel(&self) -> Channel {
         Channel::Json
     }

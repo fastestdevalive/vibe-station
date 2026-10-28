@@ -14,6 +14,8 @@ import type { Attachment, NormalizedEvent, Session, SessionMeta } from "@/api/ty
 import { ChatPane } from "@/components/layout/ChatPane";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
+import { ScheduleStrip } from "@/components/schedule/ScheduleStrip";
+import type { ScheduleRowData } from "@/components/schedule/useScheduledSends";
 import { StatusBar } from "@/components/chat/StatusBar";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { AttachmentPicker } from "@/components/chat/AttachmentPicker";
@@ -388,53 +390,49 @@ function QueueControlsScene() {
 function QueuedFailedScene() {
   const api = useMemo(() => createMockApi(), []);
   const noop = () => {};
-  const trayProps = {
-    api,
-    sessionId: "sess-failed",
-    rows: [] as QueuedTrayRow[],
-    onEdit: noop,
-    onSendNow: noop,
-    onCancel: noop,
-    onSave: async () => {},
-    onDiscard: noop,
-    onSalvage: noop,
-  };
   const inAnHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
   const earlier = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const strip = (rows: ScheduleRowData[], variant: "chat" | "overlay" | "inline" = "chat") => (
+    <ScheduleStrip
+      variant={variant}
+      rows={rows}
+      api={api}
+      sessionId="sess-failed"
+      sessionLive
+      agentName="Agent 1"
+      onEdit={noop}
+      onHideSent={noop}
+      onError={noop}
+    />
+  );
   return (
     <div className="gallery-stack">
-      <div className="gallery-label">Failed scheduled send — after the scheduled rows · Retry ↺ · Dismiss ✕</div>
+      <div className="gallery-label">Scheduled strip (below Subagents) — pending, waiting, pasting, pasted, failed</div>
       <div className="gallery-pane" style={{ height: "auto" }}>
         <div className="chat-pane__footer">
-          <QueuedTray
-            {...trayProps}
-            scheduledRows={[{ id: "sch-1", message: "Run the nightly benchmarks and summarize regressions.", fireAt: inAnHour }]}
-            failedRows={[
-              {
-                id: "sch-0",
-                message: "Check whether CI is green and rebase onto main if it is.",
-                fireAt: earlier,
-                failureReason: "Daemon restarted before delivery",
-              },
-            ]}
-          />
+          {strip([
+            { kind: "pending", id: "sch-1", message: "Run the nightly benchmarks and summarize regressions.", fireAt: inAnHour, commentCount: 3 },
+            { kind: "pending", id: "sch-w", message: "/review src/auth", fireAt: earlier, channel: "tmux", phase: "waiting" },
+            { kind: "pending", id: "sch-p", message: "/review src/auth", fireAt: earlier, channel: "tmux", phase: "pasting" },
+            { kind: "failed", id: "sch-0", message: "Check whether CI is green and rebase onto main if it is.", fireAt: earlier, failureReason: "Daemon restarted before delivery" },
+            { kind: "failed", id: "sch-t", message: "Run the linter", fireAt: earlier, failureReason: "Not ready within 10 min", failureKind: "timed_out", channel: "tmux" },
+            { kind: "sent", id: "sch-s", message: "/review src/auth", fireAt: earlier, sentAt: earlier, channel: "tmux" },
+          ])}
         </div>
       </div>
 
-      <div className="gallery-label">Only failed rows — the tray still renders</div>
+      <div className="gallery-label">Only a failed row — the strip still renders</div>
       <div className="gallery-pane" style={{ height: "auto" }}>
         <div className="chat-pane__footer">
-          <QueuedTray
-            {...trayProps}
-            failedRows={[
-              {
-                id: "sch-2",
-                message: "Open a PR for the composer revamp once tests pass.",
-                fireAt: earlier,
-                failureReason: "Agent could not be started: mode 'opus' no longer exists",
-              },
-            ]}
-          />
+          {strip([
+            {
+              kind: "failed",
+              id: "sch-2",
+              message: "Open a PR for the composer revamp once tests pass.",
+              fireAt: earlier,
+              failureReason: "Agent could not be started: mode 'opus' no longer exists",
+            },
+          ])}
         </div>
       </div>
     </div>

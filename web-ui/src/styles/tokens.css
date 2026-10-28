@@ -144,6 +144,9 @@
      (>= 80% / >= 90%) are coloured. */
   --ctx-warn: #f97316;
   --ctx-danger: #ef4444;
+  /* Review-comment accent (schedule strip rows, comment pins). Follows the
+     theme's primary foreground, so it needs no per-theme or light override. */
+  --comment: var(--fg-primary);
 }
 [data-appearance="light"] {
   --ctx-warn: #c2410c;

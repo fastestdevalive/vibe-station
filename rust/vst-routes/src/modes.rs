@@ -441,6 +441,7 @@ impl ModeRoutes {
                     id: cli,
                     default_model,
                     supports_json,
+                    supports_terminal_delivery: plugin.terminal_delivery().is_some(),
                     imports_native_history,
                     supports_json_to_terminal_resume,
                     detected,

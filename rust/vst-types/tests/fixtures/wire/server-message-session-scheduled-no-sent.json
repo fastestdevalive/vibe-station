@@ -1,0 +1,9 @@
+{
+  "type": "session:scheduled",
+  "sessionId": "vs-141-a-5853aa1a",
+  "scheduledSends": [
+    { "id": "m1", "message": "hello", "fireAt": "2026-01-01T15:00:00Z" }
+  ],
+  "scheduledFailed": [],
+  "scheduledTurnIds": []
+}

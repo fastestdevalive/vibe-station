@@ -1,0 +1,23 @@
+[package]
+name = "vst-review"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vst-types = { workspace = true }
+vst-store = { workspace = true }
+vst-proc = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tempfile = "3"
+tracing-subscriber = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[lints]
+workspace = true

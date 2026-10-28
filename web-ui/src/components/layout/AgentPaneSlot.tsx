@@ -1,8 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { FontResetButton } from "./FontResetButton";
 import type { ApiInstance } from "@/api";
 import type { PrStatus, Session } from "@/api/types";
+import { apiErrorText } from "@/lib/apiErrorText";
+import { sessionLabel } from "@/lib/sessionLabel";
+import { ScheduleButton } from "@/components/schedule/ScheduleButton";
+import { ScheduleStrip } from "@/components/schedule/ScheduleStrip";
+import { RescheduleHost, type EditingScheduled } from "@/components/schedule/RescheduleHost";
+import { useScheduledSends } from "@/components/schedule/useScheduledSends";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
@@ -90,10 +96,59 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
     usePaneDialogs.getState().setBusy(sessionId, { busy: liveState === "working", queued: 0 });
     return () => usePaneDialogs.getState().clearBusy(sessionId);
   }, [sessionId, isTerminal, liveState]);
+  // The only client copy of this Terminal agent's scheduled sends (one fetch +
+  // one subscribe per pane). It keeps running after the agent exits so the
+  // inline strip below can still show a pending or failed row. The Rich Chat
+  // side is `ChatPane`'s own call (it passes `null` while hidden).
+  const scheduleSessionId = isTerminal ? sessionId : null;
+  const { rows: scheduledRows, hideSent: hideScheduledSent } = useScheduledSends(api, scheduleSessionId);
+  const [editingScheduled, setEditingScheduled] = useState<EditingScheduled | null>(null);
+  const editScheduledAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  useEffect(() => {
+    setScheduleError(null);
+    setEditingScheduled(null);
+  }, [sessionId]);
+  const reportScheduleError = (e: unknown) =>
+    setScheduleError(apiErrorText(e, "Couldn't update the scheduled message."));
+  const scheduleErrorLine = scheduleError ? (
+    <div className="sched-strip-error" role="alert">
+      <span style={{ flex: 1 }}>{scheduleError}</span>
+      <button
+        type="button"
+        className="sched-strip__action"
+        aria-label="Dismiss error"
+        onClick={() => setScheduleError(null)}
+      >
+        ✕
+      </button>
+    </div>
+  ) : null;
+  const renderScheduleStrip = (variant: "overlay" | "inline") =>
+    session && sessionId ? (
+      <ScheduleStrip
+        variant={variant}
+        rows={scheduledRows}
+        api={api}
+        sessionId={sessionId}
+        sessionLive={liveState !== "exited" && liveState !== "done"}
+        agentName={sessionLabel(session)}
+        onHideSent={hideScheduledSent}
+        onError={reportScheduleError}
+        onEdit={(id, row, anchor) => {
+          editScheduledAnchorRef.current = anchor;
+          setEditingScheduled({ id, row });
+        }}
+      />
+    ) : null;
+
   // The font-size buttons and terminal→Rich Chat toggle for exited sessions.
   // When the session exits, these are handed to `TerminalPane`, which renders
-  // them in-flow BELOW its "Session exited / Resume" banner.
+  // them in-flow BELOW its "Session exited / Resume" banner. The scheduled
+  // strip joins them (exited AND done) so a pending or failed row stays
+  // visible and cancellable once the live header is gone.
   const exitedControls = isTerminal && !terminalLive ? (
+    <>
     <div className="terminal-font-overlay">
       <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease agent font" onClick={() => bumpTerminalFont(-0.05)}>
         <Minus size={11} />
@@ -104,6 +159,9 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
       <FontResetButton />
       <TerminalChannelToggle api={api} session={session!} />
     </div>
+    {renderScheduleStrip("inline")}
+    {scheduleErrorLine}
+    </>
   ) : undefined;
 
   // Same colored-rectangle treatment as a workspace tile (WorkspaceCanvas.tsx's
@@ -138,6 +196,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
           focusOnMount={!canvasMode}
         />
         {isTerminal && terminalLive ? (
+          <div className="agent-pane-overlay-stack">
           <div className="agent-pane-header agent-pane-header--overlay">
             <div className="agent-pane-header__left">
               <TerminalAttachmentUpload api={api} session={session!} />
@@ -179,8 +238,12 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
                 </button>
                 <FontResetButton />
               </div>
+              <ScheduleButton api={api} session={session!} rows={scheduledRows} />
               <TerminalChannelToggle api={api} session={session!} />
             </div>
+          </div>
+          {renderScheduleStrip("overlay")}
+          {scheduleErrorLine}
           </div>
         ) : null}
       </div>
@@ -188,6 +251,15 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
       {/* Last sibling, conditionally rendered inside: never shifts the (permanently
           mounted) TerminalPane/ChatPane tree positions above. */}
       <PaneDialogHost api={api} sessionId={sessionId} session={session} />
+      {sessionId && isTerminal ? (
+        <RescheduleHost
+          api={api}
+          sessionId={sessionId}
+          editing={editingScheduled}
+          anchorRef={editScheduledAnchorRef}
+          onClose={() => setEditingScheduled(null)}
+        />
+      ) : null}
     </div>
   );
 }

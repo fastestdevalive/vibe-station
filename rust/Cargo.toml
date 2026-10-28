@@ -9,6 +9,7 @@ members = [
     "vst-activity",
     "vst-proc",
     "vst-git",
+    "vst-review",
     "vst-rpc",
     "vst-agents",
     "vst-agy-stream-acp",
@@ -50,6 +51,7 @@ vst-testkit = { path = "vst-testkit", default-features = false }
 vst-store = { path = "vst-store" }
 vst-tasks = { path = "vst-tasks" }
 vst-activity = { path = "vst-activity" }
+vst-review = { path = "vst-review" }
 vst-proc = { path = "vst-proc" }
 vst-git = { path = "vst-git" }
 vst-rpc = { path = "vst-rpc" }

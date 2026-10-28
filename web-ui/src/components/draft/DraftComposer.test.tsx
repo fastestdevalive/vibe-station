@@ -417,6 +417,7 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       id: "claude",
       defaultModel: "sonnet",
       supportsJson: true,
+      supportsTerminalDelivery: false,
       importsNativeHistory: true,
       supportsJsonToTerminalResume: true,
       detected: true,

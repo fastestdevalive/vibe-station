@@ -1,0 +1,7 @@
+{
+  "scheduledSends": [
+    { "id": "m1", "message": "hi", "fireAt": "2026-01-01T15:00:00Z", "phase": "scheduled" }
+  ],
+  "scheduledFailed": [],
+  "scheduledSent": []
+}

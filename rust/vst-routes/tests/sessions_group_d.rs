@@ -136,7 +136,7 @@ fn make_project(id: &str) -> ProjectRecord {
 
 fn routes_with_tmux(store: StoreHandle, tmux: vst_proc::tmux::Tmux) -> SessionRoutes {
     SessionRoutes {
-        store,
+        store: store.clone(),
         broadcaster: Broadcaster::new(16),
         json_registry: Arc::new(JsonAgentRegistry::new()),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
@@ -151,6 +151,13 @@ fn routes_with_tmux(store: StoreHandle, tmux: vst_proc::tmux::Tmux) -> SessionRo
         model_catalog: Default::default(),
         handoff_timeout: std::time::Duration::from_secs(120),
         reset_cancels: Default::default(),
+        // Inert: these tests never schedule onto a Terminal agent.
+        terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
+            store,
+            Broadcaster::new(16),
+            std::sync::Arc::new(vst_proc::tmux::Tmux::new()),
+            None,
+        ),
     }
 }
 

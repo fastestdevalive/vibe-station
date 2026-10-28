@@ -17,6 +17,7 @@ vst-ws = { workspace = true }
 vst-lsp = { workspace = true }
 vst-harness-limits = { workspace = true }
 vst-proc = { workspace = true }
+vst-review = { workspace = true }
 axum = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

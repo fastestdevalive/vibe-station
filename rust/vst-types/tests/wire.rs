@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use vst_types::limits::LimitsSnapshot;
-use vst_types::rest::sessions::EnqueueChatResult;
+use vst_types::rest::modes::SupportedCli;
+use vst_types::rest::sessions::{EnqueueChatResult, ScheduleSnapshotDto};
 use vst_types::rest::shared::{GlobalDraft, Mode, Project, Session, Worktree};
 use vst_types::ws::{ClientMessage, ServerMessage, SessionCreatedSnapshot};
 
@@ -407,4 +408,57 @@ fn tool_diff_omits_absent_trim_starts() {
     }))
     .unwrap();
     assert_eq!((back.old_start, back.new_start), (None, None));
+}
+
+#[test]
+fn session_scheduled_with_scheduled_sent_roundtrips() {
+    assert_roundtrip::<ServerMessage>("server-message-session-scheduled.json");
+}
+
+#[test]
+fn session_scheduled_without_scheduled_sent_roundtrips_and_stays_absent() {
+    // Absent = "keep what you have": it must deserialize to None and NOT be
+    // re-emitted as `[]`/null (which a client would read as "cleared").
+    assert_roundtrip::<ServerMessage>("server-message-session-scheduled-no-sent.json");
+    let msg: ServerMessage = serde_json::from_value(load_fixture(
+        "server-message-session-scheduled-no-sent.json",
+    ))
+    .unwrap();
+    match msg {
+        ServerMessage::SessionScheduled { scheduled_sent, .. } => assert!(scheduled_sent.is_none()),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn session_scheduled_empty_scheduled_sent_is_preserved_as_clear() {
+    let mut v = load_fixture("server-message-session-scheduled-no-sent.json");
+    v["scheduledSent"] = serde_json::json!([]);
+    let msg: ServerMessage = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&msg).unwrap(), v);
+}
+
+#[test]
+fn schedule_snapshot_dto_roundtrips() {
+    assert_roundtrip::<ScheduleSnapshotDto>("schedule-snapshot.json");
+}
+
+#[test]
+fn supported_cli_without_supports_terminal_delivery_defaults_to_false() {
+    let json = serde_json::json!({
+        "id": "claude",
+        "defaultModel": "",
+        "supportsJson": true,
+        "importsNativeHistory": true,
+        "supportsJsonToTerminalResume": true,
+        "detected": true,
+        "starterBundleNames": [],
+        "usingFallbackOnly": false,
+        "defaultChannel": "json",
+        "defaultChannelOverridden": false
+    });
+    let cli: SupportedCli = serde_json::from_value(json).unwrap();
+    assert!(!cli.supports_terminal_delivery);
+    let out = serde_json::to_value(&cli).unwrap();
+    assert_eq!(out["supportsTerminalDelivery"], serde_json::json!(false));
 }

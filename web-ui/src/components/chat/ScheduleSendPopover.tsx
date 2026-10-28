@@ -1,5 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { CircleAlert } from "lucide-react";
+import { Chip } from "@/components/ui/Chip";
+import "@/components/schedule/schedule.css";
 
 interface ScheduleSendPopoverProps {
   open: boolean;
@@ -14,9 +17,25 @@ interface ScheduleSendPopoverProps {
   error?: string | null;
   /** Disables the confirm button while a request is in flight. */
   busy?: boolean;
+  /**
+   * Compose variant (Terminal "Schedule message"): passing `messageValue` adds a
+   * message textarea, a target chip and a warning note, and widens the popover to
+   * `min(340px, 100vw - 16px)`. The caller owns the message text and the API call
+   * (`ScheduleMessagePopover`). Left out, the popover renders exactly as the Rich
+   * Chat reschedule/clock popover always did.
+   */
+  messageValue?: string;
+  onMessageChange?: (value: string) => void;
+  /** Header chip, e.g. "Agent 1 · Terminal". */
+  targetLabel?: string;
+  /** Warning shown above the actions. */
+  note?: string;
+  /** Slot for part 04's "N comments attached" chip; when given an empty message is allowed. */
+  commentChip?: ReactNode;
 }
 
 const POPOVER_WIDTH = 288;
+const COMPOSE_MAX_WIDTH = 340;
 const POPOVER_HEIGHT = 140; // approximate; popover measures itself after mount
 const SCREEN_MARGIN = 8;
 
@@ -36,12 +55,19 @@ export function ScheduleSendPopover({
   title,
   error,
   busy,
+  messageValue,
+  onMessageChange,
+  targetLabel,
+  note,
+  commentChip,
 }: ScheduleSendPopoverProps) {
+  const compose = messageValue !== undefined;
   const [value, setValue] = useState(defaultFireAt);
   // Earliest pickable minute, refreshed each time the popover opens.
   const [minValue, setMinValue] = useState(() => toLocalInput(new Date()));
   const [localError, setLocalError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<React.CSSProperties>({ visibility: "hidden" });
 
@@ -50,24 +76,39 @@ export function ScheduleSendPopover({
       setMinValue(toLocalInput(new Date()));
       setLocalError(null);
       setValue(initialFireAt ? toLocalInput(new Date(initialFireAt)) : defaultFireAt());
-      setTimeout(() => inputRef.current?.focus(), 0);
+      // Compose variant: first focus is the message; otherwise the time picker.
+      setTimeout(() => (compose ? textareaRef.current : inputRef.current)?.focus(), 0);
     }
-  }, [open, initialFireAt]);
+  }, [open, initialFireAt, compose]);
+
+  // Compose variant: closing (Cancel, Esc, outside click, success) hands focus
+  // back to the control that opened it.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open && compose) {
+      const id = window.setTimeout(() => anchorRef.current?.focus(), 0);
+      wasOpen.current = false;
+      return () => window.clearTimeout(id);
+    }
+    wasOpen.current = open;
+    return undefined;
+  }, [open, compose, anchorRef]);
 
   // Compute fixed position after mount/re-open, with screen-edge protection.
   useLayoutEffect(() => {
     if (!open) return;
     const anchor = anchorRef.current;
     const popover = popoverRef.current;
+    const width = compose ? Math.min(COMPOSE_MAX_WIDTH, window.innerWidth - 2 * SCREEN_MARGIN) : POPOVER_WIDTH;
     if (!anchor) {
       // No anchor: center horizontally near bottom of viewport.
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       setStyle({
         position: "fixed",
-        left: Math.max(SCREEN_MARGIN, (vw - POPOVER_WIDTH) / 2),
+        left: Math.max(SCREEN_MARGIN, (vw - width) / 2),
         top: Math.max(SCREEN_MARGIN, vh - POPOVER_HEIGHT - 80),
-        width: POPOVER_WIDTH,
+        width,
       });
       return;
     }
@@ -93,12 +134,12 @@ export function ScheduleSendPopover({
 
     // Align left edge with anchor; clamp to keep within viewport.
     let left = rect.left;
-    left = Math.max(SCREEN_MARGIN, Math.min(left, vw - POPOVER_WIDTH - SCREEN_MARGIN));
+    left = Math.max(SCREEN_MARGIN, Math.min(left, vw - width - SCREEN_MARGIN));
 
-    setStyle({ position: "fixed", top, left, width: POPOVER_WIDTH, visibility: "visible" });
+    setStyle({ position: "fixed", top, left, width, visibility: "visible" });
     // An inline error adds a row (the popover grows), so re-measure then too —
     // otherwise a popover opened above the anchor ends up overlapping it.
-  }, [open, anchorRef, error, localError]);
+  }, [open, anchorRef, error, localError, compose]);
 
   // Escape key and outside-click close.
   useEffect(() => {
@@ -125,6 +166,10 @@ export function ScheduleSendPopover({
 
   function handleSchedule() {
     if (!value || busy) return;
+    if (compose && !commentChip && !(messageValue ?? "").trim()) {
+      setLocalError("Write a message to schedule.");
+      return;
+    }
     const when = new Date(value);
     if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
       setLocalError("Pick a time in the future.");
@@ -132,6 +177,89 @@ export function ScheduleSendPopover({
     }
     setLocalError(null);
     onSchedule(when.toISOString());
+  }
+
+  const errorText = localError ?? error;
+  const timeInput = (
+    <input
+      ref={inputRef}
+      type="datetime-local"
+      aria-label="Send at"
+      className="input"
+      value={value}
+      min={minValue}
+      onChange={(e) => {
+        setValue(e.target.value);
+        setLocalError(null);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          handleSchedule();
+        }
+      }}
+    />
+  );
+  const actions = (
+    <div className="chat-schedule-popover__actions">
+      <button type="button" className="btn btn--secondary" onClick={onClose}>
+        Cancel
+      </button>
+      <button type="button" className="btn btn--primary" disabled={!value || busy} onClick={handleSchedule}>
+        Schedule
+      </button>
+    </div>
+  );
+
+  if (compose) {
+    return createPortal(
+      <div
+        ref={popoverRef}
+        className="chat-schedule-popover chat-schedule-popover--compose"
+        style={style}
+        role="dialog"
+        aria-label={title ?? "Schedule message"}
+      >
+        <div className="chat-schedule-popover__header">
+          <b className="chat-schedule-popover__title">{title ?? "Schedule message"}</b>
+          {targetLabel ? <Chip tone="neutral">{targetLabel}</Chip> : null}
+        </div>
+        <label className="chat-schedule-popover__field">
+          <span className="chat-schedule-popover__label">Message</span>
+          <textarea
+            ref={textareaRef}
+            aria-label="Message"
+            className="chat-schedule-popover__textarea"
+            value={messageValue}
+            onChange={(e) => {
+              onMessageChange?.(e.target.value);
+              setLocalError(null);
+            }}
+            onKeyDown={(e) => {
+              // Enter inserts a newline (multi-line is allowed); Cmd/Ctrl+Enter submits.
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleSchedule();
+              }
+            }}
+          />
+        </label>
+        {commentChip ? <div className="chat-schedule-popover__chip-slot">{commentChip}</div> : null}
+        <div className="chat-schedule-popover__field">
+          <span className="chat-schedule-popover__label">When</span>
+          {timeInput}
+        </div>
+        {errorText ? (
+          <div className="chat-schedule-popover__inline-error" role="alert">
+            <CircleAlert size={13} aria-hidden />
+            <span>{errorText}</span>
+          </div>
+        ) : null}
+        {note ? <div className="chat-schedule-popover__note">{note}</div> : null}
+        {actions}
+      </div>,
+      document.body,
+    );
   }
 
   return createPortal(
@@ -143,42 +271,13 @@ export function ScheduleSendPopover({
       aria-label={title ?? "Schedule send"}
     >
       <div className="chat-schedule-popover__label">{title ?? "Send at"}</div>
-      <input
-        ref={inputRef}
-        type="datetime-local"
-        aria-label="Send at"
-        className="input"
-        value={value}
-        min={minValue}
-        onChange={(e) => {
-          setValue(e.target.value);
-          setLocalError(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            handleSchedule();
-          }
-        }}
-      />
-      {localError || error ? (
+      {timeInput}
+      {errorText ? (
         <div className="chat-schedule-popover__error" role="alert">
-          {localError ?? error}
+          {errorText}
         </div>
       ) : null}
-      <div className="chat-schedule-popover__actions">
-        <button type="button" className="btn btn--secondary" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary"
-          disabled={!value || busy}
-          onClick={handleSchedule}
-        >
-          Schedule
-        </button>
-      </div>
+      {actions}
     </div>,
     document.body,
   );

@@ -614,6 +614,10 @@ pub struct SessionRoutes {
     pub handoff_timeout: Duration,
     /// In-flight reset flags (shared `Arc` across clones — see `ResetCancels`).
     pub reset_cancels: ResetCancels,
+    /// Terminal (tmux) delivery of scheduled messages: cancel, send-now, reset
+    /// and session-delete hooks go through it so its outcome observer hears
+    /// every transition of a tmux row exactly once.
+    pub terminal_delivery: vst_review::TerminalDeliveryHandle,
 }
 
 impl std::fmt::Debug for SessionRoutes {
@@ -654,6 +658,7 @@ impl Clone for SessionRoutes {
             // Shared `Arc` — never `Default`, or cancel/in-progress would not
             // see the flag registered by the request's own clone.
             reset_cancels: self.reset_cancels.clone(),
+            terminal_delivery: self.terminal_delivery.clone(),
         }
     }
 }
@@ -1813,6 +1818,9 @@ impl SessionRoutes {
                 self.prune_notice_and_forget(id, session.parent_session_id.as_deref());
                 self.forget_activity(id);
                 // No FK to cascade — drop the session's scheduled messages here.
+                // The terminal delivery owner hears about them first (it stops
+                // their jobs and reports each one gone).
+                self.terminal_delivery.on_session_removed(id).await;
                 let _ = self.store.delete_scheduled_messages_for_session(id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.to_string(),
@@ -1956,6 +1964,9 @@ impl SessionRoutes {
                 self.prune_notice_and_forget(&id, session.parent_session_id.as_deref());
                 self.forget_activity(&id);
                 // No FK to cascade — drop the session's scheduled messages here.
+                // The terminal delivery owner hears about them first (it stops
+                // their jobs and reports each one gone).
+                self.terminal_delivery.on_session_removed(&id).await;
                 let _ = self.store.delete_scheduled_messages_for_session(&id).await;
                 self.broadcaster.send(ServerEvent::SessionDeleted {
                     session_id: id.clone(),
@@ -3787,6 +3798,14 @@ impl SessionRoutes {
             }
         }
 
+        // Held terminal deliveries must leave the old session BEFORE it is
+        // archived: afterwards a poll would resolve it `gone` and fail them.
+        // Their jobs stop and immediate sends fail; schedule rows stay claimed
+        // and `waiting` (so the poller cannot re-claim one for the old session)
+        // until `reassign_scheduled_messages` below un-claims and moves them in
+        // one statement. A failed archive re-arms them in place.
+        self.terminal_delivery.stop_for_reset(&session.id).await;
+
         // --- Step 7: archive + replacement in one locked mutation -----------
         // `handoffSummary` is the summary for `summary`, absent otherwise.
         let archived_summary = if carry_over == CarryOver::Summary {
@@ -3804,7 +3823,7 @@ impl SessionRoutes {
         let new_id_c = new_id.clone();
         let handoff_text_c = archived_summary.clone();
         let carry_over_c = carry_over;
-        let updated_project = self
+        let mutated = self
             .store
             .mutate_project(&project_id, move |p| {
                 // Re-check inside the locked mutation: a summary can hold this
@@ -3865,20 +3884,26 @@ impl SessionRoutes {
                 p.direct_sessions.push(rec);
                 Ok(p.clone())
             })
-            .await
-            .map_err(|e| {
+            .await;
+        let updated_project = match mutated {
+            Ok(p) => p,
+            Err(e) => {
                 // The export above may have created the new session's data dir; a
                 // failed mutation means no replacement record exists, so remove it
                 // (the same AgentPaths the carry used) to avoid leaking an orphaned
                 // store (plan 2.5).
-                let _ = std::fs::remove_dir_all(&new_dir);
+                let _ = tokio::fs::remove_dir_all(&new_dir).await;
+                self.terminal_delivery
+                    .rearm_after_failed_reset(&session.id)
+                    .await;
                 let msg = e.to_string();
-                if msg.contains("Session already archived") {
+                return Err(if msg.contains("Session already archived") {
                     ResetError::Archived("Session already archived".to_string())
                 } else {
                     ResetError::Internal(msg)
-                }
-            })?;
+                });
+            }
+        };
 
         // The pin the locked mutation actually moved is authoritative for
         // everything downstream (swap, snapshot, spawn opts) — not the
@@ -5758,30 +5783,51 @@ impl SessionRoutes {
             ));
         }
 
-        if session_channel(pre_session.channel, Some(pre_session.use_tmux)) != Channel::Json {
-            return Err(ChatRouteError::NotJson(
-                "Scheduling requires a Rich Chat (json) session".to_string(),
+        // What kind of target is this? Rich Chat (json) and Terminal (tmux agent)
+        // sessions can be scheduled; plain shells and pty sessions cannot.
+        if pre_session.r#type != SessionType::Agent {
+            return Err(ChatRouteError::NotSchedulable(
+                "Scheduling isn't available for plain terminal sessions".to_string(),
             ));
         }
-        if body.message.len() > MAX_SCHEDULED_MESSAGE_BYTES {
-            return Err(ChatRouteError::BadRequest(format!(
-                "A scheduled message can be at most {} KB",
-                MAX_SCHEDULED_MESSAGE_BYTES / 1024
-            )));
-        }
-        if body.message.trim().is_empty() && body.attachment_ids.is_empty() {
-            return Err(ChatRouteError::BadRequest(
-                "A scheduled message needs text or an attachment".to_string(),
-            ));
-        }
+        let (channel_col, message) =
+            match session_channel(pre_session.channel, Some(pre_session.use_tmux)) {
+                Channel::Json => {
+                    if body.message.len() > MAX_SCHEDULED_MESSAGE_BYTES {
+                        return Err(ChatRouteError::BadRequest(format!(
+                            "A scheduled message can be at most {} KB",
+                            MAX_SCHEDULED_MESSAGE_BYTES / 1024
+                        )));
+                    }
+                    if body.message.trim().is_empty() && body.attachment_ids.is_empty() {
+                        return Err(ChatRouteError::BadRequest(
+                            "A scheduled message needs text or an attachment".to_string(),
+                        ));
+                    }
+                    ("json", body.message.clone())
+                }
+                Channel::Tmux => (
+                    "tmux",
+                    terminal_schedule_message(
+                        pre_session,
+                        &body.message,
+                        !body.attachment_ids.is_empty(),
+                    )?,
+                ),
+                Channel::Pty => {
+                    return Err(ChatRouteError::NotSchedulable(
+                        "Scheduling isn't available for this session's channel".to_string(),
+                    ));
+                }
+            };
         let now_str = vst_lifecycle::util::now_iso();
         let fire_at = normalize_future_fire_at(&body.fire_at, &now_str)?;
         let pending = self
             .store
-            .list_pending_scheduled_messages(id)
+            .count_pending_schedule_rows(id)
             .await
             .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
-        if pending.len() >= vst_store::MAX_PENDING_SCHEDULED as usize {
+        if pending >= vst_store::MAX_PENDING_SCHEDULED {
             return Err(ChatRouteError::BadRequest(format!(
                 "Too many scheduled messages for this session (max {})",
                 vst_store::MAX_PENDING_SCHEDULED
@@ -5813,10 +5859,13 @@ impl SessionRoutes {
             .insert_scheduled_message(
                 &msg_id,
                 id,
-                &body.message,
+                &message,
                 attachments_json.as_deref(),
                 &fire_at,
                 &now_str,
+                Some(channel_col),
+                None,
+                Some("schedule"),
             )
             .await
             .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
@@ -5836,18 +5885,67 @@ impl SessionRoutes {
         session_id: &str,
         msg_id: &str,
     ) -> Result<(), ChatRouteError> {
-        let cancelled = self
+        let internal = |e: StoreError| ChatRouteError::Internal(format!("store error: {e}"));
+        // A tmux row's cancel goes through the delivery owner: it also stops the
+        // job and tells the outcome observer. Everything else is a store delete.
+        let is_tmux_row = self
             .store
-            .cancel_scheduled_message(msg_id, session_id)
+            .get_scheduled_message(msg_id)
             .await
-            .map_err(|e| ChatRouteError::Internal(format!("store error: {e}")))?;
-        if !cancelled {
-            return Err(ChatRouteError::TurnNotFound(format!(
-                "Scheduled message '{msg_id}' not found or not pending"
-            )));
+            .map_err(internal)?
+            .is_some_and(|r| r.session_id == session_id && r.channel.as_deref() == Some("tmux"));
+        let outcome = if is_tmux_row {
+            self.terminal_delivery
+                .cancel_row(session_id, msg_id)
+                .await
+                .map_err(internal)?
+        } else {
+            self.store
+                .cancel_scheduled_message(msg_id, session_id)
+                .await
+                .map_err(internal)?
+        };
+        match outcome {
+            vst_store::CancelOutcome::Deleted => {}
+            vst_store::CancelOutcome::InFlight => {
+                return Err(ChatRouteError::AlreadyDelivering(format!(
+                    "Scheduled message '{msg_id}' is already being delivered"
+                )));
+            }
+            vst_store::CancelOutcome::NotFound => {
+                return Err(ChatRouteError::TurnNotFound(format!(
+                    "Scheduled message '{msg_id}' not found or not pending"
+                )));
+            }
         }
-        self.broadcast_scheduled_meta(session_id).await;
+        // The delivery owner already announced a tmux row's removal.
+        if !is_tmux_row {
+            self.broadcast_scheduled_meta(session_id).await;
+        }
         Ok(())
+    }
+
+    /// `GET /sessions/:id/schedule` — the session's whole scheduled-send state
+    /// (the same lists `session:scheduled` carries), for a client that has no
+    /// chat subscription (a Terminal pane) or just (re)connected.
+    pub async fn schedule_list(
+        &self,
+        id: &str,
+    ) -> Result<vst_types::rest::sessions::ScheduleSnapshotDto, ChatRouteError> {
+        match find_session_context(&self.store, id).await {
+            Some(SessionContext::Worktree { .. }) | Some(SessionContext::Direct { .. }) => {}
+            _ => {
+                return Err(ChatRouteError::NotFound(format!(
+                    "Session '{id}' not found"
+                )))
+            }
+        }
+        let st = vst_agents::json_agent_chat::read_schedule_state(&self.store, id).await;
+        Ok(vst_types::rest::sessions::ScheduleSnapshotDto {
+            scheduled_sends: st.sends,
+            scheduled_failed: st.failed,
+            scheduled_sent: st.sent,
+        })
     }
 
     /// `POST /sessions/:id/schedule/:msgId/edit` — reschedule a pending
@@ -5876,7 +5974,9 @@ impl SessionRoutes {
     }
 
     /// `POST /sessions/:id/schedule/:msgId/send-now` — deliver a pending
-    /// scheduled message immediately, bypassing the wall-clock delay. Behaves
+    /// scheduled message immediately, bypassing the wall-clock delay. The claim
+    /// also sets the row's `fireAt` to now ("due now"; a restart re-arm then
+    /// fires it immediately). Behaves
     /// exactly like the user pressing Send on freshly typed text (steer a
     /// running turn when possible, otherwise queue).
     pub async fn schedule_send_now(
@@ -5895,6 +5995,14 @@ impl SessionRoutes {
                     "Scheduled message '{msg_id}' not found or not pending"
                 ))
             })?;
+
+        // A Terminal session: the delivery owner takes over (it still waits for
+        // the agent to be ready; "now" never interrupts a busy agent). It writes
+        // and announces every outcome itself.
+        if vst_lifecycle::schedule_poller::is_terminal_session(&self.store, session_id).await {
+            self.terminal_delivery.fire(row).await;
+            return Ok(());
+        }
 
         // Same bound as the poller: a stuck agent must not hold the claim forever
         // (the row would then be neither pending nor failed until the next boot).
@@ -5926,7 +6034,7 @@ impl SessionRoutes {
                 // Keep the message (as failed → Retry / Dismiss) rather than losing it.
                 let _ = self
                     .store
-                    .mark_scheduled_message_failed(msg_id, &reason, &now_str)
+                    .mark_scheduled_message_failed(msg_id, &reason, None, &now_str)
                     .await;
                 Err(ChatRouteError::BadRequest(reason))
             }
@@ -6972,6 +7080,81 @@ pub struct ChatActionResult {
 /// session's whole scheduled state to its subscribers, so bodies are bounded.
 const MAX_SCHEDULED_MESSAGE_BYTES: usize = 64 * 1024;
 
+/// Largest Terminal schedule message, measured AFTER control-character
+/// stripping (the exact bytes that would be pasted).
+const MAX_TERMINAL_MESSAGE_BYTES: usize = vst_review::MAX_PASTE_BYTES;
+
+/// The Terminal-specific create rules, in order: not done, not exited, a mode
+/// whose plugin has proven Terminal delivery, no attachments, then the text
+/// itself (stripped, non-empty, ≤ 32 KB, single-line unless the CLI takes
+/// multi-line pastes). Returns the stripped text to store: it is exactly what
+/// will be pasted and shown.
+fn terminal_schedule_message(
+    session: &SessionRecord,
+    raw: &str,
+    has_attachments: bool,
+) -> Result<String, ChatRouteError> {
+    match session.lifecycle.state {
+        LifecycleState::Done => {
+            return Err(ChatRouteError::Done("Agent is marked done".to_string()))
+        }
+        LifecycleState::Exited => {
+            return Err(ChatRouteError::AgentExited(
+                "Agent isn't running, so a message can't be scheduled".to_string(),
+            ))
+        }
+        _ => {}
+    }
+    let mode = session
+        .mode_id
+        .as_deref()
+        .and_then(find_mode)
+        .ok_or_else(|| {
+            ChatRouteError::TerminalDeliveryUnsupported(
+                "This agent's mode no longer exists".to_string(),
+            )
+        })?;
+    let caps = resolve_plugin(mode.cli)
+        .terminal_delivery()
+        .ok_or_else(|| {
+            ChatRouteError::TerminalDeliveryUnsupported(
+                "Scheduling isn't supported for this agent yet".to_string(),
+            )
+        })?;
+    if has_attachments {
+        return Err(ChatRouteError::BadRequest(
+            "Attachments aren't supported on Terminal agents".to_string(),
+        ));
+    }
+    check_terminal_text(raw, caps)
+}
+
+/// Strip, then require: non-empty, ≤ 32 KB, and single-line unless the CLI
+/// takes multi-line pastes. Returns the text to store.
+fn check_terminal_text(
+    raw: &str,
+    caps: vst_types::terminal_delivery::TerminalDeliveryCaps,
+) -> Result<String, ChatRouteError> {
+    let text = vst_review::sanitize_paste_text(raw);
+    if text.trim().is_empty() {
+        return Err(ChatRouteError::BadRequest(
+            "A scheduled message needs text".to_string(),
+        ));
+    }
+    if text.len() > MAX_TERMINAL_MESSAGE_BYTES {
+        return Err(ChatRouteError::BadRequest(format!(
+            "A scheduled message for a Terminal agent can be at most {} KB",
+            MAX_TERMINAL_MESSAGE_BYTES / 1024
+        )));
+    }
+    if !caps.multiline_ok && text.contains('\n') {
+        return Err(ChatRouteError::BadRequest(
+            "Multi-line messages aren't supported for this agent yet".to_string(),
+        ));
+    }
+    Ok(text)
+}
+
 /// Parse an RFC 3339 timestamp (any UTC offset), normalise it to the
 /// `YYYY-MM-DDTHH:MM:SSZ` form the store compares as text against
 /// `now_iso()`, and require that it lies in the future.
@@ -7023,8 +7206,16 @@ pub enum ChatRouteError {
     UnknownModel(String),
     /// 502 — the CLI's live model list couldn't be fetched to validate against.
     ModelListUnavailable(String),
-    /// 409 — model switch on a `done` session.
+    /// 409 — model switch on a `done` session, or scheduling onto one.
     Done(String),
+    /// 400 — the Terminal agent has exited; nothing to schedule onto.
+    AgentExited(String),
+    /// 400 — this session kind can't be scheduled (plain shell, pty).
+    NotSchedulable(String),
+    /// 400 — the agent's CLI has no proven Terminal delivery (or its mode is gone).
+    TerminalDeliveryUnsupported(String),
+    /// 409 — cancel of a scheduled message whose paste is already in flight.
+    AlreadyDelivering(String),
     /// 500 — internal failure.
     Internal(String),
 }
@@ -7081,6 +7272,32 @@ pub enum TranscriptError {
 }
 
 impl ChatRouteError {
+    /// Stable machine-readable code (SCREAMING_SNAKE variant name) shipped as
+    /// `{ error, code }` so the UI never string-matches the message.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ChatRouteError::NotFound(_) => "NOT_FOUND",
+            ChatRouteError::BadRequest(_) => "BAD_REQUEST",
+            ChatRouteError::Archived(_) => "ARCHIVED",
+            ChatRouteError::AttachmentNotFound(_) => "ATTACHMENT_NOT_FOUND",
+            ChatRouteError::AttachmentsRequireJson(_) => "ATTACHMENTS_REQUIRE_JSON",
+            ChatRouteError::NotRunning(_) => "NOT_RUNNING",
+            ChatRouteError::NoActiveTurn(_) => "NO_ACTIVE_TURN",
+            ChatRouteError::NotJson(_) => "NOT_JSON",
+            ChatRouteError::TurnNotFound(_) => "TURN_NOT_FOUND",
+            ChatRouteError::NotEditing(_) => "NOT_EDITING",
+            ChatRouteError::TurnNotQueued(_) => "TURN_NOT_QUEUED",
+            ChatRouteError::UnknownModel(_) => "UNKNOWN_MODEL",
+            ChatRouteError::ModelListUnavailable(_) => "MODEL_LIST_UNAVAILABLE",
+            ChatRouteError::Done(_) => "DONE",
+            ChatRouteError::AgentExited(_) => "AGENT_EXITED",
+            ChatRouteError::NotSchedulable(_) => "NOT_SCHEDULABLE",
+            ChatRouteError::TerminalDeliveryUnsupported(_) => "TERMINAL_DELIVERY_UNSUPPORTED",
+            ChatRouteError::AlreadyDelivering(_) => "ALREADY_DELIVERING",
+            ChatRouteError::Internal(_) => "INTERNAL",
+        }
+    }
+
     /// Map a `resolve_json_agent` error to the route's status. Mirrors the TS
     /// `reason === "not_found" ? 404 : 400` mapping (mode-resolution failures
     /// are thrown in TS and surface as 500 via the try/catch).
@@ -7602,6 +7819,72 @@ mod schedule_fire_at_tests {
         // Textually "…T09:00:00+05:30" > NOW, but it is 03:30Z — in the past relative to 05:00Z.
         assert!(
             normalize_future_fire_at("2026-10-07T09:00:00+05:30", "2026-10-07T05:00:00Z").is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod terminal_text_tests {
+    use super::{check_terminal_text, ChatRouteError, MAX_TERMINAL_MESSAGE_BYTES};
+    use vst_types::terminal_delivery::TerminalDeliveryCaps;
+
+    fn caps(multiline_ok: bool) -> TerminalDeliveryCaps {
+        TerminalDeliveryCaps {
+            settle_ms: 200,
+            multiline_ok,
+            raw_lf: false,
+        }
+    }
+
+    fn bad_request(r: Result<String, ChatRouteError>) -> String {
+        match r {
+            Err(ChatRouteError::BadRequest(m)) => m,
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strips_control_characters_from_the_stored_text() {
+        assert_eq!(
+            check_terminal_text("a\u{1b}[0m b\u{7}", caps(true)).unwrap(),
+            "a[0m b"
+        );
+    }
+
+    #[test]
+    fn rejects_text_that_is_empty_after_stripping() {
+        for raw in ["", "   ", "\u{1b}\u{7}  \u{200b}"] {
+            assert!(bad_request(check_terminal_text(raw, caps(true))).contains("needs text"));
+        }
+    }
+
+    #[test]
+    fn cap_is_measured_after_stripping_and_exact_at_the_boundary() {
+        let exact = "x".repeat(MAX_TERMINAL_MESSAGE_BYTES);
+        assert_eq!(
+            check_terminal_text(&exact, caps(true)).unwrap().len(),
+            MAX_TERMINAL_MESSAGE_BYTES
+        );
+        let over = "x".repeat(MAX_TERMINAL_MESSAGE_BYTES + 1);
+        assert!(bad_request(check_terminal_text(&over, caps(true))).contains("32 KB"));
+        // Control characters do not count toward the cap.
+        let padded = format!(
+            "{}{}",
+            "x".repeat(MAX_TERMINAL_MESSAGE_BYTES),
+            "\u{1b}".repeat(100)
+        );
+        assert!(check_terminal_text(&padded, caps(true)).is_ok());
+    }
+
+    #[test]
+    fn multiline_only_when_the_cli_takes_it() {
+        assert_eq!(check_terminal_text("a\nb", caps(true)).unwrap(), "a\nb");
+        // CRLF is normalised to LF first, so it is still multi-line.
+        assert!(bad_request(check_terminal_text("a\r\nb", caps(false)))
+            .contains("Multi-line messages aren't supported"));
+        assert_eq!(
+            check_terminal_text("one line", caps(false)).unwrap(),
+            "one line"
         );
     }
 }

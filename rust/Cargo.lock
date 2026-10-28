@@ -3129,6 +3129,7 @@ dependencies = [
  "vst-lifecycle",
  "vst-lsp",
  "vst-proc",
+ "vst-review",
  "vst-routes",
  "vst-rpc",
  "vst-store",
@@ -3227,6 +3228,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vst-review"
+version = "0.0.3-beta"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vst-proc",
+ "vst-store",
+ "vst-types",
+]
+
+[[package]]
 name = "vst-routes"
 version = "0.0.3-beta"
 dependencies = [
@@ -3250,6 +3266,7 @@ dependencies = [
  "vst-lifecycle",
  "vst-lsp",
  "vst-proc",
+ "vst-review",
  "vst-store",
  "vst-tasks",
  "vst-types",

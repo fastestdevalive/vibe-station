@@ -13,6 +13,7 @@ import { useResetProgress } from "@/hooks/useResetProgress";
 import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { useLimitsStore, __resetLimitsBootForTests as resetLimits } from "@/hooks/useLimits";
 import { useBulkWorktrees } from "@/components/bulk-worktrees/useBulkWorktrees";
+import { useScheduleDevOverride } from "@/components/schedule/scheduleDevOverride";
 import { __resetForDemo as resetBulkRunner } from "@/components/bulk-worktrees/useBulkWorktreeActions";
 import { __resetForDemo as resetSessionReset } from "@/hooks/useSessionReset";
 import { useMarkdownStyleStore, __resetForDemo as resetMarkdownStyle, reapplyMarkdownStyle } from "@/hooks/useMarkdownStyle";
@@ -38,6 +39,7 @@ export const APP_STORES = [
   useLimitsStore,
   useBulkWorktrees,
   useTaskStore,
+  useScheduleDevOverride,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

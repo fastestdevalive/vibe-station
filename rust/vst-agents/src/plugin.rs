@@ -30,7 +30,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    Channel, LimitsResult, NormalizedEvent, ProjectRecord, SessionRecord, WorktreeRecord,
+    Channel, LimitsResult, NormalizedEvent, PaneSnapshot, ProjectRecord, SessionRecord,
+    TerminalDeliveryCaps, TerminalReadiness, WorktreeRecord,
 };
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
@@ -360,6 +361,25 @@ pub trait AgentPlugin: Send + Sync {
     /// Whether this plugin can run in the JSON (Rich Chat) channel.
     fn supports_json(&self) -> bool {
         false
+    }
+
+    /// How a scheduled message is delivered into this CLI's Terminal (tmux)
+    /// pane, or `None` (default) when it cannot be: an unproven CLI is never
+    /// pasted into. Return `Some` only once [`AgentPlugin::terminal_readiness`]
+    /// is proven against captured pane fixtures for this CLI (ready, working and
+    /// approval states) and a paste followed by Enter is known to submit.
+    /// Surfaces as `supportsTerminalDelivery` on `GET /supported-clis`.
+    fn terminal_delivery(&self) -> Option<TerminalDeliveryCaps> {
+        None
+    }
+
+    /// Judge, from the visible pane and cursor, whether the CLI is at its
+    /// prompt with an empty input box. Contract: pure and cheap (called every
+    /// 500 ms), never `Ready` unless the input is provably empty and idle, and
+    /// `AwaitingApproval` for any dialog waiting on the human (the daemon never
+    /// answers it). Default `Unknown`: never ready.
+    fn terminal_readiness(&self, _pane: &PaneSnapshot) -> TerminalReadiness {
+        TerminalReadiness::Unknown
     }
 
     /// ACP migration marker: true once this plugin drives a persistent ACP

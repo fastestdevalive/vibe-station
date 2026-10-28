@@ -388,6 +388,11 @@ export function useChat(
     // snapshot, which could overwrite fresher live turn state): patch only the
     // scheduled fields. `chat:open` sends the meta first and then a
     // `session:scheduled` with the full state, so there is always a meta to patch.
+    // `scheduledSends` / `scheduledFailed` are mirrored here only to keep the
+    // meta shape whole: NO component reads them. The scheduled strip and the
+    // Terminal Schedule button read `useScheduledSends` (components/schedule/),
+    // the one client copy of that state. Only `scheduledTurnIds` has a reader
+    // here: it badges fired scheduled turns in the transcript.
     const offScheduled = chatRepo.on("session:scheduled", (e) => {
       if (e.type !== "session:scheduled" || e.sessionId !== sessionId) return;
       setMeta((prev) =>
