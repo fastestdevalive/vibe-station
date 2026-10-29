@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
+import type { DoctorHintDto, TunnelState } from "@/api/types";
 import { RemoteAccessSetting } from "./RemoteAccessSetting";
 
 // The stateless HMAC auth redesign removed the per-session list (AuthSession,
@@ -311,5 +312,291 @@ describe("RemoteAccessSetting", () => {
 
     expect(await screen.findByText("Change this from localhost on the host machine")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow access" })).toBeDisabled();
+  });
+});
+
+// ── cloudflared install guidance (phase 2) ────────────────────────────────────
+// The daemon no longer bundles cloudflared: it locates an installed one and the
+// card guides installation from the daemon's hint table (never hardcoded here).
+describe("RemoteAccessSetting — cloudflared install guidance", () => {
+  const INSTALL_HINT: DoctorHintDto = {
+    title: "cloudflared is not installed",
+    why: "Remote access needs the cloudflared binary.",
+    commands: [
+      { os: "macos", command: "brew install cloudflared" },
+      {
+        os: "linux",
+        command:
+          "sudo mkdir -p --mode=0755 /usr/share/keyrings\n" +
+          "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null\n" +
+          "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list\n" +
+          "sudo apt-get update && sudo apt-get install cloudflared",
+      },
+      {
+        os: "linux",
+        command:
+          "curl -fsSL https://pkg.cloudflare.com/cloudflared.repo | sudo tee /etc/yum.repos.d/cloudflared.repo >/dev/null && sudo yum install cloudflared",
+      },
+      { os: "windows", command: "winget install --id Cloudflare.cloudflared" },
+    ],
+    docsUrl:
+      "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/",
+    action: null,
+  };
+
+  function notInstalled(hostOs: string): TunnelState {
+    return {
+      enabled: false,
+      tunnelUrl: null,
+      binary: { state: "not_installed" },
+      hostOs,
+      installHint: INSTALL_HINT,
+    };
+  }
+
+  const CASES: Array<[string, RegExp]> = [
+    ["macos", /brew install cloudflared/],
+    ["linux", /sudo apt-get install cloudflared/],
+    ["windows", /winget install --id Cloudflare\.cloudflared/],
+  ];
+
+  it.each(CASES)("2.T1 — not_installed on %s shows its commands and hides Enable tunnel", async (hostOs, command) => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue(notInstalled(hostOs));
+    render(<RemoteAccessSetting api={api} />);
+
+    expect(await screen.findByText(/cloudflared isn't installed on this machine/)).toBeInTheDocument();
+    expect(screen.getByText(command)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable tunnel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-check" })).toBeInTheDocument();
+  });
+
+  it("2.T1 — Linux shows both the apt and the RHEL blocks", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue(notInstalled("linux"));
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByText(/cloudflared isn't installed on this machine/);
+    expect(screen.getByText(/sudo apt-get install cloudflared/)).toBeInTheDocument();
+    expect(screen.getByText(/sudo yum install cloudflared/)).toBeInTheDocument();
+  });
+
+  it("2.T2 — Re-check re-runs the status call and flips to Enable tunnel", async () => {
+    const api = createMockApi();
+    const getStatus = vi
+      .spyOn(api, "getTunnelStatus")
+      .mockResolvedValueOnce(notInstalled("macos"))
+      .mockResolvedValueOnce({
+        enabled: false,
+        tunnelUrl: null,
+        binary: { state: "installed", path: "/opt/homebrew/bin/cloudflared", version: "2026.1.0" },
+        hostOs: "macos",
+      });
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Re-check" }));
+    expect(await screen.findByRole("button", { name: "Enable tunnel" })).toBeInTheDocument();
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(getStatus).toHaveBeenCalledWith({ binary: true });
+  });
+
+  it("2.T3 — Re-check resumes a persisted enabled tunnel exactly once", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus")
+      .mockResolvedValueOnce({ ...notInstalled("macos"), enabled: true })
+      .mockResolvedValueOnce({
+        enabled: true,
+        tunnelUrl: null,
+        binary: { state: "installed", path: "/opt/homebrew/bin/cloudflared", version: "2026.1.0" },
+        hostOs: "macos",
+      });
+    const enableSpy = vi
+      .spyOn(api, "enableTunnel")
+      .mockResolvedValue({ enabled: true, tunnelUrl: "https://resumed.trycloudflare.com" });
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByText(/Your tunnel will resume once cloudflared is installed/);
+    await user.click(screen.getByRole("button", { name: "Re-check" }));
+    await waitFor(() => expect(enableSpy).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/resumed\.trycloudflare\.com/)).toBeInTheDocument();
+  });
+
+  it("2.T3 — Re-check does not resume while cloudflared is still missing", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus")
+      .mockResolvedValueOnce({ ...notInstalled("macos"), enabled: true })
+      .mockResolvedValueOnce({ ...notInstalled("macos"), enabled: true });
+    const enableSpy = vi.spyOn(api, "enableTunnel");
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Re-check" }));
+    await waitFor(() => expect(api.getTunnelStatus).toHaveBeenCalledTimes(2));
+    expect(enableSpy).not.toHaveBeenCalled();
+  });
+
+  it("2.T4 — unusable shows the path, the error and the hint, no Enable button", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({
+      enabled: false,
+      tunnelUrl: null,
+      binary: { state: "unusable", path: "/opt/homebrew/bin/cloudflared", error: "Exec format error" },
+      hostOs: "macos",
+      installHint: INSTALL_HINT,
+    });
+    render(<RemoteAccessSetting api={api} />);
+
+    expect(await screen.findByText(/Exec format error/)).toBeInTheDocument();
+    expect(screen.getByText("/opt/homebrew/bin/cloudflared")).toBeInTheDocument();
+    expect(screen.getByText(/brew install cloudflared/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable tunnel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-check" })).toBeInTheDocument();
+  });
+
+  it("2.T5 — an older daemon without `binary` still renders the Enable tunnel card", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    render(<RemoteAccessSetting api={api} />);
+    expect(await screen.findByRole("button", { name: "Enable tunnel" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-check" })).not.toBeInTheDocument();
+  });
+
+  it("2.T5 — installed keeps the existing Enable tunnel card and shows the located binary", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({
+      enabled: false,
+      tunnelUrl: null,
+      binary: { state: "installed", path: "/usr/local/bin/cloudflared", version: "2026.1.0" },
+      hostOs: "linux",
+    });
+    render(<RemoteAccessSetting api={api} />);
+    expect(await screen.findByRole("button", { name: "Enable tunnel" })).toBeInTheDocument();
+    expect(screen.queryByText(/cloudflared isn't installed/)).not.toBeInTheDocument();
+    // Which cloudflared vst will spawn (verify-fix-loop V1).
+    expect(screen.getByText("cloudflared 2026.1.0 at /usr/local/bin/cloudflared")).toBeInTheDocument();
+  });
+
+  it("2.T6 — the tunnel status is not polled (no timer shorter than the existing 30s session refresh)", async () => {
+    const intervalSpy = vi.spyOn(globalThis, "setInterval");
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue(notInstalled("linux"));
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByText(/cloudflared isn't installed on this machine/);
+    // The only intervals this component owns are the pre-existing 30s
+    // session-presence refresh and testing-library's own 50ms `waitFor`
+    // waiter. Anything else shorter than 30s would be a status poll.
+    const polls = intervalSpy.mock.calls.filter(
+      ([fn, delay]) =>
+        typeof delay === "number" &&
+        delay < 30_000 &&
+        !String(fn).includes("checkRealTimersCallback"),
+    );
+    expect(polls).toHaveLength(0);
+  });
+
+  it("2.T7 — a pending enabled row (no URL) enables, never disables, and mount alone never enables", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({
+      enabled: true,
+      tunnelUrl: null,
+      binary: { state: "installed", path: "/usr/local/bin/cloudflared", version: "2026.1.0" },
+      hostOs: "linux",
+    });
+    const enableSpy = vi
+      .spyOn(api, "enableTunnel")
+      .mockResolvedValue({ enabled: true, tunnelUrl: "https://pending.trycloudflare.com" });
+    const disableSpy = vi.spyOn(api, "disableTunnel").mockResolvedValue(undefined);
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByRole("button", { name: "Enable tunnel" });
+    expect(enableSpy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Enable tunnel" }));
+    expect(enableSpy).toHaveBeenCalledTimes(1);
+    expect(disableSpy).not.toHaveBeenCalled();
+    expect(await screen.findByText(/pending\.trycloudflare\.com/)).toBeInTheDocument();
+  });
+
+  it("2.T7 — a 409 cloudflared_not_installed on enable re-reads the status instead of only toasting", async () => {
+    const api = createMockApi();
+    const getStatus = vi
+      .spyOn(api, "getTunnelStatus")
+      .mockResolvedValueOnce({
+        enabled: false,
+        tunnelUrl: null,
+        binary: { state: "installed", path: "/usr/local/bin/cloudflared", version: "2026.1.0" },
+        hostOs: "linux",
+      })
+      .mockResolvedValueOnce(notInstalled("linux"));
+    vi.spyOn(api, "enableTunnel").mockRejectedValue(
+      new ApiError(JSON.stringify({ error: "cloudflared not installed — run: vst doctor", code: "cloudflared_not_installed" }), 409, "cloudflared_not_installed"),
+    );
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Enable tunnel" }));
+    expect(await screen.findByText(/cloudflared isn't installed on this machine/)).toBeInTheDocument();
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("an active tunnel wins over a binary that later reports not_installed", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({
+      enabled: true,
+      tunnelUrl: "https://x.trycloudflare.com",
+      binary: { state: "not_installed" },
+      hostOs: "macos",
+      installHint: INSTALL_HINT,
+    });
+    render(<RemoteAccessSetting api={api} />);
+
+    // The live tunnel's URL, Disable and QR stay available...
+    expect(await screen.findByText(/x\.trycloudflare\.com/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show QR" })).toBeInTheDocument();
+    // ...and the binary problem is a secondary warning inside the active card,
+    // not a replacement for it (no install guidance / Re-check-only card).
+    expect(screen.getByText(/cloudflared isn't installed on this machine/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-check" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/brew install cloudflared/)).not.toBeInTheDocument();
+  });
+
+  it("Don't resume clears the persisted intent while cloudflared is missing", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ ...notInstalled("macos"), enabled: true });
+    const disableSpy = vi.spyOn(api, "disableTunnel").mockResolvedValue(undefined);
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByText(/Your tunnel will resume once cloudflared is installed/);
+    await user.click(screen.getByRole("button", { name: "Don't resume" }));
+    await waitFor(() => expect(disableSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByText(/Your tunnel will resume once cloudflared is installed/)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("refetches the tunnel status on every ws:open, including the first after mount", async () => {
+    const api = createMockApi();
+    const getStatus = vi.spyOn(api, "getTunnelStatus").mockResolvedValue(notInstalled("macos"));
+    const wsOpenHandlers: Array<(e: unknown) => void> = [];
+    const realOn = api.on.bind(api);
+    vi.spyOn(api, "on").mockImplementation(((type: string, h: (e: never) => void) => {
+      if (type === "ws:open") wsOpenHandlers.push(h as (e: unknown) => void);
+      return realOn(type as never, h as never);
+    }) as typeof api.on);
+    render(<RemoteAccessSetting api={api} />);
+
+    await screen.findByText(/cloudflared isn't installed on this machine/);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(wsOpenHandlers.length).toBeGreaterThan(0);
+
+    // The settings panel mounts long after the socket's first connect, so its
+    // first observed ws:open is already a real reconnect — it must refetch.
+    act(() => wsOpenHandlers.forEach((h) => h({ type: "ws:open" })));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
   });
 });

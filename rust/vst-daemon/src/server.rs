@@ -4488,13 +4488,23 @@ async fn handle_auth_tunnel_disable(
         .map_err(mobile_auth_err_to_response)
 }
 
+/// Query of `GET /api/auth/tunnel/status`: `?binary=1` asks the daemon to
+/// locate + probe `cloudflared` (only the Remote Access panel does; the
+/// dashboard's 30s poll must not spawn a process).
+#[derive(serde::Deserialize)]
+struct TunnelStatusQuery {
+    binary: Option<String>,
+}
+
 async fn handle_auth_tunnel_status(
     State(state): State<AppState>,
+    Query(q): Query<TunnelStatusQuery>,
 ) -> Result<Json<vst_types::rest::mobile_auth::TunnelStatus>, (StatusCode, Json<serde_json::Value>)>
 {
+    let include_binary = matches!(q.binary.as_deref(), Some("1" | "true"));
     state
         .mobile_auth_routes
-        .tunnel_status()
+        .tunnel_status(include_binary)
         .await
         .map(Json)
         .map_err(mobile_auth_err_to_response)
@@ -4777,6 +4787,20 @@ fn mobile_auth_err_to_response(err: MobileAuthRouteError) -> (StatusCode, Json<s
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "No network interface found" })),
         ),
+        MobileAuthRouteError::CloudflaredNotInstalled => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "cloudflared not installed — run: vst doctor",
+                "code": "cloudflared_not_installed"
+            })),
+        ),
+        MobileAuthRouteError::CloudflaredUnusable { path, error } => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("cloudflared at {path} is unusable: {error}"),
+                "code": "cloudflared_unusable"
+            })),
+        ),
         MobileAuthRouteError::RateLimitExceeded => (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({ "error": "Rate limit exceeded" })),
@@ -4793,6 +4817,39 @@ fn mobile_auth_err_to_response(err: MobileAuthRouteError) -> (StatusCode, Json<s
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
         ),
+    }
+}
+
+#[cfg(test)]
+mod mobile_auth_error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn cloudflared_errors_are_409_with_a_machine_readable_code() {
+        let (status, Json(body)) =
+            mobile_auth_err_to_response(MobileAuthRouteError::CloudflaredNotInstalled);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "cloudflared_not_installed");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("vst doctor")),
+            "the message should point at the install path: {body}"
+        );
+
+        let (status, Json(body)) =
+            mobile_auth_err_to_response(MobileAuthRouteError::CloudflaredUnusable {
+                path: "/opt/homebrew/bin/cloudflared".to_string(),
+                error: "Exec format error".to_string(),
+            });
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "cloudflared_unusable");
+        let message = body["error"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("/opt/homebrew/bin/cloudflared"),
+            "{message}"
+        );
+        assert!(message.contains("Exec format error"), "{message}");
     }
 }
 

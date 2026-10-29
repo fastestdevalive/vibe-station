@@ -45,12 +45,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# TARGETARCH is amd64/arm64 (BuildKit) — an amd64 binary on an arm64 (Apple
-# Silicon) Docker VM would fail with "Exec format error".
+# TARGETARCH is amd64/arm64 (BuildKit), used by the harness installs below.
 ARG TARGETARCH
-RUN curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${TARGETARCH:-amd64}" \
-    -o /usr/local/bin/cloudflared \
-  && chmod +x /usr/local/bin/cloudflared
 
 # @anthropic-ai/claude-code: the Linux `claude` CLI, installed in-image so the
 # sandbox never mounts the host's binary (a macOS host's is Mach-O -> ENOEXEC).

@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
@@ -117,6 +117,27 @@ describe("DashboardPanel", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
     });
+  });
+
+  it("2.T8 — a persisted enabled tunnel with no URL reads as off, and the poll does not probe the binary", async () => {
+    const api = createMockApi();
+    const getStatus = vi
+      .spyOn(api, "getTunnelStatus")
+      .mockResolvedValue({ enabled: true, tunnelUrl: null });
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/tunnel off/i)).toBeInTheDocument();
+    });
+    expect(getStatus).toHaveBeenCalled();
+    for (const call of getStatus.mock.calls) {
+      expect(call[0]).toBeUndefined();
+    }
   });
 
   it("renders working and idle sections (6.6 split), with finished hidden until toggled", async () => {

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# prep-sidecar.sh — Build the merged vst binary (CLI + daemon) and cloudflared
-# for the host triple, then copy them into desktop/src-tauri/binaries/ for
-# Tauri to bundle.
+# prep-sidecar.sh — Build the merged vst binary (CLI + daemon) for the host
+# triple, then copy it into desktop/src-tauri/binaries/ for Tauri to bundle.
 #
 # Usage (called automatically by tauri.conf.json beforeBuildCommand):
 #   scripts/prep-sidecar.sh
@@ -15,13 +14,11 @@
 #      (cargo build --release) — one binary is both the CLI and, via
 #      `vst daemon run`, the daemon; see rust/vst-cli/src/dispatch.rs.
 #   4. Copy rust/target/release/vst → desktop/src-tauri/binaries/vst-<triple>
-#   5. Download cloudflared for the host triple →
-#      desktop/src-tauri/binaries/cloudflared-<triple>
-#   6. Install the vendored claude-agent-acp adapter
+#   5. Install the vendored claude-agent-acp adapter
 #      (vendor/claude-acp/node_modules, via install-claude-acp-vendor.sh) —
 #      tauri.conf.json's bundle.resources ships it as
 #      claude-acp-vendor/node_modules, so it must exist before bundling.
-#   7. Compile the codex-acp adapter (bun build --compile) →
+#   6. Compile the codex-acp adapter (bun build --compile) →
 #      desktop/src-tauri/binaries/codex-acp-<triple>
 #
 # Tauri resolves externalBin entries by appending the host triple, so the
@@ -122,13 +119,7 @@ cp "$SRC_CLI" "$DEST_CLI"
 chmod +x "$DEST_CLI"
 echo "    $(du -h "$DEST_CLI" | cut -f1)  $DEST_CLI"
 
-# ── Step 5: download cloudflared ─────────────────────────────────────────────
-
-echo ""
-echo "==> Downloading cloudflared for $TRIPLE..."
-bash "$SCRIPT_DIR/download-cloudflared.sh" --target "$TRIPLE"
-
-# ── Step 6: install the vendored claude-agent-acp adapter ────────────────────
+# ── Step 5: install the vendored claude-agent-acp adapter ────────────────────
 # Not a binary, but staged here anyway so this script stays the single "make
 # every bundle input exist" step `beforeBuildCommand` runs — Tauri reads
 # bundle.resources only after beforeBuildCommand finishes, and a missing
@@ -142,7 +133,7 @@ echo ""
 echo "==> Installing vendored claude-agent-acp adapter..."
 VST_VENDOR_FROZEN=1 bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
 
-# ── Step 7: compile the codex-acp adapter (bun build --compile) ──────────────
+# ── Step 6: compile the codex-acp adapter (bun build --compile) ──────────────
 # A self-contained executable staged as
 # binaries/codex-acp-<triple>, which Tauri places beside `vst` at runtime where
 # the daemon finds it (rust/vst-agents/src/codex.rs `codex_acp_bin`). Host

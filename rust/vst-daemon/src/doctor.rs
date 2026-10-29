@@ -5,7 +5,7 @@
 //! - tmux on PATH
 //! - git >= 2.20
 //! - supported CLIs (claude, cursor, opencode, agy) on PATH (warn if missing)
-//! - cloudflared (bundled via VST_CLOUDFLARED_BIN or on PATH)
+//! - cloudflared (located by `vst_lifecycle::cloudflared::locate`, not bundled)
 //! - tailscale on PATH
 //! - orphan tmux sessions (vr-* whose project/session is not in store)
 //! - orphan worktree dirs (in store manifest but missing directory on disk)
@@ -216,41 +216,37 @@ pub fn check_daemon_reachable() -> DoctorCheck {
     }
 }
 
-pub fn check_cloudflared() -> DoctorCheck {
-    if let Ok(bin) = std::env::var("VST_CLOUDFLARED_BIN") {
-        let p = Path::new(&bin);
-        if p.exists() {
-            return DoctorCheck {
-                name: "cloudflared".to_string(),
-                status: DoctorStatus::Ok,
-                required: false,
-                group: CheckGroup::Optional,
-                message: format!("cloudflared found at {bin} (bundled)"),
-                resolved_path: Some(bin),
-                ..Default::default()
-            };
-        }
-    }
-    if let Some(path) = resolve_bin_path("cloudflared") {
-        DoctorCheck {
-            name: "cloudflared".to_string(),
-            status: DoctorStatus::Ok,
-            required: false,
-            group: CheckGroup::Optional,
-            message: "cloudflared found on PATH".to_string(),
-            resolved_path: Some(path),
-            ..Default::default()
-        }
-    } else {
-        DoctorCheck {
-            name: "cloudflared".to_string(),
-            status: DoctorStatus::Warn,
-            required: false,
-            group: CheckGroup::Optional,
-            message: "cloudflared not found on PATH".to_string(),
-            resolved_path: None,
-            ..Default::default()
-        }
+/// Doctor wording for a located `cloudflared` (pure — the caller awaits the
+/// locator, mirroring `check_tailscale_binary`).
+pub fn check_cloudflared_binary(
+    binary: vst_types::rest::mobile_auth::CloudflaredBinary,
+) -> DoctorCheck {
+    use vst_types::rest::mobile_auth::CloudflaredBinary as B;
+    let mk = |status, message: String, resolved_path| DoctorCheck {
+        name: "cloudflared".to_string(),
+        status,
+        required: false,
+        group: CheckGroup::Optional,
+        message,
+        resolved_path,
+        ..Default::default()
+    };
+    match binary {
+        B::Installed { path, version } => mk(
+            DoctorStatus::Ok,
+            format!("cloudflared {version} at {path}"),
+            Some(path),
+        ),
+        B::NotInstalled => mk(
+            DoctorStatus::Warn,
+            "cloudflared not installed".to_string(),
+            None,
+        ),
+        B::Unusable { path, error } => mk(
+            DoctorStatus::Warn,
+            format!("cloudflared at {path} is unusable: {error}"),
+            Some(path),
+        ),
     }
 }
 
@@ -673,15 +669,28 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         );
     }
 
-    // 6. cloudflared (Optional, false — bundled via VST_CLOUDFLARED_BIN on desktop)
+    // 6. cloudflared (Optional, false). Located async (PATH + shell PATH +
+    // well-known dirs) and probed with a bounded `--version`; the outer budget is
+    // the probe's own timeout + 1s, so a hung binary reports its specific
+    // `unusable` message instead of losing to this generic timeout.
     checks.push(
-        with_timeout(
-            "cloudflared",
-            CheckGroup::Optional,
-            false,
-            check_cloudflared,
+        match tokio::time::timeout(
+            vst_lifecycle::cloudflared::locate::PROBE_TIMEOUT + Duration::from_secs(1),
+            vst_lifecycle::cloudflared::locate::resolve(),
         )
-        .await,
+        .await
+        {
+            Ok(binary) => check_cloudflared_binary(binary),
+            Err(_) => DoctorCheck {
+                name: "cloudflared".to_string(),
+                status: DoctorStatus::Timeout,
+                required: false,
+                group: CheckGroup::Optional,
+                message: "cloudflared timed out".to_string(),
+                resolved_path: None,
+                ..Default::default()
+            },
+        },
     );
 
     // 7. tailscale (Optional, false). Located async (it may probe the user's shell for
@@ -872,10 +881,6 @@ pub async fn build_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Mutex to serialize tests that mutate environment variables.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // 3.T1
     #[test]
@@ -916,34 +921,59 @@ mod tests {
 
     // 3.T3
     #[test]
-    fn check_cloudflared_with_bundled_env_var() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let temp_path = temp_file.path().to_string_lossy().to_string();
-        std::env::set_var("VST_CLOUDFLARED_BIN", &temp_path);
-        let check = check_cloudflared();
-        std::env::remove_var("VST_CLOUDFLARED_BIN");
-
+    fn check_cloudflared_installed_reports_path_and_version() {
+        let check =
+            check_cloudflared_binary(vst_types::rest::mobile_auth::CloudflaredBinary::Installed {
+                path: "/opt/homebrew/bin/cloudflared".to_string(),
+                version: "2025.1.0".to_string(),
+            });
         assert_eq!(check.status, DoctorStatus::Ok);
-        assert!(
-            check.message.contains("bundled"),
-            "Expected message to contain 'bundled', got: {}",
-            check.message
+        assert_eq!(check.name, "cloudflared");
+        assert!(!check.required);
+        assert_eq!(check.group, CheckGroup::Optional);
+        assert_eq!(
+            check.message,
+            "cloudflared 2025.1.0 at /opt/homebrew/bin/cloudflared"
         );
-        assert_eq!(check.install_hint, None);
-        assert_eq!(check.hint, None);
-        assert_eq!(check.resolved_path, Some(temp_path));
+        assert_eq!(
+            check.resolved_path.as_deref(),
+            Some("/opt/homebrew/bin/cloudflared")
+        );
     }
 
     // 3.T4
     #[test]
-    fn check_cloudflared_unset_falls_through_to_path() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("VST_CLOUDFLARED_BIN");
-        let check = check_cloudflared();
-        if check.status != DoctorStatus::Ok {
-            assert_eq!(check.resolved_path, None);
-        }
+    fn check_cloudflared_not_installed_is_an_optional_warning() {
+        let check =
+            check_cloudflared_binary(vst_types::rest::mobile_auth::CloudflaredBinary::NotInstalled);
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert!(!check.required, "cloudflared is optional");
+        assert_eq!(check.group, CheckGroup::Optional);
+        assert_eq!(check.resolved_path, None);
+    }
+
+    #[test]
+    fn check_cloudflared_unusable_warns_with_the_error() {
+        let check =
+            check_cloudflared_binary(vst_types::rest::mobile_auth::CloudflaredBinary::Unusable {
+                path: "/usr/local/bin/cloudflared".to_string(),
+                error: "Exec format error".to_string(),
+            });
+        assert_eq!(check.status, DoctorStatus::Warn);
+        assert!(
+            check.message.contains("Exec format error"),
+            "{}",
+            check.message
+        );
+        assert!(
+            check.message.contains("/usr/local/bin/cloudflared"),
+            "{}",
+            check.message
+        );
+        assert_eq!(
+            check.resolved_path.as_deref(),
+            Some("/usr/local/bin/cloudflared")
+        );
     }
 
     // 3.T8

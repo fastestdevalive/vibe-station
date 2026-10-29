@@ -59,7 +59,7 @@ via tmux (session processes) + SQLite (metadata).
 | `rust/vst-lsp`, `rust/vst-proc`, `rust/vst-ws`, `rust/vst-rpc`, `rust/vst-types` | Language-server integration, process/tmux control, WebSocket plumbing, internal RPC, shared types. |
 | `rust/vst-cli` | The `vst` CLI binary — full scripting surface, drives the same REST API the UI uses. |
 | `web-ui/` | React 19 + Vite frontend (`@vibestation/web`). Served by the daemon; renders identically in the desktop shell and the browser. |
-| `desktop/` | Tauri v2 shell (`@vibe-station/desktop`). Rust + system webview; supervises the bundled `vst`/`cloudflared` sidecars (the `vst` binary is the merged CLI+daemon built with `--features vst-daemon/embed-ui`). |
+| `desktop/` | Tauri v2 shell (`@vibe-station/desktop`). Rust + system webview; supervises the bundled `vst` sidecar (the `vst` binary is the merged CLI+daemon built with `--features vst-daemon/embed-ui`). |
 
 ## The daemon
 
@@ -92,8 +92,8 @@ several agents at once without them colliding.
   supervision + a pre-minted `tauriToken` injected into the webview (no login
   screen).
 - **Browser / mobile** — same web UI; mobile layout collapses to a single
-  column; optional remote access via bundled `cloudflared` tunnel or the
-  local network (QR pairing).
+  column; optional remote access via a `cloudflared` tunnel (install
+  `cloudflared` separately) or the local network (QR pairing).
 - **CLI** (`vst`) — full scripting surface (`vst project/worktree/session/mode/...`)
   driving the same REST API as the UI.
 
@@ -117,8 +117,8 @@ loads from Vite; the daemon also serves `web-ui/dist` to any other client.
 **`pnpm build`** — Tauri release build. `scripts/prep-sidecar.sh` builds
 the web UI first, then runs `cargo build --release -p vst-cli
 --features vst-daemon/embed-ui` which produces a **single merged `vst` binary**
-(CLI + daemon + embedded web UI). It copies `vst` and `cloudflared` into
-`desktop/src-tauri/binaries/` as Tauri sidecars, then bundles everything into a
+(CLI + daemon + embedded web UI). It copies `vst` into
+`desktop/src-tauri/binaries/` as a Tauri sidecar, then bundles everything into a
 distributable `.app` / `.deb` / `.AppImage` — no Docker, no separate install step
 for end users.
 

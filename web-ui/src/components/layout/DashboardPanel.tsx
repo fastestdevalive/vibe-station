@@ -371,9 +371,12 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   const [tunnelEnabled, setTunnelEnabled] = useState(false);
 
   const fetchHeaderStats = useCallback(async () => {
+    // No `binary` option: this polls every 30s, so it must not probe cloudflared.
     const tunnelState = await api.getTunnelStatus().catch(() => null);
     if (tunnelState) {
-      setTunnelEnabled(tunnelState.enabled);
+      // A persisted `enabled:true` with no URL means no tunnel is running
+      // (e.g. cloudflared is not installed) — the header must not claim one is.
+      setTunnelEnabled(tunnelState.enabled && !!tunnelState.tunnelUrl);
     }
   }, [api]);
 

@@ -152,10 +152,24 @@ static OMP_BUN: HintSpec = HintSpec {
     action: None,
     fallback_text: None,
 };
+/// Cloudflare's apt repo ("Any Debian Based Distribution" block, verbatim from
+/// pkg.cloudflare.com).
+const CLOUDFLARED_LINUX_APT: &str = "sudo mkdir -p --mode=0755 /usr/share/keyrings\ncurl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null\necho 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list\nsudo apt-get update && sudo apt-get install cloudflared";
+/// Cloudflare's yum repo for RHEL/Fedora.
+const CLOUDFLARED_LINUX_RPM: &str = "curl -fsSL https://pkg.cloudflare.com/cloudflared.repo | sudo tee /etc/yum.repos.d/cloudflared.repo >/dev/null && sudo yum install cloudflared";
+
 static CLOUDFLARED: HintSpec = HintSpec {
-    why: "Optional. Public share links use a Cloudflare tunnel.",
-    commands: &[(HintOs::Macos, "brew install cloudflared")],
-    docs_url: Some("https://developers.cloudflare.com/cloudflared/"),
+    why: "Optional. Public share links use a Cloudflare quick tunnel — install cloudflared to enable Remote Access.",
+    commands: &[
+        (HintOs::Macos, "brew install cloudflared"),
+        (HintOs::Linux, CLOUDFLARED_LINUX_APT),
+        (HintOs::Linux, CLOUDFLARED_LINUX_RPM),
+        (
+            HintOs::Windows,
+            "winget install --id Cloudflare.cloudflared",
+        ),
+    ],
+    docs_url: Some("https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/"),
     action: None,
     fallback_text: None,
 };
@@ -447,14 +461,45 @@ mod tests {
         assert!(hint_for("github-cli", "linux")
             .unwrap()
             .starts_with("sudo mkdir -p -m 755 /etc/apt/keyrings"));
+    }
+
+    #[test]
+    fn cloudflared_hints_cover_every_os() {
         assert_eq!(
             hint_for("cloudflared", "macos"),
             Some("brew install cloudflared")
         );
-        assert_eq!(hint_for("cloudflared", "linux"), None);
+        // Two Linux entries (apt + RHEL): `hint_for` returns the first, the DTO
+        // carries both so `DoctorHintBlock` renders two copy blocks.
+        assert!(hint_for("cloudflared", "linux")
+            .unwrap()
+            .contains("pkg.cloudflare.com"));
         assert_eq!(
-            hint_dto("cloudflared").unwrap().docs_url.as_deref(),
-            Some("https://developers.cloudflare.com/cloudflared/")
+            hint_for("cloudflared", "windows"),
+            Some("winget install --id Cloudflare.cloudflared")
+        );
+
+        let dto = hint_dto("cloudflared").unwrap();
+        let oses: Vec<HintOs> = dto.commands.iter().map(|c| c.os).collect();
+        assert!(oses.contains(&HintOs::Macos), "{oses:?}");
+        assert!(oses.contains(&HintOs::Windows), "{oses:?}");
+        let linux: Vec<&str> = dto
+            .commands
+            .iter()
+            .filter(|c| c.os == HintOs::Linux)
+            .map(|c| c.command.as_str())
+            .collect();
+        assert_eq!(linux.len(), 2, "apt + RHEL entries: {linux:?}");
+        assert!(
+            linux[0].contains("apt-get install cloudflared"),
+            "{linux:?}"
+        );
+        assert!(linux[1].contains("cloudflared.repo"), "{linux:?}");
+        assert_eq!(
+            dto.docs_url.as_deref(),
+            Some(
+                "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/"
+            )
         );
     }
 
