@@ -18,7 +18,8 @@ use vst_routes::auth::{
     mint_token, verify_token, AuthRoutes, AuthState, BrowserSession, COOKIE_NAME,
 };
 use vst_routes::mobile_auth::{
-    check_mobile_auth_rate_limit, parse_device_name, MobileAuthRoutes, OneTimeCodeStore,
+    check_mobile_auth_rate_limit, cloudflared_error_to_route_error, parse_device_name,
+    MobileAuthRouteError, MobileAuthRoutes, OneTimeCodeStore,
 };
 use vst_routes::tailscale::TailscaleRoutes;
 use vst_types::domain::{TokenPayload, TokenScope, VerifyErrorReason, VerifyResult};
@@ -686,6 +687,167 @@ fn tailscale_qr_expires_at_serializes_as_a_number() {
     assert!(
         v["expiresAt"].is_number(),
         "client types.ts declares number: {v}"
+    );
+}
+
+// ── cloudflared binary discovery on the tunnel status/enable path (phase 1) ──
+
+/// `VST_CLOUDFLARED_BIN` is process-global; `locate::resolve` reads it.
+/// Async-aware: the route tests await the locator while holding it.
+static CF_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(unix)]
+fn fake_cloudflared(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join("cloudflared");
+    std::fs::write(&p, body).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+#[tokio::test]
+async fn tunnel_status_without_binary_flag_omits_the_new_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = vst_store::StoreHandle::open(&dir.path().join("t.db")).unwrap();
+    let routes = MobileAuthRoutes::new(None, OneTimeCodeStore::new(), 7421, true).with_store(store);
+
+    let status = routes.tunnel_status(false).await.unwrap();
+    assert!(status.binary.is_none());
+    assert!(status.host_os.is_none());
+    assert!(status.install_hint.is_none());
+    // Byte-compatible with the Node fixture (parity_harness.rs).
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        serde_json::json!({ "enabled": false, "tunnelUrl": null, "startedAt": null })
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tunnel_status_with_binary_flag_reports_installed_and_host_os() {
+    let _guard = CF_ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_cloudflared(
+        dir.path(),
+        "#!/bin/sh\necho 'cloudflared version 2025.1.0 (built x)'\n",
+    );
+    std::env::set_var("VST_CLOUDFLARED_BIN", &bin);
+
+    let store = vst_store::StoreHandle::open(&dir.path().join("t.db")).unwrap();
+    let routes = MobileAuthRoutes::new(None, OneTimeCodeStore::new(), 7421, true).with_store(store);
+    let status = routes.tunnel_status(true).await.unwrap();
+    std::env::remove_var("VST_CLOUDFLARED_BIN");
+
+    assert_eq!(
+        status.binary,
+        Some(vst_types::rest::mobile_auth::CloudflaredBinary::Installed {
+            path: bin.to_string_lossy().into_owned(),
+            version: "2025.1.0".to_string(),
+        })
+    );
+    assert_eq!(status.host_os.as_deref(), Some(std::env::consts::OS));
+    assert!(
+        status.install_hint.is_none(),
+        "an installed binary needs no install hint"
+    );
+}
+
+/// A missing/unusable binary (deterministic via an override pointing at a path
+/// that does not exist) fills the hint even on the `store: None` early return.
+#[tokio::test]
+async fn tunnel_status_reports_unusable_with_an_install_hint() {
+    let _guard = CF_ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-cloudflared-here");
+    std::env::set_var("VST_CLOUDFLARED_BIN", &missing);
+
+    let routes = MobileAuthRoutes::new(None, OneTimeCodeStore::new(), 7421, true);
+    let status = routes.tunnel_status(true).await.unwrap();
+    std::env::remove_var("VST_CLOUDFLARED_BIN");
+
+    assert!(
+        matches!(
+            status.binary,
+            Some(vst_types::rest::mobile_auth::CloudflaredBinary::Unusable { .. })
+        ),
+        "expected Unusable, got {:?}",
+        status.binary
+    );
+    let hint = status
+        .install_hint
+        .expect("install hint for a missing binary");
+    assert!(
+        !hint.commands.is_empty(),
+        "the hint must carry per-OS install commands"
+    );
+}
+
+#[test]
+fn cloudflared_errors_map_to_typed_route_errors() {
+    use vst_lifecycle::cloudflared::CloudflaredError;
+
+    assert_eq!(
+        cloudflared_error_to_route_error(CloudflaredError::NotInstalled),
+        MobileAuthRouteError::CloudflaredNotInstalled
+    );
+    assert_eq!(
+        cloudflared_error_to_route_error(CloudflaredError::Unusable {
+            path: "/opt/homebrew/bin/cloudflared".to_string(),
+            error: "Exec format error".to_string(),
+        }),
+        MobileAuthRouteError::CloudflaredUnusable {
+            path: "/opt/homebrew/bin/cloudflared".to_string(),
+            error: "Exec format error".to_string(),
+        }
+    );
+    assert!(
+        matches!(
+            cloudflared_error_to_route_error(CloudflaredError::Timeout),
+            MobileAuthRouteError::Internal(_)
+        ),
+        "unrelated tunnel errors stay internal"
+    );
+    assert_eq!(
+        MobileAuthRouteError::CloudflaredNotInstalled.error_code(),
+        "conflict"
+    );
+    assert_eq!(
+        MobileAuthRouteError::CloudflaredUnusable {
+            path: "/x".to_string(),
+            error: "boom".to_string(),
+        }
+        .error_code(),
+        "conflict"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn enable_tunnel_maps_an_unusable_binary_and_leaves_the_store_untouched() {
+    let _guard = CF_ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-cloudflared-here");
+    std::env::set_var("VST_CLOUDFLARED_BIN", &missing);
+
+    let store = vst_store::StoreHandle::open(&dir.path().join("t.db")).unwrap();
+    let routes = MobileAuthRoutes::new(
+        Some(AuthState::new("secret-daemon-key-12345", 0)),
+        OneTimeCodeStore::new(),
+        7421,
+        false,
+    )
+    .with_store(store.clone());
+    let err = routes.enable_tunnel(false).await.unwrap_err();
+    std::env::remove_var("VST_CLOUDFLARED_BIN");
+
+    assert!(
+        matches!(err, MobileAuthRouteError::CloudflaredUnusable { .. }),
+        "expected CloudflaredUnusable, got {err:?}"
+    );
+    assert_eq!(
+        store.get_tunnel_state().await,
+        vst_store::TunnelStateRow::empty(),
+        "a rejected enable must not persist anything"
     );
 }
 

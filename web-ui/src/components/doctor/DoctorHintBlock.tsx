@@ -32,9 +32,10 @@ export function DoctorHintBlock({ hint, hostOs, hostname }: DoctorHintBlockProps
     macos.map((c) => c.command).join("\n") !== linux.map((c) => c.command).join("\n");
 
   const [picked, setPicked] = useState<"macos" | "linux" | null>(null);
-  const selected: string = showSwitch
-    ? (picked ?? (hostOs === "macos" ? "macos" : "linux"))
-    : hostOs;
+  // A Windows host defaults to its own commands (the switch below is only the
+  // macOS/Linux pair); an explicit pick still wins.
+  const selected: string =
+    picked ?? (hostOs === "windows" ? "windows" : showSwitch ? (hostOs === "macos" ? "macos" : "linux") : hostOs);
   const shown = commandsFor(hint.commands, selected);
 
   return (

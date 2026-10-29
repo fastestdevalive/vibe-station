@@ -5,6 +5,8 @@ import QRCode from "qrcode";
 import type { ApiInstance } from "@/api";
 import type {
   AuthSession,
+  CloudflaredBinary,
+  DoctorHintDto,
   TunnelState,
   MobileQrResponse,
   LocalQrResponse,
@@ -14,6 +16,7 @@ import type {
 } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { DoctorHintBlock } from "@/components/doctor/DoctorHintBlock";
 import { ShellBlock } from "@/components/preview/ShellBlock";
 
 interface RemoteAccessSettingProps {
@@ -32,8 +35,7 @@ function formatRelative(ms: number): string {
 
 /**
  * ApiError.message is the raw response body, which for these routes is
- * `{"error":"…"}`. Surface the human-readable string instead of the JSON blob
- * (e.g. the "cloudflared not found — run vst doctor" hint).
+ * `{"error":"…"}`. Surface the human-readable string instead of the JSON blob.
  */
 function errMessage(err: unknown, fallback: string): string {
   if (!(err instanceof ApiError)) return fallback;
@@ -44,6 +46,25 @@ function errMessage(err: unknown, fallback: string): string {
     // not JSON — fall through to the raw message
   }
   return err.message || fallback;
+}
+
+/** Parsed JSON body of a daemon error response (`{}` when there is none). */
+function errBody(err: unknown): Record<string, unknown> {
+  if (!(err instanceof ApiError)) return {};
+  try {
+    return JSON.parse(err.message) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/** The 409 codes meaning "no usable cloudflared on this machine". */
+function isCloudflaredUnavailable(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    (err.code === "cloudflared_not_installed" || err.code === "cloudflared_unusable")
+  );
 }
 
 type ActiveQrType = {
@@ -290,8 +311,14 @@ function TunnelCard({
   truncatedUrl,
   qrLoading,
   toggling,
+  binary,
+  hostOs,
+  installHint,
+  rechecking,
   onShowQr,
   onToggle,
+  onDontResume,
+  onRecheck,
   error,
 }: {
   enabled: boolean;
@@ -299,10 +326,21 @@ function TunnelCard({
   truncatedUrl: string | null;
   qrLoading: boolean;
   toggling: boolean;
+  /** Only present when the daemon was asked to locate the binary (`binary: true`). */
+  binary?: CloudflaredBinary;
+  hostOs?: string | null;
+  installHint?: DoctorHintDto | null;
+  rechecking: boolean;
   onShowQr: () => void;
   onToggle: () => void;
+  /** Clear the persisted "enabled" intent while the binary is missing. */
+  onDontResume: () => void;
+  onRecheck: () => void;
   error: string | null;
 }) {
+  // Older daemons send no `binary` — fall through to the plain enable/active card.
+  const blocked = binary?.state === "not_installed" || binary?.state === "unusable";
+
   return (
     <div style={CARD_STYLE}>
       <div
@@ -319,9 +357,22 @@ function TunnelCard({
 
       {enabled && tunnelUrl ? (
         <>
+          {/* A live tunnel always wins: the binary can go missing/unusable after
+              it started, but the URL stays valid until that process stops. */}
           <StatusBox sentiment="ok">
             tunnel active · {truncatedUrl}
           </StatusBox>
+          {blocked && (
+            <StatusBox sentiment="warn">
+              {binary?.state === "unusable" ? (
+                <>
+                  cloudflared at <code className="selectable">{binary.path}</code> is unusable: {binary.error} — the running tunnel keeps working until it stops.
+                </>
+              ) : (
+                "cloudflared isn't installed on this machine — the running tunnel keeps working until it stops."
+              )}
+            </StatusBox>
+          )}
           {error && <StatusBox sentiment="error">{error}</StatusBox>}
           <CardActions>
             <button
@@ -343,8 +394,55 @@ function TunnelCard({
             </button>
           </CardActions>
         </>
+      ) : blocked ? (
+        <>
+          {binary?.state === "unusable" ? (
+            <StatusBox sentiment="warn">
+              cloudflared at <code className="selectable">{binary.path}</code> is unusable: {binary.error}
+            </StatusBox>
+          ) : (
+            <StatusBox sentiment="info">cloudflared isn't installed on this machine.</StatusBox>
+          )}
+          {enabled && (
+            <StatusBox sentiment="info">
+              Your tunnel will resume once cloudflared is installed.
+            </StatusBox>
+          )}
+          {installHint && <DoctorHintBlock hint={installHint} hostOs={hostOs ?? "linux"} />}
+          {error && <StatusBox sentiment="error">{error}</StatusBox>}
+          <CardActions>
+            {enabled && (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={toggling}
+                onClick={onDontResume}
+                style={{ fontWeight: "normal" }}
+              >
+                {toggling ? "…" : "Don't resume"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={rechecking}
+              onClick={onRecheck}
+            >
+              {rechecking ? "Checking…" : "Re-check"}
+            </button>
+          </CardActions>
+        </>
       ) : (
         <>
+          {/* Located binary: which cloudflared vst will actually spawn. */}
+          {binary?.state === "installed" && (
+            <div
+              className="selectable"
+              style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}
+            >
+              cloudflared {binary.version} at {binary.path}
+            </div>
+          )}
           <StatusBox sentiment="off">Tunnel off</StatusBox>
           {error && <StatusBox sentiment="error">{error}</StatusBox>}
           <CardActions>
@@ -628,6 +726,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [tunnel, setTunnel] = useState<TunnelState>({ enabled: false, tunnelUrl: null });
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // ── Network access state ────────────────────────────────────────────────────
@@ -675,9 +774,12 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [revokeSuccess, setRevokeSuccess] = useState(false);
 
   // ── Fetch tunnel status ─────────────────────────────────────────────────────
+  // `binary: true` makes the daemon locate + probe cloudflared (`?binary=1`).
+  // This page is the only caller that asks for it — see the Dashboard header,
+  // which polls the plain route every 30s and must not spawn a probe each time.
   const fetchStatus = useCallback(async () => {
     try {
-      const state = await api.getTunnelStatus();
+      const state = await api.getTunnelStatus({ binary: true });
       setTunnel(state);
       setError(null);
     } catch {
@@ -724,6 +826,16 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     void fetchSessions();
     void fetchNetwork();
   }, [fetchStatus, fetchSessions, fetchNetwork]);
+
+  // Refetch on every `ws:open` (like `useLimits`): the mount fetch above covers
+  // the case where the socket was already open before this panel mounted, and a
+  // reconnect can hide a binary installed meanwhile, or a tunnel that came up.
+  // No polling: every fetch probes `cloudflared --version`.
+  useEffect(() => {
+    return api.on("ws:open", () => {
+      void fetchStatus();
+    });
+  }, [api, fetchStatus]);
 
   // ── Refresh lastSeenAt periodically ────────────────────────────────────────
   useEffect(() => {
@@ -817,19 +929,77 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     setToggling(true);
     setError(null);
     try {
-      if (tunnel.enabled) {
+      // Branch on `enabled && tunnelUrl`: a persisted `enabled:true` with no
+      // running tunnel (binary was missing at boot) is still "off" for the user,
+      // so the button must enable, not disable.
+      if (tunnel.enabled && tunnel.tunnelUrl) {
         await api.disableTunnel();
-        setTunnel({ enabled: false, tunnelUrl: null });
+        setTunnel((prev) => ({ ...prev, enabled: false, tunnelUrl: null }));
         // Close QR overlay if it was a tunnel QR
         setActiveQr((prev) => (prev?.type === "tunnel" ? null : prev));
       } else {
         const result = await api.enableTunnel();
-        setTunnel({ enabled: result.enabled, tunnelUrl: result.tunnelUrl });
+        // Merge: keep `binary`/`hostOs`/`installHint` from the last status fetch.
+        setTunnel((prev) => ({ ...prev, enabled: result.enabled, tunnelUrl: result.tunnelUrl }));
       }
     } catch (err) {
-      setError(errMessage(err, "Failed to toggle tunnel."));
+      if (isCloudflaredUnavailable(err)) {
+        // The binary vanished between the status fetch and the click — re-read
+        // the status so the card switches to the install/unusable guidance.
+        void fetchStatus();
+      } else {
+        setError(errMessage(err, "Failed to toggle tunnel."));
+      }
     } finally {
       setToggling(false);
+    }
+  }
+
+  // ── Give up on a pending resume ─────────────────────────────────────────────
+  // While the binary is missing, a persisted `enabled:true` row means "resume
+  // once installed". This clears that intent (and the row) for good.
+  async function handleDontResume() {
+    setToggling(true);
+    setError(null);
+    try {
+      await api.disableTunnel();
+      setTunnel((prev) => ({ ...prev, enabled: false, tunnelUrl: null }));
+    } catch (err) {
+      setError(errMessage(err, "Failed to clear the pending tunnel."));
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  // ── Re-check the binary (the only auto-resume trigger) ──────────────────────
+  async function handleRecheck() {
+    setRechecking(true);
+    setError(null);
+    try {
+      const state = await api.getTunnelStatus({ binary: true });
+      setTunnel(state);
+      // Decision 5: a tunnel persisted as enabled whose binary went missing is
+      // resumed here and only here — never on mount/reconnect (several open
+      // tabs must not each fire enable; a remote client would get a 403).
+      if (state.binary?.state === "installed" && state.enabled && !state.tunnelUrl) {
+        try {
+          const result = await api.enableTunnel();
+          setTunnel((prev) => ({ ...prev, enabled: result.enabled, tunnelUrl: result.tunnelUrl }));
+        } catch (err) {
+          if (isCloudflaredUnavailable(err)) {
+            void fetchStatus();
+          } else if (err instanceof ApiError && err.status === 409 && typeof errBody(err).tunnelUrl === "string") {
+            // AlreadyEnabled — another tab won the race. That is success.
+            setTunnel((prev) => ({ ...prev, enabled: true, tunnelUrl: errBody(err).tunnelUrl as string }));
+          } else {
+            setError(errMessage(err, "Could not resume the tunnel."));
+          }
+        }
+      }
+    } catch {
+      setError("Could not reach daemon.");
+    } finally {
+      setRechecking(false);
     }
   }
 
@@ -1207,8 +1377,14 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           truncatedUrl={truncatedUrl}
           qrLoading={qrLoading === "tunnel"}
           toggling={toggling}
+          binary={tunnel.binary}
+          hostOs={tunnel.hostOs}
+          installHint={tunnel.installHint}
+          rechecking={rechecking}
           onShowQr={() => void openQr("tunnel")}
           onToggle={() => void handleToggleTunnel()}
+          onDontResume={() => void handleDontResume()}
+          onRecheck={() => void handleRecheck()}
           error={error ?? (qrError?.type === "tunnel" ? qrError.message : null)}
         />
 

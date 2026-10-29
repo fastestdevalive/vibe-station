@@ -47,14 +47,7 @@ fi
 BINARIES_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-CF_STUB="$BINARIES_DIR/cloudflared-$TRIPLE"
 VST_STUB="$BINARIES_DIR/vst-$TRIPLE"
-
-if [[ ! -f "$CF_STUB" ]]; then
-  printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$CF_STUB"
-  chmod +x "$CF_STUB"
-  echo "[dev-start] created cloudflared stub: $CF_STUB"
-fi
 
 if [[ ! -f "$VST_STUB" ]]; then
   printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$VST_STUB"

@@ -1910,8 +1910,10 @@ export function createClientApi() {
 
     // ── Mobile / tunnel ───────────────────────────────────────────────────────
 
-    async getTunnelStatus(): Promise<TunnelState> {
-      const res = await apiFetch(`${baseUrl()}/auth/tunnel/status`);
+    /** `binary: true` asks the daemon to locate + probe `cloudflared` (`?binary=1`). */
+    async getTunnelStatus(opts?: { binary?: boolean }): Promise<TunnelState> {
+      const query = opts?.binary ? "?binary=1" : "";
+      const res = await apiFetch(`${baseUrl()}/auth/tunnel/status${query}`);
       return parseJson<TunnelState>(res);
     },
 

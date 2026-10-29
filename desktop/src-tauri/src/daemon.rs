@@ -74,13 +74,8 @@ pub fn detect_running_daemon() -> Option<DaemonInfo> {
 /// Spawn the bundled vst sidecar (merged CLI+daemon binary, via `daemon run`)
 /// and wait for it to be ready. Returns DaemonInfo once the daemon is listening.
 ///
-/// `cloudflared_bin` — absolute path to the bundled cloudflared binary.
 /// `vst_bin` — absolute path to the bundled vst binary.
-pub fn spawn_daemon(
-    app_handle: &tauri::AppHandle,
-    cloudflared_bin: &Path,
-    vst_bin: &Path,
-) -> Result<DaemonInfo, String> {
+pub fn spawn_daemon(app_handle: &tauri::AppHandle, vst_bin: &Path) -> Result<DaemonInfo, String> {
     use tauri_plugin_shell::process::CommandEvent;
     use tauri_plugin_shell::ShellExt;
 
@@ -90,9 +85,6 @@ pub fn spawn_daemon(
     // user's persisted settings (defaultProjectsDir, auth token, etc.)
     let old_pid: Option<u32> = read_config().map(|c| c.pid);
 
-    let cloudflared_str = cloudflared_bin
-        .to_str()
-        .ok_or("cloudflared path is not valid UTF-8")?;
     let vst_bin_str = vst_bin.to_str().ok_or("vst_bin path is not valid UTF-8")?;
 
     // The bundled `vst` sidecar is the merged CLI+daemon binary — pass
@@ -102,7 +94,6 @@ pub fn spawn_daemon(
         .sidecar("vst")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
         .args(["daemon", "run"])
-        .env("VST_CLOUDFLARED_BIN", cloudflared_str)
         .env("VST_CLI_BIN", vst_bin_str);
 
     // NOTE: web-ui/dist is compiled into the `vst` binary via the `embed-ui`

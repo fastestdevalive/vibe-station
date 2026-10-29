@@ -103,7 +103,7 @@ curl -fsSL https://raw.githubusercontent.com/fastestdevalive/vibe-station/main/s
 
 The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re-run to upgrade. Options: `--version <tag>`, `--install-dir <dir>`, `--no-modify-path`.
 
-The `vst` binary contains the daemon and web UI; the desktop bundle adds `cloudflared` as a sidecar — you install neither Node.js nor pnpm.
+The `vst` binary contains the daemon and web UI; you install neither Node.js nor pnpm. The Cloudflare tunnel needs `cloudflared` installed separately (Settings → Remote access shows per-OS commands, e.g. `brew install cloudflared`).
 
 The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Claude and Codex adapters compiled with the bun runtime, so no bun or Node is needed). (agy Rich Chat needs no adapter binary: it runs as the hidden `vst agy-stream-acp` subcommand of `vst` itself.) They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `claude-acp` and `codex-acp` are glibc builds and are skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
 
@@ -169,7 +169,7 @@ A [Tauri v2](https://v2.tauri.app) shell (Rust + the system webview) around the 
 | Mode | How it works | When to use |
 |---|---|---|
 | **Same network** | QR pointing at a detected LAN or Tailscale address | Same network; nothing leaves it |
-| **Cloudflare tunnel** | Temporary public HTTPS URL via the bundled `cloudflared` | Off your network; also gives a secure context for PWA install |
+| **Cloudflare tunnel** | Temporary public HTTPS URL via your installed `cloudflared` (install separately — the Remote Access page guides you) | Off your network; also gives a secure context for PWA install |
 
 The daemon binds loopback by default. Toggle **Settings → Remote access → Same network** to listen on your LAN with no restart (it persists `allowNetworkAccess` in `~/.vibe-station/config.json`), or start with `VST_ALLOW_NETWORK=1` to set the initial state. Disabling the tunnel invalidates only tunnel-minted codes.
 
@@ -344,7 +344,7 @@ pnpm build:rust   # release `vst` binary (CLI + daemon + embedded UI)
 pnpm build        # desktop bundle (.deb / .AppImage on Linux, .dmg on macOS)
 ```
 
-Rust tests and lints: `cargo test` / `cargo clippy` from `rust/` (CI runs `rust/scripts/rust-gate.sh`). The desktop bundle expects the `vst` sidecar and `cloudflared` in `desktop/src-tauri/binaries/` (`scripts/prep-sidecar.sh`, `scripts/download-cloudflared.sh`).
+Rust tests and lints: `cargo test` / `cargo clippy` from `rust/` (CI runs `rust/scripts/rust-gate.sh`). The desktop bundle expects the `vst` sidecar in `desktop/src-tauri/binaries/` (`scripts/prep-sidecar.sh`).
 
 | Path | What it is |
 |---|---|
@@ -382,7 +382,7 @@ vst doctor
 
 ## Troubleshooting
 
-**`vst doctor`** is the first stop — it checks `tmux`, `git`, the agent CLIs on `PATH`, `cloudflared`, Tailscale, and whether a daemon is registered. It does not prove every API route works.
+**`vst doctor`** is the first stop — it checks `tmux`, `git`, the agent CLIs on `PATH`, `cloudflared` (install it separately, e.g. `brew install cloudflared`), Tailscale, and whether a daemon is registered. It does not prove every API route works.
 
 - **Daemon not starting** — `vst daemon status`, then `cat ~/.vibe-station/logs/daemon.log`.
 - **Port 7421 in use** — the daemon picks the next free port up to 7520; the one in use is in `~/.vibe-station/config.json`.
@@ -398,7 +398,7 @@ vst doctor
 
 Inspired by [agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator), [emdash](https://github.com/generalaction/emdash) and [claudecodeui](https://github.com/siteboon/claudecodeui), but built to be lightweight and local-first.
 
-- **Install and go** — one `vst` binary ships the daemon and web UI; the desktop bundle adds `cloudflared`.
+- **Install and go** — one `vst` binary ships the daemon and web UI; the Cloudflare tunnel uses a `cloudflared` you install yourself.
 - **Local-first, not cloud-optional** — state is a SQLite file on your disk, the daemon binds loopback, remote access is opt-in.
 - **Terminal *and* structured chat** — Rich Chat renders tool calls and thinking blocks while the tmux stream stays available for everything else.
 - **Agent-agnostic** — Claude Code, Cursor, OpenCode and agy through one plugin interface; mix them per worktree.

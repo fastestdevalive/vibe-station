@@ -12,9 +12,10 @@ use ring::rand::{SecureRandom, SystemRandom};
 use vst_lifecycle::cloudflared;
 use vst_store::StoreHandle;
 use vst_types::domain::TokenScope;
+use vst_types::rest::doctor_hints;
 use vst_types::rest::mobile_auth::{
-    ConnectionType, LocalQrResult, MobileQrResult, TunnelDisableResult, TunnelEnableResult,
-    TunnelStatus,
+    CloudflaredBinary, ConnectionType, LocalQrResult, MobileQrResult, TunnelDisableResult,
+    TunnelEnableResult, TunnelStatus,
 };
 use vst_types::ws::{RemoteSession, ServerMessage};
 use vst_ws::broadcaster::WsHub;
@@ -295,6 +296,10 @@ pub enum MobileAuthRouteError {
     NetworkAccessDisabled,
     #[error("No network interface found")]
     NoNetworkInterface,
+    #[error("cloudflared is not installed")]
+    CloudflaredNotInstalled,
+    #[error("cloudflared at {path} is unusable: {error}")]
+    CloudflaredUnusable { path: String, error: String },
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
     #[error("Missing code parameter")]
@@ -314,11 +319,26 @@ impl MobileAuthRouteError {
             Self::TunnelNotEnabled => "conflict",
             Self::NetworkAccessDisabled => "conflict",
             Self::NoNetworkInterface => "unavailable",
+            Self::CloudflaredNotInstalled | Self::CloudflaredUnusable { .. } => "conflict",
             Self::RateLimitExceeded => "rate_limit_exceeded",
             Self::MissingCode => "missing_code",
             Self::AuthNotConfigured => "auth_not_configured",
             Self::Internal(_) => "internal_error",
         }
+    }
+}
+
+/// Map a tunnel-owner error onto the route's typed errors: a missing/unusable
+/// binary is a 409 with a machine-readable `code`, everything else stays a 500.
+pub fn cloudflared_error_to_route_error(e: cloudflared::CloudflaredError) -> MobileAuthRouteError {
+    match e {
+        cloudflared::CloudflaredError::NotInstalled => {
+            MobileAuthRouteError::CloudflaredNotInstalled
+        }
+        cloudflared::CloudflaredError::Unusable { path, error } => {
+            MobileAuthRouteError::CloudflaredUnusable { path, error }
+        }
+        other => MobileAuthRouteError::Internal(other.to_string()),
     }
 }
 
@@ -433,7 +453,7 @@ impl MobileAuthRoutes {
 
         let url = cloudflared::enable(tunnel_port, store)
             .await
-            .map_err(|e| MobileAuthRouteError::Internal(e.to_string()))?;
+            .map_err(cloudflared_error_to_route_error)?;
 
         Ok(TunnelEnableResult {
             tunnel_url: url,
@@ -458,7 +478,28 @@ impl MobileAuthRoutes {
     }
 
     /// `GET /auth/tunnel/status`
-    pub async fn tunnel_status(&self) -> Result<TunnelStatus, MobileAuthRouteError> {
+    ///
+    /// `include_binary` (`?binary=1`) runs the locator + a bounded `--version`
+    /// probe and fills `binary` / `hostOs` / `installHint`; without it the three
+    /// fields stay `None` and are omitted from the body, so the dashboard's 30s
+    /// poll never spawns a process (Decision 6).
+    pub async fn tunnel_status(
+        &self,
+        include_binary: bool,
+    ) -> Result<TunnelStatus, MobileAuthRouteError> {
+        let binary = if include_binary {
+            Some(cloudflared::locate::resolve().await)
+        } else {
+            None
+        };
+        let host_os = include_binary.then(|| std::env::consts::OS.to_string());
+        let install_hint = match &binary {
+            Some(b) if !matches!(b, CloudflaredBinary::Installed { .. }) => {
+                doctor_hints::hint_dto("cloudflared")
+            }
+            _ => None,
+        };
+
         let store = match &self.store {
             Some(s) => s,
             None => {
@@ -466,6 +507,9 @@ impl MobileAuthRoutes {
                     enabled: false,
                     tunnel_url: None,
                     started_at: None,
+                    binary,
+                    host_os,
+                    install_hint,
                 })
             }
         };
@@ -475,6 +519,9 @@ impl MobileAuthRoutes {
             enabled: row.enabled,
             tunnel_url: row.current_url,
             started_at: row.started_at,
+            binary,
+            host_os,
+            install_hint,
         })
     }
 

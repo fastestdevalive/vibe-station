@@ -25,12 +25,6 @@ export const THIRD_PARTY_LICENSES: ThirdPartyLicense[] = [
     url: "https://github.com/oven-sh/bun",
   },
   {
-    name: "cloudflared",
-    role: "Remote-access tunnel, desktop app bundle only",
-    license: "Apache-2.0",
-    url: "https://github.com/cloudflare/cloudflared",
-  },
-  {
     name: "Geist",
     role: "UI typeface, self-hosted via @fontsource/geist",
     license: "OFL-1.1",

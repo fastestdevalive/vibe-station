@@ -1,10 +1,22 @@
 /** REST/WS types — see docs/ARCHITECTURE.md */
 
+/** Where the daemon found `cloudflared` (mirror of `vst-types` `CloudflaredBinary`). */
+export type CloudflaredBinary =
+  | { state: "installed"; path: string; version: string }
+  | { state: "not_installed" }
+  | { state: "unusable"; path: string; error: string };
+
 export interface TunnelState {
   enabled: boolean;
   tunnelUrl: string | null;
   /** Epoch ms when the current tunnel process was started, or null. */
   startedAt?: number | null;
+  /** Only present when fetched with `getTunnelStatus({ binary: true })`. */
+  binary?: CloudflaredBinary;
+  /** Daemon host OS ("macos" | "linux" | "windows"); only with `binary`. */
+  hostOs?: string | null;
+  /** Install commands, present only when `binary.state !== "installed"`. */
+  installHint?: DoctorHintDto | null;
 }
 
 export interface MobileQrResponse {

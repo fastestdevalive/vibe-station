@@ -46,11 +46,12 @@ def ensure_netns():
 
 
 def check_no_cloudflared(force):
-    # the daemon's boot-time cloudflared::sweep_orphans() kills EVERY process
-    # named cloudflared on the machine (vst-lifecycle/src/cloudflared.rs)
+    # the daemon's boot-time cloudflared::sweep_orphans() only kills processes
+    # whose command line is vst's own quick tunnel (`tunnel --url http://127.0.0.1:`);
+    # a user's own `cloudflared tunnel run` is left alone (vst-lifecycle/src/cloudflared.rs)
     r = subprocess.run(["pgrep", "-x", "cloudflared"], capture_output=True, text=True)
     if r.returncode == 0 and not force:
-        sys.exit("a cloudflared process is running; the daemon would kill it on boot. stop it or pass --force")
+        sys.exit("a cloudflared process is running; a vst quick tunnel would be killed on boot. stop it or pass --force")
 
 
 # ───────────────────────── /proc helpers ──────────────────────────

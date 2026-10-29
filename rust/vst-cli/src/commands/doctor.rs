@@ -147,11 +147,41 @@ fn print_hint(message: &str) {
     println!("\x1b[33m  →\x1b[0m {message}");
 }
 
-/// Print the shared table's fix-it command for a failing check (nothing if the
-/// table has none for this OS). One source with the daemon's `GET /api/doctor`.
+/// Print every fix-it command the shared table has for this check on this OS
+/// (nothing if the table has none). One source with the daemon's
+/// `GET /api/doctor`; a check with several commands for one OS (cloudflared's
+/// apt AND RHEL blocks on Linux) prints all of them, not just the first.
 fn print_table_hint(check_name: &str) {
-    if let Some(hint) = vst_types::rest::doctor_hints::hint_for(check_name, std::env::consts::OS) {
-        print_hint(hint);
+    use vst_types::rest::doctor::HintOs;
+
+    let Some(hint) = vst_types::rest::doctor_hints::hint_dto(check_name) else {
+        return;
+    };
+    let want = match std::env::consts::OS {
+        "macos" => HintOs::Macos,
+        "linux" => HintOs::Linux,
+        "windows" => HintOs::Windows,
+        _ => HintOs::Any,
+    };
+
+    let mut printed = false;
+    for command in hint.commands.iter().filter(|c| c.os == want) {
+        print_hint(&command.command);
+        printed = true;
+    }
+    if !printed {
+        for command in hint.commands.iter().filter(|c| c.os == HintOs::Any) {
+            print_hint(&command.command);
+            printed = true;
+        }
+    }
+    // A hint with no commands at all (e.g. agy) only has fallback text.
+    if !printed {
+        if let Some(text) =
+            vst_types::rest::doctor_hints::hint_for(check_name, std::env::consts::OS)
+        {
+            print_hint(text);
+        }
     }
 }
 
@@ -298,8 +328,21 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
         }
     }
 
-    if !check("cloudflared", || which("cloudflared")) {
-        print_table_hint("cloudflared");
+    // cloudflared is optional (Remote Access tunnel only): a warning, never a
+    // failure. Located like the daemon does (PATH + shell PATH + well-known
+    // dirs, `VST_CLOUDFLARED_BIN` authoritative), not a bare `which`.
+    match vst_lifecycle::cloudflared::locate::resolve().await {
+        vst_types::rest::mobile_auth::CloudflaredBinary::Installed { path, version } => {
+            println!("\x1b[32m✓\x1b[0m cloudflared {version} ({path})");
+        }
+        vst_types::rest::mobile_auth::CloudflaredBinary::NotInstalled => {
+            println!("\x1b[33m⚠\x1b[0m cloudflared not installed (optional)");
+            print_table_hint("cloudflared");
+        }
+        vst_types::rest::mobile_auth::CloudflaredBinary::Unusable { path, error } => {
+            println!("\x1b[33m⚠\x1b[0m cloudflared at {path} is unusable: {error} (optional)");
+            print_table_hint("cloudflared");
+        }
     }
 
     check_tailscale().await;

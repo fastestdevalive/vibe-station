@@ -2569,7 +2569,7 @@ export function createMockApi(seed: MockSeed = {}) {
     async checkAuthStatus(): Promise<"authed"> { return "authed"; },
 
     // Mobile / tunnel — stubs for mock mode
-    async getTunnelStatus(): Promise<TunnelState> { return tunnelState; },
+    async getTunnelStatus(_opts?: { binary?: boolean }): Promise<TunnelState> { return tunnelState; },
     async enableTunnel(): Promise<TunnelState & { tunnelUrl: string }> { return { enabled: true, tunnelUrl: "https://mock.trycloudflare.com" }; },
     async disableTunnel(): Promise<void> {},
     async getMobileQr(): Promise<MobileQrResponse> { return { qrUrl: "https://mock.trycloudflare.com/mobile-auth?code=mock", expiresAt: Date.now() + 30_000 }; },

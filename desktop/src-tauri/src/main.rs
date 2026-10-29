@@ -24,21 +24,6 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            let cloudflared_bin: PathBuf = app_handle
-                .path()
-                .resource_dir()
-                .ok()
-                .map(|dir| {
-                    let name = if cfg!(target_os = "windows") {
-                        "cloudflared.exe"
-                    } else {
-                        "cloudflared"
-                    };
-                    let p = dir.join(name);
-                    if p.exists() { p } else { PathBuf::from("cloudflared") }
-                })
-                .unwrap_or_else(|| PathBuf::from("cloudflared"));
-
             let vst_bin: PathBuf = app_handle
                 .path()
                 .resource_dir()
@@ -78,7 +63,7 @@ fn main() {
                 }
                 None => {
                     println!("[vst] no running daemon — spawning sidecar...");
-                    match daemon::spawn_daemon(&app_handle, &cloudflared_bin, &vst_bin) {
+                    match daemon::spawn_daemon(&app_handle, &vst_bin) {
                         Ok(info) => {
                             println!("[vst] daemon ready on port {}", info.port);
                             info
