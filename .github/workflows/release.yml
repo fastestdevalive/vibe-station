@@ -383,6 +383,7 @@ jobs:
           elif [ "${{ runner.os }}" = "macOS" ]; then
             # Stage dmg
             DMG_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n1)
+            bash scripts/recompress-dmg.sh "$DMG_SRC"   # zlib -> lzma (ULMO), ~20-25% smaller
             DMG_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.dmg"
             cp "$DMG_SRC" "$DMG_DEST"
             shasum -a 256 "$DMG_DEST" | cut -d' ' -f1 > "$DMG_DEST.sha256"

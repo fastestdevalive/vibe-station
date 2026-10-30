@@ -46,7 +46,10 @@ pin() { # pin <key>
     /^\[/ { cur = $0; next }
     cur == sec && $1 == key { sub(/^[^=]*=[ \t]*"/, ""); sub(/"[ \t]*$/, ""); print; exit }' "$PINS"
 }
-REPO="$(pin repo)"; REV="$(pin rev)"; MANIFEST="$(pin manifest)"; PKG="$(pin package)"; BIN_NAME="$(pin bin)"; UPSTREAM="$(pin upstream)"
+REPO="$(pin repo)"; REV="$(pin rev)"; MANIFEST="$(pin manifest)"; PKG="$(pin package)"; BIN_NAME="$(pin bin)"; UPSTREAM="$(pin upstream)"; PROFILE="$(pin profile)"
+[[ "$REV" =~ ^[0-9a-f]{40}$ ]] || { echo "Error: [$NAME] rev must be a full 40-char lowercase commit sha, got '$REV' (a branch/short sha is not a pin)" >&2; exit 1; }
+PROFILE_ENV=()   # CARGO_PROFILE_RELEASE_<KEY>=<value> overrides from pins.toml `profile`
+for kv in $PROFILE; do k="${kv%%=*}"; PROFILE_ENV+=("CARGO_PROFILE_RELEASE_$(echo "$k" | tr 'a-z-' 'A-Z_')=${kv#*=}"); done
 for v in REV MANIFEST PKG BIN_NAME UPSTREAM; do [[ -n "${!v}" ]] || { echo "Error: $v missing for [$NAME] in $PINS" >&2; exit 1; }; done
 
 # ── source ────────────────────────────────────────────────────────────────
@@ -65,11 +68,14 @@ if [[ "$USE_WORKTREE" == 1 ]]; then
   echo "WARNING: building the port's working tree as-is ($SRC @ $(git -C "$SRC" rev-parse --short HEAD), dirty=$([[ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]] && echo yes || echo no)); this is NOT the pinned rev $REV" >&2
 else
   SRC="${XDG_CACHE_HOME:-$HOME/.cache}/vibe-station/rust-acp-src/$NAME-$REV"  # outside rust/: cargo would treat a clone there as a stray workspace member
-  if [[ "$(git -C "$SRC" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$REV" ]]; then
+  # Reuse the cached clone only if it is exactly the pin AND has no tracked-file edits; otherwise
+  # re-clone into a temp dir and move it into place (two concurrent first-time builds never share a dir).
+  if [[ "$(git -C "$SRC" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$REV" || -n "$(git -C "$SRC" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
     echo "==> Cloning $REPO @ $REV ..." >&2
-    rm -rf "$SRC"; mkdir -p "$SRC"; git -C "$SRC" init -q; git -C "$SRC" remote add origin "$REPO"
-    git -C "$SRC" fetch -q origin "$REV" && git -C "$SRC" checkout -q FETCH_HEAD || {
-      rm -rf "$SRC"; echo "Error: cannot fetch $REV from $REPO (unpushed? point $REPO_ENV at a local clone that has it)" >&2; exit 1; }
+    TMP="$SRC.tmp.$$"; rm -rf "$TMP"; mkdir -p "$TMP"; git -C "$TMP" init -q; git -C "$TMP" remote add origin "$REPO"
+    git -C "$TMP" fetch -q origin "$REV" && git -C "$TMP" checkout -q FETCH_HEAD || {
+      rm -rf "$TMP"; echo "Error: cannot fetch $REV from $REPO (unpushed? point $REPO_ENV at a local clone that has it)" >&2; exit 1; }
+    rm -rf "$SRC"; mv "$TMP" "$SRC"
   fi
 fi
 
@@ -84,7 +90,7 @@ if [[ "$DOCKER" == 1 ]]; then
   docker run --rm --platform "linux/$ARCH" \
     -v "$SRC:/src:ro" -v "$OUT_DIR:/out" \
     -v vst-rust-acp-cargo:/usr/local/cargo/registry -v "vst-rust-acp-target-$NAME-$ARCH:/target" \
-    -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm \
+    -e CARGO_TARGET_DIR=/target $(for e in ${PROFILE_ENV[@]+"${PROFILE_ENV[@]}"}; do printf -- "-e %s " "$e"; done) -w /src rust:1-bookworm \
     sh -c "cargo build --release --locked --manifest-path $MANIFEST -p $PKG >&2 && cp /target/release/$BIN_NAME /out/${NAME}-acp" >&2
   BIN="$OUT_DIR/${NAME}-acp"
 else
@@ -92,7 +98,7 @@ else
   if [[ -n "$TRIPLE" ]]; then TARGET_ARGS=(--target "$TRIPLE"); REL="$TRIPLE/release"; fi
   OUT_DIR="$OUT_ROOT/${TRIPLE:-host}"; mkdir -p "$OUT_DIR"
   echo "==> cargo build ($NAME, ${TRIPLE:-host}) ..." >&2
-  cargo build --release --locked --manifest-path "$SRC/$MANIFEST" -p "$PKG" \
+  env ${PROFILE_ENV[@]+"${PROFILE_ENV[@]}"} cargo build --release --locked --manifest-path "$SRC/$MANIFEST" -p "$PKG" \
     --target-dir "$OUT_ROOT/cargo-target" ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} >&2
   cp "$OUT_ROOT/cargo-target/$REL/$BIN_NAME" "$OUT_DIR/${NAME}-acp"
   BIN="$OUT_DIR/${NAME}-acp"
@@ -100,19 +106,21 @@ fi
 [[ -x "$BIN" ]] || { echo "Error: expected $BIN after build" >&2; exit 1; }
 
 # ── assert the mirrored upstream level ────────────────────────────────────
-# Skipped only when the binary can't execute here (a foreign --target);
-# --docker binaries are run inside the build image.
-if [[ "$DOCKER" == 1 ]]; then
-  VER="$(docker run --rm --platform "linux/$ARCH" -v "$BIN:/x:ro" rust:1-bookworm /x --version 2>&1 | head -n1)" || VER=""
+# Mandatory whenever the binary can run here: --docker (run inside the build image) and host or
+# host-triple builds. Skipped only for a foreign --target, which cannot execute on this machine.
+CAN_RUN=1
+if [[ "$DOCKER" == 0 && -n "$TRIPLE" && "$TRIPLE" != "$(rustc -vV | sed -n 's/^host: //p')" ]]; then CAN_RUN=0; fi
+if [[ "$CAN_RUN" == 0 ]]; then
+  echo "==> $NAME-acp version not checked (foreign target $TRIPLE)" >&2
 else
-  VER="$("$BIN" --version 2>&1 | head -n1)" || VER=""
-fi
-if [[ -z "$VER" ]]; then
-  echo "==> $NAME-acp version not checked (binary not runnable on this host)" >&2
-else
+  if [[ "$DOCKER" == 1 ]]; then
+    VER="$(docker run --rm --platform "linux/$ARCH" -v "$BIN:/x:ro" rust:1-bookworm /x --version 2>&1 | head -n1)" || true
+  else
+    VER="$("$BIN" --version 2>&1 | head -n1)" || true
+  fi
   case "$VER" in
     *"+upstream.$UPSTREAM"*) echo "==> $NAME-acp reports: $VER" >&2 ;;
-    *) echo "Error: $NAME-acp reports '$VER' but pins.toml says upstream=$UPSTREAM" >&2; exit 1 ;;
+    *) echo "Error: $NAME-acp reports '${VER:-<nothing>}' but pins.toml says upstream=$UPSTREAM" >&2; exit 1 ;;
   esac
 fi
 echo "$BIN"

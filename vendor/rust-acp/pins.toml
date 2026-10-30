@@ -8,6 +8,11 @@
 # `scripts/build-rust-acp.sh claude` / `codex` (it asserts the binary reports
 # `+upstream.<upstream>`), re-run the parity harness, commit.
 #
+# `profile` (optional): space-separated key=value cargo release-profile overrides applied as
+# CARGO_PROFILE_RELEASE_<KEY> env vars when building that adapter, so a port whose own profile
+# is not size-tuned can be shrunk without editing it (claude: 17.6 MB -> 6.5 MB). `panic` is
+# deliberately left at the port's `unwind` (the adapter turns a panicking session into an error reply).
+#
 # `upstream` is asserted against the built binary's `--version`; it is never
 # trusted on its own, so it can't drift from the port's own UPSTREAM_VERSION.
 
@@ -19,6 +24,7 @@ manifest = "rust/Cargo.toml"
 package  = "claude-agent-acp-rs"
 bin      = "claude-agent-acp-rs"
 upstream = "0.94.0"
+profile  = "opt-level=s lto=true strip=true codegen-units=1"
 
 [codex]
 # Port: private fork fastestdevalive/codex-acp (upstream v2.2.2 tree at root, crate in rust/). Needs the fastestdevalive GitHub account over SSH.
