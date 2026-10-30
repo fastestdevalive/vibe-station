@@ -67,6 +67,12 @@ mod resolution {
     }
 
     #[test]
+    fn codex_supports_mid_turn_steering() {
+        // codex-acp answers `_session/steering` with `injected` mid-turn.
+        assert!(resolve_plugin(CliId::Codex).supports_mid_turn_steering());
+    }
+
+    #[test]
     fn agy_is_identical_rich_chat_default_tmux() {
         let p = resolve_plugin(CliId::Agy);
         assert_eq!(p.name(), "agy");

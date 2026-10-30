@@ -488,6 +488,13 @@ impl AgentPlugin for CodexPlugin {
         })
     }
 
+    /// codex-acp answers `_session/steering`
+    /// with `injected` for a running turn, so vst may inject queued user messages
+    /// into the live turn instead of waiting for it to end.
+    fn supports_mid_turn_steering(&self) -> bool {
+        true
+    }
+
     fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
         // codex-acp ignores `_meta` at `session/new` (inspected only for additional
         // directories) — the only way to select a model is this explicit follow-up
@@ -517,13 +524,14 @@ impl AgentPlugin for CodexPlugin {
         let params = RunTurnAcpParams {
             provider: NormalizedEventProvider::Codex,
             build_spec: Box::new(|ctx| {
-                let (command, args) = match codex_acp_bin() {
-                    Some(bin) => (bin.to_string_lossy().to_string(), Vec::new()),
-                    None => (codex_acp_bun_command(), vec![codex_acp_entry_path()]),
-                };
+                // The Rust port (`codex-acp`); the bare name fails the spawn
+                // with a plain "not found" that `vst doctor` explains.
+                let command = codex_acp_bin()
+                    .map(|b| b.to_string_lossy().to_string())
+                    .unwrap_or_else(|| CODEX_ACP_BIN_NAME.to_string());
                 AcpLaunchSpec {
                     command,
-                    args,
+                    args: Vec::new(),
                     cwd: ctx.cwd.clone(),
                     env: acp_env(ctx),
                     initialize_timeout_ms: None,
@@ -572,16 +580,13 @@ pub const CODEX_ACP_BIN_NAME: &str = "codex-acp";
 /// Env var for an explicit compiled-adapter path override.
 pub const CODEX_ACP_BIN_ENV: &str = "VST_CODEX_ACP_BIN";
 
-/// Resolve the compiled `codex-acp` adapter (`bun build --compile` of the
-/// pinned `@agentclientprotocol/codex-acp`, built by
-/// `scripts/build-codex-acp.sh`). Order: `VST_CODEX_ACP_BIN` env → `codex-acp`
-/// beside `current_exe()` (curl-install and Tauri sidecar layouts). `None` when
-/// neither resolves, or when `VST_CODEX_ACP_ENTRY` is set — that explicit
-/// `bun <entry.js>` override (dev sandbox) wins.
+/// Resolve the `codex-acp` adapter: the Rust port, built from the revision
+/// pinned in `vendor/rust-acp/pins.toml` by `scripts/build-rust-acp.sh codex`.
+///
+/// Order: `VST_CODEX_ACP_BIN` env → `codex-acp` beside `current_exe()` (curl
+/// tarball, Tauri sidecar) → `rust/target/rust-acp/codex/host/codex-acp` walking
+/// up from cwd (a bare `cargo run` in a dev checkout). `None` when none exists.
 pub fn codex_acp_bin() -> Option<std::path::PathBuf> {
-    if std::env::var("VST_CODEX_ACP_ENTRY").is_ok_and(|v| !v.is_empty()) {
-        return None;
-    }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(std::path::PathBuf::from));
@@ -589,6 +594,15 @@ pub fn codex_acp_bin() -> Option<std::path::PathBuf> {
         std::env::var(CODEX_ACP_BIN_ENV).ok().as_deref(),
         exe_dir.as_deref(),
     )
+    .or_else(|| {
+        let cwd = std::env::current_dir().ok()?;
+        cwd.ancestors().take(8).find_map(|a| {
+            let c = a
+                .join("rust/target/rust-acp/codex/host")
+                .join(CODEX_ACP_BIN_NAME);
+            c.is_file().then_some(c)
+        })
+    })
 }
 
 fn resolve_codex_acp_bin(
@@ -605,78 +619,6 @@ fn resolve_codex_acp_bin(
     let beside = exe_dir?.join(CODEX_ACP_BIN_NAME);
     beside.is_file().then_some(beside)
 }
-
-/// The `bun` binary that runs the codex ACP adapter. `bun` (not `node`) is
-/// used deliberately: it's already a required, doctor-checked dependency for
-/// agy's and claude's ACP paths, and — unlike `node` — can run the adapter's real
-/// `dist/index.js` directly with no separate install/compile step of its
-/// own.
-fn codex_acp_bun_command() -> String {
-    std::env::var("VST_CODEX_ACP_BUN").unwrap_or_else(|_| "bun".to_string())
-}
-
-/// Relative suffix shared by both the beside-exe and walk-upward candidates.
-const VENDOR_ENTRY_SUFFIX: &[&str] = &[
-    "node_modules",
-    "@agentclientprotocol",
-    "codex-acp",
-    "dist",
-    "index.js",
-];
-
-/// The codex-acp adapter's real entrypoint (`dist/index.js`), from a
-/// vendored install pinned in `vendor/codex-acp/package.json` and produced
-/// by `scripts/install-codex-acp-vendor.sh` (`bun install --omit=optional`).
-///
-/// Resolution order — a bare `cargo run` from inside the repo needs zero env
-/// vars (case 3); the dev sandbox, `tauri dev` and the packaged desktop app
-/// all set `VST_CODEX_ACP_ENTRY` explicitly (case 1):
-/// 1. `VST_CODEX_ACP_ENTRY` env var, if set — explicit override, always wins.
-/// 2. `<dir of the running exe>/codex-acp-vendor/node_modules/@agentclientprotocol/codex-acp/dist/index.js`
-///    — beside-exe layout (packaged builds).
-/// 3. Walk UPWARD from cwd (bounded to 8 levels) looking for `vendor/codex-acp/...` (dev/Docker).
-/// 4. Fallback to bare npm specifier with an `eprintln!` diagnostic.
-pub fn codex_acp_entry_path() -> String {
-    if let Ok(p) = std::env::var("VST_CODEX_ACP_ENTRY") {
-        if !p.is_empty() {
-            return p;
-        }
-    }
-    static RESOLVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    RESOLVED.get_or_init(resolve_codex_acp_entry_path).clone()
-}
-
-fn resolve_codex_acp_entry_path() -> String {
-    // Candidate 2: beside the running exe, under `codex-acp-vendor/` (packaged builds).
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let mut candidate = dir.join("codex-acp-vendor");
-            candidate.extend(VENDOR_ENTRY_SUFFIX);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-    // Candidate 3: walk upward from cwd looking for `vendor/codex-acp/...` (dev/Docker).
-    if let Ok(cwd) = std::env::current_dir() {
-        for ancestor in cwd.ancestors().take(8) {
-            let mut candidate = ancestor.join("vendor").join("codex-acp");
-            candidate.extend(VENDOR_ENTRY_SUFFIX);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-    // Candidate 4: no install found anywhere. Diagnose loudly.
-    eprintln!(
-        "[codex-acp] no vendored install found (checked VST_CODEX_ACP_ENTRY, beside-exe, and \
-         vendor/codex-acp/ walking up from cwd) — falling back to a bare npm specifier, which \
-         will fail to spawn. Run ./scripts/install-codex-acp-vendor.sh, or set VST_CODEX_ACP_ENTRY."
-    );
-    CODEX_ACP_ADAPTER_SPECIFIER.to_string()
-}
-
-const CODEX_ACP_ADAPTER_SPECIFIER: &str = "@agentclientprotocol/codex-acp/dist/index.js";
 
 /// Extract model ids from the JSON output of `codex debug models [--bundled]`.
 ///
