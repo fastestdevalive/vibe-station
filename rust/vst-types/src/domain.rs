@@ -246,6 +246,9 @@ pub enum NormalizedEventKind {
     CommandsUpdate,
     MessageGenerated,
     SessionBreak,
+    /// Harness task-lifecycle signal (claude: whitelisted raw SDK `task_*` message).
+    /// Persisted + broadcast, never rendered; consumed only by the task registry.
+    TaskSignal,
 }
 
 /// What kind of session break a `session_break` event represents.
@@ -529,6 +532,8 @@ pub struct NormalizedEvent {
     /// (`Task`/`Agent`) this nested event ran under. Harness-specific
     /// (Claude: `_meta.claudeCode.parentToolUseId`); absent for top-level calls.
     pub parent_tool_use_id: Option<String>,
+    /// task_signal only: harness-specific task lifecycle payload (claude: whitelisted raw SDK message).
+    pub task_signal: Option<serde_json::Value>,
 }
 
 impl Default for NormalizedEvent {
@@ -576,6 +581,7 @@ impl Default for NormalizedEvent {
             from_mode: None,
             to_mode: None,
             parent_tool_use_id: None,
+            task_signal: None,
         }
     }
 }

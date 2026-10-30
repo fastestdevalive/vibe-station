@@ -152,6 +152,7 @@ fn kind_str(kind: NormalizedEventKind) -> &'static str {
         NormalizedEventKind::CommandsUpdate => "commands_update",
         NormalizedEventKind::MessageGenerated => "message_generated",
         NormalizedEventKind::SessionBreak => "session_break",
+        NormalizedEventKind::TaskSignal => "task_signal",
     }
 }
 

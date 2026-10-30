@@ -57,7 +57,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
     on_receive_notification, on_receive_request, AcpAgent, AcpAgentConfig, Agent, Client,
-    ConnectionTo, JsonRpcRequest, JsonRpcResponse, LineDirection, Responder,
+    ConnectionTo, JsonRpcRequest, JsonRpcResponse, LineDirection, Responder, UntypedMessage,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -67,6 +67,19 @@ use crate::acp_transport::{
     AcpTransport, AcpTransportError, InitializeOutcome, LoadSessionOutcome, NewSessionOutcome,
     PromptTurn, PromptTurnOutcome, SteerOutcome,
 };
+
+/// Largest ext-notification `params` (serialized) forwarded to the ext sink.
+pub const MAX_EXT_NOTIFICATION_BYTES: usize = 64 * 1024;
+
+/// A vendor extension notification (any method other than `session/update`)
+/// for the CURRENT ACP session. The connection is CLI-agnostic: it forwards
+/// the raw `{method, params}`; the plugin decides whether it means anything
+/// (`AgentPlugin::acp_ext_notification_event`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcpExtNotification {
+    pub method: String,
+    pub params: serde_json::Value,
+}
 
 /// Launch spec for the agent process — a plugin supplies only this (argv/env
 /// plus timeouts); everything below is identical for every plugin.
@@ -192,6 +205,9 @@ struct Shared {
     /// flight (autonomous/out-of-band work) to the session layer, which
     /// persists + broadcasts them. Cleared on dispose.
     out_of_band: Mutex<Option<mpsc::UnboundedSender<SessionUpdate>>>,
+    /// Routes vendor ext notifications for the current session (prompt open or
+    /// not) to the session layer. Leaf lock; cleared with `out_of_band`.
+    ext_notification: Mutex<Option<mpsc::UnboundedSender<AcpExtNotification>>>,
     session_id: Mutex<Option<String>>,
     load_session_supported: AtomicBool,
     /// True iff the `initialize` response's `_meta.steering.supported === true`.
@@ -230,6 +246,7 @@ impl Shared {
         Self {
             active_update: Mutex::new(None),
             out_of_band: Mutex::new(None),
+            ext_notification: Mutex::new(None),
             session_id: Mutex::new(None),
             load_session_supported: AtomicBool::new(false),
             steering_supported: AtomicBool::new(false),
@@ -339,6 +356,14 @@ impl AcpConnection {
     /// `session/update` notifications which must not reach this sink.
     pub fn set_out_of_band_sink(&self, tx: Option<mpsc::UnboundedSender<SessionUpdate>>) {
         *self.0.shared.out_of_band.lock().unwrap() = tx;
+    }
+
+    /// Set (or clear) the ext-notification sink — the receiver of vendor
+    /// extension notifications (e.g. claude's `_claude/sdkMessage`) for the
+    /// current ACP session. Attached after `session/load` like the
+    /// out-of-band sink so history replay is never ingested.
+    pub fn set_ext_notification_sink(&self, tx: Option<mpsc::UnboundedSender<AcpExtNotification>>) {
+        *self.0.shared.ext_notification.lock().unwrap() = tx;
     }
 }
 
@@ -515,6 +540,7 @@ impl AcpTransport for AcpConnection {
         self.0.shared.active_update.lock().unwrap().take();
         self.0.shared.open_tools.lock().unwrap().clear();
         self.0.shared.out_of_band.lock().unwrap().take();
+        self.0.shared.ext_notification.lock().unwrap().take();
         // Ask the actor to stop its loop, which lets the `connect_with` closure
         // return, closing the connection and terminating the child process.
         let (tx, _rx) = oneshot::channel::<()>();
@@ -595,6 +621,38 @@ fn spawn_actor(
                 if current.as_deref() == Some(nid.as_str()) {
                     let _ = tx.send(notification.update);
                 }
+            }
+            Ok(())
+        };
+
+        // Vendor ext notifications. Registered AFTER `notif_handler` so
+        // `session/update` keeps its typed path; this one only sees methods
+        // the typed handler declined. Always `Ok(())` — a bad ext frame must
+        // never tear the connection down.
+        let ext_shared = Arc::clone(&shared);
+        let ext_handler = async move |msg: UntypedMessage, _cx| {
+            if msg.method() == "session/update" {
+                return Ok(());
+            }
+            let current = ext_shared.session_id.lock().unwrap().clone();
+            let for_current = current.is_some()
+                && msg.params().get("sessionId").and_then(|v| v.as_str()) == current.as_deref();
+            if !for_current {
+                tracing::debug!(
+                    method = msg.method(),
+                    "ext notification not for the current session; dropped"
+                );
+                return Ok(());
+            }
+            let oversized = serde_json::to_vec(msg.params())
+                .map_or(true, |b| b.len() > MAX_EXT_NOTIFICATION_BYTES);
+            if oversized {
+                tracing::debug!(method = msg.method(), "oversized ext notification dropped");
+                return Ok(());
+            }
+            if let Some(tx) = ext_shared.ext_notification.lock().unwrap().as_ref() {
+                let (method, params) = msg.into_parts();
+                let _ = tx.send(AcpExtNotification { method, params });
             }
             Ok(())
         };
@@ -756,6 +814,7 @@ fn spawn_actor(
             .builder()
             .name("vst-acp")
             .on_receive_notification(notif_handler, on_receive_notification!())
+            .on_receive_notification(ext_handler, on_receive_notification!())
             .on_receive_request(perm_handler, on_receive_request!())
             .on_receive_request(fs_read_handler, on_receive_request!())
             .on_receive_request(fs_write_handler, on_receive_request!())
@@ -778,6 +837,7 @@ fn spawn_actor(
         shared_after.active_update.lock().unwrap().take();
         shared_after.open_tools.lock().unwrap().clear();
         shared_after.out_of_band.lock().unwrap().take();
+        shared_after.ext_notification.lock().unwrap().take();
 
         // `AcpAgent` has already SIGKILLed the child's process group. Finish
         // the job for descendants that left it (snapshotted at close).
@@ -1029,15 +1089,18 @@ async fn do_initialize(
             // handlers wired below. Without this the agent is told we support
             // none of them and the handlers are never called.
             //
-            // Deliberately NOT advertising `_meta.jetbrains.air.asyncTasks`:
-            // the vendored adapter (0.98.0) only emits `async_task_*` updates
-            // to a client that lists `asyncTasks` in
-            // `_meta.jetbrains.air.capabilities`, and nothing here consumes them
-            // yet (plan task-tray, Findings § Bump decision / gap K1).
-            // Background tasks are derived by `AgentPlugin::task_observations`
-            // instead. To adopt structured task events later: inject the
-            // capability per plugin here, add an `UntypedMessage` handler for
-            // `async_task_*` updates.
+            // Deliberately NO `_meta.jetbrains.air` (any AIR capability): the
+            // vendored claude adapter (0.98.0) treats a client that declares one
+            // as an "AIR client" (`isAirClient`) and rewrites EVERY tool-call
+            // update we normalize (rawInput withheld, `_meta` de-duplicated,
+            // different terminal/exit_code semantics); `backgroundSubagents`
+            // would end turns while subagents run (breaks `TurnSettled`) and
+            // `nativeSubagentSessions` hides subagents behind child session ids
+            // this connection drops. Background-task state instead comes from
+            // raw SDK messages the plugin opts into via `acp_meta`
+            // (`emitRawSDKMessages`) and that arrive here as ext notifications
+            // (`ext_handler` -> `set_ext_notification_sink`). Pinned by the
+            // client-capabilities test in `tests/acp_transport.rs`.
             InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
                 ClientCapabilities::new()
                     .fs(FileSystemCapabilities::new()

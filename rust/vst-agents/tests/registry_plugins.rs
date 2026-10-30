@@ -198,6 +198,47 @@ mod claude_plugin {
         assert_eq!(create_agy_plugin().acp_meta("Gemini 3.1 Pro (High)"), None);
     }
 
+    /// 8.T3: the claude plugin opts into exactly the three raw task SDK messages
+    /// (and leaves `options` alone); no other plugin turns an ext notification into a row.
+    #[test]
+    fn claude_opts_into_raw_task_messages_and_other_plugins_ignore_ext_notifications() {
+        let meta = create_claude_plugin().acp_meta("sonnet").unwrap();
+        assert_eq!(
+            meta["claudeCode"]["emitRawSDKMessages"],
+            serde_json::json!([
+                {"type": "system", "subtype": "task_started"},
+                {"type": "system", "subtype": "task_updated"},
+                {"type": "system", "subtype": "task_notification"},
+            ])
+        );
+        assert_eq!(meta["claudeCode"]["options"]["model"], "sonnet");
+        let params = serde_json::json!({"sessionId": "s", "message": {
+            "type": "system", "subtype": "task_started", "task_id": "t",
+            "task_type": "local_bash", "is_backgrounded": true}});
+        assert!(create_claude_plugin()
+            .acp_ext_notification_event("_claude/sdkMessage", &params)
+            .is_some());
+        let m = "_claude/sdkMessage";
+        assert!(create_cursor_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+        assert!(create_opencode_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+        assert!(create_agy_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+        assert!(create_codex_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+        assert!(create_omp_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+        assert!(create_pi_plugin()
+            .acp_ext_notification_event(m, &params)
+            .is_none());
+    }
+
     #[test]
     fn acp_meta_enables_chrome_and_artifacts_for_every_model() {
         let plugin = create_claude_plugin();

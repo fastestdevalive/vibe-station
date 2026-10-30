@@ -82,6 +82,12 @@
 //     the vendored adapter 0.98.0 emits only to a client that lists `asyncTasks`
 //     in `_meta.jetbrains.air.capabilities`, which the daemon does not). The typed
 //     handler cannot parse it; the turn and the connection must survive (F6).
+//   FAKE_ACP_MODE=raw_sdk_tasks — like normal, but session/prompt first sends `_claude/sdkMessage`
+//     ext notifications (the messages in the capture file RAW_SDK_CAPTURE, produced by
+//     scripts/claude-acp-raw-harness from the REAL adapter) for the current session,
+//     interleaved with a `session/update` chunk; plus one for a DIFFERENT sessionId and one
+//     whose params exceed 64 KiB. Both extras must be dropped by the connection.
+//     Without RAW_SDK_CAPTURE a single built-in message is used.
 //   FAKE_ACP_MODE=steering_strict — steering supported; every session/prompt holds for
 //     STEER_PROMPT_MS (default 400; the FIRST prompt for STEER_FIRST_MS, default 20)
 //     and `_session/steering` answers `outcome: "injected"` only while a prompt is
@@ -92,7 +98,7 @@
 //     first prompt hangs until session/cancel, then takes CANCEL_UNWIND_MS (default 300)
 //     to unwind before resolving "cancelled"; later prompts resolve end_turn at once.
 import { createInterface } from "node:readline";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
 
@@ -414,6 +420,27 @@ rl.on("line", (line) => {
           sessionId: sid,
           update: { sessionUpdate: "async_task_spawned", taskId: "t1", taskType: "bash", outputFilePath: "/tmp/x" },
         },
+      });
+    }
+    if (mode === "raw_sdk_tasks") {
+      let exts = [];
+      try {
+        exts = JSON.parse(readFileSync(process.env.RAW_SDK_CAPTURE, "utf8")).ext;
+      } catch {
+        exts = [{ method: "_claude/sdkMessage", params: { message: { type: "system", subtype: "task_started", task_id: "b1" } } }];
+      }
+      const ext = (params, method = "_claude/sdkMessage") => write({ jsonrpc: "2.0", method, params });
+      exts.forEach((e, i) => {
+        ext({ ...e.params, sessionId: sid }, e.method);
+        if (i === 1) {
+          write({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "between ext" } } },
+          });
+          ext({ sessionId: "some-other-session", message: { type: "system", subtype: "task_started", task_id: "foreign" } });
+          ext({ sessionId: sid, message: { type: "system", subtype: "task_started", task_id: "huge", description: "x".repeat(70 * 1024) } });
+        }
       });
     }
     if (mode === "usage_update") {

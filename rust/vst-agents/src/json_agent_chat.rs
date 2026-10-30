@@ -400,6 +400,11 @@ pub const SUBAGENT_NOTICE_REASON: &str = "subagent-notice";
 /// `working` while the agent produces output with no prompt in flight
 /// (adapter-driven autonomous cycle / background-work output).
 pub const BACKGROUND_REASON: &str = "background";
+/// `working` like [`BACKGROUND_REASON`], but the turn's visible
+/// `waiting_for_human(None)` has not been announced yet. Persisted so a daemon
+/// restart can still settle it to `waiting_for_human(None)` (the parent's
+/// subagent-notify wake) instead of the silent `background-settled`.
+pub const BACKGROUND_TURN_ENDED_REASON: &str = "background-turn-ended";
 /// `waiting_for_human` written when a background window goes quiet.
 pub const BACKGROUND_SETTLED_REASON: &str = "background-settled";
 
@@ -409,7 +414,7 @@ pub const BACKGROUND_SETTLED_REASON: &str = "background-settled";
 pub fn is_silent_state_reason(reason: &str) -> bool {
     matches!(
         reason,
-        READY_REASON | BACKGROUND_REASON | BACKGROUND_SETTLED_REASON
+        READY_REASON | BACKGROUND_REASON | BACKGROUND_TURN_ENDED_REASON | BACKGROUND_SETTLED_REASON
     )
 }
 

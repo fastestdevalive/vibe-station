@@ -32,9 +32,22 @@ pub enum TaskObservation {
         ok: bool,
         final_text: Option<String>,
     },
-    /// Structured end signal (reserved; unused in v1).
+    /// The event's turn ended; its BACKGROUND subagents are done (only for
+    /// harnesses whose turn is held open until they settle).
+    TurnSettled,
+    /// Structured state from the harness: the task is running (`paused: false`)
+    /// or paused. Authoritative over the liveness probe. Matches a task by its
+    /// id, the harness's own id or its tool call id; never creates a task.
+    Confirmed {
+        id: String,
+        tool_id: Option<String>,
+        paused: bool,
+    },
+    /// Structured end signal from the harness: authoritative; arms the grace
+    /// window when it drops the hold to zero.
     Ended {
         id: String,
+        tool_id: Option<String>,
         state: TaskState,
         reason: Option<String>,
     },

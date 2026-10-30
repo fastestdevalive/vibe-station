@@ -1563,3 +1563,20 @@ fn read_last_returns_the_newest_rows_oldest_first() {
     );
     assert!(store.read_last(0).is_empty());
 }
+
+#[test]
+fn task_signal_row_round_trips_through_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut e = ev(NormalizedEventKind::TaskSignal, serde_json::json!({}));
+    e.task_signal =
+        Some(serde_json::json!({"subtype": "task_notification", "status": "completed"}));
+    store.append(&mut e);
+    let last = store.read_last(10);
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].kind, NormalizedEventKind::TaskSignal);
+    assert_eq!(
+        last[0].task_signal,
+        Some(serde_json::json!({"subtype": "task_notification", "status": "completed"}))
+    );
+}

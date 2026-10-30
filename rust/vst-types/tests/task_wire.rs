@@ -76,3 +76,22 @@ fn old_normalized_event_rows_deserialise_without_parent_tool_use_id() {
     let v = serde_json::to_value(&ev).unwrap();
     assert_eq!(v["parentToolUseId"], "toolu_1");
 }
+
+#[test]
+fn task_signal_event_round_trips_and_old_rows_parse_without_it() {
+    let mut ev = NormalizedEvent::default();
+    ev.id = "e".into();
+    ev.kind = vst_types::NormalizedEventKind::TaskSignal;
+    ev.task_signal = Some(serde_json::json!({"subtype": "task_started", "task_id": "b1"}));
+    let v = serde_json::to_value(&ev).unwrap();
+    assert_eq!(v["kind"], "task_signal");
+    assert_eq!(v["taskSignal"]["task_id"], "b1");
+    let back: NormalizedEvent = serde_json::from_value(v).unwrap();
+    assert_eq!(back, ev);
+
+    let old: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": "o", "sessionId": "s", "ts": "t", "provider": "claude", "kind": "text"
+    }))
+    .unwrap();
+    assert_eq!(old.task_signal, None);
+}
