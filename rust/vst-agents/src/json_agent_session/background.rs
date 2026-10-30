@@ -4,15 +4,16 @@
 //! autonomous cycle, background-command wake-up, subagent notification) the
 //! session is *working* even though no drain runs. This module owns that
 //! window: the first content writes `Working(background)`, every further
-//! content re-arms a quiet timer, and the timer settles the window back to
-//! `WaitingForHuman(background-settled)`.
+//! content re-arms a quiet timer, and the timer closes the window. The
+//! lifecycle itself is never written here: window open/close only feed
+//! `reconcile_lifecycle_locked` (`lifecycle.rs`), which also weighs live tasks.
 //!
 //! The settle is a quiet-timer heuristic (the vendored adapter exposes no
 //! cycle-end signal; plan K6). `turn_state` is never touched: Stop/steer stay
 //! tied to real prompts. A real drain start (`kick_drain`) invalidates the
 //! window, and the drain's own final write is then authoritative.
 //!
-//! All writes go through `write_lifecycle_locked` under `lifecycle_lock`.
+//! The settle runs under `lifecycle_lock`.
 //! The timer is ONE long-lived task per window, never aborted (aborting could
 //! drop it between the in-memory flip and the store write); it re-reads its
 //! deadline each wake and exits itself under the `state` lock.
@@ -23,7 +24,6 @@ use tokio::time::Instant;
 use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, ToolStatus};
 
 use super::{JsonAgentSession, BACKGROUND_HEARTBEAT_CAP_MS, BACKGROUND_QUIET_MS};
-use crate::json_agent_chat::{BACKGROUND_REASON, BACKGROUND_SETTLED_REASON};
 
 /// A heartbeat is a progress update for a still-running tool (carries no new
 /// content); it extends a window only within `BACKGROUND_HEARTBEAT_CAP_MS`.
@@ -39,7 +39,7 @@ impl JsonAgentSession {
         let cap = Duration::from_millis(BACKGROUND_HEARTBEAT_CAP_MS);
         let heartbeat = is_heartbeat(ev);
 
-        let (gen, need_write, spawn_timer) = {
+        let (need_write, spawn_timer) = {
             let mut s = self.0.state.lock().unwrap();
             if s.running {
                 // A drain owns the lifecycle.
@@ -67,28 +67,13 @@ impl JsonAgentSession {
             }
             let spawn_timer = !s.bg_timer_active;
             s.bg_timer_active = true;
-            (
-                s.bg_gen,
-                s.last_written != LifecycleState::Working,
-                spawn_timer,
-            )
+            (s.last_written != LifecycleState::Working, spawn_timer)
         };
 
         self.note_activity(ev);
 
         if need_write {
-            let this = self.clone();
-            tokio::spawn(async move {
-                let _guard = this.0.lifecycle_lock.lock().await;
-                let still = {
-                    let s = this.0.state.lock().unwrap();
-                    s.bg_working && s.bg_gen == gen && s.last_written != LifecycleState::Working
-                };
-                if still {
-                    this.write_lifecycle_locked(LifecycleState::Working, Some(BACKGROUND_REASON))
-                        .await;
-                }
-            });
+            self.spawn_reconcile();
         }
         if spawn_timer {
             let this = self.clone();
@@ -134,11 +119,8 @@ impl JsonAgentSession {
             }
         };
         if settle {
-            self.write_lifecycle_locked(
-                LifecycleState::WaitingForHuman,
-                Some(BACKGROUND_SETTLED_REASON),
-            )
-            .await;
+            // The window is closed; live tasks may still hold `working`.
+            self.reconcile_lifecycle_locked().await;
         }
     }
 }

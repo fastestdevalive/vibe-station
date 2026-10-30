@@ -413,6 +413,13 @@ async fn initialize_sends_fs_and_terminal_client_capabilities_on_the_wire() {
     assert_eq!(caps["fs"]["readTextFile"], true);
     assert_eq!(caps["fs"]["writeTextFile"], true);
     assert_eq!(caps["terminal"], true);
+    // Declaring ANY `_meta.jetbrains.air` capability flips the claude adapter into
+    // "AIR client" mode and rewrites every tool-call shape we normalize (plan A-D1).
+    assert!(
+        caps.get("_meta")
+            .map_or(true, |m| m.get("jetbrains").is_none()),
+        "no AIR capability may be declared: {caps}"
+    );
 }
 
 // --- 5.T1 / 5.T2 — steering (`supports_steering` / `steer`) ---
@@ -818,6 +825,118 @@ async fn unknown_session_update_variant_mid_turn_does_not_break_turn_or_connecti
             "round {round}: the known chunk after the unknown update still streams: {seen:?}"
         );
         assert!(conn.is_alive(), "round {round}: connection survives");
+    }
+    conn.dispose().await;
+}
+
+// ---- ext notifications (`_claude/sdkMessage` and friends) ------------------
+
+fn raw_sdk_connection() -> AcpConnection {
+    let mut env = HashMap::new();
+    env.insert("FAKE_ACP_MODE".to_string(), "raw_sdk_tasks".to_string());
+    env.insert(
+        "RAW_SDK_CAPTURE".to_string(),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/claude_tasks/raw_adapter_capture.json")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    AcpConnection::new(AcpLaunchSpec {
+        command: "node".to_string(),
+        args: vec![fake_agent()],
+        cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        env,
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+        reap_detached_descendants: false,
+        open_tool_idle_timeout_ms: None,
+    })
+}
+
+/// Phase 7.T1: the ext sink receives exactly the current-session notifications,
+/// in send order (adapter-captured payloads); a foreign-session one and an
+/// oversized one are dropped; the turn's `SessionUpdate`s are unaffected.
+#[tokio::test]
+async fn ext_sink_receives_current_session_notifications_in_order_and_drops_the_rest() {
+    let expected: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/claude_tasks/raw_adapter_capture.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let expected = expected["ext"].as_array().unwrap().clone();
+    assert!(
+        expected.len() >= 8,
+        "capture should carry the adapter's messages"
+    );
+
+    let conn = raw_sdk_connection();
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    conn.set_ext_notification_sink(Some(tx));
+
+    let turn = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("hi"))],
+    );
+    let mut updates = turn.updates;
+    let seen = drain_updates(&mut updates).await;
+    let stop = turn.result.await.expect("result").expect("prompt");
+    assert_eq!(stop.stop_reason, StopReason::EndTurn);
+    assert!(
+        seen.iter()
+            .any(|u| matches!(u, SessionUpdate::AgentMessageChunk(_))),
+        "session/update chunks still stream: {seen:?}"
+    );
+
+    conn.dispose().await;
+    let mut got = Vec::new();
+    while let Some(n) = rx.recv().await {
+        got.push(n);
+    }
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "foreign + oversized dropped: {got:?}"
+    );
+    for (g, e) in got.iter().zip(&expected) {
+        assert_eq!(g.method, "_claude/sdkMessage");
+        assert_eq!(g.params["sessionId"], session_id.as_str());
+        assert_eq!(
+            g.params["message"], e["params"]["message"],
+            "send order, verbatim"
+        );
+    }
+}
+
+/// Phase 7.T2: with no sink attached, ext notifications are dropped and the
+/// connection keeps serving turns.
+#[tokio::test]
+async fn ext_notifications_without_a_sink_are_dropped_and_turns_still_run() {
+    let conn = raw_sdk_connection();
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session")
+        .session_id;
+    for round in 0..2 {
+        let turn = conn.send_prompt(
+            &session_id,
+            vec![ContentBlock::Text(TextContent::new("hi"))],
+        );
+        let mut updates = turn.updates;
+        let _ = drain_updates(&mut updates).await;
+        let stop = turn.result.await.expect("result").expect("prompt");
+        assert_eq!(stop.stop_reason, StopReason::EndTurn, "round {round}");
+        assert!(conn.is_alive());
     }
     conn.dispose().await;
 }

@@ -570,6 +570,14 @@ impl AgentPlugin for ClaudePlugin {
         true
     }
 
+    fn acp_ext_notification_event(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Option<NormalizedEvent> {
+        crate::claude_tasks::claude_task_signal_event(method, params)
+    }
+
     fn task_observations(&self, ev: &NormalizedEvent) -> Vec<vst_tasks::TaskObservation> {
         crate::claude_tasks::claude_task_observations(ev)
     }
@@ -637,7 +645,15 @@ impl AgentPlugin for ClaudePlugin {
         if !model_for_acp.is_empty() {
             options["model"] = serde_json::json!(model_for_acp);
         }
-        Some(serde_json::json!({ "claudeCode": { "options": options } }))
+        // Opt into the raw SDK task messages (`_claude/sdkMessage` ext
+        // notifications): the authoritative start/state/end of background
+        // Bash and subagents, with no AIR mode and no tool-call shape change.
+        let raw_sdk_filter: serde_json::Value =
+            serde_json::from_str(crate::claude_tasks::CLAUDE_RAW_SDK_FILTER)
+                .expect("CLAUDE_RAW_SDK_FILTER is valid JSON");
+        Some(serde_json::json!({
+            "claudeCode": { "options": options, "emitRawSDKMessages": raw_sdk_filter }
+        }))
     }
 
     /// claude-agent-acp ranks `ANTHROPIC_MODEL` above every other model

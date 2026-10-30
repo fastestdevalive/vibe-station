@@ -21,24 +21,67 @@ Background/rationale: `.vibekit/reports/2026-08-16-pr-detection-broken-root-caus
 - `session.pr.prBranch` records the branch the PR was found on. A PR is only ever rendered when
   `prBranch === worktree.branch` — a stale PR after a branch switch must never colour anything.
 
-### Rich Chat (JSON channel) lifecycle writes
+### Rich Chat (JSON channel) lifecycle
 
-JSON sessions are not polled; every lifecycle write goes through one
-`JsonAgentSession` method (`write_lifecycle`, under `lifecycle_lock`; released sessions no-op).
-A JSON session can return to `working` **without a human prompt**:
+JSON sessions are not polled. Their lifecycle is **derived**, not sequenced: one function,
+`reconcile_lifecycle_locked` (`rust/vst-agents/src/json_agent_session/lifecycle.rs`), recomputes it
+from fresh evidence under `lifecycle_lock` every time an input changes, and the single writer
+`write_lifecycle_locked` persists it (released sessions write nothing). Inputs:
+**drain** (a human/notice turn is running) · **cycle** (out-of-band ACP window open) ·
+**hold** (`TaskRegistry::hold()`: live background tasks of the current adapter, plus a registry-owned grace).
+
+**Derivation (no drain running):** `working(background)` iff `cycle_open || holding > 0 || grace_active`;
+otherwise `waiting_for_human`. A running drain always owns the lifecycle (reconcile no-ops).
 
 | Write | Reason | Trigger | Returns to `waiting_for_human` |
 |-------|--------|---------|-------------------------------|
-| `working` | `None` | human turn (send / chat / resubmit / create / scheduled) | drain's final write |
-| `working` | `subagent-notice` | daemon-started "child is waiting" turn | drain's final write |
-| `working` | `background` | agent output with no prompt in flight (adapter autonomous cycle) | quiet timer, reason `background-settled` |
+| `working` | `None` | human turn (send / chat / resubmit / create / scheduled) | turn end: reconcile (see below) |
+| `working` | `subagent-notice` | daemon-started "child is waiting" turn | turn end: reconcile |
+| `working` | `background` | out-of-band cycle (adapter autonomous cycle, task-notification wake) | reconcile: quiet timer AND no live task AND grace expired |
+| `working` | `background` | live background task (current adapter) | reconcile: no live task AND grace expired |
+| `working` | `background-turn-ended` | as `background`, but the turn's visible `waiting_for_human(None)` is still owed (persisted so a restart can announce it) | reconcile: settles with `waiting_for_human(None)` |
 
-- `background` is a **heuristic**: ends after 60 s without new content (heartbeats extend it for at most
-  10 min). It never changes `turn_state` (Stop/steer stay tied to real prompts).
-- `ready`, `background` and `background-settled` are **invisible to subagent-notify** (a parent is not
-  woken by them); `subagent-notice` is visible on purpose.
-- A daemon restart settles stale `working(background|subagent-notice)` rows to
-  `waiting_for_human(background-settled)` at boot.
+- **Live tasks** (`vst-tasks`): for Claude the adapter itself says what runs. It is asked (`acp_meta`
+  `emitRawSDKMessages`) to forward the raw SDK `task_started` / `task_updated` / `task_notification`
+  messages as ext notifications; each becomes a persisted, never-rendered `task_signal` row that the
+  registry reads as `Confirmed` (running / paused) or `Ended` (done / failed / stopped) for a background
+  command **or** subagent. **Authoritative beats probe:** a confirmed task holds on the adapter's state
+  and is never probed; a **paused** one does not hold (row stays `running`, reason "Paused — not counted
+  as agent work"). The OS probe is only the fallback for a command the adapter never confirmed (older
+  adapter, filter ignored, other harness): it holds while a process has the output file open (first probe
+  ~2 s, then every 10 s; two consecutive "no writer" results end it as `Done("Exited")`).
+  Holds are bounded: **confirmed or alive command / confirmed subagent 60 min from start (visible
+  lapse)**; **unverified command (no output path / probe unknown) 10 min since the agent's last event
+  (any event, in-band or out-of-band), still bounded by the same 60 min-from-start cap**; an
+  **unconfirmed background subagent** until its turn's `Result` (`TurnSettled`, kept as a fallback) or the
+  10 min nested-inactivity stale bound. A confirmed background subagent ends at its own
+  `task_notification`. Stop / Stop-all does **not** release a live command's hold; only closing the
+  session or a channel toggle (`release()`) does.
+- **Grace:** when the last hold ends *by a structured `Ended` signal, probe death, stale bound, hold
+  lapse or adapter replacement*, `working(background)` is kept for 10 s (`TASK_END_GRACE_MS`, stamped by
+  the registry in the same mutation) so the task-notification cycle that follows continues `working`
+  without a waiting/working flap. Ends the session already knows about (sync-subagent result,
+  `TurnSettled` at the turn's `Result`, `turn_ended`) arm **no** grace: the parent is notified right away.
+  A task that ended before its own tool result was seen is created already `Done` and never holds.
+- **Deferred announcement:** a turn end never writes `waiting_for_human` while a task or cycle is live.
+  The visible `waiting_for_human(None)` (which wakes a parent's subagent-notify) is written once, when the
+  session truly settles; later settles of the same work use `background-settled`.
+- **Lapse is visible:** a task whose hold lapsed stays `running` in the tray with a `reason`
+  ("Still running after 60 min..." / "No sign of life for 10 min...") and the chat gets one `Status` row.
+  The dot then settles to `waiting_for_human`.
+- `background` also keeps the 60 s quiet / 10 min heartbeat heuristic for the *cycle* window only
+  (the adapter has no cycle-end signal); it never changes `turn_state`.
+- `ready`, `background`, `background-turn-ended` and `background-settled` are **invisible to subagent-notify**; `subagent-notice`
+  is visible on purpose.
+- An adapter that exits while the session is idle (ext-notification channel closes without a release) stales its
+  still-running tasks (`Stale("Agent restarted")`, no-op if a newer connection already took over), so a confirmed
+  task cannot hold the session for the full cap. `TurnSettled` skips subagents the harness already confirmed;
+  a subagent resumed outside a turn (same task id, new tool call id) re-opens and holds again.
+- Tasks from a previous adapter epoch (reconnect, model switch, daemon restart) never hold; the tray shows
+  them `Stale("Agent restarted")`. A daemon restart settles stale `working(background|background-turn-ended|subagent-notice)`
+  rows to `waiting_for_human(background-settled)` at boot; `working(background-turn-ended)` rows settle to
+  `waiting_for_human(None)` instead, so the parent still hears the child finished.
+- Child `vst` sessions are **not** tasks: they own their lifecycle and report via the notice flow.
 - No new values, colours or glyphs: the matrix below is unchanged.
 
 ## The matrix

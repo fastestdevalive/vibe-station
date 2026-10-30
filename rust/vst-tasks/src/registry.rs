@@ -12,15 +12,19 @@ use std::time::Duration;
 
 use notify::RecommendedWatcher;
 use tokio::runtime::Handle;
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 use vst_types::{NormalizedEvent, TaskKind, TaskOutput, TaskOutputKind, TaskSummary};
 
 use crate::clock::{format_ms, Clock};
+use crate::hold::{HoldLapse, TaskHold};
+use crate::liveness::{Liveness, LivenessProbe, OsWriterProbe};
 use crate::observation::ObservationsFn;
 use crate::output::{default_roots, read_output_file, resolve};
 use crate::task::{event_ms, Inner, Op};
 use crate::watch::watch_file;
-use crate::{COALESCE_MS, MAX_PENDING_OPS, MAX_RING_LINES, MAX_TAIL_LINES, MAX_WATCHERS};
+use crate::{
+    COALESCE_MS, MAX_PENDING_OPS, MAX_PROBES_PER_TICK, MAX_RING_LINES, MAX_TAIL_LINES, MAX_WATCHERS,
+};
 
 /// Called with `(rev, full snapshot)` when the task list visibly changed.
 pub type OnChange = Arc<dyn Fn(u64, Vec<TaskSummary>) + Send + Sync>;
@@ -45,6 +49,8 @@ struct Shared {
     handle: Mutex<Option<Handle>>,
     watchers: Mutex<HashMap<String, RecommendedWatcher>>,
     roots: Vec<PathBuf>,
+    probe: Mutex<Arc<dyn LivenessProbe>>,
+    hold_tx: watch::Sender<TaskHold>,
 }
 
 impl Drop for Shared {
@@ -87,7 +93,29 @@ impl TaskRegistry {
             handle: Mutex::new(None),
             watchers: Mutex::new(HashMap::new()),
             roots,
+            probe: Mutex::new(Arc::new(OsWriterProbe)),
+            hold_tx: watch::channel(TaskHold::default()).0,
         }))
+    }
+
+    /// What the registry contributes to the session lifecycle right now:
+    /// evaluated synchronously, so it reflects every mutation that has
+    /// returned. `TaskHold::default()` while rebuilding or closed.
+    #[must_use]
+    pub fn hold(&self) -> TaskHold {
+        self.0.current_hold()
+    }
+
+    /// Push channel for [`Self::hold`]: fires on every change of the value.
+    #[must_use]
+    pub fn subscribe_hold(&self) -> watch::Receiver<TaskHold> {
+        self.0.hold_tx.subscribe()
+    }
+
+    /// Replace the liveness probe (tests).
+    #[doc(hidden)]
+    pub fn set_probe_for_test(&self, p: Arc<dyn LivenessProbe>) {
+        *self.0.probe.lock().unwrap() = p;
     }
 
     /// Registry clock, unix ms (SystemTime at construction + tokio time).
@@ -109,15 +137,18 @@ impl TaskRegistry {
         g.pending.clear();
     }
 
-    /// Observe an in-band event.
+    /// Observe an event of the agent. Every event also counts as activity for
+    /// running commands: the agent is demonstrably alive (this is what keeps a
+    /// probe-less command held through a long turn; its 10 min no-activity
+    /// timer starts at the last event).
     pub fn observe(&self, ev: &NormalizedEvent) {
-        self.0.observe(ev, false);
+        self.0.observe(ev);
     }
 
-    /// Observe an out-of-band (no prompt in flight) event; it also counts as
-    /// activity for running commands.
+    /// Observe an out-of-band (no prompt in flight) event. Same as
+    /// [`Self::observe`]; kept as a distinct entry point for call-site clarity.
     pub fn observe_out_of_band(&self, ev: &NormalizedEvent) {
-        self.0.observe(ev, true);
+        self.0.observe(ev);
     }
 
     /// A turn ended: its synchronous subagents become `Stopped("Turn ended")`.
@@ -150,6 +181,33 @@ impl TaskRegistry {
         self.0.settle(g);
     }
 
+    /// The current adapter epoch (bumped per new ACP connection).
+    #[must_use]
+    pub fn epoch(&self) -> u64 {
+        self.0.lock().epoch
+    }
+
+    /// The adapter that was current at `epoch` exited (its ext-notification
+    /// channel closed without a release): its running tasks can no longer be
+    /// tracked, so they become `Stale("Agent restarted")`. A no-op when the
+    /// epoch moved on (a replaced connection closing late must not stale the
+    /// new adapter's tasks).
+    pub fn adapter_gone(&self, epoch: u64) {
+        let mut g = self.0.lock();
+        if g.closed {
+            return;
+        }
+        if g.rebuilding {
+            g.push_pending(Op::AdapterGone(epoch));
+            return;
+        }
+        if g.epoch != epoch {
+            return;
+        }
+        g.stale_all_running(self.0.clock.now_ms());
+        self.0.settle(g);
+    }
+
     /// Rebuild from transcript rows (oldest first). Everything still running
     /// afterwards is from an earlier adapter and becomes `Stale("Agent
     /// restarted")`; buffered live observations are then replayed, skipping
@@ -165,10 +223,12 @@ impl TaskRegistry {
                 continue;
             }
             consumed.insert(ev.id.clone());
-            staged.apply(obs, event_ms(ev, now), ev.turn_id.as_deref(), false);
+            staged.apply(obs, event_ms(ev, now), ev.turn_id.as_deref(), now);
         }
         staged.stale_all_running(now);
         staged.evaluate(now);
+        // Rows made stale by the rebuild itself are not a fresh hold end.
+        staged.last_hold_end_ms = None;
 
         let mut g = self.0.lock();
         if g.closed {
@@ -176,6 +236,10 @@ impl TaskRegistry {
         }
         g.tasks = staged.tasks;
         g.launches = staged.launches;
+        g.confirmed_early = staged.confirmed_early;
+        g.ended_early = staged.ended_early;
+        g.prev_holding = staged.prev_holding;
+        g.last_hold_end_ms = staged.last_hold_end_ms;
         g.rebuilding = false;
         let pending = std::mem::take(&mut g.pending);
         for op in pending {
@@ -184,17 +248,21 @@ impl TaskRegistry {
                     event_id,
                     ts_ms,
                     turn_id,
-                    out_of_band,
                     obs,
                 } => {
                     if !consumed.contains(&event_id) {
-                        g.apply(obs, ts_ms, turn_id.as_deref(), out_of_band);
+                        g.apply(obs, ts_ms, turn_id.as_deref(), now);
                     }
                 }
                 Op::TurnEnded(t) => g.turn_ended(&t, now),
                 Op::BumpEpoch => {
                     g.epoch += 1;
                     g.stale_all_running(now);
+                }
+                Op::AdapterGone(e) => {
+                    if g.epoch == e {
+                        g.stale_all_running(now);
+                    }
                 }
             }
         }
@@ -293,6 +361,7 @@ impl TaskRegistry {
             }
         }
         self.0.lock().closed = true;
+        self.0.send_hold(TaskHold::default());
         self.0.watchers.lock().unwrap().clear();
         self.0.timer_notify.notify_one();
     }
@@ -334,7 +403,7 @@ impl Shared {
         self.inner.lock().unwrap()
     }
 
-    fn observe(self: &Arc<Self>, ev: &NormalizedEvent, out_of_band: bool) {
+    fn observe(self: &Arc<Self>, ev: &NormalizedEvent) {
         let obs = (self.observe_fn)(ev);
         let now = self.clock.now_ms();
         let ts_ms = event_ms(ev, now);
@@ -348,34 +417,75 @@ impl Shared {
                     event_id: ev.id.clone(),
                     ts_ms,
                     turn_id: ev.turn_id.clone(),
-                    out_of_band,
                     obs,
                 });
             }
             return;
         }
         if obs.is_empty() {
-            // Hot path (text/thinking chunks): only the activity bump.
-            if out_of_band {
-                g.bump_command_activity(ts_ms);
+            // Hot path (text/thinking chunks): the activity bump, and a full
+            // settle only when it may re-arm a hold that lapsed for lack of
+            // activity.
+            if g.bump_command_activity(ts_ms) {
+                self.settle(g);
             }
             return;
         }
-        g.apply(obs, ts_ms, ev.turn_id.as_deref(), out_of_band);
+        g.apply(obs, ts_ms, ev.turn_id.as_deref(), now);
         self.settle(g);
     }
 
     /// After a mutation: lazy evaluation, watcher/timer upkeep, and (if the
     /// broadcast key changed) a trailing-coalesced flush.
     fn settle(self: &Arc<Self>, mut g: MutexGuard<'_, Inner>) {
-        g.evaluate(self.clock.now_ms());
+        let now = self.clock.now_ms();
+        g.evaluate(now);
         let changed = g.changed_since_sent();
         let want = watch_targets(&g);
+        let hold = Self::hold_value(&g, now);
         drop(g);
+        self.send_hold(hold);
         self.after_unlock(want);
         if changed {
             self.request_flush();
         }
+    }
+
+    fn hold_value(g: &Inner, now: i64) -> TaskHold {
+        if g.closed || g.rebuilding {
+            TaskHold::default()
+        } else {
+            g.hold(now)
+        }
+    }
+
+    /// Publish `hold` to subscribers if it differs from the current value.
+    fn send_hold(&self, hold: TaskHold) {
+        self.hold_tx.send_if_modified(|cur| {
+            if *cur == hold {
+                false
+            } else {
+                *cur = hold;
+                true
+            }
+        });
+    }
+
+    fn current_hold(self: &Arc<Self>) -> TaskHold {
+        let now = self.clock.now_ms();
+        let mut g = self.lock();
+        if g.closed || g.rebuilding {
+            return TaskHold::default();
+        }
+        g.evaluate(now);
+        let changed = g.changed_since_sent();
+        let hold = g.hold(now);
+        drop(g);
+        self.send_hold(hold.clone());
+        if changed {
+            self.request_flush();
+        }
+        hold
     }
 
     fn after_unlock(self: &Arc<Self>, want: Vec<(String, String)>) {
@@ -430,19 +540,23 @@ impl Shared {
     fn flush(self: &Arc<Self>, force: bool) {
         let _emit = self.emit_lock.lock().unwrap();
         let now = self.clock.now_ms();
-        let (out, want) = {
+        let (out, want, hold) = {
             let mut g = self.lock();
             g.evaluate(now);
             let want = watch_targets(&g);
+            let hold = Self::hold_value(&g, now);
             if g.closed || g.rebuilding || !(force || g.changed_since_sent()) {
-                (None, want)
+                (None, want, hold)
             } else {
                 let rev = g.rev.saturating_add(1).max(u64::try_from(now).unwrap_or(0));
                 g.rev = rev;
                 g.last_sent = Some(g.key());
-                (Some((rev, g.summaries())), want)
+                (Some((rev, g.summaries())), want, hold)
             }
         };
+        // Unconditional: a deadline firing (grace expiry, hold lapse) changes
+        // the hold even when no tray snapshot is due.
+        self.send_hold(hold);
         self.sync_watchers(&want);
         if let Some((rev, tasks)) = out {
             (self.on_change)(rev, tasks);
@@ -463,14 +577,14 @@ impl Shared {
         h.spawn(async move {
             loop {
                 let Some(s) = weak.upgrade() else { return };
+                let now = s.clock.now_ms();
                 let (deadline, closed) = {
                     let g = s.lock();
-                    (g.next_deadline(), g.closed)
+                    (g.next_deadline(now), g.closed)
                 };
                 if closed {
                     return;
                 }
-                let now = s.clock.now_ms();
                 drop(s);
                 if let Some(d) = deadline {
                     let wait = u64::try_from((d - now).max(0)).unwrap_or(0);
@@ -480,11 +594,60 @@ impl Shared {
                     }
                     let Some(s) = weak.upgrade() else { return };
                     s.flush_now();
+                    s.spawn_due_probes();
                 } else {
                     notify.notified().await;
                 }
             }
         });
+    }
+
+    /// Start liveness probes for due running file commands (bounded per tick).
+    /// Probes run outside the lock; results re-enter through `apply_probe`.
+    fn spawn_due_probes(self: &Arc<Self>) {
+        let Some(h) = self.runtime() else { return };
+        let now = self.clock.now_ms();
+        let due: Vec<(String, String)> = {
+            let mut g = self.lock();
+            if g.closed || g.rebuilding {
+                return;
+            }
+            let mut out = Vec::new();
+            for t in &mut g.tasks {
+                if out.len() >= MAX_PROBES_PER_TICK {
+                    break;
+                }
+                if t.is_running()
+                    && t.kind == TaskKind::Command
+                    && !t.probing
+                    && t.next_probe_ms.is_some_and(|n| n <= now)
+                {
+                    if let Some(p) = t.output_path.clone() {
+                        t.probing = true;
+                        out.push((t.id.clone(), p));
+                    }
+                }
+            }
+            out
+        };
+        for (id, path) in due {
+            let weak = Arc::downgrade(self);
+            let (probe, roots) = (self.probe.lock().unwrap().clone(), self.roots.clone());
+            h.spawn(async move {
+                let result = match resolve(&path, &id, &roots) {
+                    Ok(canon) => probe.probe(&canon).await,
+                    Err(_) => Liveness::Unknown,
+                };
+                let Some(s) = weak.upgrade() else { return };
+                let now = s.clock.now_ms();
+                let mut g = s.lock();
+                if g.closed {
+                    return;
+                }
+                g.apply_probe(&id, result, now);
+                s.settle(g);
+            });
+        }
     }
 
     /// Reconcile watchers with the running file-output commands.
@@ -533,6 +696,15 @@ impl Shared {
             }
             t.output_rev += 1;
             t.last_activity_ms = t.last_activity_ms.max(now);
+            // Activity may re-arm a hold that lapsed for lack of it; any other
+            // state is unaffected (the timer owns every other deadline).
+            let rearm = t.lapse == Some(HoldLapse::Unverified);
+            if rearm {
+                g.evaluate(now);
+                let hold = Self::hold_value(&g, now);
+                drop(g);
+                self.send_hold(hold);
+            }
         }
         self.request_flush();
     }

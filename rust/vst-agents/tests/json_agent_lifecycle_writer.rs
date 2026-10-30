@@ -422,14 +422,17 @@ async fn oob_during_drain_tail_keeps_background_working() {
     let seen = h.states();
     // Whatever interleaving happened, the LAST word must be working(background)
     // or the drain's Waiting followed by a re-written Working(background).
-    // (The deterministic tail-window sequence, plain waiting BEFORE
-    // working(background), is pinned in `drain.rs`'s unit test, R1F-12.)
+    // (The deterministic tail-window sequence, no plain waiting before
+    // working(background), is pinned in `drain.rs`'s unit test.)
     assert_eq!(
         seen.last(),
         Some(&st(LifecycleState::Working, Some(BACKGROUND_REASON))),
         "got {seen:?}"
     );
     advance_secs(61).await;
+    // In this harness the drain's finally runs BEFORE the late chunk, so the
+    // turn end was already announced (`waiting_for_human(None)`, seen above);
+    // the chunk is a straggler (State table row 26) and settles silently.
     assert_eq!(
         h.states().last(),
         Some(&st(
@@ -492,6 +495,11 @@ async fn boot_sweep_settles_stale_background_working() {
     project.direct_sessions = vec![
         direct_session("bg", LifecycleState::Working, Some("background")),
         direct_session("notice", LifecycleState::Working, Some("subagent-notice")),
+        direct_session(
+            "unann",
+            LifecycleState::Working,
+            Some("background-turn-ended"),
+        ),
         direct_session("plain", LifecycleState::Working, None),
         direct_session(
             "waiting",
@@ -507,7 +515,7 @@ async fn boot_sweep_settles_stale_background_working() {
     store.add_project(project).await.unwrap();
     let (tx, mut rx) = broadcast::channel(64);
     let n = sweep_stale_background_working(&store, &Broadcaster(tx)).await;
-    assert_eq!(n, 2);
+    assert_eq!(n, 3);
 
     let state_of = |id: &str| {
         let store = store.clone();
@@ -526,6 +534,11 @@ async fn boot_sweep_settles_stale_background_working() {
             )
         );
     }
+    // Turn end never announced: settle visibly so the parent's notify fires.
+    assert_eq!(
+        state_of("unann").await,
+        (LifecycleState::WaitingForHuman, None)
+    );
     assert_eq!(state_of("plain").await, (LifecycleState::Working, None));
     assert_eq!(
         state_of("tmux").await,
@@ -536,7 +549,10 @@ async fn boot_sweep_settles_stale_background_working() {
         ids.push(session_id);
     }
     ids.sort();
-    assert_eq!(ids, vec!["bg".to_string(), "notice".to_string()]);
+    assert_eq!(
+        ids,
+        vec!["bg".to_string(), "notice".to_string(), "unann".to_string()]
+    );
 }
 
 /// 1.T17 — a straggler update after a turn ended looks like an OOB cycle:

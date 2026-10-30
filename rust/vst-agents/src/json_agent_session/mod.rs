@@ -15,11 +15,13 @@ pub mod boot_sweep;
 pub mod connection;
 pub mod drain;
 pub mod events;
+pub mod lifecycle;
 pub mod meta;
 pub mod model_race;
 pub mod out_of_band;
 pub mod pids;
 pub mod queue;
+pub mod task_signals;
 pub mod tasks;
 
 use std::collections::{HashMap, HashSet};
@@ -35,8 +37,8 @@ use vst_store::transcript::{
 };
 use vst_types::{
     Attachment, Broadcaster, CarryOver, Command, LifecycleState, Mention, NormalizedEvent,
-    NormalizedEventKind, NormalizedEventProvider, ProjectRecord, ServerEvent, SessionBreakKind,
-    SessionLifecycle, SessionMeta, SessionRecord, TurnState, UsageInfo, WorktreeRecord,
+    NormalizedEventKind, NormalizedEventProvider, ProjectRecord, SessionBreakKind, SessionMeta,
+    SessionRecord, TurnState, UsageInfo, WorktreeRecord,
 };
 
 use crate::acp_connection::AcpConnection;
@@ -218,6 +220,12 @@ pub(super) struct State {
     // ---- lifecycle writer / background window (see `background.rs`) ----
     /// Last lifecycle state this session wrote (under `Inner::lifecycle_lock`).
     pub(super) last_written: LifecycleState,
+    /// Reason of the last lifecycle write (dedup key with `last_written`).
+    pub(super) last_written_reason: Option<String>,
+    /// A turn ended since the last visible `waiting_for_human(None)` (see `lifecycle.rs`).
+    pub(super) turn_end_unannounced: bool,
+    /// Task ids whose hold lapse already produced a chat `Status` row.
+    pub(super) lapse_announced: HashSet<String>,
     /// An out-of-band window is open: lifecycle is `working` without a drain.
     pub(super) bg_working: bool,
     /// Bumped whenever a window opens or a real drain invalidates it.
@@ -392,6 +400,7 @@ impl JsonAgentSession {
         let (drain_tx, _) = watch::channel(true); // true = idle initially
 
         let initial_lifecycle = opts.session.lifecycle.state;
+        let initial_reason = opts.session.lifecycle.reason.clone();
         let session_id_for_tasks = opts.session.id.clone();
         let state = State {
             project: opts.project,
@@ -422,6 +431,9 @@ impl JsonAgentSession {
             out_of_band_turn_id: None,
             out_of_band_last_at_ms: 0,
             last_written: initial_lifecycle,
+            last_written_reason: initial_reason,
+            turn_end_unannounced: false,
+            lapse_announced: HashSet::new(),
             bg_working: false,
             bg_gen: 0,
             bg_last_content: None,
@@ -850,61 +862,6 @@ impl JsonAgentSession {
         let _ = rx.wait_for(|&v| v).await;
     }
 
-    /// The single JSON-channel lifecycle writer. Takes `lifecycle_lock`,
-    /// then no-ops if released (checked INSIDE the lock).
-    pub(super) async fn write_lifecycle(&self, new_state: LifecycleState, reason: Option<&str>) {
-        let _guard = self.0.lifecycle_lock.lock().await;
-        self.write_lifecycle_locked(new_state, reason).await;
-    }
-
-    /// Body of [`Self::write_lifecycle`]; the caller MUST hold `lifecycle_lock`.
-    pub(super) async fn write_lifecycle_locked(
-        &self,
-        new_state: LifecycleState,
-        reason: Option<&str>,
-    ) {
-        if self.is_released() {
-            return;
-        }
-        let (project_id, session_id) = {
-            let mut s = self.0.state.lock().unwrap();
-            s.last_written = new_state;
-            (s.project.id.clone(), s.session.id.clone())
-        };
-        let lifecycle = SessionLifecycle {
-            state: new_state,
-            reason: reason.map(str::to_string),
-            last_transition_at: crate::util::now_iso_8601(),
-        };
-        let _ = self
-            .0
-            .store_handle
-            .update_session_lifecycle(&project_id, &session_id, lifecycle)
-            .await;
-        self.0.broadcaster.send(ServerEvent::SessionState {
-            session_id,
-            state: new_state,
-            reason: reason.map(str::to_string),
-        });
-    }
-
-    /// `working` for a human-originated turn (send / chat / resubmit / create /
-    /// scheduled delivery), reason `None`. Skipped unless a turn is running or
-    /// queued: a fast turn may already have finished (drain's final
-    /// `waiting_for_human`) before the caller got here, and a late `working`
-    /// would then stick.
-    pub async fn write_working_for_human_turn(&self) {
-        let _guard = self.0.lifecycle_lock.lock().await;
-        let live = {
-            let s = self.0.state.lock().unwrap();
-            s.running || !s.queue.is_empty()
-        };
-        if live {
-            self.write_lifecycle_locked(LifecycleState::Working, None)
-                .await;
-        }
-    }
-
     /// Persist the per-session model override.
     pub(super) async fn persist_model_override(&self, override_model: Option<String>) {
         let (project_id, worktree_id, session_id) = {
@@ -1086,6 +1043,7 @@ pub fn get_or_create_json_agent_session(
     if created {
         // OUTSIDE the registry lock: reads the transcript.
         session.start_task_rebuild();
+        session.start_hold_follower();
     }
     session
 }

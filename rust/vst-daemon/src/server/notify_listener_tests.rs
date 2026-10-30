@@ -140,3 +140,22 @@ async fn turn_end_then_background_window_yields_exactly_one_parent_notice() {
     assert_eq!(deps.populated.load(Ordering::SeqCst), 1);
     assert_eq!(deps.pruned.load(Ordering::SeqCst), 0);
 }
+
+/// A turn ended while a task held the session: `working(background-turn-ended)`
+/// is invisible, and the eventual `waiting_for_human(None)` (also what the boot
+/// sweep writes for that reason) is the single parent notice.
+#[tokio::test(start_paused = true)]
+async fn background_turn_ended_working_is_silent_and_settle_notifies_once() {
+    let (b, deps) = start();
+    tokio::task::yield_now().await;
+    b.send(state(
+        LifecycleState::Working,
+        Some("background-turn-ended"),
+    ));
+    flush().await;
+    assert_eq!(deps.populated.load(Ordering::SeqCst), 0);
+    assert_eq!(deps.pruned.load(Ordering::SeqCst), 0);
+    b.send(state(LifecycleState::WaitingForHuman, None));
+    flush().await;
+    assert_eq!(deps.populated.load(Ordering::SeqCst), 1);
+}

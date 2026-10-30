@@ -13,7 +13,9 @@ use tokio_util::sync::CancellationToken;
 use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, TurnState};
 
 use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn};
-use crate::json_agent_chat::{BACKGROUND_REASON, SUBAGENT_NOTICE_REASON};
+use crate::json_agent_chat::{
+    BACKGROUND_REASON, BACKGROUND_TURN_ENDED_REASON, SUBAGENT_NOTICE_REASON,
+};
 use crate::{
     plugin::{TurnContext, TurnInput},
     skill_resolution::{get_merged_skill_catalog, inject_attachments, resolve_skill_invocations},
@@ -21,10 +23,15 @@ use crate::{
 
 /// R9: a child still counts as "waiting for the human" when it is
 /// `WaitingForHuman`, or `Working` only because of an out-of-band
-/// (`background`) window — that transition is invisible to parent notify.
+/// (`background`) window or a live background task (an announced settle is
+/// still pending) — that transition is invisible to parent notify.
 fn counts_as_waiting(l: &vst_types::SessionLifecycle) -> bool {
     l.state == LifecycleState::WaitingForHuman
-        || (l.state == LifecycleState::Working && l.reason.as_deref() == Some(BACKGROUND_REASON))
+        || (l.state == LifecycleState::Working
+            && matches!(
+                l.reason.as_deref(),
+                Some(BACKGROUND_REASON | BACKGROUND_TURN_ENDED_REASON)
+            ))
 }
 
 impl JsonAgentSession {
@@ -142,6 +149,7 @@ impl JsonAgentSession {
         {
             let mut s = self.0.state.lock().unwrap();
             s.running = false;
+            s.turn_end_unannounced = true;
             if !s.queue.is_empty() {
                 s.turn_state = TurnState::Queued;
             } else if s.turn_state != TurnState::Error {
@@ -150,36 +158,15 @@ impl JsonAgentSession {
         }
         self.emit_meta();
 
-        // Persist lifecycle → waiting_for_human (Decision 11). The lifecycle
-        // poller skips JSON sessions, so this is the only mechanism. Written
-        // under `lifecycle_lock`: if a newer drain already started, it owns the
-        // final write; if out-of-band content arrived since `running=false`,
-        // write the plain waiting then re-enter `working(background)`, and let the
-        // quiet timer settle.
+        // Re-derive the lifecycle (Decision 11). The lifecycle poller skips JSON
+        // sessions, so this is the only mechanism. `reconcile_lifecycle_locked`
+        // reads every input fresh under `lifecycle_lock` and no-ops if a newer
+        // drain already started. With live tasks or an open window it writes
+        // `working(background)` and DEFERS the visible `waiting_for_human(None)`
+        // (`turn_end_unannounced`) until the session truly settles.
         {
             let _guard = self.0.lifecycle_lock.lock().await;
-            let (running, bg) = {
-                let s = self.0.state.lock().unwrap();
-                (s.running, s.bg_working)
-            };
-            if !running {
-                // The turn's real end is always written (reason `None`, visible
-                // to parent notify: "subagent finished"). If an out-of-band
-                // window opened in the tail, re-enter `working(background)`
-                // right after — both reasons `background*` are silent to the
-                // notify listener, so skipping the plain write would hide this
-                // turn end from the parent (R1F-12).
-                self.write_lifecycle_locked(LifecycleState::WaitingForHuman, None)
-                    .await;
-                // Re-read: `note_background_activity` does not take `lifecycle_lock`, so a chunk can land
-                // between the read above and the plain write (it would then see `last_written == Working`
-                // and skip its own write), leaving the session showing waiting while output flows.
-                let bg_now = bg || self.0.state.lock().unwrap().bg_working;
-                if bg_now {
-                    self.write_lifecycle_locked(LifecycleState::Working, Some(BACKGROUND_REASON))
-                        .await;
-                }
-            }
+            self.reconcile_lifecycle_locked().await;
         }
 
         // Signal idle — but only if no new drain started while we awaited the
@@ -601,7 +588,7 @@ mod tests {
     };
 
     use super::super::{JsonAgentSession, JsonAgentSessionOptions};
-    use crate::json_agent_chat::BACKGROUND_REASON;
+    use crate::json_agent_chat::BACKGROUND_TURN_ENDED_REASON;
     use crate::plugin::{
         AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
         PromptDelivery, ReadySignal, TurnContext, TurnInput,
@@ -741,12 +728,13 @@ mod tests {
         out
     }
 
-    /// R1F-12 — an out-of-band window opening between `running=false` and the
-    /// drain's final write must still emit the turn's plain
-    /// `waiting_for_human` (None) BEFORE `working(background)`, so the parent
-    /// notify listener (which ignores `background*`) sees the turn end.
-    #[tokio::test]
-    async fn bg_in_drain_tail_emits_plain_waiting_before_background_working() {
+    /// An out-of-band window opening between `running=false` and the drain's
+    /// final reconcile defers the turn-end announcement: NO plain
+    /// `waiting_for_human` (None) before `working(background)`; the visible
+    /// one is written when the window settles, so the parent notify listener
+    /// sees the child's real end exactly once.
+    #[tokio::test(start_paused = true)]
+    async fn bg_in_drain_tail_defers_turn_end() {
         let dir = tempfile::tempdir().unwrap();
         let _home = crate::home::with_home(dir.path().to_path_buf());
         let store = vst_store::StoreHandle::open(dir.path().join("t.db")).unwrap();
@@ -801,15 +789,25 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         let seen = lifecycle_events(&mut rx);
-        let pos_plain = seen
-            .iter()
-            .position(|e| *e == (LifecycleState::WaitingForHuman, None))
-            .unwrap_or_else(|| panic!("no plain waiting in {seen:?}"));
-        let pos_bg = seen
-            .iter()
-            .position(|e| *e == (LifecycleState::Working, Some(BACKGROUND_REASON.to_string())))
-            .unwrap_or_else(|| panic!("no background working in {seen:?}"));
-        assert!(pos_plain < pos_bg, "got {seen:?}");
-        assert_eq!(seen.last().unwrap().1.as_deref(), Some(BACKGROUND_REASON));
+        assert!(
+            !seen.contains(&(LifecycleState::WaitingForHuman, None)),
+            "turn end must be deferred, got {seen:?}"
+        );
+        assert_eq!(
+            seen.last().unwrap(),
+            &(
+                LifecycleState::Working,
+                Some(BACKGROUND_TURN_ENDED_REASON.to_string())
+            ),
+            "got {seen:?}"
+        );
+
+        tokio::time::sleep(Duration::from_secs(61)).await;
+        let seen = lifecycle_events(&mut rx);
+        assert_eq!(
+            seen.last().unwrap(),
+            &(LifecycleState::WaitingForHuman, None),
+            "got {seen:?}"
+        );
     }
 }

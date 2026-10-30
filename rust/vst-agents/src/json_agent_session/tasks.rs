@@ -2,7 +2,8 @@
 //! coalescing, watchers, output reader) is owned by `vst-tasks`; this file only
 //! wires one registry per session: detection is the plugin's
 //! `task_observations`, change notifications become `ServerEvent`s, and the
-//! initial state is rebuilt from the persisted transcript.
+//! initial state is rebuilt from the persisted transcript. The registry's hold watch
+//! (`TaskRegistry::subscribe_hold`) is followed by `lifecycle.rs`.
 
 use std::sync::Arc;
 
@@ -66,6 +67,41 @@ impl JsonAgentSession {
                     .unwrap_or_default();
             this.0.tasks.rebuild(&rows);
         });
+    }
+
+    /// Test seam: replace the registry's output-writer liveness probe.
+    #[doc(hidden)]
+    pub fn set_task_probe_for_test(&self, p: Arc<dyn vst_tasks::LivenessProbe>) {
+        self.0.tasks.set_probe_for_test(p);
+    }
+
+    /// Test seam: re-enter the registry's rebuilding state (live observations
+    /// are buffered, `hold()` is empty).
+    #[doc(hidden)]
+    pub fn begin_task_rebuild_for_test(&self) {
+        self.0.tasks.begin_rebuild();
+    }
+
+    /// Test seam: finish a rebuild started by [`Self::begin_task_rebuild_for_test`]
+    /// with no persisted rows, replaying only the buffered observations.
+    #[doc(hidden)]
+    pub fn finish_task_rebuild_for_test(&self) {
+        self.0.tasks.rebuild(&[]);
+    }
+
+    /// Test seam: simulate an ACP connection replacement (new adapter epoch).
+    #[doc(hidden)]
+    pub fn bump_task_epoch_for_test(&self) {
+        self.0.tasks.bump_epoch();
+    }
+
+    /// Test seam: a daemon-restart rebuild — re-enter the rebuilding state and
+    /// replay the persisted transcript rows, exactly like `start_task_rebuild`.
+    #[doc(hidden)]
+    pub fn rebuild_tasks_from_transcript_for_test(&self) {
+        self.0.tasks.begin_rebuild();
+        let rows = self.read_last_rows(TASK_REBUILD_ROWS);
+        self.0.tasks.rebuild(&rows);
     }
 
     fn read_last_rows(&self, limit: usize) -> Vec<NormalizedEvent> {

@@ -8,10 +8,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use vst_agents::claude::create_claude_plugin;
-use vst_agents::claude_tasks::claude_enrich_hook;
+use vst_agents::claude_tasks::{claude_enrich_hook, claude_task_signal_event};
 use vst_agents::AgentPlugin;
 use vst_tasks::TaskObservation as O;
-use vst_types::NormalizedEvent;
+use vst_types::{NormalizedEvent, NormalizedEventKind, TaskState};
 
 fn fixture(name: &str) -> Value {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -226,4 +226,257 @@ fn enrich_hook_copies_parent_tool_use_id_and_nothing_else() {
     // No parent id -> no replacement.
     let plain = SessionUpdate::ToolCall(ToolCall::new(ToolCallId::new("x"), "t"));
     assert!(hook(&plain, &base).is_none());
+}
+
+#[test]
+fn result_row_yields_turn_settled_and_text_or_usage_rows_yield_nothing() {
+    assert_eq!(obs("claude_turn_result.json"), vec![O::TurnSettled]);
+    let plugin = create_claude_plugin();
+    for kind in ["text", "usage", "thinking"] {
+        let mut v = fixture("claude_turn_result.json");
+        v["event"]["kind"] = Value::String(kind.into());
+        assert_eq!(plugin.task_observations(&event(&v)), vec![], "{kind}");
+    }
+}
+
+/// The persisted `Result` row carries NO stop reason (`acp_run_turn.rs` emits
+/// it for end_turn, refusal, max_tokens and an adapter/watchdog-answered
+/// `cancelled` alike, with or without usage); a failed turn emits an `error`
+/// row and no `Result`; a user cancel returns before any `Result`. So every
+/// `Result` is treated as a settle: see the `claude_tasks.rs` module docs.
+#[test]
+fn every_result_row_settles_but_error_rows_do_not() {
+    let plugin = create_claude_plugin();
+    // Normal (usage present) and cancelled/watchdog shape (no usage).
+    for usage in [true, false] {
+        let mut v = fixture("claude_turn_result.json");
+        if !usage {
+            v["event"]["usage"] = Value::Null;
+        }
+        assert_eq!(
+            plugin.task_observations(&event(&v)),
+            vec![O::TurnSettled],
+            "usage={usage}"
+        );
+    }
+    let mut v = fixture("claude_turn_result.json");
+    v["event"]["kind"] = Value::String("error".into());
+    assert_eq!(plugin.task_observations(&event(&v)), vec![]);
+}
+
+// --- raw SDK task signals (adapter 0.98.0 `emitRawSDKMessages`) ---
+//
+// `raw_*.json` are the `params` of `_claude/sdkMessage` notifications exactly as
+// the REAL adapter emitted them (scripts/claude-acp-raw-harness).
+
+const RAW: &str = "_claude/sdkMessage";
+
+fn signal(name: &str) -> NormalizedEvent {
+    claude_task_signal_event(RAW, &fixture(name)).unwrap_or_else(|| panic!("{name}: no signal"))
+}
+
+fn signal_obs(name: &str) -> Vec<O> {
+    create_claude_plugin().task_observations(&signal(name))
+}
+
+const RAW_FIXTURES: [&str; 12] = [
+    "raw_task_started_bash.json",
+    "raw_task_started_ambient.json",
+    "raw_task_started_monitor.json",
+    "raw_task_started_agent.json",
+    "raw_task_updated_running.json",
+    "raw_task_updated_paused.json",
+    "raw_task_updated_backgrounded.json",
+    "raw_task_updated_killed.json",
+    "raw_task_updated_failed.json",
+    "raw_task_notification_completed.json",
+    "raw_task_notification_failed.json",
+    "raw_task_notification_worker_restart.json",
+];
+
+/// 8.T1: every real payload becomes a `TaskSignal` row without the sensitive/bulky fields.
+#[test]
+fn raw_messages_become_whitelisted_task_signal_rows() {
+    for name in RAW_FIXTURES {
+        let ev = signal(name);
+        assert_eq!(ev.kind, NormalizedEventKind::TaskSignal, "{name}");
+        let sig = ev.task_signal.as_ref().unwrap().as_object().unwrap();
+        for banned in [
+            "prompt",
+            "usage",
+            "uuid",
+            "session_id",
+            "resource_links",
+            "type",
+        ] {
+            assert!(!sig.contains_key(banned), "{name} leaks {banned}");
+        }
+        assert!(
+            sig["task_id"].as_str().is_some_and(|s| !s.is_empty()),
+            "{name}"
+        );
+    }
+    // The agent fixture really carried a prompt on the wire; it must be stripped.
+    assert!(fixture("raw_task_started_agent.json")["message"]["prompt"].is_string());
+    let sig = signal("raw_task_started_bash.json").task_signal.unwrap();
+    assert_eq!(sig["subtype"], "task_started");
+    assert_eq!(sig["task_type"], "local_bash");
+    assert_eq!(sig["is_backgrounded"], true);
+    assert_eq!(sig["tool_use_id"], "toolu_bash01");
+}
+
+#[test]
+fn only_the_three_task_system_messages_on_the_raw_method_are_accepted() {
+    let p = fixture("raw_task_started_bash.json");
+    assert!(claude_task_signal_event("_claude/other", &p).is_none());
+    assert!(claude_task_signal_event("session/update", &p).is_none());
+    let mut other = p.clone();
+    other["message"]["type"] = "assistant".into();
+    assert!(claude_task_signal_event(RAW, &other).is_none());
+    let mut other = p.clone();
+    other["message"]["subtype"] = "status".into();
+    assert!(claude_task_signal_event(RAW, &other).is_none());
+    let mut no_id = p.clone();
+    no_id["message"].as_object_mut().unwrap().remove("task_id");
+    assert!(claude_task_signal_event(RAW, &no_id).is_none());
+    assert!(claude_task_signal_event(RAW, &serde_json::json!({"message": 3})).is_none());
+    assert!(claude_task_signal_event(RAW, &serde_json::json!(null)).is_none());
+    // Oversized free text is clipped.
+    let mut big = p;
+    big["message"]["description"] = "d".repeat(5_000).into();
+    let sig = claude_task_signal_event(RAW, &big)
+        .unwrap()
+        .task_signal
+        .unwrap();
+    assert_eq!(sig["description"].as_str().unwrap().chars().count(), 200);
+}
+
+/// 8.T2: observations exactly per the plan's A-D6 table.
+#[test]
+fn signal_rows_yield_confirmed_and_ended_per_the_table() {
+    assert_eq!(
+        signal_obs("raw_task_started_bash.json"),
+        vec![O::Confirmed {
+            id: "bx1a2b3c4".into(),
+            tool_id: Some("toolu_bash01".into()),
+            paused: false
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_started_agent.json"),
+        vec![O::Confirmed {
+            id: "agent-7f".into(),
+            tool_id: Some("toolu_agent01".into()),
+            paused: false
+        }]
+    );
+    assert!(signal_obs("raw_task_started_monitor.json").is_empty());
+    assert!(signal_obs("raw_task_started_ambient.json").is_empty());
+    assert_eq!(
+        signal_obs("raw_task_updated_running.json"),
+        vec![O::Confirmed {
+            id: "bx1a2b3c4".into(),
+            tool_id: None,
+            paused: false
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_updated_paused.json"),
+        vec![O::Confirmed {
+            id: "bx1a2b3c4".into(),
+            tool_id: None,
+            paused: true
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_updated_backgrounded.json"),
+        vec![O::Confirmed {
+            id: "bx9".into(),
+            tool_id: None,
+            paused: false
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_updated_killed.json"),
+        vec![O::Ended {
+            id: "bx2".into(),
+            tool_id: None,
+            state: TaskState::Stopped,
+            reason: None
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_updated_failed.json"),
+        vec![O::Ended {
+            id: "agent-7f".into(),
+            tool_id: None,
+            state: TaskState::Failed,
+            reason: Some("boom".into())
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_notification_completed.json"),
+        vec![O::Ended {
+            id: "bx1a2b3c4".into(),
+            tool_id: Some("toolu_bash01".into()),
+            state: TaskState::Done,
+            reason: None
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_notification_failed.json"),
+        vec![O::Ended {
+            id: "bx3".into(),
+            tool_id: Some("toolu_bash03".into()),
+            state: TaskState::Failed,
+            reason: None
+        }]
+    );
+    assert_eq!(
+        signal_obs("raw_task_notification_worker_restart.json"),
+        vec![O::Ended {
+            id: "agent-7f".into(),
+            tool_id: Some("toolu_agent01".into()),
+            state: TaskState::Stopped,
+            reason: None
+        }]
+    );
+}
+
+/// Tolerance: a foreground Bash start, a missing patch, an unknown status and a
+/// non-signal row all yield nothing (the probe fallback stays in charge).
+#[test]
+fn unexpected_signal_shapes_yield_no_observations() {
+    let plugin = create_claude_plugin();
+    let mk = |sig: Value| {
+        let mut e = NormalizedEvent::default();
+        e.kind = NormalizedEventKind::TaskSignal;
+        e.task_signal = Some(sig);
+        plugin.task_observations(&e)
+    };
+    use serde_json::json;
+    assert!(
+        mk(json!({"subtype": "task_started", "task_id": "x", "task_type": "local_bash"}))
+            .is_empty()
+    );
+    assert!(
+        mk(json!({"subtype": "task_started", "task_id": "x", "task_type": "local_agent"}))
+            .is_empty()
+    );
+    assert!(mk(json!({"subtype": "task_updated", "task_id": "x"})).is_empty());
+    assert!(
+        mk(json!({"subtype": "task_updated", "task_id": "x", "patch": {"status": "weird"}}))
+            .is_empty()
+    );
+    assert!(
+        mk(json!({"subtype": "task_notification", "task_id": "x", "status": "weird"})).is_empty()
+    );
+    assert!(mk(json!({"subtype": "nope", "task_id": "x"})).is_empty());
+    assert!(mk(json!("not an object")).is_empty());
+    let mut e = NormalizedEvent::default();
+    e.kind = NormalizedEventKind::TaskSignal;
+    assert!(
+        plugin.task_observations(&e).is_empty(),
+        "signal kind without payload"
+    );
 }

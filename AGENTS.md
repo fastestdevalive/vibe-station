@@ -256,7 +256,8 @@ else if (mode.cli === "opencode") { ... }
 | `supportsChannelResume?()` | optional | Two-identity model: `false` (cursor only) declares that no bridge exists from this CLI's ACP session to its own resume flag, so a json→tty toggle starting a fresh conversation is expected, not a bug. Unimplemented ≡ `true` |
 | `acpSessionIdIsNative?()` | optional (default `false`) | Two-identity model: `true` (omp, agy) declares the ACP `session/new` id IS the CLI's own resume id (`identical` strategy), so after a tty→json toggle refreshes `agent_chat_id` the daemon may drop a stale stored `acp_session_id` (which would otherwise win on reconnect). See `rust/vst-agents/src/omp.rs` |
 | `native_history_importer?()` | optional (default `None`) | At-rest history importer for this harness's native store (`None` ⇒ toggle reports `historyImported:false` and the UI warns). Implement once the store is readable — importing terminal history into Rich Chat is preferred for every harness, so a plugin that omits it carries a comment saying why not |
-| `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id` |
+| `acp_ext_notification_event(method, params)` | optional (default `None`) | Turns an ACP ext notification for the current session into a persisted, never-rendered `task_signal` row (claude: raw SDK `task_*` messages, opted into via `acp_meta` `emitRawSDKMessages`); vendor parsing in the harness's one task file. **Never declare `_meta.jetbrains.air` in `initialize`**: it flips the claude adapter into AIR-client mode, which rewrites every tool-call shape we normalize |
+| `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id`, returns `TurnSettled` from a `Result` row (its adapter holds a turn open until background subagents settle), and maps `task_signal` rows (see `acp_ext_notification_event`) to `Confirmed`/`Ended` — structured state that beats the OS liveness probe |
 
 ### The two session identities (ACP)
 
@@ -369,6 +370,9 @@ A PR that changes behaviour without changing the matrix should be sent back.
 
 ### What to watch for
 
+- **JSON (Rich Chat) lifecycle is derived** by `reconcile_lifecycle_locked` (`json_agent_session/lifecycle.rs`)
+  from drain · OOB window · `TaskRegistry::hold()`; the only writer is `write_lifecycle_locked`. Never add a
+  second prompt-less writer; feed a new input into reconcile instead.
 - **Colour and bucket deliberately disagree for `done`/`exited`** — the dot keeps the PR colour
   (blue/green) so you can see the branch landed, but the card stays in **Finished**, because
   `done` is an explicit manual user action. This is intentional; don't "fix" it into agreement.

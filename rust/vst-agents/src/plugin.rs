@@ -457,6 +457,24 @@ pub trait AgentPlugin: Send + Sync {
         None
     }
 
+    /// Turn one vendor ACP extension notification (any method other than
+    /// `session/update`, for the current ACP session) into a persisted
+    /// `task_signal` row, or `None` to drop it (the default, as before).
+    ///
+    /// **Contract:** pure; returns a `NormalizedEventKind::TaskSignal` event
+    /// carrying a whitelisted, size-clipped `task_signal` payload (the session
+    /// stamps id / ts / turn). Vendor parsing lives in the harness's one task
+    /// file (claude: `claude_tasks.rs`, raw SDK `task_*` messages opted into by
+    /// `acp_meta`). The matching `task_observations` turns the row into task
+    /// state.
+    fn acp_ext_notification_event(
+        &self,
+        _method: &str,
+        _params: &serde_json::Value,
+    ) -> Option<NormalizedEvent> {
+        None
+    }
+
     /// Extra env vars for the ACP adapter process, derived from the model the
     /// connection is being set up for. Merged over the daemon's inherited env
     /// and the launch spec's own env (a var can be overridden, not removed).
@@ -530,6 +548,14 @@ pub trait AgentPlugin: Send + Sync {
     /// panic on malformed input. Unstable harness text/format parsing belongs
     /// in ONE file per harness (claude: `claude_tasks.rs`). Default: none, so
     /// the tray stays hidden for harnesses without task support.
+    ///
+    /// `task_signal` rows (see `acp_ext_notification_event`) are persisted
+    /// inputs too: they may yield `Confirmed` / `Ended`, which the registry
+    /// treats as authoritative over its OS liveness probe.
+    ///
+    /// `TaskObservation::TurnSettled` (the event's turn ended, so its
+    /// background subagents are done) may only be reported by harnesses whose
+    /// turn is held open until its background subagents settle (claude).
     fn task_observations(&self, _ev: &NormalizedEvent) -> Vec<vst_tasks::TaskObservation> {
         Vec::new()
     }

@@ -285,6 +285,8 @@ impl JsonAgentSession {
             // completed (Decision 2 — load replays the whole history as
             // `session/update` notifications, which must not be ingested).
             self.attach_out_of_band_sink(&conn, enrich);
+            // Same ordering rule for the vendor ext-notification sink (task signals).
+            self.attach_ext_notification_sink(&conn);
 
             return Ok(conn);
         }
@@ -301,7 +303,7 @@ impl JsonAgentSession {
     }
 
     /// Emit + persist a visible `status` event.
-    fn emit_status(&self, text: &str) {
+    pub(super) fn emit_status(&self, text: &str) {
         let mut ev = vst_types::NormalizedEvent::default();
         ev.text = Some(text.to_string());
         let mut ev = self.new_event(NormalizedEventKind::Status, &mut ev);

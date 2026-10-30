@@ -3290,6 +3290,7 @@ dependencies = [
  "notify",
  "tempfile",
  "tokio",
+ "tracing",
  "vst-types",
 ]
 

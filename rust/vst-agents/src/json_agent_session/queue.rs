@@ -685,7 +685,8 @@ impl JsonAgentSession {
             // and spawn where a second caller could also spawn).
             s.running = true;
             // A real drain owns the lifecycle now: close any out-of-band
-            // window so its quiet timer can never write over the drain.
+            // window so its quiet timer can never write over the drain. (Task
+            // grace is irrelevant while `running`: reconcile no-ops.)
             s.bg_working = false;
             s.bg_gen += 1;
             // Signal not-idle while still holding the `state` lock, so a draining
