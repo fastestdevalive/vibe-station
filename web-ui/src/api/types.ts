@@ -354,7 +354,8 @@ export type NormalizedEventKind =
   | "mode_update"
   | "commands_update"
   | "message_generated"
-  | "session_break";
+  | "session_break"
+  | "task_signal";
 
 export type SessionBreakKind = "reset" | "switch";
 
@@ -475,6 +476,8 @@ export interface NormalizedEvent {
   toMode?: string;
   /** Tool events only — tool call id of the subagent this nested event ran under. */
   parentToolUseId?: string;
+  /** `task_signal` only — harness-specific task lifecycle payload (claude: whitelisted raw SDK message). Never rendered. */
+  taskSignal?: Record<string, unknown>;
 }
 
 /** Background task kinds (mirror of `TaskKind`). `monitor` is reserved. */
@@ -490,6 +493,7 @@ export interface TaskSummary {
   kind: TaskKind;
   label: string;
   state: TaskState;
+  /** Why a task ended (stale/failed/stopped), and — on a `running` row — why it is no longer counted as agent work (hold lapsed). */
   reason?: string;
   startedAt: string;
   endedAt?: string;

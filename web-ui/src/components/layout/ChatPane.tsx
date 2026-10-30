@@ -30,7 +30,6 @@ import { fromWire, toPlainText, toWire } from "@/lib/mentions";
 import { useSessionTasks } from "@/hooks/useSessionTasks";
 import { TaskTray } from "@/components/tasks/TaskTray";
 import { TaskView } from "@/components/tasks/TaskView";
-import { BackgroundLine } from "@/components/tasks/BackgroundLine";
 import { useTaskFocusReturn } from "@/components/tasks/useTaskFocusReturn";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
@@ -599,12 +598,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             setEditingScheduled(null);
             setEditScheduleError(null);
           }}
-        />
-        <BackgroundLine
-          liveState={liveState}
-          turnActive={turnActive}
-          turnState={meta?.turnState}
-          queueDepth={meta?.queueDepth ?? 0}
         />
         <StatusBar
           meta={meta}

@@ -143,6 +143,23 @@ describe("TaskTray", () => {
     expect(screen.getByTestId("task-icon-quiet")).toBeTruthy();
   });
 
+  it("a running row shows its reason (hold lapsed); without one it shows none", () => {
+    renderTray(
+      [mkTask({ id: "lapsed", reason: "Still running after 60 min — no longer counted as agent work" }), mkTask({ id: "plain" })],
+      { pref: "bar" },
+    );
+    const rows = screen.getAllByTestId("task-row");
+    expect(rows[0]!.textContent).toContain("Still running after 60 min");
+    expect(rows[1]!.querySelector(".task-tray__row-reason")).toBeNull();
+  });
+
+  it("a row's accessible name includes its reason", () => {
+    renderTray([mkTask({ id: "lapsed", reason: "Still running after 60 min — no longer counted as agent work" })], {
+      pref: "bar",
+    });
+    expect(screen.getByRole("button", { name: /no longer counted as agent work/ })).toBeTruthy();
+  });
+
   it("3.T1 all finished -> dot with a summary name, no aria-controls, other layers inert", () => {
     renderTray(finished(3));
     expect(mode()).toBe("dot");

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import type { Session, SessionMeta } from "@/api/types";
+import type { Session } from "@/api/types";
 import { mkTask } from "@/components/tasks/taskFixtures";
 import { useTaskStore } from "@/hooks/useTaskStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -28,17 +28,6 @@ function session(id: string, over: Partial<Session> = {}): Session {
     ...over,
   };
 }
-
-const meta = (sessionId: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({
-  sessionId,
-  channel: "json",
-  cli: "claude",
-  turnState: "idle",
-  queueDepth: 0,
-  queuedTurnIds: [],
-  editingTurnIds: [],
-  ...extra,
-});
 
 const seed = (sid: string, rev = Date.now()) =>
   act(() => useTaskStore.getState().applySnapshot(sid, rev, [mkTask({ id: "t1" }), mkTask({ id: "t2", label: "npm run dev" })]));
@@ -203,72 +192,5 @@ describe("ChatPane task view (2.T5)", () => {
     expect(screen.queryByTestId("task-tray")).toBeNull();
     act(() => api.__test.emit({ type: "session:tasks", sessionId: "c6", rev: Date.now() + 5, tasks: [mkTask({ id: "z" })] }));
     expect(screen.getByTestId("task-tray")).toBeTruthy();
-  });
-});
-
-describe("ChatPane background line (2.T5)", () => {
-  async function renderWorking(id: string, turnMeta: Partial<SessionMeta> = {}) {
-    const api = createMockApi();
-    useWorkspaceStore.setState({ sessionStates: { [id]: "working" } });
-    render(<ChatPane api={api} session={session(id, { state: "idle", lifecycleState: "idle" })} visible />);
-    await screen.findByRole("textbox", { name: /message/i });
-    act(() => api.__test.emit({ type: "session:meta", sessionId: id, meta: meta(id, turnMeta) }));
-    return api;
-  }
-
-  it("appears only after the condition held for 1.5s (fake timers) and uses live state", async () => {
-    const api = createMockApi();
-    useWorkspaceStore.setState({ sessionStates: { b1: "idle" } });
-    render(<ChatPane api={api} session={session("b1")} visible />);
-    await screen.findByRole("textbox", { name: /message/i });
-    vi.useFakeTimers();
-    act(() => useWorkspaceStore.setState({ sessionStates: { b1: "working" } }));
-    act(() => void vi.advanceTimersByTime(1400));
-    expect(screen.queryByTestId("background-line")).toBeNull();
-    act(() => void vi.advanceTimersByTime(200));
-    expect(screen.getByTestId("background-line").textContent).toBe("Agent is working in the background");
-  });
-
-  it("does not render for a working flash shorter than 1.5s", async () => {
-    const api = createMockApi();
-    useWorkspaceStore.setState({ sessionStates: { b2: "idle" } });
-    render(<ChatPane api={api} session={session("b2")} visible />);
-    await screen.findByRole("textbox", { name: /message/i });
-    vi.useFakeTimers();
-    act(() => useWorkspaceStore.setState({ sessionStates: { b2: "working" } }));
-    act(() => void vi.advanceTimersByTime(1000));
-    act(() => useWorkspaceStore.setState({ sessionStates: { b2: "waiting_for_human" } }));
-    act(() => void vi.advanceTimersByTime(3000));
-    expect(screen.queryByTestId("background-line")).toBeNull();
-  });
-
-  it("never while a turn is active", async () => {
-    await renderWorking("b3", { turnState: "responding" });
-    vi.useFakeTimers();
-    act(() => void vi.advanceTimersByTime(5000));
-    expect(screen.queryByTestId("background-line")).toBeNull();
-  });
-
-  it("never while turnState is queued or queueDepth > 0", async () => {
-    await renderWorking("b4", { turnState: "queued" });
-    vi.useFakeTimers();
-    act(() => void vi.advanceTimersByTime(5000));
-    expect(screen.queryByTestId("background-line")).toBeNull();
-  });
-
-  it("never while queueDepth > 0", async () => {
-    await renderWorking("b5", { queueDepth: 2 });
-    vi.useFakeTimers();
-    act(() => void vi.advanceTimersByTime(5000));
-    expect(screen.queryByTestId("background-line")).toBeNull();
-  });
-
-  it("is not driven by the stale lifecycleState field", async () => {
-    const api = createMockApi();
-    render(<ChatPane api={api} session={session("b6", { state: "idle", lifecycleState: "working" })} visible />);
-    await screen.findByRole("textbox", { name: /message/i });
-    vi.useFakeTimers();
-    act(() => void vi.advanceTimersByTime(5000));
-    expect(screen.queryByTestId("background-line")).toBeNull();
   });
 });
