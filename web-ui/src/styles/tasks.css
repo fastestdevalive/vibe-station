@@ -212,8 +212,8 @@
   width: var(--task-tray-dot-d);
   height: var(--task-tray-dot-d);
   padding: 0;
-  /* fg-secondary (neutral token, opaque in every theme; fg-muted is translucent in nord), for 3:1 non-text contrast. */
-  border: var(--border-width) solid var(--fg-secondary);
+  /* Same border colour as the composer shell it floats above. */
+  border: var(--border-width) solid var(--border-default);
   border-radius: 50%;
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
