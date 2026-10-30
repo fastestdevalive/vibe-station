@@ -19,7 +19,7 @@
 # `COPY --chown=vst:vst . .` below hashes the whole build context — with only
 # the target dirs excluded, editing so much as one .rs file still changed the
 # context and invalidated that COPY layer, forcing `--build` to rerun
-# `pnpm install`/the bun install/the claude-acp vendor install on every Rust
+# `pnpm install`/the bun install on every Rust
 # edit even though none of them depend on Rust source at all. Excluding all
 # of rust/ makes `--build` a near no-op unless web-ui/vendor/skill actually
 # changed.

@@ -315,14 +315,18 @@ if [ ! -f /usr/local/bin/vst-daemon-rust ] || [ ! -x /usr/local/bin/vst-daemon-r
   exit 1
 fi
 
-# Explicit, not relied-on-by-inference: `claude_acp_entry_path()`'s
-# walk-upward-from-cwd fallback would likely also find this (cwd is /app,
-# this WORKDIR, when `su -c` is invoked from here) but `su -c`'s cwd
-# behavior isn't a contract worth depending on silently — pin it directly.
-export VST_CLAUDE_ACP_ENTRY=/app/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
+# Rust ACP adapters: bind-mounted at /opt/rust-acp/* by a generated overlay (dev-sandbox.sh) only
+# when they were built; exported only when the mount is a real executable.
+for acp in claude codex; do
+  if [ -f "/opt/rust-acp/$acp-acp" ] && [ -x "/opt/rust-acp/$acp-acp" ]; then
+    if [ "$acp" = claude ]; then export VST_CLAUDE_ACP_BIN="/opt/rust-acp/$acp-acp"; else export VST_CODEX_ACP_BIN="/opt/rust-acp/$acp-acp"; fi
+  else
+    echo "[daemon] WARNING: $acp-acp adapter not mounted — $acp Rich Chat will fail (see scripts/build-rust-acp.sh)" >&2
+  fi
+done
 
 echo "[daemon] starting Rust daemon (/usr/local/bin/vst-daemon-rust)"
-su vst -c "VST_CLAUDE_ACP_ENTRY='$VST_CLAUDE_ACP_ENTRY' VST_NO_AUTH_BIND_ALL=1 /usr/local/bin/vst-daemon-rust" &
+su vst -c "VST_CLAUDE_ACP_BIN='${VST_CLAUDE_ACP_BIN:-}' VST_CODEX_ACP_BIN='${VST_CODEX_ACP_BIN:-}' VST_NO_AUTH_BIND_ALL=1 /usr/local/bin/vst-daemon-rust" &
 echo 'Waiting for daemon...'
 timeout=60
 while ! curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do

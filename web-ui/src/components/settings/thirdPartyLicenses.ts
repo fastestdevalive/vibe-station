@@ -7,22 +7,16 @@ export interface ThirdPartyLicense {
 
 export const THIRD_PARTY_LICENSES: ThirdPartyLicense[] = [
   {
-    name: "@agentclientprotocol/claude-agent-acp (+ @agentclientprotocol/sdk)",
-    role: "Claude Rich Chat adapter, compiled into claude-acp",
+    name: "claude-acp (Rust port of @agentclientprotocol/claude-agent-acp)",
+    role: "Claude Rich Chat adapter, shipped beside vst",
     license: "Apache-2.0",
     url: "https://github.com/agentclientprotocol/claude-agent-acp",
   },
   {
-    name: "@anthropic-ai/claude-agent-sdk",
-    role: "Runs the user's claude CLI, embedded in claude-acp",
-    license: "Anthropic terms",
-    url: "https://code.claude.com/docs/en/legal-and-compliance",
-  },
-  {
-    name: "Bun runtime",
-    role: "Embedded in claude-acp by bun build --compile",
-    license: "MIT",
-    url: "https://github.com/oven-sh/bun",
+    name: "codex-acp (Rust port of @agentclientprotocol/codex-acp)",
+    role: "Codex Rich Chat adapter, shipped beside vst",
+    license: "Apache-2.0",
+    url: "https://github.com/agentclientprotocol/codex-acp",
   },
   {
     name: "Geist",

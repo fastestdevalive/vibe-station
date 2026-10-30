@@ -308,11 +308,11 @@ extension); otherwise the message is queued (cancel-and-resend is the ceiling).
 
 | CLI | Steering | Notes |
 |---|---|---|
-| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0 (vendored: 0.98.0); reports `_meta.steering.supported: true` in `initialize`. One of two plugins implementing `supports_mid_turn_steering()` |
+| claude | **Supported, verified end-to-end** | `claude-agent-acp` ≥ 0.70.0 (the Rust port `claude-acp` mirrors 0.94.0); reports `_meta.steering.supported: true` in `initialize`. One of three plugins implementing `supports_mid_turn_steering()` (claude, codex, omp) |
 | opencode | **Disabled deliberately** | Advertises steering and replies `injected`, but the text never reaches the model (silently swallowed). Re-enable only after a fixed version is verified |
 | agy | Not supported | `agy` stream-json stdin accepts only `user` events (anything else is ignored) and `initialize` does not advertise steering; the daemon queues. No competitor steers agy mid-turn |
 | cursor | Not supported | Closed binary, no steering surface; cancelling starts a fresh conversation |
-| codex | Not supported | `codex-acp` has no `_session/steering` extension |
+| codex | **Supported** | The `codex-acp` adapter (npm 2.2.2 and the Rust port alike) answers `_session/steering` with `injected` on a running turn and reports `_meta.steering.supported`; the plugin opts in via `supports_mid_turn_steering()` |
 | omp | **Supported, verified omp 18.12.6 (injected + promptRequired)** | Model re-streams the answer so text can appear duplicated |
 | pi | N/A | Terminal only — no Rich Chat channel at all |
 
@@ -401,3 +401,21 @@ new/load session.
 
 Update sections 5–8 when a CLI ships a new ACP version or the daemon wires a
 new capability.
+
+## Claude / Codex adapters (Rust ports)
+
+Rich Chat for `claude` and `codex` runs the Rust ACP adapters `claude-acp` and `codex-acp` (no bun/node).
+The ports are private repos; the build ships **prebuilt** binaries (public release assets) pinned in **one** file,
+`vendor/rust-acp/pins.toml` (release URL, per-target sha256, port `rev`, and `upstream` = the npm adapter level the
+binary mirrors; `scripts/build-rust-acp.sh` verifies the sha256 and fails if `--version` does not report
+`+upstream.<upstream>`).
+
+- Fetch: `scripts/build-rust-acp.sh <claude|codex> [--target T | --docker]`. `--from-source` (or
+  `VST_CLAUDE_ACP_REPO` / `VST_CODEX_ACP_REPO` pointing at a port checkout) builds the port instead; maintainers use
+  it to cut a new prebuilt.
+- Launch override: `VST_CLAUDE_ACP_BIN` / `VST_CODEX_ACP_BIN`; otherwise `claude-acp` / `codex-acp` beside the
+  `vst` executable, or `rust/target/rust-acp/<name>/host/` in a dev checkout. CLI-specific logic stays in
+  `claude.rs` / `codex.rs`.
+- Bump: do "npm bump → diff → adopt" inside the port repo (its `UPSTREAM-BUMP.md` / `docs/UPSTREAM.md`), publish a
+  new prebuilt release, then follow the bump procedure in the header of `vendor/rust-acp/pins.toml`.
+  Parity drivers (maintainer tools; they need the npm reference adapter and `bun`): `scripts/parity/`.

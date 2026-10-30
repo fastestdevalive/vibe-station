@@ -43,10 +43,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/vst", "binaries/codex-acp"],
-    "resources": {
-      "../../vendor/claude-acp/node_modules": "claude-acp-vendor/node_modules"
-    },
+    "externalBin": ["binaries/vst", "binaries/claude-acp", "binaries/codex-acp"],
     "macOS": {
       "entitlements": "entitlements.mac.plist",
       "frameworks": [],
@@ -55,7 +52,7 @@
     },
     "linux": {
       "deb": {
-        "depends": []
+        "depends": ["libssl3"]
       },
       "appimage": {
         "bundleMediaFramework": false

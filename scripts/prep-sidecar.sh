@@ -14,11 +14,9 @@
 #      (cargo build --release) — one binary is both the CLI and, via
 #      `vst daemon run`, the daemon; see rust/vst-cli/src/dispatch.rs.
 #   4. Copy rust/target/release/vst → desktop/src-tauri/binaries/vst-<triple>
-#   5. Install the vendored claude-agent-acp adapter
-#      (vendor/claude-acp/node_modules, via install-claude-acp-vendor.sh) —
-#      tauri.conf.json's bundle.resources ships it as
-#      claude-acp-vendor/node_modules, so it must exist before bundling.
-#   6. Compile the codex-acp adapter (bun build --compile) →
+#   5. Build the claude-acp adapter (pinned Rust port, build-rust-acp.sh) →
+#      desktop/src-tauri/binaries/claude-acp-<triple>
+#   6. Build the codex-acp adapter (pinned Rust port) →
 #      desktop/src-tauri/binaries/codex-acp-<triple>
 #
 # Tauri resolves externalBin entries by appending the host triple, so the
@@ -119,29 +117,26 @@ cp "$SRC_CLI" "$DEST_CLI"
 chmod +x "$DEST_CLI"
 echo "    $(du -h "$DEST_CLI" | cut -f1)  $DEST_CLI"
 
-# ── Step 5: install the vendored claude-agent-acp adapter ────────────────────
-# Not a binary, but staged here anyway so this script stays the single "make
-# every bundle input exist" step `beforeBuildCommand` runs — Tauri reads
-# bundle.resources only after beforeBuildCommand finishes, and a missing
-# resource path fails the build outright. The adapter is platform-neutral JS
-# (optional per-platform packages are omitted, see that script's header), so
-# unlike the binaries above it needs no triple suffix. Run by `bun` at
-# runtime; the desktop host passes its path to the daemon as
-# VST_CLAUDE_ACP_ENTRY (desktop/src-tauri/src/daemon.rs).
-
-echo ""
-echo "==> Installing vendored claude-agent-acp adapter..."
-VST_VENDOR_FROZEN=1 bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
-
-# ── Step 6: compile the codex-acp adapter (bun build --compile) ──────────────
+# ── Step 5: build the claude-acp adapter (pinned Rust port) ─────────────────
 # A self-contained executable staged as
-# binaries/codex-acp-<triple>, which Tauri places beside `vst` at runtime where
-# the daemon finds it (rust/vst-agents/src/codex.rs `codex_acp_bin`). Host
-# build — bun compiles for the machine it runs on.
+# binaries/claude-acp-<triple>, which Tauri places beside `vst` at runtime where
+# the daemon finds it (rust/vst-agents/src/claude.rs `claude_acp_bin`). Pinned
+# in vendor/rust-acp/pins.toml; a pinned prebuilt download, no bun/node.
 
 echo ""
-echo "==> Compiling codex-acp adapter (pinned, bun build --compile)..."
-SRC_CODEX_ACP="$(VST_VENDOR_FROZEN=1 bash "$SCRIPT_DIR/build-codex-acp.sh")"
+echo "==> Building claude-acp adapter (pinned Rust port)..."
+SRC_CLAUDE_ACP="$(bash "$SCRIPT_DIR/build-rust-acp.sh" claude)"
+DEST_CLAUDE_ACP="$BINARIES_DIR/claude-acp-$TRIPLE$EXE_SUFFIX"
+cp "$SRC_CLAUDE_ACP" "$DEST_CLAUDE_ACP"
+chmod +x "$DEST_CLAUDE_ACP"
+echo "    $(du -h "$DEST_CLAUDE_ACP" | cut -f1)  $DEST_CLAUDE_ACP"
+
+# ── Step 6: build the codex-acp adapter (pinned Rust port) ───────────────────
+# Same sidecar shape as claude-acp above (codex.rs `codex_acp_bin`).
+
+echo ""
+echo "==> Building codex-acp adapter (pinned Rust port)..."
+SRC_CODEX_ACP="$(bash "$SCRIPT_DIR/build-rust-acp.sh" codex)"
 DEST_CODEX_ACP="$BINARIES_DIR/codex-acp-$TRIPLE$EXE_SUFFIX"
 cp "$SRC_CODEX_ACP" "$DEST_CODEX_ACP"
 chmod +x "$DEST_CODEX_ACP"

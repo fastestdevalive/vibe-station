@@ -39,11 +39,6 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
             is_musl: true
-            # claude-acp is the GLIBC bun build even in the musl tarball: the
-            # installer serves this tarball to glibc and musl systems alike,
-            # and a musl-linked bun cannot run on glibc (nor on bare Alpine
-            # without libstdc++). install.sh skips it on musl systems.
-            claude_target: x86_64-unknown-linux-gnu
           # Found in review: install.sh's own header comment already promises
           # aarch64-unknown-linux-musl as a published asset, but no CI job
           # ever built one — any aarch64 Linux curl-install would silently
@@ -52,7 +47,6 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             is_musl: true
-            claude_target: aarch64-unknown-linux-gnu
           # Intel macOS (x86_64-apple-darwin) deliberately dropped: the only
           # GitHub-hosted Intel runner left (macos-15-large) is a paid
           # "larger runners" tier this org doesn't have enabled -- see the
@@ -60,7 +54,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             is_musl: false
-            claude_target: aarch64-apple-darwin
 
     runs-on: ${{ matrix.os }}
 
@@ -119,20 +112,15 @@ jobs:
           workspaces: "rust -> target"
 
       # ── ACP adapters shipped in the CLI tarball ───────────────────────────
-      - name: Setup Bun (compiles claude-acp)
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
+      # claude-acp / codex-acp are the pinned Rust ports (vendor/rust-acp/pins.toml),
+      # static on musl so one tarball serves glibc and Alpine alike. NOTE: the pinned
+      # revs must be reachable from CI (the ports' repos/branches pushed) — see
+      # scripts/build-rust-acp.sh.
+      - name: Build claude-acp adapter (pinned Rust port)
+        run: bash scripts/build-rust-acp.sh claude --target ${{ matrix.target }}
 
-      - name: Build claude-acp adapter (pinned, frozen, bun --compile)
-        env:
-          VST_VENDOR_FROZEN: "1"
-        run: bash scripts/build-claude-acp.sh --target ${{ matrix.claude_target }}
-
-      - name: Build codex-acp adapter (pinned, frozen, bun --compile)
-        env:
-          VST_VENDOR_FROZEN: "1"
-        run: bash scripts/build-codex-acp.sh --target ${{ matrix.claude_target }}
+      - name: Build codex-acp adapter (pinned Rust port)
+        run: bash scripts/build-rust-acp.sh codex --target ${{ matrix.target }}
 
       # ── Build merged vst binary ───────────────────────────────────────────
       - name: Build merged vst release binary
@@ -178,24 +166,24 @@ jobs:
           echo "Alpine --version output: $OUTPUT"
           test "$OUTPUT" = "${{ steps.ver.outputs.version }}"
 
-          echo "==> Verifying claude-acp answers ACP initialize on a glibc distro (debian bullseye)..."
-          CLAUDE="rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp"
+          echo "==> Verifying claude-acp answers ACP initialize under Alpine (static musl)..."
+          CLAUDE="rust/target/rust-acp/claude/${{ matrix.target }}/claude-acp"
           test -x "$CLAUDE"
           printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
-          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CLAUDE:/bin/claude-acp:ro" -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/claude-acp > /tmp/acp-init.out || true
+          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CLAUDE:/bin/claude-acp:ro" -e HOME=/tmp alpine:latest timeout 12 /bin/claude-acp > /tmp/acp-init.out || true
 
           echo "==> Verifying the bundled agy-stream-acp subcommand answers initialize under Alpine..."
           (cat /tmp/acp-init.json; sleep 2) | docker run --rm -i -v "$(pwd)/$BIN:/bin/vst:ro" -e HOME=/tmp alpine:latest /bin/vst agy-stream-acp > /tmp/agy-init.out
           grep -q '"protocolVersion"' /tmp/agy-init.out || { echo "vst agy-stream-acp did not answer initialize"; cat /tmp/agy-init.out; exit 1; }
           grep -q '"protocolVersion"' /tmp/acp-init.out || { echo "claude-acp did not answer initialize"; cat /tmp/acp-init.out; exit 1; }
 
-          echo "==> Verifying codex-acp answers ACP initialize on a glibc distro (debian bullseye)..."
-          CODEX="rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp"
+          echo "==> Verifying codex-acp answers ACP initialize under Alpine (static musl)..."
+          CODEX="rust/target/rust-acp/codex/${{ matrix.target }}/codex-acp"
           test -x "$CODEX"
           # codex-acp only answers initialize once `codex app-server` answers it, and the
           # bundled adapter deliberately omits @openai/codex (users run their own `codex`
           # via CODEX_PATH). Point CODEX_PATH at a stub app-server so the smoke test is hermetic.
-          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CODEX:/bin/codex-acp:ro" -v "$(pwd)/scripts/fake-codex-app-server.sh:/bin/fake-codex:ro" -e CODEX_PATH=/bin/fake-codex -e HOME=/tmp debian:bullseye-slim timeout 12 /bin/codex-acp > /tmp/codex-init.out || true
+          (cat /tmp/acp-init.json; sleep 8) | docker run --rm -i -v "$(pwd)/$CODEX:/bin/codex-acp:ro" -v "$(pwd)/scripts/fake-codex-app-server.sh:/bin/fake-codex:ro" -e CODEX_PATH=/bin/fake-codex -e HOME=/tmp alpine:latest timeout 12 /bin/codex-acp > /tmp/codex-init.out || true
           grep -q '"protocolVersion"' /tmp/codex-init.out || { echo "codex-acp did not answer initialize"; cat /tmp/codex-init.out; exit 1; }
 
           echo "==> Booting the actual daemon inside Alpine and hitting /health..."
@@ -243,8 +231,8 @@ jobs:
         if: ${{ !matrix.is_musl }}
         run: |
           BIN="rust/target/${{ matrix.target }}/release/vst"
-          CLAUDE="rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp"
-          CODEX="rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp"
+          CLAUDE="rust/target/rust-acp/claude/${{ matrix.target }}/claude-acp"
+          CODEX="rust/target/rust-acp/codex/${{ matrix.target }}/codex-acp"
           test -x "$BIN" && test -x "$CLAUDE" && test -x "$CODEX"
           printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}' > /tmp/acp-init.json
           # macOS has no `timeout`: let the server end on stdin EOF after the reply.
@@ -268,8 +256,8 @@ jobs:
           # vst + claude-acp + codex-acp (see scripts/package-cli-tarball.sh)
           bash scripts/package-cli-tarball.sh \
             "$BIN_DIR/vst" \
-            "rust/target/claude-acp/${{ matrix.claude_target }}/claude-acp" \
-            "rust/target/codex-acp/${{ matrix.claude_target }}/codex-acp" \
+            "rust/target/rust-acp/claude/${{ matrix.target }}/claude-acp" \
+            "rust/target/rust-acp/codex/${{ matrix.target }}/codex-acp" \
             "$DIST_DIR/$ASSET"
 
           cd "$DIST_DIR"
@@ -364,14 +352,6 @@ jobs:
             libgtk-3-dev \
             libssl-dev \
             libayatana-appindicator3-dev
-
-      # ── Bun (prep-sidecar claude-acp vendor dependency) ───────────────────
-      # Pinned: an unpinned bun (1.4.3) produced a codex-acp binary that makes
-      # linuxdeploy's `ldd` scan abort the AppImage bundle (see desktop-build.yml).
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
 
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app

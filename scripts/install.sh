@@ -23,7 +23,7 @@
 # the normal way instead.
 #
 # The CLI tarball also carries claude-acp and codex-acp (self-contained ACP adapters for
-# Rich Chat, no bun/node needed), installed beside vst. claude-acp and codex-acp are skipped on musl.
+# Rich Chat, no bun/node needed), installed beside vst. Both are self-contained Rust binaries (static on Linux, whose tarballs are musl).
 #
 # Release assets consumed (GitHub Release of fastestdevalive/vibe-station):
 #   vst-<triple>.tar.gz              + vst-<triple>.tar.gz.sha256
@@ -269,16 +269,6 @@ install_cli() {
 	mkdir -p "$TMP/cli"
 	tar -xzf "$TMP/$_asset" -C "$TMP/cli" || err "failed to extract $_asset"
 	mkdir -p "$INSTALL_DIR"
-	# claude-acp is a glibc build of bun: it cannot run on musl (e.g. Alpine).
-	# Skip it there so the daemon never launches a binary that cannot exec.
-	if is_musl && [ -f "$TMP/cli/claude-acp" ]; then
-		rm -f "$TMP/cli/claude-acp"
-		warn "musl system: the bundled claude-acp (glibc) was skipped, so Rich Chat for Claude sessions is unavailable here"
-	fi
-	if is_musl && [ -f "$TMP/cli/codex-acp" ]; then
-		rm -f "$TMP/cli/codex-acp"
-		warn "musl system: the bundled codex-acp (glibc) was skipped, so Rich Chat for Codex sessions is unavailable here"
-	fi
 	_n=0
 	# Accept either a flat archive or one wrapping directory (cargo-dist style).
 	for _src in "$TMP/cli"/* "$TMP/cli"/*/*; do

@@ -7,8 +7,8 @@
 #   vst
 #   claude-acp   (found by vst_agents::claude::claude_acp_bin: beside current_exe)
 #   codex-acp    (found by vst_agents::codex::codex_acp_bin: beside current_exe)
-# claude-acp / codex-acp are the pinned ACP adapters compiled with the bun
-# runtime (scripts/build-{claude,codex}-acp.sh), so no bun/node is needed at runtime.
+# claude-acp / codex-acp are the pinned Rust ACP adapters (vendor/rust-acp/pins.toml,
+# scripts/build-rust-acp.sh), so no bun/node is needed at runtime.
 
 set -euo pipefail
 
