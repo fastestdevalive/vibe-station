@@ -40,7 +40,7 @@ FROM node:24-slim
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tmux git procps curl ripgrep ca-certificates unzip \
+    tmux git procps curl ripgrep ca-certificates unzip libssl3 \
     python3 make g++ \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -146,13 +146,11 @@ RUN chmod +x /app/scripts/dev-entrypoint.sh
 USER vst
 RUN pnpm install --no-frozen-lockfile
 
-# Claude's ACP path (see rust/vst-agents/src/claude.rs) spawns the official
-# `claude-agent-acp` adapter via a plain `bun <entry.js>` — Bun is a hard
-# runtime dependency of Claude's Rich Chat, not otherwise needed by this
-# project. (agy's Rich Chat needs neither bun nor npm nor any mounted binary:
-# it runs as the hidden `agy-stream-acp` subcommand of the daemon's own `vst`
-# binary.) Installed as `vst` (not root) so it lands under $HOME/.bun,
-# matching how the daemon itself runs `bun` at spawn time.
+# Bun is still needed in-image for `omp` (below). The Claude/Codex Rich Chat adapters
+# are the pinned Rust ports (`claude-acp`/`codex-acp`), bind-mounted from the host through
+# the overlay dev-sandbox.sh generates (fetched with `scripts/build-rust-acp.sh <name> --docker`); agy's
+# runs as the hidden `agy-stream-acp` subcommand of the daemon's own `vst`. Installed as
+# `vst` (not root) so it lands under $HOME/.bun.
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/vst/.bun/bin:${PATH}"
 
@@ -166,22 +164,6 @@ ENV PATH="/home/vst/.bun/bin:${PATH}"
 # (session/load ignoring --session-dir, ACP id == session-file id, v3 entry shape —
 # see rust/vst-agents/tests/fixtures/omp/README.txt). Bump them together.
 RUN bun install -g @oh-my-pi/pi-coding-agent@18.12.6
-
-# Vendor install for Claude's ACP adapter (see scripts/install-claude-acp-vendor.sh
-# for why `--omit=optional` matters — skips 600MB+ of per-platform binaries
-# this project never uses). `rust/vst-agents/src/claude.rs::claude_acp_entry_path`
-# would find this by walking upward from the daemon's cwd (`/app`, this
-# WORKDIR), but scripts/dev-entrypoint.sh also pins VST_CLAUDE_ACP_ENTRY to it
-# explicitly so the lookup doesn't depend on `su -c`'s cwd.
-RUN ./scripts/install-claude-acp-vendor.sh
-
-# Same for Codex's ACP adapter (Rich Chat), found by the same walk-upward from
-# /app. Used to be bind-mounted from the host's vendor/codex-acp, which is empty
-# until someone runs this script on the host — so codex Rich Chat silently had no
-# adapter in a fresh checkout's sandbox. Installing it here, like claude-acp,
-# removes that host prerequisite (the adapter is pure JS; `codex.rs` points it at
-# the in-image `codex` via CODEX_PATH).
-RUN ./scripts/install-codex-acp-vendor.sh
 
 # The Rust CLI binary is mounted from the host at /usr/local/bin/vst-rust by
 # docker-compose.dev.yml, and scripts/dev-entrypoint.sh symlinks it to

@@ -105,13 +105,13 @@ The installer needs no `sudo`, puts the CLI in `~/.local/bin`, and is safe to re
 
 The `vst` binary contains the daemon and web UI; you install neither Node.js nor pnpm. The Cloudflare tunnel needs `cloudflared` installed separately (Settings → Remote access shows per-OS commands, e.g. `brew install cloudflared`).
 
-The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Claude and Codex adapters compiled with the bun runtime, so no bun or Node is needed). (agy Rich Chat needs no adapter binary: it runs as the hidden `vst agy-stream-acp` subcommand of `vst` itself.) They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `claude-acp` and `codex-acp` are glibc builds and are skipped on musl systems (e.g. Alpine). `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
+The CLI install also bundles the ACP adapters for Rich Chat as self-contained executables beside `vst` — `claude-acp` and `codex-acp` (the pinned Rust ports of the Claude and Codex adapters — no bun or Node needed). (agy Rich Chat needs no adapter binary: it runs as the hidden `vst agy-stream-acp` subcommand of `vst` itself.) They still drive your own `agy` / `claude` / `codex` CLIs, which you must have installed. `cursor` and `opencode` use your own `cursor-agent` / `opencode` binaries.
 
 **You still need** `tmux`, `git`, and at least one agent CLI on your `PATH`: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy. Run `vst doctor` to check.
 
 ### Build from source
 
-Prerequisites: a Rust toolchain (pinned in `rust/rust-toolchain.toml`), Node.js ≥ 20 and pnpm ≥ 9 (for the web UI and desktop shell), `tmux`, `git`, and `bun` for Claude Rich Chat.
+Prerequisites: a Rust toolchain (pinned in `rust/rust-toolchain.toml`), Node.js ≥ 20 and pnpm ≥ 9 (for the web UI and desktop shell), `tmux`, `git`.
 
 ```bash
 git clone https://github.com/fastestdevalive/vibe-station.git

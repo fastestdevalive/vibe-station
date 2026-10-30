@@ -207,7 +207,7 @@ case "$CMD" in
 
     if [ "$HOST_OS" = "Linux" ]; then
       HOSTBINS_OVERLAY="$(mktemp "${TMPDIR:-/tmp}/vst-dev-linux.XXXXXX")"
-      trap 'rm -f "$HOSTBINS_OVERLAY"' EXIT
+      trap 'rm -f "${HOSTBINS_OVERLAY:-}" "${RUSTACP_OVERLAY:-}"' EXIT
       write_linux_hostbins_overlay > "$HOSTBINS_OVERLAY"
       COMPOSE_ARGS+=(-f "$HOSTBINS_OVERLAY")
       echo "    Linux host: host harness binaries mounted (others run from the image):"
@@ -311,6 +311,29 @@ case "$CMD" in
       echo "error: expected Rust binaries at $RUST_DAEMON_BIN and $RUST_CLI_BIN." >&2
       exit 1
     fi
+
+    # claude-acp / codex-acp: the pinned Rust ACP adapters (vendor/rust-acp/pins.toml).
+    # The container is Linux, so fetch the Linux (glibc) prebuilts (--docker); they are
+    # cached, so repeat `up`s are quick. To test an unreleased port set VST_CLAUDE_ACP_REPO /
+    # VST_CODEX_ACP_REPO (a source build). An adapter that cannot be fetched is skipped with
+    # the reason shown — the sandbox still boots, that harness's Rich Chat is just
+    # unavailable (doctor shows it). Mounts go in a generated overlay, only for
+    # binaries that exist (a missing bind source would become an empty directory).
+    RUSTACP_OVERLAY="$(mktemp "${TMPDIR:-/tmp}/vst-dev-rustacp.XXXXXX")"
+    trap 'rm -f "${HOSTBINS_OVERLAY:-}" "$RUSTACP_OVERLAY"' EXIT
+    { echo "services:"; echo "  vst-dev:"; echo "    volumes:"; } > "$RUSTACP_OVERLAY"
+    for ACP in claude codex; do
+      ACP_ERR="$(mktemp "${TMPDIR:-/tmp}/vst-rustacp-err.XXXXXX")"
+      if ACP_BIN="$(bash scripts/build-rust-acp.sh "$ACP" --docker 2>"$ACP_ERR")" && [ -x "$ACP_BIN" ]; then
+        ACP_Q="${ACP_BIN//\'/\'\'}"; ACP_Q="${ACP_Q//\$/\$\$}"   # YAML single-quote; `$` doubled for compose
+        echo "      - '${ACP_Q}:/opt/rust-acp/$ACP-acp:ro'" >> "$RUSTACP_OVERLAY"
+        echo "    $ACP-acp: RUST ($ACP_BIN)"
+      else
+        echo "    $ACP-acp: NOT built — $(tail -n 1 "$ACP_ERR") ($ACP Rich Chat unavailable in this sandbox; check network access, or set VST_$(echo "$ACP" | tr a-z A-Z)_ACP_REPO to build a local port)" >&2
+      fi
+      rm -f "$ACP_ERR"
+    done
+    if grep -q "/opt/rust-acp/" "$RUSTACP_OVERLAY"; then COMPOSE_ARGS+=(-f "$RUSTACP_OVERLAY"); fi
 
     export VST_RUST_DAEMON_BIN="$RUST_DAEMON_BIN"
     export VST_RUST_CLI_BIN="$RUST_CLI_BIN"

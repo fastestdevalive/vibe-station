@@ -3,7 +3,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use tauri::Manager;
 
 /// Information about a running daemon instance.
 #[derive(Debug, Clone)]
@@ -89,7 +88,7 @@ pub fn spawn_daemon(app_handle: &tauri::AppHandle, vst_bin: &Path) -> Result<Dae
 
     // The bundled `vst` sidecar is the merged CLI+daemon binary — pass
     // "daemon run" so it enters daemon mode (see rust/vst-cli/src/dispatch.rs).
-    let mut cmd = app_handle
+    let cmd = app_handle
         .shell()
         .sidecar("vst")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
@@ -102,31 +101,9 @@ pub fn spawn_daemon(app_handle: &tauri::AppHandle, vst_bin: &Path) -> Result<Dae
     // no VST_SKILL_PATH/VST_DIST_PATH env plumbing needed; the daemon serves
     // its own embedded copies.
 
-    // Point the daemon at the bundled claude-agent-acp adapter (Claude's Rich
-    // Chat / ACP path runs it as `bun <entry.js>` — see
-    // `rust/vst-agents/src/claude.rs::claude_acp_entry_path`). Staged into
-    // the bundle by `tauri.conf.json`'s `bundle.resources`
-    // (`vendor/claude-acp/node_modules` → `claude-acp-vendor/node_modules`,
-    // installed by `scripts/prep-sidecar.sh` before bundling). Set explicitly
-    // from here rather than relying on the daemon's own beside-the-exe
-    // fallback: the Tauri host is the only process that actually knows where
-    // the resource dir is (on macOS it's `Contents/Resources/`, NOT beside
-    // the sidecar in `Contents/MacOS/`), same reasoning as `VST_DIST_PATH`
-    // above. Missing file ⇒ leave unset; `vst doctor` flags it.
-    if let Ok(dir) = app_handle.path().resource_dir() {
-        let entry_candidate = dir
-            .join("claude-acp-vendor")
-            .join("node_modules")
-            .join("@agentclientprotocol")
-            .join("claude-agent-acp")
-            .join("dist")
-            .join("index.js");
-        if entry_candidate.is_file() {
-            if let Some(entry) = entry_candidate.to_str() {
-                cmd = cmd.env("VST_CLAUDE_ACP_ENTRY", entry);
-            }
-        }
-    }
+    // claude-acp / codex-acp ship as sidecars (`externalBin`), so Tauri places
+    // them beside `vst` and the daemon finds them via `current_exe()` — no env
+    // plumbing (rust/vst-agents/src/{claude,codex}.rs `*_acp_bin`).
 
     let (mut rx, child) = cmd
         .spawn()

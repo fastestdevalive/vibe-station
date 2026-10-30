@@ -1,0 +1,31 @@
+# The ONE place vibe-station records which Rust ACP adapter build it ships and
+# which npm adapter level that build mirrors. Read by scripts/build-rust-acp.sh
+# (awk — keep it flat: [section] + `key = "value"` lines only).
+#
+# Bump procedure (the npm-diff / adopt work happens in the port repos, see their
+# UPSTREAM-BUMP.md / docs/UPSTREAM.md): land the bump there, then here change
+# `rev` (+ `upstream` if the mirrored npm level moved), run
+# `scripts/build-rust-acp.sh claude` / `codex` (it asserts the binary reports
+# `+upstream.<upstream>`), re-run the parity harness, commit.
+#
+# `upstream` is asserted against the built binary's `--version`; it is never
+# trusted on its own, so it can't drift from the port's own UPSTREAM_VERSION.
+
+[claude]
+# Port: claude-agent-acp-rs (branch feat/rust-port). Unpushed as of 2026-10-23.
+repo     = "git@github.com:fastestdevalive/claude-agent-acp.git"
+rev      = "ffb031946e769d68eb47bed355f5d66a63c2127a"
+manifest = "rust/Cargo.toml"
+package  = "claude-agent-acp-rs"
+bin      = "claude-agent-acp-rs"
+upstream = "0.94.0"
+
+[codex]
+# Port: private fork fastestdevalive/codex-acp (upstream v2.2.2 tree at root, crate in rust/). Needs the fastestdevalive GitHub account over SSH.
+# Verified GREEN at this rev on 2026-10-28 (0 open vst-observable divergences): .vibekit/reports/2026-10-28-codex-verify-aefc768.md
+repo     = "git@github.com:fastestdevalive/codex-acp.git"
+rev      = "b7391e216a7eabdd89bdcad22cacbbaf06f28c72"
+manifest = "rust/Cargo.toml"
+package  = "codex-acp"
+bin      = "codex-acp"
+upstream = "2.2.2"

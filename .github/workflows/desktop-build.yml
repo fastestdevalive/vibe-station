@@ -73,24 +73,9 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev
 
-      # ── Bun (vendored claude-agent-acp install) ───────────────────────────
-      # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh,
-      # which builds the merged vst binary (CLI + daemon, one binary as of
-      # cli-daemon-unification's Part 00) and installs the vendored
-      # claude-agent-acp adapter (`bun install` — a bundle.resources input, so
-      # the build fails without bun) — everything the now-removed
-      # "Build TypeScript (daemon)" / "Build daemon binary" / "Copy daemon
-      # binary" steps used to do by hand, back
-      # when the daemon was still the Node/TS build under cli/. That tree was
-      # hard-removed (7bfa386c); prep-sidecar.sh is the current single source
-      # of truth for staging every sidecar binary before Tauri bundles them.
-      # Pinned (same as release.yml's adapter-compile job): an unpinned bun
-      # picked up 1.4.3, whose `bun build --compile` output (codex-acp) makes
-      # `ldd` exit 1 and aborts linuxdeploy's gtk plugin during AppImage bundling.
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
+      # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh, which
+      # builds the merged vst binary and the claude-acp / codex-acp adapters (the
+      # pinned Rust ports, scripts/build-rust-acp.sh — no bun/node needed).
 
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app

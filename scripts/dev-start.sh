@@ -11,9 +11,8 @@
 # 3. Builds web-ui/dist, which the daemon serves to non-Vite clients (LAN/tunnel,
 #    curl). The desktop window loads Vite directly and never needs this, but
 #    other clients get a stale dist without it.
-# 4. Installs the vendored claude-agent-acp adapter if missing — it's a
-#    tauri.conf.json bundle.resources entry, so build.rs's resource-path check
-#    fails without it, and the dev daemon needs it for Claude Rich Chat anyway.
+# 4. Fetches the claude-acp / codex-acp Rich Chat adapters (pinned prebuilts,
+#    scripts/build-rust-acp.sh) and points the daemon at them.
 # 5. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
 #    so the daemon writes the shim on first boot.
 #    The daemon ALWAYS authenticates (no loopback trust). The Tauri window gets its
@@ -55,13 +54,14 @@ if [[ ! -f "$VST_STUB" ]]; then
   echo "[dev-start] created vst stub: $VST_STUB"
 fi
 
-CODEX_ACP_STUB="$BINARIES_DIR/codex-acp-$TRIPLE"
-
-if [[ ! -f "$CODEX_ACP_STUB" ]]; then
-  printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$CODEX_ACP_STUB"
-  chmod +x "$CODEX_ACP_STUB"
-  echo "[dev-start] created codex-acp stub: $CODEX_ACP_STUB"
-fi
+for ACP in claude-acp codex-acp; do
+  ACP_STUB="$BINARIES_DIR/$ACP-$TRIPLE"
+  if [[ ! -f "$ACP_STUB" ]]; then
+    printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$ACP_STUB"
+    chmod +x "$ACP_STUB"
+    echo "[dev-start] created $ACP stub: $ACP_STUB"
+  fi
+done
 
 # Build vst-cli so the daemon can write the ~/.vibe-station/bin/vst shim pointing
 # at the real Rust binary. `cargo run -p vst-daemon` only compiles vst-daemon, so
@@ -75,29 +75,21 @@ VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst"
 echo "[dev-start] building web-ui/dist..."
 pnpm --filter @vibestation/web build
 
-# Vendored claude-agent-acp adapter: required by build.rs (bundle.resources)
-# and by the daemon's Claude ACP path. Always run the install script rather
-# than skip-if-file-exists: `bun install` with an already-satisfied lockfile
-# is a ~15ms no-op (confirmed), so there is no real cost to always checking —
-# and a skip-if-present guard would silently leave a stale adapter installed
-# forever after `vendor/claude-acp/package.json` bumps the pinned version,
-# since the file would already exist and never get re-checked.
-echo "[dev-start] checking vendored claude-agent-acp adapter..."
-bash "$REPO_ROOT/scripts/install-claude-acp-vendor.sh"
-CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
-
-# Vendored codex-acp adapter (same rationale as claude-agent-acp above):
-# required by build.rs (bundle.resources) and by the daemon's Codex ACP path.
-echo "[dev-start] checking vendored codex-acp adapter..."
-bash "$REPO_ROOT/scripts/install-codex-acp-vendor.sh"
-CODEX_ACP_ENTRY="$REPO_ROOT/vendor/codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js"
+# Rust ACP adapters (pinned in vendor/rust-acp/pins.toml). Always run via the
+# script: it reuses its download cache and re-asserts the pinned upstream level.
+# To test an unreleased port, set VST_CLAUDE_ACP_REPO / VST_CODEX_ACP_REPO (see the script header).
+echo "[dev-start] fetching claude-acp / codex-acp adapters..."
+# An adapter that cannot be fetched (offline, no prebuilt pinned for this target) must not stop `tauri dev`:
+# warn, leave the env unset, and let `vst doctor` report that harness's Rich Chat as unavailable.
+CLAUDE_ACP_BIN="$(bash "$REPO_ROOT/scripts/build-rust-acp.sh" claude)" || { echo "[dev-start] WARNING: claude-acp not built — Claude Rich Chat unavailable" >&2; CLAUDE_ACP_BIN=""; }
+CODEX_ACP_BIN="$(bash "$REPO_ROOT/scripts/build-rust-acp.sh" codex)" || { echo "[dev-start] WARNING: codex-acp not built — Codex Rich Chat unavailable" >&2; CODEX_ACP_BIN=""; }
 
 # Launch Rust daemon + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_ALLOWED_ORIGINS=http://localhost:5180 VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' VST_CODEX_ACP_ENTRY='$CODEX_ACP_ENTRY' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_ALLOWED_ORIGINS=http://localhost:5180 VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_BIN='$CLAUDE_ACP_BIN' VST_CODEX_ACP_BIN='$CODEX_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

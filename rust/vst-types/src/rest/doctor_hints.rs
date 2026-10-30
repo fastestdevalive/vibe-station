@@ -114,11 +114,21 @@ static PLUGIN_CODEX: HintSpec = HintSpec {
     action: None,
     fallback_text: None,
 };
-static CODEX_ACP: HintSpec = HintSpec {
-    why: "Codex is installed but its Rich Chat adapter is missing, so Codex runs in Terminal only.",
+static CLAUDE_ACP: HintSpec = HintSpec {
+    why: "Claude is installed but its Rich Chat adapter (claude-acp) is missing, so Claude Rich Chat sessions will fail (Terminal still works).",
     commands: &[(
         HintOs::Any,
-        "export VST_CODEX_ACP_ENTRY=/path/to/codex-acp/dist/index.js",
+        "export VST_CLAUDE_ACP_BIN=/path/to/claude-acp  # or re-run the vibe-station installer, which bundles it",
+    )],
+    docs_url: None,
+    action: None,
+    fallback_text: None,
+};
+static CODEX_ACP: HintSpec = HintSpec {
+    why: "Codex is installed but its Rich Chat adapter (codex-acp) is missing, so Codex Rich Chat sessions will fail (Terminal still works).",
+    commands: &[(
+        HintOs::Any,
+        "export VST_CODEX_ACP_BIN=/path/to/codex-acp  # or re-run the vibe-station installer, which bundles it",
     )],
     docs_url: None,
     action: None,
@@ -229,6 +239,7 @@ pub fn hint_spec(check_name: &str) -> Option<&'static HintSpec> {
         "plugin-opencode" => &PLUGIN_OPENCODE,
         "plugin-agy" => &PLUGIN_AGY,
         "plugin-codex" => &PLUGIN_CODEX,
+        "claude-acp" => &CLAUDE_ACP,
         "codex-acp" => &CODEX_ACP,
         "plugin-pi" => &PLUGIN_PI,
         "plugin-omp" => &PLUGIN_OMP,
@@ -374,6 +385,7 @@ mod tests {
         "plugin-opencode",
         "plugin-agy",
         "plugin-codex",
+        "claude-acp",
         "codex-acp",
         "plugin-pi",
         "plugin-omp",

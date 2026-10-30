@@ -614,6 +614,73 @@ pub fn compute_ok(checks: &[DoctorCheck]) -> bool {
             .any(|c| c.group == CheckGroup::AgentCli && c.status == DoctorStatus::Ok)
 }
 
+/// `<bin> --version`, bounded to 3s (first line). `Err` = the binary could not be executed at all
+/// (missing exec bit, wrong-OS Mach-O/ELF, ...); `Ok(None)` = it ran but printed nothing usable.
+async fn acp_adapter_version(bin: &Path) -> Result<Option<String>, String> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--version").kill_on_drop(true);
+    let out = match tokio::time::timeout(Duration::from_secs(3), cmd.output()).await {
+        Err(_) => return Ok(None),
+        Ok(Err(e)) => return Err(e.to_string()),
+        Ok(Ok(out)) => out,
+    };
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty()))
+}
+
+/// Doctor row for a Rust ACP adapter binary: Ok with its reported
+/// `<crate>+upstream.<npm>` version, or Warn when missing. A binary that is
+/// present but won't report a version is still Ok-but-annotated — it is
+/// "unknown", not "missing".
+async fn check_acp_adapter(
+    name: &str,
+    label: &str,
+    bin: Option<std::path::PathBuf>,
+) -> DoctorCheck {
+    let Some(bin) = bin else {
+        return DoctorCheck {
+            name: name.to_string(),
+            status: DoctorStatus::Warn,
+            required: false,
+            group: CheckGroup::Feature,
+            message: format!("{name} adapter not found — {label} Rich Chat (ACP) will fail."),
+            resolved_path: None,
+            // The hint table supplies the VST_*_ACP_BIN text.
+            ..Default::default()
+        };
+    };
+    let shown = bin.to_string_lossy().to_string();
+    let message = match acp_adapter_version(&bin).await {
+        Ok(Some(v)) => format!("{name} adapter found at {shown} ({v})"),
+        Ok(None) => format!("{name} adapter found at {shown} (version unknown)"),
+        Err(e) => {
+            return DoctorCheck {
+                name: name.to_string(),
+                status: DoctorStatus::Warn,
+                required: false,
+                group: CheckGroup::Feature,
+                message: format!(
+                    "{name} adapter present at {shown} but cannot be executed ({e}) — {label} Rich Chat (ACP) will fail."
+                ),
+                resolved_path: Some(shown),
+                ..Default::default()
+            };
+        }
+    };
+    DoctorCheck {
+        name: name.to_string(),
+        status: DoctorStatus::Ok,
+        required: false,
+        group: CheckGroup::Feature,
+        message,
+        resolved_path: Some(shown),
+        ..Default::default()
+    }
+}
+
 /// Run all doctor health checks.
 pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<DoctorCheck> {
     let mut checks = Vec::new();
@@ -715,39 +782,18 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         },
     );
 
-    // 8. codex-acp vendor install (the official ACP adapter for
-    // Codex, run via `bun` — see
-    // `rust/vst-agents/src/codex.rs::codex_acp_entry_path`). Only checked when
-    // codex itself is installed, so users without it aren't warned.
+    // 8. Rust ACP adapters (`claude-acp`, `codex-acp`; pinned in
+    // vendor/rust-acp/pins.toml). Only checked when the matching CLI is
+    // installed, so users without it aren't warned. No bun/node involved.
+    if resolve_bin_path("claude").is_some() {
+        checks.push(
+            check_acp_adapter("claude-acp", "Claude", vst_agents::claude::claude_acp_bin()).await,
+        );
+    }
     if resolve_bin_path("codex").is_some() {
-        // A bundled compiled `codex-acp` (curl install / desktop) needs no bun.
-        let entry = vst_agents::codex::codex_acp_bin()
-            .map(|b| b.to_string_lossy().to_string())
-            .unwrap_or_else(vst_agents::codex::codex_acp_entry_path);
-        let found = Path::new(&entry).is_file();
-        checks.push(if found {
-            DoctorCheck {
-                name: "codex-acp".to_string(),
-                status: DoctorStatus::Ok,
-                required: false,
-                group: CheckGroup::Feature,
-                message: format!("codex-acp adapter found at {entry} (Codex Rich Chat / ACP)"),
-                resolved_path: Some(entry),
-                ..Default::default()
-            }
-        } else {
-            DoctorCheck {
-                name: "codex-acp".to_string(),
-                status: DoctorStatus::Warn,
-                required: false,
-                group: CheckGroup::Feature,
-                message: "codex-acp adapter not found — Codex Rich Chat (ACP) will fail."
-                    .to_string(),
-                resolved_path: None,
-                // The hint table supplies the VST_CODEX_ACP_ENTRY text.
-                ..Default::default()
-            }
-        });
+        checks.push(
+            check_acp_adapter("codex-acp", "Codex", vst_agents::codex::codex_acp_bin()).await,
+        );
     }
 
     // 8b. omp-bun: the npm/bun-installed `omp` is a `#!/usr/bin/env bun` script, so
@@ -880,6 +926,24 @@ pub async fn build_report(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn acp_adapter_present_but_not_executable_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("codex-acp");
+        std::fs::write(&bin, b"not an executable").unwrap(); // no exec bit
+        let c = check_acp_adapter("codex-acp", "Codex", Some(bin)).await;
+        assert_eq!(c.status, DoctorStatus::Warn);
+        assert!(c.message.contains("cannot be executed"), "{}", c.message);
+        assert!(c.resolved_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn acp_adapter_missing_warns_without_path() {
+        let c = check_acp_adapter("claude-acp", "Claude", None).await;
+        assert_eq!(c.status, DoctorStatus::Warn);
+        assert!(c.resolved_path.is_none());
+    }
+
     use super::*;
 
     // 3.T1
