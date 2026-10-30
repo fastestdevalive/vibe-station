@@ -86,6 +86,10 @@ jobs:
           projectPath: desktop
           args: --target ${{ matrix.target }}
 
+      - name: Recompress macOS .dmg (lzma)
+        if: runner.os == 'macOS'
+        run: bash scripts/recompress-dmg.sh desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
       # ── Upload artifacts ──────────────────────────────────────────────────
       - name: Upload macOS .dmg
         if: runner.os == 'macOS'
