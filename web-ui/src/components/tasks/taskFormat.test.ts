@@ -61,6 +61,9 @@ describe("taskFormat", () => {
   it("per-kind copy table", () => {
     const started = new Date(now - 252_000).toISOString();
     expect(stateText(mkTask({ startedAt: started }), now)).toBe("Background command · running 4m 12s");
+    expect(stateText(mkTask({ startedAt: started, reason: "Still running after 60 min — no longer counted as agent work" }), now)).toBe(
+      "Background command · running 4m 12s · Still running after 60 min — no longer counted as agent work",
+    );
     expect(stateText(mkTask({ state: "stale", reason: "No end signal from the agent" }), now)).toBe(
       "Ended or unknown · No end signal from the agent",
     );

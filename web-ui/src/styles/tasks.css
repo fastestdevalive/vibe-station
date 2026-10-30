@@ -358,13 +358,6 @@
   color: var(--fg-muted);
 }
 
-/* ── Passive background line ───────────────────────────────────────────────── */
-.task-bg-line {
-  padding: 0 var(--space-3) var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-
 /* ── Task view (covers .chat-pane; chat + footer stay mounted underneath, inert) ── */
 .task-view {
   position: absolute;

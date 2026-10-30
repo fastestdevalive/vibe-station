@@ -97,6 +97,28 @@ describe("groupEvents assistant turn boundaries", () => {
   });
 });
 
+describe("groupEvents task_signal (6.T3)", () => {
+  it("renders no item and does not close an open thinking group", () => {
+    const signal: NormalizedEvent = {
+      id: "sig1",
+      sessionId: "s1",
+      ts: "",
+      provider: "claude",
+      kind: "task_signal",
+      turnId: "t1",
+      taskSignal: { subtype: "task_started", task_id: "b1" },
+    };
+    expect(groupEvents([signal])).toEqual([]);
+    const withSignal = groupEvents([
+      thinkingEvent("th1", "t1", "a"),
+      signal,
+      thinkingEvent("th2", "t1", "b"),
+    ]);
+    const without = groupEvents([thinkingEvent("th1", "t1", "a"), thinkingEvent("th2", "t1", "b")]);
+    expect(withSignal.map((i) => i.type)).toEqual(without.map((i) => i.type));
+  });
+});
+
 describe("groupEvents status filtering (RA6 — benign rate-limit noise)", () => {
   it("drops benign 'rate limit: unknown'/'allowed' but keeps real throttles + other notes", () => {
     const items = groupEvents([

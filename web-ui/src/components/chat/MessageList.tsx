@@ -344,6 +344,10 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         }
         break;
       }
+      case "task_signal":
+        // Harness task lifecycle payload for the daemon's task registry — never
+        // rendered, and not a turn boundary (must not close an open thinking group).
+        break;
       case "error":
         closeOpenThinking(ev.turnId, ev.ts);
         items.push({ type: "error", id: ev.id, text: ev.text ?? "" });

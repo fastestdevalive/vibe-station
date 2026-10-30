@@ -107,7 +107,7 @@ export function TaskTray({ sessionId, groups, total, known, pref, onPrefChange, 
         <TaskIcon state={t.state} quiet={quiet} size={12} label={false} />
         <span className={`task-tray__row-label${t.kind === "command" ? " task-tray__row-label--mono" : ""}`}>{t.label}</span>
         <span className="task-tray__row-kind">{t.kind === "command" ? "command" : t.kind}</span>
-        {t.state !== "running" && t.reason ? <span className="task-tray__row-reason">{t.reason}</span> : null}
+        {t.reason ? <span className="task-tray__row-reason">{t.reason}</span> : null}
         <span className="task-tray__row-meta">{rowMeta(t, now)}</span>
         <ChevronRight size={12} aria-hidden />
       </button>

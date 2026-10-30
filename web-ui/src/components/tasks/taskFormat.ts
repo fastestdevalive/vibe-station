@@ -87,18 +87,20 @@ function endedElapsed(t: TaskSummary): number | undefined {
   return s !== undefined && e !== undefined ? e - s : undefined;
 }
 
-/** Per-kind status sentence (header, tooltips). Stale/Failed carry `reason` as text. */
+/** Per-kind status sentence (header, tooltips). Stale/Failed carry `reason` as text; a running row's reason is appended. */
 export function stateText(t: TaskSummary, now: number): string {
   const kind = kindName(t);
   const startedMs = toMs(t.startedAt);
   const reason = t.reason ? ` (${t.reason})` : "";
   switch (t.state) {
     case "running": {
+      // A running row carries a reason only once its hold lapsed (no longer counted as agent work).
+      const why = t.reason ? ` · ${t.reason}` : "";
       if (isQuiet(t, now)) {
         const last = toMs(t.lastActivityAt) ?? startedMs ?? now;
-        return `No new output for ${formatAge(now - last)} — may have finished`;
+        return `No new output for ${formatAge(now - last)} — may have finished${why}`;
       }
-      return `${kind} · running ${formatElapsed(startedMs !== undefined ? now - startedMs : 0)}`;
+      return `${kind} · running ${formatElapsed(startedMs !== undefined ? now - startedMs : 0)}${why}`;
     }
     case "done": {
       const d = endedElapsed(t);
@@ -134,10 +136,10 @@ export function rowMeta(t: TaskSummary, now: number): string {
   return t.state;
 }
 
-/** Accessible name of a tray row button: `label, kind, state, elapsed`. */
+/** Accessible name of a tray row button: `label, kind, state, elapsed[, reason]`. */
 export function rowAriaLabel(t: TaskSummary, now: number): string {
   const q = isQuiet(t, now);
-  return [t.label, kindShort(t), stateWord(t.state, q), rowMeta(t, now)].filter(Boolean).join(", ");
+  return [t.label, kindShort(t), stateWord(t.state, q), rowMeta(t, now), t.reason].filter(Boolean).join(", ");
 }
 
 /** First two whitespace tokens of a command, ≤24 chars; other kinds just truncate. */
