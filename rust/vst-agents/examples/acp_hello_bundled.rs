@@ -1,22 +1,17 @@
 //! Same end-to-end proof as `acp_hello.rs` (`initialize` -> `session/new` ->
 //! `session/prompt` -> streamed `session/update`s -> final `stopReason`), but
-//! against the VENDORED install run via `bun` directly (see
-//! `scripts/install-claude-acp-vendor.sh` / `claude.rs::claude_acp_entry_path`)
-//! instead of `npx`-fetching the adapter. This is what proves the "no
-//! Node.js install required" approach actually works end to end for a real
-//! turn (a single compiled binary via `bun build --compile` was tried first
-//! and rejected — see the doc comment on `claude_acp_entry_path` for why).
+//! against the pinned Rust `claude-acp` adapter (`claude.rs::claude_acp_bin`).
+//! This is what proves the no-Node/no-bun path works end to end for a real
+//! turn.
 //!
 //! # Requires
-//! - The vendor install already done: `./scripts/install-claude-acp-vendor.sh`.
+//! - The adapter built: `scripts/build-rust-acp.sh claude` (or `VST_CLAUDE_ACP_BIN`).
 //! - The `claude` CLI already authenticated in this environment (this
 //!   example sets `CLAUDE_CODE_EXECUTABLE=claude` itself, same as `claude.rs`).
 //!
 //! # Usage
 //! ```bash
 //! cargo run -p vst-agents --example acp_hello_bundled
-//! # or point at a vendor install built somewhere else:
-//! VST_CLAUDE_ACP_ENTRY=/path/to/dist/index.js cargo run -p vst-agents --example acp_hello_bundled
 //! ```
 
 use std::path::PathBuf;
@@ -35,10 +30,12 @@ const PROMPT: &str = "Reply with exactly one word: hello";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Same env this plugin's real `run_turn` sets — see `claude.rs`.
     std::env::set_var("CLAUDE_CODE_EXECUTABLE", "claude");
-    let entry = vst_agents::claude::claude_acp_entry_path();
-    eprintln!("spawning: bun {entry}");
+    let bin = vst_agents::claude::claude_acp_bin().ok_or(
+        "claude-acp not found: run scripts/build-rust-acp.sh claude or set VST_CLAUDE_ACP_BIN",
+    )?;
+    eprintln!("spawning: {}", bin.display());
 
-    let agent = AcpAgent::from_args(["bun", entry.as_str()])?;
+    let agent = AcpAgent::from_args([bin.to_string_lossy().as_ref()])?;
 
     agent_client_protocol::Client
         .builder()
