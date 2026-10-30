@@ -1,22 +1,26 @@
 #!/usr/bin/env node
-// Offline harness: runs the REAL claude-agent-acp adapter (vendor/claude-acp, pinned 0.98.0)
-// against a fake Claude CLI that plays synthetic SDK task messages, and records the exact
+// Offline harness: runs the REAL npm claude-agent-acp adapter (the parity reference, not what vst ships;
+// install it e.g. `npm i @agentclientprotocol/claude-agent-acp@0.98.0` and set CLAUDE_AGENT_ACP_ENTRY to its
+// dist/index.js) against a fake Claude CLI that plays synthetic SDK task messages, and records the exact
 // `_claude/sdkMessage` notifications the adapter emits when
 // `_meta.claudeCode.emitRawSDKMessages` is set (the opt-in vst makes in claude.rs `acp_meta`).
 //
-//   node scripts/claude-acp-raw-harness/harness.mjs [out.json [fixtures-dir]]
+//   CLAUDE_AGENT_ACP_ENTRY=/path/to/dist/index.js node scripts/claude-acp-raw-harness/harness.mjs [out.json [fixtures-dir]]
 //
 // Output: JSON { initialize, ext: [{method, params}], updates: [session/update params] }
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, "../..");
-const entry = join(repo, "vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
+const entry = process.env.CLAUDE_AGENT_ACP_ENTRY;
+if (!entry) {
+  console.error("set CLAUDE_AGENT_ACP_ENTRY to the npm claude-agent-acp dist/index.js (see the header)");
+  process.exit(1);
+}
 const FILTER = [
   { type: "system", subtype: "task_started" },
   { type: "system", subtype: "task_updated" },
