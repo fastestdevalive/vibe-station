@@ -90,6 +90,14 @@ describe("TextMessage sent time", () => {
     expect(container.querySelector(".chat-bubble__time")).toBeNull();
   });
 
+  it("renders the time as an overlay sibling of the bubble, not inside it (no reflow)", () => {
+    const { container } = render(<TextMessage role="user" text="hi" ts="2026-10-22T14:32:00Z" />);
+    fireEvent.click(container.querySelector(".chat-bubble")!);
+    const time = container.querySelector(".chat-bubble__time")!;
+    expect(time.parentElement).toBe(container.querySelector(".chat-msg"));
+    expect(container.querySelector(".chat-bubble")!.contains(time)).toBe(false);
+  });
+
   it("shows nothing without a timestamp", () => {
     const { container } = render(<TextMessage role="user" text="hi" />);
     fireEvent.click(container.querySelector(".chat-bubble")!);

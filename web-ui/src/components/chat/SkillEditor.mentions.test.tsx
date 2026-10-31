@@ -246,6 +246,27 @@ describe("SkillEditor mentions popover & interactions (2.T3 - 2.T6)", () => {
     });
   });
 
+  describe("arrow-key wrap", () => {
+    it("ArrowUp on the first row wraps to the last; ArrowDown on the last wraps to the first", async () => {
+      const { ref } = renderEditorWithMentions("@");
+      await act(async () => {
+        ref.current?.focus();
+      });
+      await waitFor(() => {
+        expect(screen.queryAllByRole("option").length).toBeGreaterThan(1);
+      });
+      const options = () => screen.queryAllByRole("option");
+      const activeIdx = () => options().findIndex((o) => o.getAttribute("aria-selected") === "true");
+      expect(activeIdx()).toBe(0);
+
+      await key(editorEl(), "ArrowUp");
+      expect(activeIdx()).toBe(options().length - 1);
+
+      await key(editorEl(), "ArrowDown");
+      expect(activeIdx()).toBe(0);
+    });
+  });
+
   describe("2.T5 Key race, submission, Escape & composing", () => {
     it("open popover, force source updates, press Enter: chip inserted, onSubmit not called, immediate next Enter submits", async () => {
       const onSubmit = vi.fn();
@@ -511,13 +532,13 @@ describe("SkillEditor mentions popover & interactions (2.T3 - 2.T6)", () => {
       expect(screen.queryAllByRole("option")).toHaveLength(0);
     });
 
-    it("query over 40 chars does not open the popup; 40 does", async () => {
-      const { ref: r1 } = renderEditorWithMentions("@" + "a".repeat(41));
+    it("query over 80 chars does not open the popup; 80 does", async () => {
+      const { ref: r1 } = renderEditorWithMentions("@" + "a".repeat(81));
       await act(async () => {
         r1.current?.focus();
       });
       expect(screen.queryAllByRole("listbox")).toHaveLength(0);
-      const { ref: r2 } = renderEditorWithMentions("@" + "a".repeat(40));
+      const { ref: r2 } = renderEditorWithMentions("@" + "a".repeat(80));
       await act(async () => {
         r2.current?.focus();
       });

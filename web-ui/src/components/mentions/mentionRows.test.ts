@@ -262,3 +262,110 @@ describe("mentionRows (1.T11)", () => {
     });
   });
 });
+
+describe("worktree scope rows (cross-project)", () => {
+  const wts: MentionItem[] = [
+    { kind: "worktree", id: "w1", label: "fix-login", secondary: "fix/login" },
+    { kind: "worktree", id: "w2", label: "billing", secondary: "feat/billing" },
+  ];
+  const projects: MentionItem[] = [
+    { kind: "project", id: "p-cur", label: "current", secondary: "~/cur" },
+    { kind: "project", id: "p-other", label: "other-proj", secondary: "~/other" },
+  ];
+
+  it("lists current-project worktrees first, then other projects as scope rows that rewrite the token", () => {
+    const rows = buildMentionRows(
+      parseMentionQuery("worktrees:", [{ id: "p-other", name: "other-proj" }]),
+      makeSources({ worktree: { items: wts }, project: { items: projects } }),
+      { limitReached: false, currentProjectId: "p-cur" },
+    );
+    expect(rows.slice(0, 2).map((r) => r.type)).toEqual(["item", "item"]);
+    const scopes = rows.filter((r): r is Extract<MentionRow, { type: "scope" }> => r.type === "scope");
+    expect(scopes).toHaveLength(1);
+    expect(scopes[0]!.insertRaw).toBe("worktrees:other-proj:");
+  });
+
+  it("filters the picker by the typed project name and keeps matching current worktrees", () => {
+    const rows = buildMentionRows(
+      parseMentionQuery("worktrees:oth", []),
+      makeSources({ worktree: { items: wts }, project: { items: projects } }),
+      { limitReached: false, currentProjectId: "p-cur" },
+    );
+    expect(rows.filter((r) => r.type === "item")).toHaveLength(0);
+    expect(rows.filter((r) => r.type === "scope")).toHaveLength(1);
+  });
+
+  it("with a picked project, ranks only the worktree half and shows no picker", () => {
+    const parsed = parseMentionQuery("worktrees:other-proj:bill", [{ id: "p-other", name: "other-proj" }]);
+    const rows = buildMentionRows(parsed, makeSources({ worktree: { items: wts }, project: { items: projects } }), {
+      limitReached: false,
+      currentProjectId: "p-cur",
+    });
+    expect(rows).toEqual([{ type: "item", item: wts[1] }]);
+  });
+
+  it("empty picked project shows a named status row", () => {
+    const parsed = parseMentionQuery("worktrees:other-proj:", [{ id: "p-other", name: "other-proj" }]);
+    const rows = buildMentionRows(parsed, makeSources({ worktree: { items: [] } }), { limitReached: false });
+    expect(rows).toEqual([{ type: "status", text: "No worktrees in other-proj" }]);
+  });
+});
+
+describe("agent scope rows (cross-project)", () => {
+  const agents: MentionItem[] = [
+    { kind: "agent", id: "a1", label: "main", secondary: "claude · this worktree" },
+    { kind: "agent", id: "a2", label: "reviewer", secondary: "claude · feat/x" },
+  ];
+  const projects: MentionItem[] = [
+    { kind: "project", id: "p-cur", label: "current", secondary: "~/cur" },
+    { kind: "project", id: "p-other", label: "other-proj", secondary: "~/other" },
+  ];
+
+  it("lists current-project agents, then project rows that rewrite the token to @agents:<project>:", () => {
+    const rows = buildMentionRows(
+      parseMentionQuery("agents:", []),
+      makeSources({ agent: { items: agents }, project: { items: projects } }),
+      { limitReached: false, currentProjectId: "p-cur" },
+    );
+    expect(rows.filter((r) => r.type === "item")).toHaveLength(2);
+    const scopes = rows.filter((r): r is Extract<MentionRow, { type: "scope" }> => r.type === "scope");
+    expect(scopes).toHaveLength(1);
+    expect(scopes[0]).toMatchObject({ kind: "agent", insertRaw: "agents:other-proj:", label: "@agents:other-proj:" });
+  });
+
+  it("picked project: ranks the filter half (name or worktree label) and shows no picker", () => {
+    const parsed = parseMentionQuery("agents:other-proj:feat", [{ id: "p-other", name: "other-proj" }]);
+    const rows = buildMentionRows(parsed, makeSources({ agent: { items: agents }, project: { items: projects } }), {
+      limitReached: false,
+      currentProjectId: "p-cur",
+    });
+    expect(rows).toEqual([{ type: "item", item: agents[1] }]);
+  });
+
+  it("picked project with nothing matching shows a named status", () => {
+    const parsed = parseMentionQuery("agents:other-proj:zzz", [{ id: "p-other", name: "other-proj" }]);
+    const rows = buildMentionRows(parsed, makeSources({ agent: { items: agents } }), { limitReached: false });
+    expect(rows).toEqual([{ type: "status", text: 'No agents in other-proj match "zzz"' }]);
+  });
+});
+
+describe("project picker rows — dedupe and cap", () => {
+  it("one row per distinct project name, none whose token would exceed the query cap", () => {
+    const rows = buildMentionRows(
+      parseMentionQuery("agents:", []),
+      makeSources({
+        project: {
+          items: [
+            { kind: "project", id: "p1", label: "same", secondary: "~/a" },
+            { kind: "project", id: "p2", label: "Same", secondary: "~/b" },
+            { kind: "project", id: "p3", label: "x".repeat(90), secondary: "~/c" },
+            { kind: "project", id: "p4", label: "ok", secondary: "~/d" },
+          ],
+        },
+      }),
+      { limitReached: false, currentProjectId: null },
+    );
+    const labels = rows.filter((r) => r.type === "scope").map((r) => (r as { label: string }).label);
+    expect(labels).toEqual(["@agents:same:", "@agents:ok:"]);
+  });
+});

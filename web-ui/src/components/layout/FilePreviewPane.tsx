@@ -65,6 +65,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const layoutKey = worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "";
   const canGoBack = useWorkspaceStore((s) => !controlled && (s.backStack[layoutKey]?.length ?? 0) > 0);
   const canGoForward = useWorkspaceStore((s) => !controlled && (s.forwardStack[layoutKey]?.length ?? 0) > 0);
+  const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
+  const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
+  const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
   const navigateBack = useWorkspaceStore((s) => s.navigateBack);
   const navigateForward = useWorkspaceStore((s) => s.navigateForward);
 
@@ -174,10 +177,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // CRUD), so poll while the plain file view is visible. The fetch effect skips
   // the state update when the marks are unchanged, so an idle poll is inert.
   const [vcsTick, setVcsTick] = useState(0);
-  // `fileScope:worktreeId:path` whose gutter fetch 404'd — the file doesn't
+  // The marks follow the Files header's Local/Branch option (`treeScope`):
+  // HEAD-relative for local, base-branch-fork-relative for branch. Project
+  // (direct-session) scope has no base branch, so it is always local.
+  const treeScopeRaw = useWorkspaceStore((s) => (worktreeId ? s.treeScopeByWorktree[worktreeId] : undefined));
+  const gutterScope: "local" | "branch" = fileScope === "worktree" && treeScopeRaw === "branch" ? "branch" : "local";
+  // `fileScope:worktreeId:path:gutterScope` whose gutter fetch 404'd (or 422'd:
+  // no resolvable branch base) — the file doesn't
   // exist in this context, so stop polling it until the path changes (L7).
   const [gutterMissingKey, setGutterMissingKey] = useState<string | null>(null);
-  const gutterKey = worktreeId && path ? `${fileScope}:${worktreeId}:${path}` : null;
+  const gutterKey = worktreeId && path ? `${fileScope}:${worktreeId}:${path}:${gutterScope}` : null;
   const gutterMissing = gutterKey != null && gutterMissingKey === gutterKey;
   useEffect(() => {
     if (!worktreeId || !path || scope !== "none" || gutterMissing) return;
@@ -328,7 +337,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     let cancelled = false;
     void (async () => {
       try {
-        const result = await api.getGutter(worktreeId, path, undefined, fileScope);
+        const result = await api.getGutter(worktreeId, path, undefined, fileScope, gutterScope);
         if (cancelled) return;
         const marks = new Map<number, Set<GutterMarkKind>>();
         const addMark = (lineNum: number, kind: GutterMarkKind) => {
@@ -368,15 +377,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         // Silently ignore errors (e.g., file not tracked, permission denied)
         gutterSigRef.current = null;
         setGutterMarks(null);
-        if (!cancelled && e instanceof ApiError && e.status === 404) {
-          setGutterMissingKey(`${fileScope}:${worktreeId}:${path}`);
+        if (!cancelled && e instanceof ApiError && (e.status === 404 || e.status === 422)) {
+          setGutterMissingKey(`${fileScope}:${worktreeId}:${path}:${gutterScope}`);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick, vcsTick, commitSha]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick, vcsTick, commitSha, gutterScope]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -753,6 +762,23 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             ? "Commit diff"
             : "Compared to HEAD"}
       </span>
+      {scope === "commit" && path && worktreeId && !submodule && !controlled?.deleted ? (
+        // A commit's diff is not a tab. Open the same file as a normal Files
+        // tab in plain (non-diff) view — the working-tree copy, which may have
+        // moved on since this commit.
+        <button
+          type="button"
+          className="preview-diffinfo__view-source"
+          title="Open this file in the Files tab (plain view)"
+          onClick={() => {
+            setDiffScopeForWorktree(worktreeId, "none");
+            openFileTabNew(worktreeId, path);
+            setToolPanelTab("files");
+          }}
+        >
+          View source
+        </button>
+      ) : null}
       {isHtml ? (
         <HtmlModeToggle
           mode={htmlTooLarge || htmlForcedSource ? "source" : htmlMode}

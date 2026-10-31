@@ -274,10 +274,17 @@ describe("§7 focus", () => {
 });
 
 describe("§9 empty-args visual", () => {
-  it("keeps a minimum ~4ch width with no argumentHint", () => {
+  it("sizes via a text mirror (no inline ch width) so the input tracks real glyph width", () => {
     renderComposer("{/simplify}");
     const input = screen.getByLabelText("Arguments for simplify") as HTMLInputElement;
-    expect(input.style.width).toBe("4ch");
+    expect(input.style.width).toBe("");
+    expect(input.parentElement?.className).toBe("chat-skill-chip__arg-wrap");
+    expect(input.parentElement?.getAttribute("data-value")).toBe("");
+  });
+
+  it("mirrors the typed args", () => {
+    renderComposer("{/code-review high}");
+    expect(argInput().parentElement?.getAttribute("data-value")).toBe("high");
   });
 });
 

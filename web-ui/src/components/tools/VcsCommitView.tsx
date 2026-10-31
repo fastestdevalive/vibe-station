@@ -115,7 +115,13 @@ export function VcsCommitView({
           api={api}
           worktreeId={worktreeId}
           scope={scope}
-          controlled={{ path: selectedPath, scope: "commit", commitSha: sha, submodule }}
+          controlled={{
+            path: selectedPath,
+            scope: "commit",
+            commitSha: sha,
+            submodule,
+            deleted: entries.find((e) => e.path === selectedPath)?.status === "D",
+          }}
         />
       }
     />

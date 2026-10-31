@@ -1162,9 +1162,13 @@ export function createClientApi() {
       path: string,
       signal?: AbortSignal,
       scope: FileScope = "worktree",
+      /** `"branch"` marks lines relative to the base-branch fork point (worktrees
+       *  only); default `"local"` is relative to HEAD. */
+      gutterScope: "local" | "branch" = "local",
     ): Promise<GutterResult> {
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-      const res = await apiFetch(`${fileBase(scope, worktreeId)}/gutter/${encodedPath}`, { signal });
+      const q = gutterScope === "branch" && scope === "worktree" ? "?scope=branch" : "";
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/gutter/${encodedPath}${q}`, { signal });
       return parseJson<GutterResult>(res);
     },
 

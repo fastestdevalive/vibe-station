@@ -475,6 +475,7 @@
 .chat-msg {
   display: flex;
   max-width: 100%;
+  position: relative;
 }
 .chat-msg--user {
   /* 80% of the available row width. Measured here because `.chat-user-turn` is
@@ -570,14 +571,34 @@
 .chat-bubble--clickable {
   cursor: default;
 }
+/* Tap-to-show send time: an overlay anchored to the message's bottom edge, out
+   of flow (no reflow while selecting) and click-through (never steals a
+   selection drag). */
 .chat-bubble__time {
-  margin-top: 2px;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  margin-top: -2px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
   font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
   color: var(--fg-muted);
-  text-align: right;
+  white-space: nowrap;
+  pointer-events: none;
 }
-.chat-bubble--assistant .chat-bubble__time {
-  text-align: left;
+.chat-msg--assistant .chat-bubble__time {
+  right: auto;
+  left: 0;
+}
+/* Virtualized rows are transformed (each its own stacking context), so the
+   overlay's z-index only wins inside its row — lift the row that shows one
+   above the following rows, which would otherwise paint over its bottom. */
+.chat-vrow:has(.chat-bubble__time) {
+  z-index: 1;
 }
 .chat-msg--forking {
   width: 100%;
@@ -2391,13 +2412,31 @@
   white-space: nowrap;
   cursor: text;
 }
-.chat-skill-chip__arg-input {
-  /* §9: a minimum ~4ch width even with no argumentHint placeholder, so
-     there is always a visible, clickable target — a subtle inset makes it
-     read as "somewhere to type" without a hint. */
+.chat-skill-chip__arg-wrap {
+  /* Hidden mirror (`::after`, painted from `data-value`) sizes the wrapper to
+     the real text width; the input fills it. Mirror and input share font and
+     padding so they cannot drift apart. */
+  display: inline-grid;
   flex-shrink: 1;
   min-width: 4ch;
   max-width: 240px;
+}
+.chat-skill-chip__arg-wrap::after {
+  content: attr(data-value) " ";
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: pre;
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+}
+.chat-skill-chip__arg-input {
+  grid-area: 1 / 1;
+  /* width:0 + min-width:100% — the input's intrinsic (size=20) width must not
+     prop up the grid track; only the mirror decides the wrapper's width. */
+  width: 0;
+  min-width: 100%;
   overflow-x: auto;
   background: var(--bg-active);
   color: var(--fg-primary);

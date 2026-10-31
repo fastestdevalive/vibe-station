@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMentionQuery } from "./mentionQuery";
+import { parseMentionQuery, splitProjectQuery } from "./mentionQuery";
 import { MAX_MENTION_QUERY_LENGTH } from "./mentionOps";
 
 describe("mentionQuery (1.T10)", () => {
@@ -95,7 +95,60 @@ describe("mentionQuery spaces (F1)", () => {
     expect(parseMentionQuery("agents:Agent 2")).toMatchObject({ scope: "agent", query: "Agent 2" });
   });
 
-  it("caps the query length at 40", () => {
-    expect(MAX_MENTION_QUERY_LENGTH).toBe(40);
+  it("caps the query length at 80 (room for <project>:<worktree>)", () => {
+    expect(MAX_MENTION_QUERY_LENGTH).toBe(80);
+  });
+});
+
+describe("splitProjectQuery", () => {
+  const projects = [
+    { id: "p1", name: "alpha" },
+    { id: "p2", name: "alpha:beta" },
+    { id: "p3", name: "Alpha" },
+    { id: "p4", name: "My Proj" },
+  ];
+
+  it("returns null until a full project name is followed by a colon", () => {
+    expect(splitProjectQuery("alp", projects)).toBeNull();
+    expect(splitProjectQuery("alpha", projects)).toBeNull();
+  });
+
+  it("splits on the project name and returns every project sharing it (case-insensitive)", () => {
+    const r = splitProjectQuery("alpha:feat", projects)!;
+    expect(r.rest).toBe("feat");
+    expect(r.scope.projectIds).toEqual(["p1", "p3"]);
+  });
+
+  it("prefers the longest matching name (names may contain ':')", () => {
+    const r = splitProjectQuery("alpha:beta:x", projects)!;
+    expect(r.scope.projectIds).toEqual(["p2"]);
+    expect(r.rest).toBe("x");
+  });
+
+  it("supports spaces and an empty worktree half", () => {
+    const r = splitProjectQuery("my proj:", projects)!;
+    expect(r.scope.projectName).toBe("My Proj");
+    expect(r.rest).toBe("");
+  });
+
+  it("parseMentionQuery strips the project half for @agents: / @agent:, and never for files/projects", () => {
+    for (const prefix of ["agents", "agent"]) {
+      const p = parseMentionQuery(`${prefix}:alpha:main`, projects);
+      expect(p.scope).toBe("agent");
+      expect(p.query).toBe("main");
+      expect(p.projectScope?.projectName).toBe("alpha");
+    }
+    expect(parseMentionQuery("files:alpha:x", projects).projectScope).toBeUndefined();
+    expect(parseMentionQuery("projects:alpha:x", projects).projectScope).toBeUndefined();
+  });
+
+  it("parseMentionQuery strips the project half for @worktrees: and the singular alias", () => {
+    for (const prefix of ["worktrees", "worktree"]) {
+      const p = parseMentionQuery(`${prefix}:My Proj:fix`, projects);
+      expect(p.scope).toBe("worktree");
+      expect(p.query).toBe("fix");
+      expect(p.projectScope?.projectIds).toEqual(["p4"]);
+    }
+    expect(parseMentionQuery("worktrees:My", projects).projectScope).toBeUndefined();
   });
 });

@@ -18,11 +18,12 @@ import {
   insertMentionForActiveToken,
   rewriteActiveAtToken,
 } from "./mentionOps";
-import { parseMentionQuery } from "./mentionQuery";
+import { type MentionProjectRef, parseMentionQuery } from "./mentionQuery";
 import { buildMentionRows, type MentionRow, selectableRows } from "./mentionRows";
 import { MentionPopover } from "./MentionPopover";
 import type { MentionEditorConfig } from "./types";
 import { useMentionSources } from "./useMentionSources";
+import { useServerStore } from "@/hooks/useServerStore";
 import { MAX_MENTIONS } from "@/lib/mentions";
 
 export interface MentionPluginProps {
@@ -64,7 +65,16 @@ export function MentionPlugin({
   const pasteSuppressRef = useRef(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  const parsed = useMemo(() => parseMentionQuery(uiState.raw), [uiState.raw]);
+  // Visible projects, for the `@worktrees:<project>:<worktree>` grammar.
+  const serverProjects = useServerStore((s) => s.projects);
+  const projectRefs: MentionProjectRef[] = useMemo(
+    () => serverProjects.filter((p) => !p.hidden).map((p) => ({ id: p.id, name: p.name })),
+    [serverProjects],
+  );
+  const projectRefsRef = useRef(projectRefs);
+  projectRefsRef.current = projectRefs;
+
+  const parsed = useMemo(() => parseMentionQuery(uiState.raw, projectRefs), [uiState.raw, projectRefs]);
   const sources = useMentionSources(config, parsed, uiState.open);
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
@@ -75,8 +85,8 @@ export function MentionPlugin({
 
   const rows = useMemo(() => {
     if (!uiState.open) return [];
-    return buildMentionRows(parsed, sources, { limitReached, fileScope });
-  }, [uiState.open, parsed, sources, limitReached, fileScope]);
+    return buildMentionRows(parsed, sources, { limitReached, fileScope, currentProjectId: config.projectId });
+  }, [uiState.open, parsed, sources, limitReached, fileScope, config.projectId]);
 
   const rowsRef = useRef<MentionRow[]>(rows);
   rowsRef.current = rows;
@@ -90,9 +100,13 @@ export function MentionPlugin({
       setLimitReached(isLimit);
       limitReachedRef.current = isLimit;
 
-      const p = parseMentionQuery(next.raw);
+      const p = parseMentionQuery(next.raw, projectRefsRef.current);
       const nextRows = next.open
-        ? buildMentionRows(p, sourcesRef.current, { limitReached: isLimit, fileScope: fileScopeRef.current })
+        ? buildMentionRows(p, sourcesRef.current, {
+            limitReached: isLimit,
+            fileScope: fileScopeRef.current,
+            currentProjectId: configRef.current.projectId,
+          })
         : [];
       const hasSelectable =
         next.open && nextRows.some((r) => r.type === "scope" || r.type === "item");
@@ -109,6 +123,18 @@ export function MentionPlugin({
     syncState({ open: false, raw: "", activeOrdinal: 0 });
   }, [syncState]);
 
+  // One rewrite path for every scope row (`@files:`, `@worktrees:<project>:` …)
+  // so keyboard and mouse selection can't drift. `syncState.raw` must equal
+  // the rewritten token minus `@`, or the active ordinal resets.
+  const applyScopeRow = (row: Extract<MentionRow, { type: "scope" }>) => {
+    const raw = row.insertRaw ?? `${mentionKindDef(row.kind).section}:`;
+    rewriteActiveAtToken(editor, `@${raw}`);
+    suppressedTokenRef.current = null;
+    syncState({ open: true, raw, activeOrdinal: 0 });
+  };
+  const applyScopeRowRef = useRef(applyScopeRow);
+  applyScopeRowRef.current = applyScopeRow;
+
   const selectActiveRef = useRef<() => void>(() => {});
   selectActiveRef.current = () => {
     const selectable = selectableRows(rowsRef.current);
@@ -116,10 +142,7 @@ export function MentionPlugin({
     if (!active) return;
 
     if (active.type === "scope") {
-      const def = mentionKindDef(active.kind);
-      rewriteActiveAtToken(editor, `@${def.section}:`);
-      suppressedTokenRef.current = null;
-      syncState({ open: true, raw: `${def.section}:`, activeOrdinal: 0 });
+      applyScopeRowRef.current(active);
       return;
     }
 
@@ -174,7 +197,7 @@ export function MentionPlugin({
           e?.preventDefault();
           const selectable = selectableRows(rowsRef.current);
           if (selectable.length === 0) return true;
-          const next = Math.min(uiStateRef.current.activeOrdinal + 1, selectable.length - 1);
+          const next = (uiStateRef.current.activeOrdinal + 1) % selectable.length;
           setUiState((s) => ({ ...s, activeOrdinal: next }));
           uiStateRef.current.activeOrdinal = next;
           return true;
@@ -186,7 +209,9 @@ export function MentionPlugin({
         (e) => {
           if (e?.isComposing || !handles()) return false;
           e?.preventDefault();
-          const next = Math.max(uiStateRef.current.activeOrdinal - 1, 0);
+          const selectable = selectableRows(rowsRef.current);
+          if (selectable.length === 0) return true;
+          const next = (uiStateRef.current.activeOrdinal - 1 + selectable.length) % selectable.length;
           setUiState((s) => ({ ...s, activeOrdinal: next }));
           uiStateRef.current.activeOrdinal = next;
           return true;
@@ -308,10 +333,7 @@ export function MentionPlugin({
       }}
       onSelect={(row) => {
         if (row.type === "scope") {
-          const def = mentionKindDef(row.kind);
-          rewriteActiveAtToken(editor, `@${def.section}:`);
-          suppressedTokenRef.current = null;
-          syncState({ open: true, raw: `${def.section}:`, activeOrdinal: 0 });
+          applyScopeRow(row);
         } else if (row.type === "item") {
           insertMentionForActiveToken(editor, {
             kind: row.item.kind,

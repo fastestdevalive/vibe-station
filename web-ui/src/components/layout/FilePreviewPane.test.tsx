@@ -421,6 +421,40 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingLineTarget, from search cli
   });
 });
 
+describe("FilePreviewPane — commit view 'View source'", () => {
+  it("opens the file as a plain Files tab; hidden for deleted files", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getDiff").mockResolvedValue("");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      openFileTabsByWorktree: {},
+      diffScopeByWorktree: { "wt-1": "local" },
+    });
+    const { rerender } = render(
+      <FilePreviewPane
+        api={api}
+        worktreeId="wt-1"
+        controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123" }}
+      />,
+    );
+    const btn = await screen.findByRole("button", { name: "View source" });
+    fireEvent.click(btn);
+    const st = useWorkspaceStore.getState();
+    expect(st.openFileTabsByWorktree["wt-1"]).toEqual(["src/App.tsx"]);
+    expect(st.activeFilePath).toBe("src/App.tsx");
+    expect(st.diffScopeByWorktree["wt-1"]).toBe("none");
+
+    rerender(
+      <FilePreviewPane
+        api={api}
+        worktreeId="wt-1"
+        controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123", deleted: true }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+  });
+});
+
 describe("FilePreviewPane — 5.T3 (git gutter marks on modified files)", () => {
   it("shows gutter marks when getGutter returns added/modified data", async () => {
     const api = createMockApi();
@@ -446,6 +480,24 @@ describe("FilePreviewPane — 5.T3 (git gutter marks on modified files)", () => 
     const modifiedLines = container.querySelectorAll(".workspace-code-line--modified");
     expect(modifiedLines.length).toBeGreaterThan(0);
 
+    getGutterSpy.mockRestore();
+  });
+
+  it("asks for branch-relative gutter marks when the tree scope is Branch", async () => {
+    const api = createMockApi();
+    const getGutterSpy = vi
+      .spyOn(api, "getGutter")
+      .mockResolvedValue({ added: [], deleted: [], modified: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      treeScopeByWorktree: { "wt-1": "branch" },
+    });
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(getGutterSpy).toHaveBeenCalled());
+    expect(getGutterSpy.mock.calls[0]![4]).toBe("branch");
+    useWorkspaceStore.setState({ treeScopeByWorktree: {} });
     getGutterSpy.mockRestore();
   });
 

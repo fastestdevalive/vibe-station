@@ -71,8 +71,16 @@ export function useFileMentions(
 const EMPTY_ITEMS: MentionItem[] = [];
 const EMPTY_RESULT: SourceResult = { items: EMPTY_ITEMS };
 
-export function useAgentMentions(cfg: MentionEditorConfig, open: boolean): SourceResult {
+export function useAgentMentions(
+  cfg: MentionEditorConfig,
+  parsed: ParsedMentionQuery,
+  open: boolean,
+): SourceResult {
   const sessions = useServerStore((s) => s.sessions);
+  // `@agents:<project>:` picked a project: list that project's agents instead
+  // of the composer's own (the project half is only parsed for agent/worktree
+  // scopes, but guard on the kind so one source never reads the other's pick).
+  const pickedProjectIds = parsed.scope === "agent" ? (parsed.projectScope?.projectIds ?? null) : null;
   const worktrees = useServerStore((s) => s.worktrees);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const modes = useModesStore((s) => s.modes);
@@ -85,7 +93,9 @@ export function useAgentMentions(cfg: MentionEditorConfig, open: boolean): Sourc
       if (session.type !== "agent") continue;
       if (session.archivedAt != null) continue;
       if (session.supersededBy != null) continue;
-      if (cfg.projectId !== null && session.projectId !== cfg.projectId) continue;
+      if (pickedProjectIds) {
+        if (session.projectId === null || !pickedProjectIds.includes(session.projectId)) continue;
+      } else if (cfg.projectId !== null && session.projectId !== cfg.projectId) continue;
       if (cfg.selfSessionId !== null && session.id === cfg.selfSessionId) continue;
 
       const liveState = sessionStates[session.id] ?? session.state;
@@ -144,13 +154,20 @@ export function useAgentMentions(cfg: MentionEditorConfig, open: boolean): Sourc
     });
 
     return list;
-  }, [open, sessions, worktrees, sessionStates, modes, cfg.projectId, cfg.worktreeId, cfg.selfSessionId]);
+  }, [open, sessions, worktrees, sessionStates, modes, cfg.projectId, cfg.worktreeId, cfg.selfSessionId, pickedProjectIds]);
 
   return open ? { items } : EMPTY_RESULT;
 }
 
-export function useWorktreeMentions(cfg: MentionEditorConfig, open: boolean): SourceResult {
+export function useWorktreeMentions(
+  cfg: MentionEditorConfig,
+  parsed: ParsedMentionQuery,
+  open: boolean,
+): SourceResult {
   const worktrees = useServerStore((s) => s.worktrees);
+  // `@worktrees:<project>:` picked a project: list that project's worktrees
+  // instead of the composer's own. Everything else stays current-project.
+  const pickedProjectIds = parsed.scope === "worktree" ? (parsed.projectScope?.projectIds ?? null) : null;
 
   const items: MentionItem[] = useMemo(() => {
     if (!open) return EMPTY_ITEMS;
@@ -158,7 +175,9 @@ export function useWorktreeMentions(cfg: MentionEditorConfig, open: boolean): So
     const list: MentionItem[] = [];
     for (const wt of worktrees) {
       if (wt.hiddenAt != null) continue;
-      if (cfg.projectId !== null && wt.projectId !== cfg.projectId) continue;
+      if (pickedProjectIds) {
+        if (!pickedProjectIds.includes(wt.projectId)) continue;
+      } else if (cfg.projectId !== null && wt.projectId !== cfg.projectId) continue;
 
       list.push({
         kind: "worktree",
@@ -173,7 +192,7 @@ export function useWorktreeMentions(cfg: MentionEditorConfig, open: boolean): So
     });
 
     return list;
-  }, [open, worktrees, cfg.projectId]);
+  }, [open, worktrees, cfg.projectId, pickedProjectIds]);
 
   return open ? { items } : EMPTY_RESULT;
 }
@@ -210,8 +229,8 @@ export function useMentionSources(
   open: boolean,
 ): Record<MentionKind, SourceResult> {
   const file = useFileMentions(cfg, parsed, open);
-  const agent = useAgentMentions(cfg, open);
-  const worktree = useWorktreeMentions(cfg, open);
+  const agent = useAgentMentions(cfg, parsed, open);
+  const worktree = useWorktreeMentions(cfg, parsed, open);
   const project = useProjectMentions(cfg, open);
 
   return {

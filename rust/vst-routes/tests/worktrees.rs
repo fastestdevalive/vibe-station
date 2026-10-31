@@ -1814,7 +1814,7 @@ async fn test_gutter_untracked_files() {
         .unwrap();
 
     let result = routes
-        .gutter("wt-1", "untracked.txt")
+        .gutter("wt-1", "untracked.txt", None)
         .await
         .expect("gutter should succeed for untracked UTF-8 file");
 
@@ -1834,7 +1834,7 @@ async fn test_gutter_untracked_files() {
         .unwrap();
 
     let result = routes
-        .gutter("wt-1", "binary.bin")
+        .gutter("wt-1", "binary.bin", None)
         .await
         .expect("gutter should succeed for untracked binary file");
 
@@ -1870,7 +1870,7 @@ async fn test_gutter_untracked_empty_file() {
         .unwrap();
 
     let result = routes
-        .gutter("wt-1", "empty.txt")
+        .gutter("wt-1", "empty.txt", None)
         .await
         .expect("gutter should succeed for empty file");
 
@@ -1935,7 +1935,7 @@ async fn test_gutter_tracked_file_modifications() {
         .unwrap();
 
     let result = routes
-        .gutter("wt-1", "tracked.txt")
+        .gutter("wt-1", "tracked.txt", None)
         .await
         .expect("gutter should succeed for modified tracked file");
 
@@ -1948,6 +1948,50 @@ async fn test_gutter_tracked_file_modifications() {
     assert!(!result.added.is_empty(), "should detect added lines");
     // The exact line numbers depend on how git diff structures this, but we should
     // have at least one added line
+}
+
+/// Branch scope diffs against the fork point of the base branch, so a file
+/// already committed on the feature branch is all-added there but clean locally.
+#[tokio::test]
+async fn test_gutter_branch_scope_uses_base_fork_point() {
+    let (_dir, store, mut routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(wt_dir.path().to_path_buf());
+
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let wt_path = routes.paths.worktree_path("proj-1", "wt-1");
+    tokio::fs::create_dir_all(&wt_path).await.unwrap();
+    init_git_repo(&wt_path);
+
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&wt_path)
+            .status()
+            .expect("git failed");
+        assert!(status.success(), "git {args:?} failed");
+    };
+    run(&["checkout", "-b", "feature"]);
+    tokio::fs::write(wt_path.join("feat.txt"), "a\nb\nc\n")
+        .await
+        .unwrap();
+    run(&["add", "feat.txt"]);
+    run(&["commit", "-m", "add feat.txt"]);
+
+    let local = routes.gutter("wt-1", "feat.txt", None).await.unwrap();
+    assert!(local.added.is_empty(), "committed file is clean vs HEAD");
+
+    let branch = routes
+        .gutter("wt-1", "feat.txt", Some("branch"))
+        .await
+        .unwrap();
+    assert_eq!(
+        branch.added,
+        vec![1, 2, 3],
+        "all lines are new vs base fork point"
+    );
 }
 
 /// 4.T3 variant: Binary tracked file should return all-empty.
@@ -1987,7 +2031,7 @@ async fn test_gutter_binary_tracked_file() {
     tokio::fs::write(&bin_path, modified_binary).await.unwrap();
 
     let result = routes
-        .gutter("wt-1", "binary.bin")
+        .gutter("wt-1", "binary.bin", None)
         .await
         .expect("gutter should succeed for binary file");
 
@@ -2035,7 +2079,7 @@ async fn test_gutter_clean_file_and_traversal() {
 
     // File is now clean (no uncommitted changes)
     let result = routes
-        .gutter("wt-1", "clean.txt")
+        .gutter("wt-1", "clean.txt", None)
         .await
         .expect("gutter should succeed for clean file");
 
@@ -2047,7 +2091,7 @@ async fn test_gutter_clean_file_and_traversal() {
 
     // Test path traversal attempt — should return 404
     let err = routes
-        .gutter("wt-1", "../../etc/passwd")
+        .gutter("wt-1", "../../etc/passwd", None)
         .await
         .expect_err("path traversal should fail");
 
