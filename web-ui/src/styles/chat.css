@@ -1766,14 +1766,31 @@
   z-index: 20;
   min-width: 240px;
   max-height: 320px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: var(--space-1);
+  overflow: hidden;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.28));
+}
+/* Header + model list scroll; the action rows (Start fresh…, Switch…) stay pinned below. */
+.chat-model-switch__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+}
+.chat-model-switch__scroll > * {
+  flex-shrink: 0;
+}
+.chat-model-switch__footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--space-1) var(--space-1);
 }
 .chat-model-switch__title {
   margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-1)) var(--space-1);

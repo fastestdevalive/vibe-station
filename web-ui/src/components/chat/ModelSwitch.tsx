@@ -182,6 +182,7 @@ export function ModelSwitch({
       </button>
       {open ? (
         <div className="chat-model-switch__popover" role="menu" aria-label="Agent menu" onKeyDown={onMenuKeyDown}>
+          <div className="chat-model-switch__scroll">
           {title ? <div className="chat-model-switch__title">{title}</div> : null}
           {!hideModels ? (
             <>
@@ -217,8 +218,9 @@ export function ModelSwitch({
               )}
             </>
           ) : null}
+          </div>
           {actions && actions.length > 0 ? (
-            <>
+            <div className="chat-model-switch__footer">
               {!hideModels ? <div className="chat-model-switch__divider" aria-hidden /> : null}
               {actions.map((action, i) => {
                 const rowIndex = modelRows + i;
@@ -246,7 +248,7 @@ export function ModelSwitch({
                   </Fragment>
                 );
               })}
-            </>
+            </div>
           ) : null}
         </div>
       ) : null}
