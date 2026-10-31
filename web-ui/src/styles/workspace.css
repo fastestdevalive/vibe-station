@@ -8734,6 +8734,21 @@ button.dashboard-card {
   color: var(--fg-muted);
 }
 
+.preview-diffinfo__view-source {
+  margin-left: auto;
+  padding: 1px var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+  background: transparent;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.preview-diffinfo__view-source:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
 /* Panel-level actions (fullscreen + close) on the tool-selector bar. */
 .tool-panel__tabs-actions {
   display: flex;

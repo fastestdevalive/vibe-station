@@ -14,7 +14,7 @@ import type { Mention } from "@/api/types";
 import { $createMentionChipNode, MentionChipNode } from "@/lexical/MentionChipNode";
 import { isLeftBoundary, safeMentionLabel } from "@/lib/mentions";
 
-export const MAX_MENTION_QUERY_LENGTH = 40;
+export const MAX_MENTION_QUERY_LENGTH = 80;
 
 function isAtBoundary(node: TextNode, atIndexInNode: number): boolean {
   if (atIndexInNode > 0) {

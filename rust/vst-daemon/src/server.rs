@@ -2466,13 +2466,19 @@ async fn handle_worktree_get_file(
     }
 }
 
+#[derive(Deserialize)]
+struct GutterQuery {
+    scope: Option<String>,
+}
+
 async fn handle_worktree_gutter(
     State(state): State<AppState>,
     axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+    Query(q): Query<GutterQuery>,
 ) -> Result<Json<vst_types::rest::worktrees::GutterResult>, (StatusCode, Json<serde_json::Value>)> {
     state
         .worktree_routes
-        .gutter(&id, &file_path)
+        .gutter(&id, &file_path, q.scope.as_deref())
         .await
         .map(Json)
         .map_err(worktree_err_to_response)

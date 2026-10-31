@@ -106,12 +106,15 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
             Scheduled
           </div>
         ) : null}
-        {sent && showTime ? (
-          <div className="chat-bubble__time" title={sent.full}>
-            {sent.label}
-          </div>
-        ) : null}
       </div>
+      {sent && showTime ? (
+        // Overlay, not inline: sibling of the bubble (which clips overflow) and
+        // absolutely positioned under it, so toggling it never reflows the
+        // message the user may be mid-selection in.
+        <div className="chat-bubble__time" title={sent.full}>
+          {sent.label}
+        </div>
+      ) : null}
     </div>
   );
 });

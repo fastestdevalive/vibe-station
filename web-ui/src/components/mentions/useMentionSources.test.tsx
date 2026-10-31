@@ -8,6 +8,7 @@ import { useModesStore } from "@/store/modesStore";
 import { useMentionSources } from "./useMentionSources";
 import type { MentionEditorConfig } from "./types";
 import { parseMentionQuery } from "./mentionQuery";
+import { rankItems } from "./mentionFilter";
 import { fromWire, serializeMentionToken, toWire } from "@/lib/mentions";
 
 async function flushDebounce(ms = 60) {
@@ -202,6 +203,42 @@ describe("useMentionSources (2.T2)", () => {
     expect(w.text).toBe("@agent:main (id=s-main-2)");
     expect(w.mentions).toEqual([mention]);
     expect(fromWire(w.text, w.mentions)).toBe(serializeMentionToken(mention));
+  });
+
+  it("@agents:<project>: lists that project's agents (worktree searchable in secondary); plain @agents: stays current-project", () => {
+    const p1 = projectFixture("p1", "Alpha", "/Users/alice/p1");
+    const p2 = projectFixture("p2", "Beta", "/Users/alice/p2");
+    const wtB = worktreeFixture("wtb", "p2", "plugin-sys", "feat/plugin-system");
+    useServerStore.setState({
+      projects: [p1, p2],
+      worktrees: [wtB],
+      sessions: [
+        sessionFixture("s-a", "p1", { name: "main" }),
+        sessionFixture("s-b1", "p2", { name: "main", worktreeId: "wtb" }),
+        sessionFixture("s-b2", "p2", { name: "Direct helper" }),
+        sessionFixture("s-b-old", "p2", { name: "gone", archivedAt: "2026-01-02T00:00:00Z" }),
+      ],
+    });
+    const cfg: MentionEditorConfig = { api: createMockApi(), projectId: "p1", worktreeId: null, selfSessionId: null };
+    const refs = [
+      { id: "p1", name: "Alpha" },
+      { id: "p2", name: "Beta" },
+    ];
+
+    const plain = renderHook(() => useMentionSources(cfg, parseMentionQuery("agents:", refs), true));
+    expect(plain.result.current.agent.items.map((a) => a.id)).toEqual(["s-a"]);
+
+    const picked = renderHook(() => useMentionSources(cfg, parseMentionQuery("agents:beta:", refs), true));
+    const items = picked.result.current.agent.items;
+    expect(items.map((a) => a.id).sort()).toEqual(["s-b1", "s-b2"]);
+    expect(items.find((a) => a.id === "s-b1")?.secondary).toBe("claude · plugin-sys");
+    expect(items.find((a) => a.id === "s-b2")?.secondary).toBe("claude · direct");
+    // The worktree label is matchable via the secondary text.
+    expect(rankItems(items, "plugin").map((a) => a.id)).toEqual(["s-b1"]);
+
+    // A worktree-scoped pick must not leak into the agent source.
+    const wt = renderHook(() => useMentionSources(cfg, parseMentionQuery("worktrees:Beta:", refs), true));
+    expect(wt.result.current.agent.items.map((a) => a.id)).toEqual(["s-a"]);
   });
 
   it("worktrees limited to the current project (all when unknown), secondary = branch", () => {

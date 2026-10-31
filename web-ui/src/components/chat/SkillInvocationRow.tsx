@@ -52,12 +52,12 @@ export const SkillInvocationRow = forwardRef<HTMLInputElement, SkillInvocationRo
     },
     ref,
   ) {
-    // Compact autosize: the arg input widens with its content (in `ch`
-    // units, so it tracks the font, not a pixel guess) up to the chip's own
-    // CSS `max-width` cap — beyond that it scrolls horizontally natively
-    // (chat.css). §9: a minimum ~4ch width even with no hint, so there is
-    // always a visible, clickable target.
-    const argInputWidthCh = Math.max(prefix.args.length, argumentHint?.length ?? 0, 4);
+    // Compact autosize: a hidden mirror (`data-value` painted by an `::after`
+    // in chat.css) sizes the wrapper to the REAL rendered text width, so the
+    // input tracks proportional fonts (a `ch` guess over-widens: "0" is wider
+    // than the average glyph). Capped by the wrapper's CSS `max-width`;
+    // beyond that the input scrolls natively. §9: min ~4ch even with no hint.
+    const mirrorValue = prefix.args || argumentHint || "";
 
     const localInputRef = useRef<HTMLInputElement | null>(null);
     const setInputRef = (el: HTMLInputElement | null) => {
@@ -82,6 +82,7 @@ export const SkillInvocationRow = forwardRef<HTMLInputElement, SkillInvocationRo
         >
           /{prefix.name}
         </span>
+        <span className="chat-skill-chip__arg-wrap" data-value={mirrorValue}>
         <input
           ref={setInputRef}
           type="text"
@@ -89,7 +90,6 @@ export const SkillInvocationRow = forwardRef<HTMLInputElement, SkillInvocationRo
           // own arrow/backspace/click handling, never plain Tab.
           tabIndex={-1}
           className="chat-skill-chip__arg-input"
-          style={{ width: `${argInputWidthCh}ch` }}
           value={prefix.args}
           placeholder={argumentHint}
           aria-label={`Arguments for ${prefix.name}`}
@@ -213,6 +213,7 @@ export const SkillInvocationRow = forwardRef<HTMLInputElement, SkillInvocationRo
             }
           }}
         />
+        </span>
       </span>
     );
   },

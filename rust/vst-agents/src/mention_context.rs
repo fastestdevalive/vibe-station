@@ -129,8 +129,11 @@ fn describe_one_mention(
                         let branch = sanitize_field(&wt.branch, 80);
                         let abs_path = worktree_path(&p.id, &wt.id);
                         let path = sanitize_field(&abs_path.display().to_string(), 400);
+                        // The mentioned worktree may belong to another project
+                        // than the agent's own — say which.
+                        let project_id = sanitize_field(&p.id, 80);
                         return Some(format!(
-                            "- worktree \"{name}\" id={id} branch={branch} path={path}"
+                            "- worktree \"{name}\" id={id} branch={branch} project={project_id} path={path}"
                         ));
                     }
                 }
@@ -463,11 +466,11 @@ mod tests {
         );
         assert_eq!(
             lines[3],
-            "- worktree \"feat-x\" id=wt1 branch=feat/login path=/worktrees/p1/wt1"
+            "- worktree \"feat-x\" id=wt1 branch=feat/login project=p1 path=/worktrees/p1/wt1"
         );
         assert_eq!(
             lines[4],
-            "- worktree \"feat/branch-only\" id=wt2 branch=feat/branch-only path=/worktrees/p1/wt2"
+            "- worktree \"feat/branch-only\" id=wt2 branch=feat/branch-only project=p1 path=/worktrees/p1/wt2"
         );
         assert_eq!(lines[5], "- project id=p1 path=/path/to/project");
         assert_eq!(

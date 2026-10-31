@@ -2234,6 +2234,7 @@ impl WorktreeRoutes {
         &self,
         wt_id: &str,
         file_path: &str,
+        scope: Option<&str>,
     ) -> Result<GutterResult, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
@@ -2248,7 +2249,38 @@ impl WorktreeRoutes {
             .to_string_lossy()
             .to_string();
 
-        compute_git_gutter(&wt_path, &rel_path, &abs_path, file_path)
+        // `branch` diffs against the base-branch fork point (same base the
+        // diff/diffstat endpoints use); anything else is local (HEAD).
+        let base = if scope == Some("branch") {
+            let worktree = project
+                .worktrees
+                .iter()
+                .find(|w| w.id == wt_id)
+                .ok_or_else(|| WorktreeRouteError::NotFound("worktree not found".to_string()))?;
+            let git_dir_str = wt_path.to_string_lossy().to_string();
+            let sha = resolve_base_sha(
+                &git_dir_str,
+                Some(&worktree.base_branch),
+                Some(&worktree.base_sha),
+            )
+            .await
+            .map_err(|e| WorktreeRouteError::Internal(e.to_string()))?
+            .ok_or_else(|| {
+                WorktreeRouteError::Unprocessable(
+                    "Could not resolve base branch fork point".to_string(),
+                )
+            })?;
+            if !is_valid_commit_sha(&sha) {
+                return Err(WorktreeRouteError::Unprocessable(
+                    "Could not resolve base branch fork point".to_string(),
+                ));
+            }
+            sha
+        } else {
+            "HEAD".to_string()
+        };
+
+        compute_git_gutter_against(&wt_path, &rel_path, &abs_path, file_path, &base)
             .await
             .map_err(|e| match e {
                 GutterError::NotFound(msg) => WorktreeRouteError::NotFound(msg),
@@ -2291,7 +2323,11 @@ pub enum GutterError {
 }
 
 /// `git diff --no-color --find-renames HEAD -- <pathspecs>` in `root`.
-async fn git_diff_head(root: &Path, pathspecs: &[String]) -> std::io::Result<std::process::Output> {
+async fn git_diff_against(
+    root: &Path,
+    base: &str,
+    pathspecs: &[String],
+) -> std::io::Result<std::process::Output> {
     let mut cmd = Command::new("git");
     cmd.current_dir(root).args([
         "-c",
@@ -2301,7 +2337,7 @@ async fn git_diff_head(root: &Path, pathspecs: &[String]) -> std::io::Result<std
         "diff",
         "--no-color",
         "--find-renames",
-        "HEAD",
+        base,
         "--",
     ]);
     for p in pathspecs {
@@ -2381,6 +2417,18 @@ pub async fn compute_git_gutter(
     abs_path: &Path,
     file_path: &str,
 ) -> Result<GutterResult, GutterError> {
+    compute_git_gutter_against(root, rel_path, abs_path, file_path, "HEAD").await
+}
+
+/// Gutter marks relative to `base`: `"HEAD"` for local changes, or the
+/// worktree's resolved base-branch fork sha for the branch scope.
+pub async fn compute_git_gutter_against(
+    root: &Path,
+    rel_path: &str,
+    abs_path: &Path,
+    file_path: &str,
+    base: &str,
+) -> Result<GutterResult, GutterError> {
     // Explicit unborn-HEAD check: exit 128 from `git diff` is git's generic
     // fatal code (dubious ownership, a corrupt index, a bad pathspec) —
     // treating it as "unborn" paints the whole file as added even when HEAD
@@ -2410,7 +2458,7 @@ pub async fn compute_git_gutter(
         return read_all_added(abs_path, file_path).await;
     }
 
-    let diff_output = git_diff_head(root, &[rel_path.to_string()])
+    let diff_output = git_diff_against(root, base, &[rel_path.to_string()])
         .await
         .map_err(|e| GutterError::Internal(format!("Failed to run git diff: {e}")))?;
 
@@ -2451,7 +2499,7 @@ pub async fn compute_git_gutter(
     // the diff with both paths so the rename's edits show as modifications
     // instead of a full add+delete.
     if let Some(old_p) = find_rename_source(root, rel_path).await {
-        let both = git_diff_head(root, &[rel_path.to_string(), old_p])
+        let both = git_diff_against(root, base, &[rel_path.to_string(), old_p])
             .await
             .map_err(|e| GutterError::Internal(format!("Failed to run git diff: {e}")))?;
         if !both.status.success() && both.status.code() != Some(1) {

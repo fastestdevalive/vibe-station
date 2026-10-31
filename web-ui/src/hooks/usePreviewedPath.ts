@@ -7,6 +7,8 @@ export interface FilePreviewControlled {
   scope: DiffScope;
   commitSha?: string;
   submodule?: string;
+  /** The file was deleted by this commit — no working-tree copy to open. */
+  deleted?: boolean;
 }
 
 export interface PreviewedPathInfo {

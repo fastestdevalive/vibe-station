@@ -1498,6 +1498,7 @@ export function createMockApi(seed: MockSeed = {}) {
       _path: string,
       _signal?: AbortSignal,
       _scope: FileScope = "worktree",
+      _gutterScope: "local" | "branch" = "local",
     ): Promise<GutterResult> {
       return { added: [], deleted: [], modified: [] };
     },

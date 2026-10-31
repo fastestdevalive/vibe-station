@@ -26,7 +26,10 @@ function renderHighlighted(text: string, query: string) {
 
 function getFooterText(parsed: ParsedMentionQuery, activeRow?: MentionRow): string {
   if (parsed.scope !== null) {
-    return "↑↓ navigate · Enter insert chip · ⌫ leave scope · Esc close · type to filter";
+    if (activeRow?.type === "scope") {
+      return `↑↓ navigate · Enter search that project's ${mentionKindDef(activeRow.kind).section} · Esc close`;
+    }
+    return `↑↓ navigate · Enter insert chip · ⌫ leave ${parsed.projectScope ? "project" : "scope"} · Esc close · type to filter`;
   }
   if (parsed.raw !== "" && parsed.scopeKinds.length > 0 && activeRow?.type === "scope") {
     return `Enter scope to ${activeRow.label} · ↓ pick a result · Esc close`;
@@ -64,9 +67,11 @@ export function MentionPopover({
   let scopedHeader = null;
   if (parsed.scope !== null) {
     const def = mentionKindDef(parsed.scope);
-    const count = selectable.length;
+    const count = selectable.filter((r) => r.type === "item").length;
     const text =
-      parsed.scope === "project"
+      parsed.projectScope
+        ? `Searching ${def.section} in ${parsed.projectScope.projectName} · ${count} shown`
+        : parsed.scope === "project"
         ? `Searching projects · ${count} shown`
         : `Searching ${def.section} in this project · ${count} shown`;
     scopedHeader = (
@@ -125,7 +130,7 @@ export function MentionPopover({
             const Icon = def.Icon;
             return (
               <button
-                key={`scope-${row.kind}`}
+                key={`scope-${row.kind}-${row.insertRaw ?? row.label}`}
                 ref={(el) => {
                   optionRefs.current[ordinal] = el;
                 }}
