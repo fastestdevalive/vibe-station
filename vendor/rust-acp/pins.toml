@@ -1,37 +1,51 @@
-# The ONE place vibe-station records which Rust ACP adapter build it ships and
-# which npm adapter level that build mirrors. Read by scripts/build-rust-acp.sh
-# (awk — keep it flat: [section] + `key = "value"` lines only).
+# The ONE place vibe-station records which Rust ACP adapter build it ships. Read by
+# scripts/build-rust-acp.sh (awk — keep it flat: [section] + `key = "value"` lines only).
 #
-# Bump procedure (the npm-diff / adopt work happens in the port repos, see their
-# UPSTREAM-BUMP.md / docs/UPSTREAM.md): land the bump there, then here change
-# `rev` (+ `upstream` if the mirrored npm level moved), run
-# `scripts/build-rust-acp.sh claude` / `codex` (it asserts the binary reports
-# `+upstream.<upstream>`), re-run the parity harness, commit.
+# The ports are private repos, so the build DOWNLOADS the prebuilt binary from `release` and
+# verifies it against `sha256.<target>` (no credentials needed). A target with no sha256 line has
+# no prebuilt; build it with `scripts/build-rust-acp.sh <name> --from-source` (needs the port repo).
 #
-# `profile` (optional): space-separated key=value cargo release-profile overrides applied as
-# CARGO_PROFILE_RELEASE_<KEY> env vars when building that adapter, so a port whose own profile
-# is not size-tuned can be shrunk without editing it (claude: 17.6 MB -> 6.5 MB). `panic` is
-# deliberately left at the port's `unwind` (the adapter turns a panicking session into an error reply).
+# Bump procedure: land the change in the port repo (main), build all targets from that rev with
+# `--from-source` and publish them as a release of the binaries repo tagged `<name>-acp-<short rev>`
+# (assets `<name>-acp-<target>.tar.gz` + `<name>.SHA256SUMS`), then here change `rev`, `release`, every
+# `sha256.<target>` (copy from that release's `<name>.SHA256SUMS`) and `upstream` if the mirrored level moved.
+# Run `scripts/build-rust-acp.sh <name>` (it asserts the binary reports `+upstream.<upstream>`) and
+# re-run the parity harness (scripts/parity/) before committing.
 #
-# `upstream` is asserted against the built binary's `--version`; it is never
-# trusted on its own, so it can't drift from the port's own UPSTREAM_VERSION.
+# `rev` is the port commit the prebuilt was built from. `upstream` is asserted against the binary's
+# `--version`; it is never trusted on its own, so it can't drift from the port's own UPSTREAM_VERSION.
+#
+# `profile` (optional, --from-source only): space-separated key=value cargo release-profile overrides
+# applied as CARGO_PROFILE_RELEASE_<KEY> env vars, so a port whose own profile is not size-tuned can be
+# shrunk without editing it (claude: 17.6 MB -> 6.5 MB). `panic` is deliberately left at the port's
+# `unwind` (the adapter turns a panicking session into an error reply). The published prebuilts were
+# built with it; a prebuilt's size is what ships, so keep it applied whenever one is cut.
 
 [claude]
-# Port: claude-agent-acp-rs (branch feat/rust-port). Unpushed as of 2026-10-23.
 repo     = "git@github.com:fastestdevalive/claude-agent-acp.git"
-rev      = "ffb031946e769d68eb47bed355f5d66a63c2127a"
+rev      = "f58fc63c1fa50e6b1c25a35e4e1d094718e4a7d3"
+release  = "https://github.com/fastestdevalive/vibe-station-acp-binaries/releases/download/claude-acp-f58fc63"
 manifest = "rust/Cargo.toml"
 package  = "claude-agent-acp-rs"
 bin      = "claude-agent-acp-rs"
 upstream = "0.94.0"
 profile  = "opt-level=s lto=true strip=true codegen-units=1"
+sha256.aarch64-apple-darwin = "de1c325563150c6643ad9c5248c71dd880f8808231f5cd64bca3f66ee2896394"
+sha256.aarch64-unknown-linux-gnu = "bf58936664991baf7e461f7cbaa043b4003f512f60f8b8b1d2aabd3b5775e46c"
+sha256.aarch64-unknown-linux-musl = "f9fe17890340132778460bd6a6e84f2b376c5072a628ec4e81535d00d6d96722"
+sha256.x86_64-unknown-linux-gnu = "2a8bac8385ea07bf48880da318e83a211124f7d9d501d107fde4efbe892d1bc3"
+sha256.x86_64-unknown-linux-musl = "7ad37c1f1710826a91adac3a59c18d731c95efd05148fe0848d8e4a66db89f7f"
 
 [codex]
-# Port: private fork fastestdevalive/codex-acp (upstream v2.2.2 tree at root, crate in rust/). Needs the fastestdevalive GitHub account over SSH.
-# Verified GREEN at this rev on 2026-10-28 (0 open vst-observable divergences): .vibekit/reports/2026-10-28-codex-verify-aefc768.md
 repo     = "git@github.com:fastestdevalive/codex-acp.git"
-rev      = "b7391e216a7eabdd89bdcad22cacbbaf06f28c72"
+rev      = "79ba2a1ab4d9dea2b447c6284a2d528bee698b10"
+release  = "https://github.com/fastestdevalive/vibe-station-acp-binaries/releases/download/codex-acp-79ba2a1"
 manifest = "rust/Cargo.toml"
 package  = "codex-acp"
 bin      = "codex-acp"
 upstream = "2.2.2"
+sha256.aarch64-apple-darwin = "21348b3e259248e316327416887bfa48b6e1de83414b8cd54717a9d041622605"
+sha256.aarch64-unknown-linux-gnu = "8a132983f5b895ab85e125bd1d560ed01c73426c1c35299182162d170d6f861e"
+sha256.aarch64-unknown-linux-musl = "cb235d58e926475145ec015823ecf3c23d1665eac17b4b21a1c1f16520e68eec"
+sha256.x86_64-unknown-linux-gnu = "a15e1ba846c28f55a203eb6bb648a3aa06d4b70ed4d8b4c501305406d3b259dd"
+sha256.x86_64-unknown-linux-musl = "e64d4d5b015929b4b7b23270d9877bdeac2487b61462eda9e9e31870d6866045"

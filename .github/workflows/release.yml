@@ -113,9 +113,8 @@ jobs:
 
       # ── ACP adapters shipped in the CLI tarball ───────────────────────────
       # claude-acp / codex-acp are the pinned Rust ports (vendor/rust-acp/pins.toml),
-      # static on musl so one tarball serves glibc and Alpine alike. NOTE: the pinned
-      # revs must be reachable from CI (the ports' repos/branches pushed) — see
-      # scripts/build-rust-acp.sh.
+      # static on musl so one tarball serves glibc and Alpine alike. The script
+      # downloads the pinned prebuilts and checks their sha256 (no credentials).
       - name: Build claude-acp adapter (pinned Rust port)
         run: bash scripts/build-rust-acp.sh claude --target ${{ matrix.target }}
 
