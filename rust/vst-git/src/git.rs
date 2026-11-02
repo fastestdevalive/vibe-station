@@ -30,40 +30,196 @@ pub enum GitError {
 
 type GitResult<T> = Result<T, GitError>;
 
-/// Run `git <args>` (optionally with `cwd`), returning trimmed stdout.
-async fn run_git(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(args);
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    let out = cmd.output().await?;
-    if !out.status.success() {
-        return Err(GitError::Command {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+/// Bounded timeout for ordinary git plumbing (rev-parse, diff, status, log…).
+/// A hung `git` must never pin a caller forever (AGENTS.md § external probes
+/// are bounded).
+pub const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bounded timeout for long-running git operations (worktree add/remove,
+/// clone/fetch/push, submodule update). These legitimately take minutes on a
+/// large repo or a slow remote.
+pub const HEAVY_GIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Runs the `git` binary with a bounded timeout and kill-on-drop.
+///
+/// This is the single execution path for every `git` invocation in this
+/// crate: args are passed directly (no shell), the child is killed if its
+/// future is dropped (e.g. by the timeout), and a timeout maps to
+/// [`GitError::Command`] with `stderr == "timed out"`.
+///
+/// The program path is injectable so tests can point it at a fake script
+/// without touching the process-global `PATH`.
+#[derive(Clone, Debug)]
+pub struct GitRunner {
+    program: String,
+    timeout: Duration,
 }
 
-/// Like [`run_git`], but returns raw untrimmed stdout. `git submodule status`'s
-/// clean-status lines start with a significant leading space (the status flag
-/// column), which `.trim()` would silently eat off the first line only.
+impl GitRunner {
+    /// A runner for the `git` on `PATH`, with [`DEFAULT_GIT_TIMEOUT`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_program("git")
+    }
+
+    /// A runner pointed at a specific program path (test seam), with
+    /// [`DEFAULT_GIT_TIMEOUT`].
+    #[must_use]
+    pub fn with_program(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+            timeout: DEFAULT_GIT_TIMEOUT,
+        }
+    }
+
+    /// Override the per-exec timeout.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// The program path this runner executes.
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// The per-exec timeout this runner applies.
+    #[must_use]
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// Run `git <args>` (optionally with `cwd`), returning trimmed stdout.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::Command`] on a non-zero exit or a timeout;
+    /// [`GitError::Io`] if the program cannot be spawned.
+    pub async fn run(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+        self.exec(args, cwd, self.timeout, true).await
+    }
+
+    /// Like [`Self::run`], but returns raw untrimmed stdout. `git submodule
+    /// status`'s clean-status lines start with a significant leading space
+    /// (the status flag column), which `.trim()` would silently eat off the
+    /// first line only.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::run`].
+    pub async fn run_raw(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+        self.exec(args, cwd, self.timeout, false).await
+    }
+
+    /// Run a long-running git operation with [`HEAVY_GIT_TIMEOUT`], returning
+    /// trimmed stdout.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::run`].
+    pub async fn run_heavy(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, true).await
+    }
+
+    /// Run a long-running git operation with [`HEAVY_GIT_TIMEOUT`], returning
+    /// raw untrimmed stdout.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::run`].
+    pub async fn run_raw_heavy(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, false).await
+    }
+
+    /// Run `git <args>` and return its exit status without interpreting it —
+    /// for commands whose non-zero exit is meaningful (`merge-base
+    /// --is-ancestor`: 0 = true, 1 = false).
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::Command`] on a timeout; [`GitError::Io`] if the program
+    /// cannot be spawned.
+    pub async fn exit_status(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+    ) -> GitResult<std::process::ExitStatus> {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(args);
+        // Dropping the future (timeout) drops the child, which SIGKILLs it.
+        cmd.kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
+        match tokio::time::timeout(self.timeout, cmd.status()).await {
+            Ok(Ok(status)) => Ok(status),
+            Ok(Err(e)) => Err(GitError::Io(e)),
+            Err(_) => Err(timed_out(args)),
+        }
+    }
+
+    async fn exec(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        timeout: Duration,
+        trim: bool,
+    ) -> GitResult<String> {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(args);
+        // Dropping the future (timeout) drops the child, which SIGKILLs it.
+        cmd.kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
+        let out = match tokio::time::timeout(timeout, cmd.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(GitError::Io(e)),
+            Err(_) => return Err(timed_out(args)),
+        };
+        if !out.status.success() {
+            return Err(GitError::Command {
+                args: args.join(" "),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        Ok(if trim {
+            stdout.trim().to_string()
+        } else {
+            stdout
+        })
+    }
+}
+
+impl Default for GitRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn timed_out(args: &[&str]) -> GitError {
+    GitError::Command {
+        args: args.join(" "),
+        stderr: "timed out".to_string(),
+    }
+}
+
+/// Run `git <args>` (optionally with `cwd`), returning trimmed stdout.
+async fn run_git(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+    GitRunner::new().run(args, cwd).await
+}
+
+/// Like [`run_git`], but returns raw untrimmed stdout.
 async fn run_git_raw(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(args);
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    let out = cmd.output().await?;
-    if !out.status.success() {
-        return Err(GitError::Command {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    GitRunner::new().run_raw(args, cwd).await
+}
+
+/// Like [`run_git`], but with [`HEAVY_GIT_TIMEOUT`] for long-running operations.
+async fn run_git_heavy(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
+    GitRunner::new().run_heavy(args, cwd).await
 }
 
 /// Returns true if `dir` is inside a git repository.
@@ -220,17 +376,17 @@ pub async fn resolve_parent_sha(repo_path: &str, sha: &str) -> GitResult<String>
 /// Returns true if `ancestor` is an ancestor of (or equal to) `descendant`.
 /// Exit code 0 = true, 1 = false; any other failure propagates.
 async fn is_ancestor(repo_path: &str, ancestor: &str, descendant: &str) -> GitResult<bool> {
-    let mut cmd = Command::new("git");
-    cmd.args([
+    let args = [
         "-C",
         repo_path,
         "merge-base",
         "--is-ancestor",
         ancestor,
         descendant,
-    ]);
-    cmd.current_dir(repo_path);
-    let status = cmd.status().await?;
+    ];
+    let status = GitRunner::new()
+        .exit_status(&args, Some(Path::new(repo_path)))
+        .await?;
     if status.success() {
         Ok(true)
     } else if status.code() == Some(1) {
@@ -349,7 +505,7 @@ pub async fn worktree_add(
     branch: &str,
     base_branch: &str,
 ) -> GitResult<()> {
-    run_git(
+    run_git_heavy(
         &[
             "-C",
             repo_path,
@@ -368,7 +524,7 @@ pub async fn worktree_add(
 
 /// Remove a git worktree (`--force`).
 pub async fn worktree_remove(repo_path: &str, worktree_path: &str) -> GitResult<()> {
-    run_git(
+    run_git_heavy(
         &[
             "-C",
             repo_path,
@@ -1077,6 +1233,8 @@ impl GitService {
         let mut cmd = Command::new(&self.0.git_bin);
         cmd.args(["-C", repo_path, "fetch", "origin", r#ref]);
         cmd.current_dir(repo_path);
+        // Dropping the future (timeout) drops the child, which SIGKILLs it.
+        cmd.kill_on_drop(true);
         // Keep a remote that needs credentials from ever blocking on an
         // interactive prompt / SSH hang.
         cmd.env("GIT_TERMINAL_PROMPT", "0");

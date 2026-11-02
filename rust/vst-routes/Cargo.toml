@@ -37,6 +37,8 @@ tracing-subscriber = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 # Plugin-trait tests (MockTurnPlugin's `run_turn` receives a CancellationToken).
 tokio-util = { version = "0.7", features = ["rt"] }
+# `WorktreeRoutes::pr` regression tests (fake GraphQL endpoint).
+mockito = "0.31"
 
 [lints]
 workspace = true

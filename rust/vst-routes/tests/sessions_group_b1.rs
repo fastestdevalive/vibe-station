@@ -265,6 +265,7 @@ async fn delete_worktree_main_promotes_eligible_sibling_and_carries_pr() {
         error: None,
         error_kind: None,
         pr_branch: Some("branch-w1".into()),
+        stale_since: None,
     });
     let mut other = make_session("s-other", "p1");
     other.worktree_id = Some("w1".into());

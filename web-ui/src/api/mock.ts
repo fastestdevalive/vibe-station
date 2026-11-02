@@ -1644,6 +1644,9 @@ export function createMockApi(seed: MockSeed = {}) {
       }));
     },
 
+    /** Focus hint is a no-op in the mock: there is no daemon-side poller. */
+    async focusWorktree(_worktreeId: string): Promise<void> {},
+
     async getPr(worktreeId: string): Promise<PrInfo | null> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (worktreeId === "wt-1") {

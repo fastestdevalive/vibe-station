@@ -1204,6 +1204,16 @@ export function createClientApi() {
       return parseJson<DiffStat>(res);
     },
 
+    /** Tell the daemon which worktree the client just opened, so the PR and
+     *  diffstat pollers can refresh it sooner (1 s debounce / top priority).
+     *  Fire-and-forget: `204`, no body — never worth surfacing to the user. */
+    async focusWorktree(worktreeId: string): Promise<void> {
+      const root = baseUrl();
+      await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/focus`, {
+        method: "POST",
+      });
+    },
+
     /** Commit history for the worktree, most-recent-first, with per-commit diffstat. */
     async listCommits(
       worktreeId: string,

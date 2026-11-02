@@ -137,6 +137,62 @@ fn pre_existing_worktrees_without_hidden_at_gets_backfilled() {
 }
 
 #[test]
+fn pre_existing_sessions_without_pr_stale_since_gets_backfilled() {
+    let conn = Connection::open_in_memory().unwrap();
+    // A sessions table created before the PR columns existed.
+    conn.execute_batch(
+        "CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            worktreeId TEXT,
+            projectId TEXT NOT NULL,
+            isMain INTEGER NOT NULL DEFAULT 0,
+            sortOrder REAL NOT NULL,
+            type TEXT NOT NULL,
+            modeId TEXT,
+            name TEXT,
+            nameSource TEXT,
+            tmuxName TEXT NOT NULL,
+            useTmux INTEGER NOT NULL,
+            channel TEXT,
+            state TEXT NOT NULL,
+            reason TEXT,
+            lastTransitionAt TEXT NOT NULL,
+            transcriptKind TEXT,
+            transcriptPath TEXT,
+            agentChatId TEXT,
+            modelOverride TEXT,
+            pinnedAt TEXT,
+            initialPrompt TEXT,
+            archivedAt TEXT,
+            handoffSummary TEXT
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, projectId, sortOrder, type, tmuxName, useTmux, state, lastTransitionAt) \
+         VALUES ('s-old', 'proj-old', 0, 'agent', 'tmux-old', 1, 'idle', ?1)",
+        ["2024-01-01T00:00:00.000Z"],
+    )
+    .unwrap();
+    assert!(!columns(&conn, "sessions")
+        .iter()
+        .any(|c| c == "prStaleSince"));
+    ensure_schema(&conn).unwrap();
+    assert!(columns(&conn, "sessions")
+        .iter()
+        .any(|c| c == "prStaleSince"));
+    let stale: Option<String> = conn
+        .query_row(
+            "SELECT prStaleSince FROM sessions WHERE id = 's-old'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(stale.is_none());
+    ensure_schema(&conn).unwrap();
+}
+
+#[test]
 fn fresh_db_has_tunnel_state_table() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_schema(&conn).unwrap();

@@ -14,6 +14,7 @@
 
 pub mod activity;
 pub mod artifacts;
+pub mod coalescer;
 pub mod domain;
 pub mod events;
 pub mod limits;
@@ -24,6 +25,7 @@ pub mod serde_ext;
 pub mod terminal_delivery;
 pub mod ws;
 
+pub use coalescer::{Coalescer, CoalescerConfig, MarkOpts};
 pub use domain::*;
 pub use events::{Broadcaster, ServerEvent};
 pub use limits::*;

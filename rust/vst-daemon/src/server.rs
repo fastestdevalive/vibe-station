@@ -29,6 +29,7 @@ use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
 use vst_harness_limits::LimitsHandle;
+use vst_lifecycle::pr_poller::PrPollerHandle;
 use vst_lifecycle::subagent_notify::{
     NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle,
 };
@@ -140,6 +141,10 @@ pub struct BuildServerOptions {
     pub limits: LimitsHandle,
 }
 
+/// A poller hint fired by `POST /api/worktrees/:id/focus` (one closure per
+/// poller that reacts to "the user opened this worktree").
+pub type FocusHint = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Shared application state accessible to Axum request handlers and middleware.
 #[derive(Clone)]
 pub struct AppState {
@@ -167,6 +172,14 @@ pub struct AppState {
     pub artifacts: vst_artifacts::ArtifactsHandle,
     /// Review-comments owner (`vst-review`); `run.rs` starts its lease sweeper.
     pub review: vst_review::ReviewHandle,
+
+    /// The PR-status poller (sole writer of `session.pr`). Built here so
+    /// `run.rs` can start it off the state and the focus route can hint it.
+    pub pr_poller: Arc<PrPollerHandle>,
+    /// Focus hints fired by `POST /api/worktrees/:id/focus` — one closure per
+    /// poller that reacts to "the user opened this worktree". Phase 5 adds the
+    /// diffstat poller's hint to this same list.
+    pub focus_hints: Arc<Vec<FocusHint>>,
 
     // Routes
     pub health_routes: HealthRoutes,
@@ -413,6 +426,21 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
 
     let code_store = OneTimeCodeStore::new();
 
+    // PR-status poller: built here (not in `run.rs`) so the focus route and
+    // `AppState` can reach the same handle `run.rs` starts. Hooks are bound
+    // here like `limits.bind_client_counter` above — no new
+    // `BuildServerOptions` field, so every test's struct literal stays valid.
+    let pr_poller = Arc::new(PrPollerHandle::new(
+        opts.store.clone(),
+        opts.broadcaster.clone(),
+    ));
+    let focus_hints: Arc<Vec<FocusHint>> = {
+        let poller = pr_poller.clone();
+        Arc::new(vec![Arc::new(move |_worktree_id: &str| {
+            poller.hint_worktree();
+        })])
+    };
+
     let health_routes = HealthRoutes::new(opts.version.clone(), opts.port as i64, opts.started_at);
     let open_routes = OpenRoutes::new(opts.store.clone(), opts.broadcaster.clone());
     let mut project_routes = ProjectRoutes::new(
@@ -637,6 +665,8 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         code_store,
         artifacts,
         review,
+        pr_poller,
+        focus_hints,
         health_routes,
         open_routes,
         project_routes,
@@ -795,6 +825,7 @@ pub fn router_from_state(state: AppState) -> Router {
         .route("/worktrees/:id/commits", get(handle_worktree_commits))
         .route("/worktrees/:id/submodules", get(handle_worktree_submodules))
         .route("/worktrees/:id/pr", get(handle_worktree_pr))
+        .route("/worktrees/:id/focus", post(handle_worktree_focus))
         .route("/worktrees/:id/open-file", post(handle_worktree_open_file))
         .route(
             "/worktrees/:id/pending-file-opens",
@@ -2678,6 +2709,24 @@ async fn handle_worktree_pr(
         .await
         .map(Json)
         .map_err(worktree_err_to_response)
+}
+
+/// `POST /api/worktrees/:id/focus` — the client tells the daemon which
+/// worktree it just opened, so both pollers can refresh it sooner (PR: 1 s
+/// debounce; diffstat, Phase 5: top priority). Fire-and-forget: `204`.
+async fn handle_worktree_focus(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    if !state.worktree_routes.worktree_exists(&id).await {
+        return Err(worktree_err_to_response(WorktreeRouteError::NotFound(
+            format!("Worktree '{id}' not found"),
+        )));
+    }
+    for hint in state.focus_hints.iter() {
+        hint(&id);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn handle_worktree_open_file(

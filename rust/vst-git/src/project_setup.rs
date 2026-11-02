@@ -146,7 +146,19 @@ async fn run_bash_script(dir: &str) -> Result<(), std::io::Error> {
 
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg(&script_path).arg(dir);
-    let out = cmd.output().await?;
+    // Dropping the future (timeout) drops the child, which SIGKILLs it. The
+    // script runs `git init/add/commit`, so it gets the heavy git bound.
+    cmd.kill_on_drop(true);
+    let out = match tokio::time::timeout(crate::git::HEAVY_GIT_TIMEOUT, cmd.output()).await {
+        Ok(out) => out?,
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&script_dir);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "project-setup timed out",
+            ));
+        }
+    };
     let _ = std::fs::remove_dir_all(&script_dir);
     if !out.status.success() {
         return Err(std::io::Error::new(

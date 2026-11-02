@@ -167,6 +167,10 @@ pub struct PrStatus {
     pub error_kind: Option<PrErrorKind>,
     /// The branch `prPoller` queried GitHub for (D20).
     pub pr_branch: Option<String>,
+    /// ISO8601 — set when the shown value went stale (the poller failed
+    /// transiently and kept the last-known value). Absent means fresh.
+    #[serde(default)]
+    pub stale_since: Option<String>,
 }
 
 /// The `state` discriminator of `PrStatus`.
@@ -188,6 +192,10 @@ pub enum PrErrorKind {
     Auth,
     NotFound,
     Transient,
+    /// The remote is not a GitHub-hosted repo this poller can query (e.g. a
+    /// GitHub Enterprise host) — a permanent, visible state, never a transient
+    /// retry.
+    Unsupported,
 }
 
 /// `agent` | `terminal`.

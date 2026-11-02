@@ -511,7 +511,11 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
       if (projects.find((p) => p.id === wt.projectId)?.hidden) continue;
       const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
       const prStatus = worktreePrStatus(sessionsForWt, wt.branch);
-      if (prStatus?.errorKind) {
+      // Only the three states a user can act on raise the chip. `unsupported`
+      // (a permanent non-github.com host) and `stale` (a held last-known value)
+      // are informational only — see docs/STATUS-INDICATORS.md § PR poll states.
+      const kind = prStatus?.errorKind;
+      if (kind === "auth" || kind === "no_credentials" || kind === "not_found") {
         affected.add(wt.id);
       }
     }
