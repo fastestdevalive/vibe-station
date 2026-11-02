@@ -50,6 +50,15 @@ export function DashboardCardGroup<T>({
     .filter((x): x is T => x !== undefined);
   const visible = expanded ? ordered : ordered.slice(0, limit);
   const hasMore = ordered.length > limit && !expanded;
+  // framer-motion re-measures every `layout` element on EVERY render unless a
+  // `layoutDependency` is given — a forced page relayout per render, and this
+  // component re-renders on every `session:*` frame. Keying the dependency on
+  // the visible card order means cards are only measured (and animated) when a
+  // card is added, removed or reordered. Trade-off: a card nudged by a
+  // sibling merely changing height now snaps instead of tweening, and so do
+  // other sections in the list view that are shifted by a card moving between
+  // two sections (each group has its own key).
+  const layoutKey = visible.map(idOf).join("\u0000");
 
   return (
     <Tag className={className} {...hoverProps}>
@@ -60,6 +69,7 @@ export function DashboardCardGroup<T>({
             <motion.div
               key={idOf(item)}
               layout="position"
+              layoutDependency={layoutKey}
               transition={{ duration: 0.25, ease: "easeOut" }}
             >
               {renderItem(item)}
