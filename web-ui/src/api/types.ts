@@ -1156,6 +1156,15 @@ export type WSEvent =
       worktree: Worktree;
     }
   | {
+      type: "worktree:diffstat";
+      worktreeId: string;
+      insertions: number;
+      deletions: number;
+      state: DiffStatState;
+      rev: number;
+      hint?: string;
+    }
+  | {
       /** Broadcast after PUT /user/ordered-lists/:scopeKey (pinned-order-sync).
        *  `scopeKey` is generic even though only "pinned-all" is wired up today. */
       type: "orderedList:updated";
@@ -1635,6 +1644,22 @@ export type DiffScope = "local" | "branch" | "none" | "commit";
 export interface DiffStat {
   insertions: number;
   deletions: number;
+}
+
+export type DiffStatState = "ok" | "unknown" | "unavailable" | "broken";
+
+/** One worktree's cached diffstat (`worktree:diffstat` payload / `GET /worktrees/diffstats` value). */
+export interface DiffStatEntry {
+  insertions: number;
+  deletions: number;
+  state: DiffStatState;
+  rev: number;
+  hint?: string;
+}
+
+/** `GET /api/worktrees/diffstats` response. */
+export interface DiffStatsSnapshot {
+  stats: Record<string, DiffStatEntry>;
 }
 
 export type GitStatusChar = "M" | "A" | "D" | "R" | "?";

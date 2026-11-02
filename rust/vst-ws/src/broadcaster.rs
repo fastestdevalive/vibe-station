@@ -38,6 +38,13 @@ pub fn close_auth_expired(conn: &WsConnection) {
         .close(AUTH_EXPIRED_CLOSE_CODE, AUTH_EXPIRED_CLOSE_REASON);
 }
 
+/// An observer called whenever the number of connected WS clients changes
+/// (on connect and disconnect, with the new count).
+pub type ConnectionObserver = Arc<dyn Fn(usize) + Send + Sync>;
+
+/// A hook called when a file watcher observes a tree change for a worktree.
+pub type TreeChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// The connection registry (broadcaster receiver side).
 ///
 /// (Token-level remote-session tracking — `TokenSession`, `remote:connected`/
@@ -47,6 +54,7 @@ pub fn close_auth_expired(conn: &WsConnection) {
 #[derive(Default)]
 pub struct WsHub {
     connections: RwLock<HashSet<WsConnection>>,
+    connection_observers: RwLock<Vec<ConnectionObserver>>,
 }
 
 impl WsHub {
@@ -54,14 +62,36 @@ impl WsHub {
         Self::default()
     }
 
+    /// Bind an observer called on every connect and disconnect with the new count.
+    pub fn bind_connection_observer(&self, observer: ConnectionObserver) {
+        self.connection_observers.write().unwrap().push(observer);
+    }
+
+    fn notify_connection_observers(&self, count: usize) {
+        let observers = self.connection_observers.read().unwrap().clone();
+        for obs in observers {
+            obs(count);
+        }
+    }
+
     /// Register a connection for broadcasts.
     pub fn register_connection(&self, conn: &WsConnection) {
-        self.connections.write().unwrap().insert(conn.clone());
+        let count = {
+            let mut conns = self.connections.write().unwrap();
+            conns.insert(conn.clone());
+            conns.len()
+        };
+        self.notify_connection_observers(count);
     }
 
     /// Unregister a connection from broadcasts.
     pub fn unregister_connection(&self, conn: &WsConnection) {
-        self.connections.write().unwrap().remove(conn);
+        let count = {
+            let mut conns = self.connections.write().unwrap();
+            conns.remove(conn);
+            conns.len()
+        };
+        self.notify_connection_observers(count);
     }
 
     /// Number of live WS connections (used by the harness-limits scheduler's
@@ -252,6 +282,21 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             ServerMessage::WorktreeDeleted { worktree_id }
         }
         ServerEvent::WorktreeUpdated { worktree } => ServerMessage::WorktreeUpdated { worktree },
+        ServerEvent::WorktreeDiffStat {
+            worktree_id,
+            insertions,
+            deletions,
+            state,
+            rev,
+            hint,
+        } => ServerMessage::WorktreeDiffStat {
+            worktree_id,
+            insertions,
+            deletions,
+            state,
+            rev,
+            hint,
+        },
         ServerEvent::OrderedListUpdated {
             scope_key,
             item_ids,
@@ -513,6 +558,37 @@ mod tests {
                 assert_eq!(limits, snapshot, "payload must be preserved verbatim")
             }
             other => panic!("expected LimitsUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worktree_diffstat_event_maps_to_server_message() {
+        let event = ServerEvent::WorktreeDiffStat {
+            worktree_id: "wt-1".into(),
+            insertions: 7,
+            deletions: 2,
+            state: vst_types::rest::worktrees::DiffStatState::Ok,
+            rev: 42,
+            hint: Some("git worktree repair".into()),
+        };
+        let msg = server_event_to_message(event.clone());
+        match msg {
+            vst_types::ws::ServerMessage::WorktreeDiffStat {
+                worktree_id,
+                insertions,
+                deletions,
+                state,
+                rev,
+                hint,
+            } => {
+                assert_eq!(worktree_id, "wt-1");
+                assert_eq!(insertions, 7);
+                assert_eq!(deletions, 2);
+                assert_eq!(state, vst_types::rest::worktrees::DiffStatState::Ok);
+                assert_eq!(rev, 42);
+                assert_eq!(hint.as_deref(), Some("git worktree repair"));
+            }
+            other => panic!("expected WorktreeDiffStat, got {other:?}"),
         }
     }
 

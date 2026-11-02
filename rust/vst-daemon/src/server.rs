@@ -27,6 +27,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
+use vst_diffstat::DiffStatPollerHandle;
 use vst_git::paths::Paths;
 use vst_harness_limits::LimitsHandle;
 use vst_lifecycle::pr_poller::PrPollerHandle;
@@ -176,9 +177,11 @@ pub struct AppState {
     /// The PR-status poller (sole writer of `session.pr`). Built here so
     /// `run.rs` can start it off the state and the focus route can hint it.
     pub pr_poller: Arc<PrPollerHandle>,
+    /// The diffstat poller (cached worktree diffstats). Built here so `run.rs`
+    /// can start it off the state and the focus route can hint it.
+    pub diffstat_poller: Arc<DiffStatPollerHandle>,
     /// Focus hints fired by `POST /api/worktrees/:id/focus` — one closure per
-    /// poller that reacts to "the user opened this worktree". Phase 5 adds the
-    /// diffstat poller's hint to this same list.
+    /// poller that reacts to "the user opened this worktree".
     pub focus_hints: Arc<Vec<FocusHint>>,
 
     // Routes
@@ -434,11 +437,45 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.store.clone(),
         opts.broadcaster.clone(),
     ));
+
+    // Diffstat poller: built here off the same store/broadcaster/paths.
+    let hub_for_ds = ws_hub.clone();
+    let diffstat_poller = Arc::new(
+        DiffStatPollerHandle::new(
+            opts.store.clone(),
+            opts.broadcaster.clone(),
+            opts.paths.clone(),
+        )
+        .with_client_count(Arc::new(move || hub_for_ds.connection_count())),
+    );
+
+    // Bind connection observer so diffstat poller knows when WS client count changes
+    {
+        let ds = diffstat_poller.clone();
+        ws_hub.bind_connection_observer(Arc::new(move |count| {
+            ds.note_clients_changed(count);
+        }));
+    }
+
+    // Tree change hook for opened worktrees (fire ONLY for worktree scope in tree_watch)
+    let tree_hook: Arc<dyn Fn(&str) + Send + Sync> = {
+        let ds = diffstat_poller.clone();
+        Arc::new(move |worktree_id: &str| {
+            ds.mark_dirty(worktree_id);
+        })
+    };
+
     let focus_hints: Arc<Vec<FocusHint>> = {
         let poller = pr_poller.clone();
-        Arc::new(vec![Arc::new(move |_worktree_id: &str| {
-            poller.hint_worktree();
-        })])
+        let ds = diffstat_poller.clone();
+        Arc::new(vec![
+            Arc::new(move |_worktree_id: &str| {
+                poller.hint_worktree();
+            }),
+            Arc::new(move |worktree_id: &str| {
+                ds.hint_focus(worktree_id);
+            }),
+        ])
     };
 
     let health_routes = HealthRoutes::new(opts.version.clone(), opts.port as i64, opts.started_at);
@@ -495,7 +532,13 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.tmux.clone(),
         opts.port,
     );
-    let mut worktree_routes = worktree_routes.with_artifacts(artifacts.clone());
+    let ds_for_routes = diffstat_poller.clone();
+    let mut worktree_routes = worktree_routes
+        .with_artifacts(artifacts.clone())
+        .with_diffstats_fn(Arc::new(move || {
+            let ds = ds_for_routes.clone();
+            Box::pin(async move { ds.snapshot().await })
+        }));
     worktree_routes.paths = opts.paths.clone();
     project_routes = project_routes.with_file_search(worktree_routes.file_search.clone());
 
@@ -641,6 +684,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         // the WS layer (tree_watch's on_changed/on_deleted) and the HTTP layer
         // (WorktreeRoutes::file_search) must observe the same index instance.
         file_search: worktree_routes.file_search.clone(),
+        tree_change_hook: Some(tree_hook),
     };
 
     let state = AppState {
@@ -666,6 +710,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         artifacts,
         review,
         pr_poller,
+        diffstat_poller,
         focus_hints,
         health_routes,
         open_routes,
@@ -796,6 +841,7 @@ pub fn router_from_state(state: AppState) -> Router {
             get(handle_list_worktrees).post(handle_create_worktree),
         )
         .route("/worktrees/disk-usage", get(handle_worktrees_disk_usage))
+        .route("/worktrees/diffstats", get(handle_worktrees_diffstats))
         .route("/worktrees/:id/pin", patch(handle_worktree_pin))
         .route("/worktrees/:id/hide", patch(handle_worktree_hide))
         .route(
@@ -2357,6 +2403,12 @@ async fn handle_worktrees_disk_usage(
         .map_err(worktree_err_to_response)
 }
 
+async fn handle_worktrees_diffstats(
+    State(state): State<AppState>,
+) -> Json<vst_types::rest::worktrees::DiffStatsSnapshot> {
+    Json(state.worktree_routes.diffstats().await)
+}
+
 async fn handle_worktree_pin(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -2713,7 +2765,7 @@ async fn handle_worktree_pr(
 
 /// `POST /api/worktrees/:id/focus` — the client tells the daemon which
 /// worktree it just opened, so both pollers can refresh it sooner (PR: 1 s
-/// debounce; diffstat, Phase 5: top priority). Fire-and-forget: `204`.
+/// debounce; diffstat: top priority). Fire-and-forget: `204`.
 async fn handle_worktree_focus(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,

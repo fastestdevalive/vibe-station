@@ -74,6 +74,7 @@ pub async fn handle_tree_watch(
     registry: &WatcherRegistry,
     resolve_root: &WorktreePathResolver,
     file_search: &Arc<FileSearchIndex>,
+    tree_change_hook: Option<&crate::broadcaster::TreeChangeHook>,
     msg: &ClientMessage,
 ) {
     let ClientMessage::TreeWatch {
@@ -143,6 +144,13 @@ pub async fn handle_tree_watch(
         root.join(&tree_path)
     };
 
+    // Fire tree change hooks only for worktree scope (not project scope).
+    let tree_hook = if *scope == vst_types::ws::WatchScope::Worktree {
+        tree_change_hook.cloned()
+    } else {
+        None
+    };
+
     let callbacks = {
         let on_changed = {
             let registry = Arc::clone(registry);
@@ -152,6 +160,7 @@ pub async fn handle_tree_watch(
             let tp = tree_path.clone();
             let file_search = Arc::clone(file_search);
             let root = root.clone();
+            let hook = tree_hook.clone();
             Arc::new(move |abs: String| {
                 for c in tree_watch_subscribers(&registry, &key) {
                     c.send(ServerMessage::TreeChanged {
@@ -161,6 +170,9 @@ pub async fn handle_tree_watch(
                         from: None,
                         to: None,
                     });
+                }
+                if let Some(h) = hook.as_ref() {
+                    h(&wt);
                 }
                 let file_search = Arc::clone(&file_search);
                 let ik = ik.clone();
@@ -179,6 +191,7 @@ pub async fn handle_tree_watch(
             let tp = tree_path.clone();
             let file_search = Arc::clone(file_search);
             let root = root.clone();
+            let hook = tree_hook;
             Arc::new(move |abs: String| {
                 for c in tree_watch_subscribers(&registry, &key) {
                     c.send(ServerMessage::TreeChanged {
@@ -188,6 +201,9 @@ pub async fn handle_tree_watch(
                         from: None,
                         to: None,
                     });
+                }
+                if let Some(h) = hook.as_ref() {
+                    h(&wt);
                 }
                 let file_search = Arc::clone(&file_search);
                 let ik = ik.clone();
@@ -470,6 +486,7 @@ mod tests {
                 &registry,
                 &resolve_root,
                 &file_search,
+                None,
                 &ClientMessage::TreeWatch {
                     worktree_id: "wt1".into(),
                     path: Some(bad.into()),
@@ -488,6 +505,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: Some("sub".into()),
@@ -531,7 +549,7 @@ mod tests {
             };
             let (conn, registry, resolve_root, file_search) =
                 (&conn, &registry, &resolve_root, &file_search);
-            async move { handle_tree_watch(conn, registry, resolve_root, file_search, &msg).await }
+            async move { handle_tree_watch(conn, registry, resolve_root, file_search, None, &msg).await }
         };
         watch("leak").await;
         assert!(registry.lock().unwrap().watchers.is_empty());
@@ -565,6 +583,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: Some("sub".into()),
@@ -676,7 +695,15 @@ mod tests {
             scope: vst_types::ws::WatchScope::Worktree,
         };
 
-        handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_a,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         let first = registry
             .lock()
             .unwrap()
@@ -685,7 +712,15 @@ mod tests {
             .cloned()
             .expect("first connection registered a watcher");
 
-        handle_tree_watch(&conn_b, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_b,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         let second = registry
             .lock()
             .unwrap()
@@ -739,14 +774,30 @@ mod tests {
             scope: vst_types::ws::WatchScope::Worktree,
         };
 
-        handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_a,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         let subs = tree_watch_subscribers(&registry, &key);
         assert_eq!(subs.len(), 1, "creator is its own first subscriber");
         assert_eq!(subs[0].id(), conn_a.id());
 
         // conn_b joins the ALREADY-shared watcher (the dedup-join branch) —
         // it must be added to the subscriber set, not silently left out.
-        handle_tree_watch(&conn_b, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_b,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         let subs = tree_watch_subscribers(&registry, &key);
         let ids: std::collections::HashSet<String> =
             subs.iter().map(|c| c.id().to_string()).collect();
@@ -810,10 +861,34 @@ mod tests {
         // and FilePreviewPane both mounted on the same tab — but this only
         // ever takes ONE global ref (the second call short-circuits at
         // conn.retain_tree_watcher).
-        handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
-        handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_a,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
+        handle_tree_watch(
+            &conn_a,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         // conn_b joins too, taking the second (and only other) global ref.
-        handle_tree_watch(&conn_b, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_b,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         assert_eq!(
             registry
                 .lock()
@@ -883,6 +958,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: None,
@@ -937,6 +1013,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: None,
@@ -949,6 +1026,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: Some("src".into()),
@@ -1044,6 +1122,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "proj1".into(),
                 path: None,
@@ -1106,7 +1185,15 @@ mod tests {
             scope: vst_types::ws::WatchScope::Worktree,
         };
 
-        handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_a,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         populate(&file_search, &idx_key, root.path()).await;
         assert!(file_search.is_watched(&idx_key));
 
@@ -1118,7 +1205,15 @@ mod tests {
         assert!(!file_search.is_watched(&idx_key), "unmarked under the lock");
 
         // A new tree:watch lands before the follow-up eviction runs.
-        handle_tree_watch(&conn_b, &registry, &resolve_root, &file_search, &msg()).await;
+        handle_tree_watch(
+            &conn_b,
+            &registry,
+            &resolve_root,
+            &file_search,
+            None,
+            &msg(),
+        )
+        .await;
         assert!(registry.lock().unwrap().watchers.contains_key(&watch_key));
         assert!(file_search.is_watched(&idx_key));
 
@@ -1160,6 +1255,7 @@ mod tests {
             &registry,
             &resolve_root,
             &file_search,
+            None,
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: None,

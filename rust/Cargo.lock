@@ -3153,6 +3153,7 @@ dependencies = [
  "vst-agents",
  "vst-agy-stream-acp",
  "vst-artifacts",
+ "vst-diffstat",
  "vst-fswatch",
  "vst-git",
  "vst-harness-limits",
@@ -3172,6 +3173,19 @@ name = "vst-diff"
 version = "0.0.3-beta"
 dependencies = [
  "similar",
+ "vst-types",
+]
+
+[[package]]
+name = "vst-diffstat"
+version = "0.0.3-beta"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "vst-git",
+ "vst-store",
  "vst-types",
 ]
 

@@ -24,13 +24,15 @@ to refactor it in an unrelated PR.
 
 ### Backend (Rust)
 
-- **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types, `Broadcaster`, the
+- **Dependencies are one-way.** Today: `vst-types` (no I/O; serde types, `Broadcaster`, `Coalescer`, the
   `ReviewPort`/`TurnObserver` traits) ← `vst-proc`/`vst-store`/`vst-rpc`/`vst-tasks`/`vst-fswatch` ←
   `vst-git`/`vst-activity`/`vst-artifacts` ← `vst-review` ← `vst-agents` ← `vst-lifecycle`/`vst-ws` ←
   `vst-lsp`/`vst-routes` ← `vst-daemon` ← `vst-cli`; `vst-ws` re-exports `vst-fswatch`; `vst-review`
   depends only on `vst-types`, `vst-store`, `vst-proc`, `vst-git`, `vst-fswatch`, `vst-artifacts` (the
   `vst-review -> vst-artifacts` edge is one-way); `vst-routes` and `vst-daemon` also depend on
-  `vst-review`; `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by
+  `vst-review`; `vst-diffstat` (deps: `vst-git`, `vst-store`, `vst-types` only) sits beside
+  `vst-lifecycle`/`vst-ws` and is depended on only by `vst-daemon`;
+  `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by
   `vst-daemon` (hidden `agy-stream-acp` subcommand); no library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.

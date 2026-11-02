@@ -26,6 +26,7 @@ import type {
   DetectAndBundleResult,
   DoctorReport,
   DiffStat,
+  DiffStatsSnapshot,
   DiskUsageResponse,
   DraftConfig,
   EnableTailscaleResponse,
@@ -1191,6 +1192,13 @@ export function createClientApi() {
       if (submodule) q.set("submodule", submodule);
       const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/changed-paths?${q}`);
       return parseJson<ChangedPathEntry[]>(res);
+    },
+
+    /** Fetch the whole in-memory diffstat cache (GET /worktrees/diffstats). */
+    async getDiffStats(): Promise<DiffStatsSnapshot> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/diffstats`);
+      return parseJson<DiffStatsSnapshot>(res);
     },
 
     /** Aggregate `+insertions -deletions` against the worktree's base branch

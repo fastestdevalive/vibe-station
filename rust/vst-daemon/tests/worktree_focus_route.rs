@@ -143,6 +143,7 @@ async fn focus_returns_204_and_hints_the_pr_poller() {
 
     let state = build_state(make_opts(tmp.path(), store));
     let pr_poller = state.pr_poller.clone();
+    let diffstat_poller = state.diffstat_poller.clone();
     let router = router_from_state(state);
 
     assert!(
@@ -158,6 +159,10 @@ async fn focus_returns_204_and_hints_the_pr_poller() {
     assert!(
         pr_poller.has_pending(),
         "the registered focus hint must mark the PR poller dirty"
+    );
+    assert!(
+        diffstat_poller.has_pending("wt-1"),
+        "the registered focus hint must mark the diffstat poller dirty"
     );
 }
 
