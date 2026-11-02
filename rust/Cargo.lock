@@ -3299,6 +3299,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "libc",
+ "mockito",
  "ring",
  "serde",
  "serde_json",

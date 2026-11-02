@@ -139,6 +139,7 @@ fn parse_pr_error_kind(s: &str) -> Option<PrErrorKind> {
         "auth" => Some(PrErrorKind::Auth),
         "not_found" => Some(PrErrorKind::NotFound),
         "transient" => Some(PrErrorKind::Transient),
+        "unsupported" => Some(PrErrorKind::Unsupported),
         _ => None,
     }
 }
@@ -149,6 +150,7 @@ pub(crate) fn pr_error_kind_str(k: PrErrorKind) -> &'static str {
         PrErrorKind::Auth => "auth",
         PrErrorKind::NotFound => "not_found",
         PrErrorKind::Transient => "transient",
+        PrErrorKind::Unsupported => "unsupported",
     }
 }
 
@@ -196,6 +198,8 @@ pub struct SessionRow {
     pub pr_branch: Option<String>,
     pub pr_error: Option<String>,
     pub pr_error_kind: Option<String>,
+    /// When the shown PR value went stale (ISO8601); NULL means fresh.
+    pub pr_stale_since: Option<String>,
 }
 
 /// Row -> `SessionRecord`, applying the `needs_review` back-compat (R10): a
@@ -217,6 +221,7 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
             error: row.pr_error.clone(),
             error_kind: row.pr_error_kind.as_deref().and_then(parse_pr_error_kind),
             pr_branch: row.pr_branch.clone(),
+            stale_since: row.pr_stale_since.clone(),
         })
     });
 
@@ -235,6 +240,7 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
         error: None,
         error_kind: None,
         pr_branch: None,
+        stale_since: None,
     });
 
     SessionRecord {
@@ -354,6 +360,7 @@ pub fn session_to_row(
             .and_then(|p| p.error_kind)
             .map(pr_error_kind_str)
             .map(str::to_string),
+        pr_stale_since: session.pr.as_ref().and_then(|p| p.stale_since.clone()),
     }
 }
 

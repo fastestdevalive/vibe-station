@@ -143,8 +143,10 @@ done.
 - PR beats `waiting_for_human` on purpose: an agent idles at its prompt immediately after opening
   a PR, so red would otherwise mask blue permanently.
 
-> **pr.error / pr.errorKind** — informational only. Never affects dot colour or dashboard bucket.
-> Surfaced in: StatusDot tooltip, VCS panel error row, Dashboard header chip, Doctor Feature group.
+> **pr.error / pr.errorKind / pr.staleSince** — informational only. Never affects dot colour or
+> dashboard bucket. Surfaced in: StatusDot tooltip, VCS panel error row, Dashboard header chip
+> (auth/no_credentials/not_found only — `unsupported`/`stale` do not raise it), Doctor Feature group.
+> See § PR poll states for the full mapping.
 
 ### Precedence — dashboard bucket (D19, split by 6.6)
 ```
@@ -164,6 +166,36 @@ done.
   They're now separate columns: 🔴 **Needs you** (`waiting_for_human`, agent explicitly blocked)
   and neutral **Idle** (`idle`, nothing happening). Both are shown by default — only Finished
   hides behind "Show finished".
+
+## PR poll states
+
+`session.pr` is written **only** by `rust/vst-lifecycle/src/pr_poller.rs` (single writer, unchanged by
+the poller-redesign). The poller is now **event-driven**: `worktree:created`/`worktree:updated`,
+`session:created`, `session:state` → idle/waiting_for_human, `project:updated`/`project:deleted` and
+`POST /api/worktrees/:id/focus` (client opened a worktree) each mark one global key dirty; a burst
+collapses into one run, runs start at least 20 s apart, and a fixed 45 s tick is the safety net for
+remote-only changes (a merge/review that happens on GitHub). One batched GraphQL request per account
+covers every project's branches.
+
+| State | Wire (`session.pr`) | UI cue | Dashboard PR-error chip |
+|---|---|---|---|
+| PR found | `state: open`/`draft`/`merged`/`closed`, `number`, `url`, `prBranch`, no `staleSince` | PR banner / chip | — (not an error) |
+| No PR on the branch | `state: none`, no `errorKind`, `prBranch` set | nothing | — |
+| **Stale** (transient failure, last value held) | previous `state`/`number`/`url` kept, `staleSince` set | VCS panel: "PR status may be stale — the last lookup failed" | **no** — informational |
+| **Unavailable** (no account can see the repo) | `state: none`, `errorKind: not_found` | VCS panel: "Repo not visible to configured accounts" | yes |
+| **Signed out** | `state: none`, `errorKind: no_credentials` | VCS panel: "No GitHub credentials — run gh auth login" | yes |
+| Token lacks `repo` scope | `state: none`, `errorKind: auth` | VCS panel: "GitHub token can't access this repo" | yes |
+| **Unsupported host** (GHE-like, permanent) | `state: none`, `errorKind: unsupported` | VCS panel: "Unsupported GitHub host — PR status unavailable" | **no** — permanent, never retried |
+| Transient, no prior value | nothing written | nothing | — |
+
+- A transient failure (`gh` timeout, 5xx, network) **never** writes a failure state over a good
+  value and never writes `no_credentials`; it only sets `staleSince`. `no_credentials` requires a
+  clean zero-login credential resolution or every account answering 401.
+- `errorKind`/`staleSince` remain **informational**: dot colour and dashboard bucket are unchanged
+  (the two-axis matrix above still applies). Only `auth`/`no_credentials`/`not_found` raise the
+  dashboard header chip — `unsupported` and `stale` deliberately do not.
+- `pr_status_equivalent` compares state/number/url/`errorKind`/`prBranch` and *whether* the value is
+  stale — never the free-text `error`, never `checkedAt` — so error-text churn cannot re-broadcast.
 
 ## Tokens
 

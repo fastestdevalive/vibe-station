@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { VcsPanel } from "./VcsPanel";
+import { VcsPanel, prStatusMessage } from "./VcsPanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import type { CommitLogEntry, SubmoduleInfo } from "@/api/types";
+import type { CommitLogEntry, PrErrorKind, PrStatus, SubmoduleInfo } from "@/api/types";
 
 /** Builds `count` synthetic commits, newest first, all on-branch unless overridden. */
 function makeCommits(count: number, opts: { isOnBranch?: (i: number) => boolean } = {}): CommitLogEntry[] {
@@ -47,6 +47,54 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+function prStatusFixture(overrides: Partial<PrStatus> = {}): PrStatus {
+  return {
+    state: "none",
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("prStatusMessage", () => {
+  it("renders a distinct row per PR poll state", () => {
+    const cases: Array<[PrErrorKind | undefined, string]> = [
+      ["no_credentials", "No GitHub credentials — run gh auth login"],
+      ["auth", "GitHub token can't access this repo"],
+      ["not_found", "Repo not visible to configured accounts"],
+      ["transient", "PR lookup failed, retrying…"],
+      ["unsupported", "Unsupported GitHub host — PR status unavailable"],
+    ];
+    for (const [kind, text] of cases) {
+      expect(prStatusMessage(prStatusFixture({ errorKind: kind }))?.text).toBe(text);
+    }
+  });
+
+  it("has no row for a healthy status", () => {
+    expect(prStatusMessage(prStatusFixture())).toBeNull();
+    expect(prStatusMessage(null)).toBeNull();
+  });
+
+  it("flags a held last-known value as stale, with the last check in the tooltip", () => {
+    const message = prStatusMessage(
+      prStatusFixture({
+        state: "open",
+        number: 7,
+        url: "https://github.com/acme/repo/pull/7",
+        staleSince: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+    expect(message?.text).toContain("stale");
+    expect(message?.title).toContain("2026-01-01T00:00:00.000Z");
+  });
+
+  it("shows the stale marker even when a failure kind is also held", () => {
+    const message = prStatusMessage(
+      prStatusFixture({ errorKind: "not_found", staleSince: "2026-01-02T00:00:00.000Z" }),
+    );
+    expect(message?.text).toContain("stale");
+  });
+});
 
 describe("VcsPanel", () => {
   beforeEach(() => {

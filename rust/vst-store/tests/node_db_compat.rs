@@ -62,11 +62,21 @@ fn rust_open_of_node_db_is_a_schema_noop() {
     let copy = tmp.path().join("copy.sqlite");
     std::fs::copy(&node_db, &copy).unwrap();
 
-    // The committed schema dump — the ground truth for F4.
+    // The committed schema dump — the ground truth for F4 (Node-created
+    // schema, frozen since the TS daemon was removed).
     let expected = std::fs::read_to_string(dir.join("schema-dump.sql")).unwrap();
 
+    // The Node fixture stays pristine. Since then the Rust migration has added
+    // exactly ONE column to `sessions` (`prStaleSince`, poller-redesign Phase
+    // 1) via `add_column_if_missing`; anything else would still be drift.
+    let expected = expected.replace(
+        "prErrorKind TEXT, modeIcon",
+        "prErrorKind TEXT, prStaleSince TEXT, modeIcon",
+    );
+
     let conn = Connection::open(&copy).unwrap();
-    // The migration runner's open pass must be a no-op: no error, no schema drift.
+    // The migration runner's open pass must be a no-op for the Node schema
+    // apart from that single additive column: no error, no other drift.
     ensure_schema(&conn).unwrap();
 
     let actual = dump_schema(&conn);

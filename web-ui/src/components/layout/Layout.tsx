@@ -2,6 +2,7 @@ import { useDemoEnv } from "../../context/DemoEnv";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
+import { useWorktreeFocusHint } from "@/hooks/useWorktreeFocusHint";
 import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
 import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } from "@/hooks/useStore";
 import { ToolsRailColumn } from "@/components/layout/ToolsRailColumn";
@@ -130,6 +131,9 @@ export function Layout({
   }
 
   // Must be called unconditionally — before any early returns — to satisfy Rules of Hooks.
+  // Tells the daemon which worktree just became the opened one (PR/diffstat
+  // pollers refresh it sooner). Mount-only: no feature logic lives here.
+  useWorktreeFocusHint();
   const paneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
   const setPaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
   // Collapse/expand/re-orient animation is ONLY for an explicit toggle action

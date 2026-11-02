@@ -64,6 +64,40 @@ function PrBanner({ pr }: { pr: PrInfo }) {
 
 const PAGE_SIZE = 50;
 
+/**
+ * The PR-status row's copy for a worktree with no PR banner.
+ *
+ * Distinct text per failure kind (Decision 3's states), and a stale marker
+ * for a held last-known value: `staleSince` means the poller failed
+ * transiently and kept the previous answer rather than blanking it.
+ * Colours/buckets never change here — these rows are informational only.
+ */
+export function prStatusMessage(
+  prStatus: PrStatus | null | undefined,
+): { text: string; title?: string } | null {
+  if (!prStatus) return null;
+  if (prStatus.staleSince) {
+    return {
+      text: "PR status may be stale — the last lookup failed",
+      title: `Last checked ${prStatus.checkedAt}`,
+    };
+  }
+  switch (prStatus.errorKind) {
+    case "no_credentials":
+      return { text: "No GitHub credentials — run gh auth login" };
+    case "auth":
+      return { text: "GitHub token can't access this repo" };
+    case "not_found":
+      return { text: "Repo not visible to configured accounts" };
+    case "transient":
+      return { text: "PR lookup failed, retrying…" };
+    case "unsupported":
+      return { text: "Unsupported GitHub host — PR status unavailable" };
+    default:
+      return null;
+  }
+}
+
 /** Mirrors the `limit` clamp `GET /worktrees/:id/commits` applies server-side (`daemon/src/routes/worktrees.ts`). */
 const SERVER_MAX_LIMIT = 1000;
 
@@ -103,6 +137,9 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
   // "expandedSha" so multiple commits can be open at once (mirrors how e.g.
   // GitHub's PR commit list behaves) — tapping a row toggles just that row.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // The PR-status row (no banner case): one row per PR poll state, stale first.
+  // Informational only — it never affects dot colour or dashboard bucket.
+  const prMessage = pr ? null : prStatusMessage(prStatus);
   // ON by default — the branch's own commits are the point of this view;
   // flipping it OFF reveals the full unfiltered log inline (Requirement 1a-1c).
   const [diffFromMain, setDiffFromMain] = useState(true);
@@ -365,12 +402,9 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
         </div>
       ) : null}
       {pr ? <PrBanner pr={pr} /> : null}
-      {!pr && prStatus?.errorKind && !prStatus?.url ? (
-        <div className="vcs-pr-error error-text">
-          {prStatus.errorKind === "no_credentials" && "No GitHub credentials — run gh auth login"}
-          {prStatus.errorKind === "auth" && "GitHub token can't access this repo"}
-          {prStatus.errorKind === "not_found" && "Repo not visible to configured accounts"}
-          {prStatus.errorKind === "transient" && "PR lookup failed, retrying…"}
+      {prMessage ? (
+        <div className="vcs-pr-error error-text" title={prMessage.title}>
+          {prMessage.text}
         </div>
       ) : null}
       <div className="vcs-panel__body">

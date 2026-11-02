@@ -298,9 +298,21 @@ export interface PrStatus {
   prBranch?: string;
   /** Categorized error kind — camelCase from serde. */
   errorKind?: PrErrorKind;
+  /**
+   * ISO8601 — set when the shown value went stale (the daemon's PR poller
+   * failed transiently and is holding the last-known value, `staleSince`).
+   * Absent means the value is fresh.
+   */
+  staleSince?: string;
 }
 
-export type PrErrorKind = "no_credentials" | "auth" | "not_found" | "transient";
+export type PrErrorKind =
+  | "no_credentials"
+  | "auth"
+  | "not_found"
+  | "transient"
+  /** Non-GitHub-hosted remote (e.g. GitHub Enterprise): permanent, not retried. */
+  | "unsupported";
 
 /** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
 export interface UsageInfo {

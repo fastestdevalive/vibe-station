@@ -251,6 +251,7 @@ async fn update_session_pr_writes_one_row() {
                 error: None,
                 error_kind: None,
                 pr_branch: None,
+                stale_since: None,
             },
         )
         .await
@@ -273,6 +274,7 @@ async fn update_session_pr_writes_one_row() {
                 error: None,
                 error_kind: None,
                 pr_branch: None,
+                stale_since: None,
             },
         )
         .await
@@ -300,6 +302,7 @@ async fn session_pr_survives_write_read_round_trip() {
                         error: None,
                         error_kind: None,
                         pr_branch: None,
+                        stale_since: None,
                     });
                 }
             }
@@ -343,6 +346,7 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
                         error: None,
                         error_kind: None,
                         pr_branch: Some("feature-x".into()),
+                        stale_since: None,
                     });
                 }
             }
@@ -368,6 +372,7 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
                 error: None,
                 error_kind: None,
                 pr_branch: Some("feature-y".into()),
+                stale_since: None,
             },
         )
         .await
@@ -378,6 +383,120 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
         .unwrap();
     assert_eq!(pr.state, PrState::Merged);
     assert_eq!(pr.pr_branch.as_deref(), Some("feature-y"));
+}
+
+/// `prStaleSince` survives both write paths (full-row INSERT via
+/// `mutate_project` and the fast-path `update_session_pr` UPDATE), and clears
+/// back to `None` when the poller sees a fresh result.
+#[tokio::test]
+async fn pr_stale_since_survives_round_trip_via_mutate_and_fast_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    store
+        .add_project(project_with_session(
+            "pr-stale-proj",
+            "pr-stale-wt",
+            "pr-stale-sess",
+        ))
+        .await
+        .unwrap();
+    store
+        .mutate_project("pr-stale-proj", |p| {
+            for w in &mut p.worktrees {
+                for s in &mut w.sessions {
+                    s.pr = Some(vst_types::PrStatus {
+                        state: PrState::Open,
+                        number: Some(5),
+                        url: Some("https://github.com/acme/widgets/pull/5".into()),
+                        checked_at: "2026-01-01T00:00:00.000Z".into(),
+                        error: None,
+                        error_kind: None,
+                        pr_branch: Some("feature-z".into()),
+                        stale_since: Some("2026-01-01T00:05:00.000Z".into()),
+                    });
+                }
+            }
+            Ok(p.clone())
+        })
+        .await
+        .unwrap();
+    let pr = store.get_project("pr-stale-proj").await.unwrap().worktrees[0].sessions[0]
+        .pr
+        .clone()
+        .unwrap();
+    assert_eq!(pr.stale_since.as_deref(), Some("2026-01-01T00:05:00.000Z"));
+
+    // A later fresh lookup through the fast path clears the stale marker.
+    store
+        .update_session_pr(
+            "pr-stale-proj",
+            "pr-stale-sess",
+            vst_types::PrStatus {
+                state: PrState::Open,
+                number: Some(5),
+                url: Some("https://github.com/acme/widgets/pull/5".into()),
+                checked_at: "2026-01-01T00:10:00.000Z".into(),
+                error: None,
+                error_kind: None,
+                pr_branch: Some("feature-z".into()),
+                stale_since: None,
+            },
+        )
+        .await
+        .unwrap();
+    let pr = store.get_project("pr-stale-proj").await.unwrap().worktrees[0].sessions[0]
+        .pr
+        .clone()
+        .unwrap();
+    assert!(pr.stale_since.is_none());
+}
+
+/// A session row written before `prStaleSince` existed still reads cleanly as
+/// `stale_since: None` (persisted data stays readable).
+#[tokio::test]
+async fn old_session_row_without_pr_stale_since_reads_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    store
+        .add_project(project_with_session(
+            "pr-legacy-proj",
+            "pr-legacy-wt",
+            "pr-legacy-sess",
+        ))
+        .await
+        .unwrap();
+    store
+        .update_session_pr(
+            "pr-legacy-proj",
+            "pr-legacy-sess",
+            vst_types::PrStatus {
+                state: PrState::Open,
+                number: Some(3),
+                url: Some("https://github.com/acme/widgets/pull/3".into()),
+                checked_at: "2026-01-01T00:00:00.000Z".into(),
+                error: None,
+                error_kind: None,
+                pr_branch: Some("feature-legacy".into()),
+                stale_since: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Simulate a row persisted before the column existed.
+    {
+        let conn = store.raw_conn();
+        conn.execute(
+            "UPDATE sessions SET prStaleSince = NULL WHERE id = 'pr-legacy-sess'",
+            [],
+        )
+        .unwrap();
+    }
+    let pr = store.get_project("pr-legacy-proj").await.unwrap().worktrees[0].sessions[0]
+        .pr
+        .clone()
+        .unwrap();
+    assert_eq!(pr.state, PrState::Open);
+    assert!(pr.stale_since.is_none());
 }
 
 /// Two-axis status regression test (AGENTS.md § Status indicators; part 10,
@@ -418,6 +537,7 @@ async fn two_axis_status_writers_do_not_clobber_each_other() {
                 error: None,
                 error_kind: None,
                 pr_branch: Some("feat-two-axis".into()),
+                stale_since: None,
             },
         )
         .await
@@ -480,6 +600,7 @@ async fn two_axis_status_writers_do_not_clobber_each_other() {
                 error: None,
                 error_kind: None,
                 pr_branch: Some("feat-two-axis".into()),
+                stale_since: None,
             },
         )
         .await

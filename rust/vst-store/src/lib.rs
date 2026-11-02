@@ -330,7 +330,7 @@ impl StoreHandle {
         tokio::task::spawn_blocking(move || -> StoreResult<bool> {
             let conn = inner.conn.lock().unwrap();
             let changes = conn.execute(
-                "UPDATE sessions SET prState = ?1, prNumber = ?2, prUrl = ?3, prCheckedAt = ?4, prBranch = ?5, prError = ?6, prErrorKind = ?7 WHERE id = ?8",
+                "UPDATE sessions SET prState = ?1, prNumber = ?2, prUrl = ?3, prCheckedAt = ?4, prBranch = ?5, prError = ?6, prErrorKind = ?7, prStaleSince = ?8 WHERE id = ?9",
                 params![
                     pr_state_str(pr.state),
                     pr.number,
@@ -339,6 +339,7 @@ impl StoreHandle {
                     pr.pr_branch,
                     pr.error,
                     pr.error_kind.map(pr_error_kind_str),
+                    pr.stale_since,
                     session_id
                 ],
             )?;
@@ -459,7 +460,7 @@ fn pr_state_str(s: vst_types::PrState) -> &'static str {
 
 // --- SQL helpers (all invoked from within spawn_blocking) ---
 
-const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail, handoffCarryOver";
+const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail, handoffCarryOver, prStaleSince";
 
 fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -504,6 +505,7 @@ fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
         last_tool_name: r.get(38)?,
         last_tool_detail: r.get(39)?,
         handoff_carry_over: r.get(40)?,
+        pr_stale_since: r.get(41)?,
     })
 }
 
@@ -756,8 +758,8 @@ fn insert_session(
         }
     }
     conn.execute(
-        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail, handoffCarryOver)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)",
+        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig, modeIcon, lastActivityAt, lastLine, lastToolName, lastToolDetail, handoffCarryOver, prStaleSince)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)",
         params![
             row.id, row.worktree_id, row.project_id, row.is_main, row.sort_order, row.r#type, row.mode_id,
             row.name, row.name_source, row.tmux_name, row.use_tmux, row.channel, row.state, row.reason,
@@ -766,7 +768,7 @@ fn insert_session(
             row.handoff_summary, row.spawned_from, row.superseded_by, row.pr_state, row.pr_number,
             row.pr_url, row.pr_checked_at, row.pr_branch, row.pr_error, row.pr_error_kind,
             row.draft_prompt, row.draft_config, row.mode_icon, row.last_activity_at, row.last_line,
-            row.last_tool_name, row.last_tool_detail, row.handoff_carry_over
+            row.last_tool_name, row.last_tool_detail, row.handoff_carry_over, row.pr_stale_since
         ],
     )?;
     Ok(())

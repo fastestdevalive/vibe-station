@@ -48,6 +48,7 @@ fn base_row() -> SessionRow {
         pr_branch: None,
         pr_error: None,
         pr_error_kind: None,
+        pr_stale_since: None,
         last_activity_at: None,
         last_line: None,
         last_tool_name: None,
@@ -270,6 +271,58 @@ fn pr_branch_round_trips() {
 }
 
 #[test]
+fn pr_stale_since_round_trips_through_row() {
+    let mut row = base_row();
+    row.state = "working".into();
+    row.pr_state = Some("open".into());
+    row.pr_checked_at = Some("2024-01-03T00:00:00.000Z".into());
+    row.pr_stale_since = Some("2024-01-04T00:00:00.000Z".into());
+    let session = row_to_session(&row);
+    let pr = session.pr.clone().unwrap();
+    assert_eq!(pr.stale_since.as_deref(), Some("2024-01-04T00:00:00.000Z"));
+    let back = session_to_row(&session, "proj-1", None);
+    assert_eq!(
+        back.pr_stale_since.as_deref(),
+        Some("2024-01-04T00:00:00.000Z")
+    );
+}
+
+#[test]
+fn old_row_without_pr_stale_since_reads_none() {
+    let mut row = base_row();
+    row.state = "working".into();
+    row.pr_state = Some("open".into());
+    row.pr_checked_at = Some("2024-01-03T00:00:00.000Z".into());
+    // A row written before the column existed reads NULL.
+    assert!(row.pr_stale_since.is_none());
+    let session = row_to_session(&row);
+    assert!(session.pr.clone().unwrap().stale_since.is_none());
+    assert!(session_to_row(&session, "proj-1", None)
+        .pr_stale_since
+        .is_none());
+}
+
+#[test]
+fn unsupported_error_kind_round_trips_through_row() {
+    let mut row = base_row();
+    row.state = "working".into();
+    row.pr_state = Some("none".into());
+    row.pr_checked_at = Some("2024-01-03T00:00:00.000Z".into());
+    row.pr_error_kind = Some("unsupported".into());
+    let session = row_to_session(&row);
+    assert_eq!(
+        session.pr.clone().unwrap().error_kind,
+        Some(vst_types::PrErrorKind::Unsupported)
+    );
+    assert_eq!(
+        session_to_row(&session, "proj-1", None)
+            .pr_error_kind
+            .as_deref(),
+        Some("unsupported")
+    );
+}
+
+#[test]
 fn session_to_row_writes_pr_branch_null_when_absent() {
     let session = SessionRecord {
         id: "s1".into(),
@@ -311,6 +364,7 @@ fn session_to_row_writes_pr_branch_null_when_absent() {
             error: None,
             error_kind: None,
             pr_branch: Some("feature-x".into()),
+            stale_since: None,
         }),
         last_activity_at: None,
         last_line: None,

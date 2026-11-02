@@ -50,7 +50,11 @@ use vst_git::worktree_service::{
 };
 use vst_git::DirectPtyRegistry;
 use vst_lifecycle::channel::resolve_channel;
-use vst_lifecycle::github::{fetch_prs_for_branches, get_remote_url, resolve_github_remote};
+use vst_lifecycle::github::{
+    classify_remote, fetch_all, get_remote_url, AccountMergedOutcome, Query, RemoteClass,
+};
+use vst_lifecycle::github_auth::{AccountCache, AccountsOutcome};
+use vst_lifecycle::pr_poller::AccountSource;
 use vst_proc::pty::PtyHandle;
 use vst_proc::resolve_use_tmux::resolve_use_tmux;
 use vst_proc::tmux::Tmux;
@@ -66,10 +70,10 @@ use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
     DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, OpenFilesBody,
-    OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrInfo,
-    PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
-    ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
-    WorktreeDoneResult, WorktreeOrderBody, WorktreeOrderResult, WorktreeUsage,
+    OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrErrorReason,
+    PrInfo, PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult,
+    ReorderWorktreeBody, ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus,
+    SubmodulesResult, WorktreeDoneResult, WorktreeOrderBody, WorktreeOrderResult, WorktreeUsage,
 };
 use vst_types::ws::WatchScope;
 use vst_ws::services::file_list::FileList;
@@ -504,6 +508,15 @@ pub struct WorktreeRoutes {
     /// so jobs stop and held comments are restored (`None` in tests that never
     /// schedule into a Terminal agent).
     pub terminal_delivery: Option<vst_review::TerminalDeliveryHandle>,
+    /// GitHub API base for the ad-hoc `GET /worktrees/:id/pr` lookup. Tests
+    /// point this at `mockito`; production keeps the default.
+    pub github_base: String,
+    /// TTL cache for the route's credential resolution — the poller has its
+    /// own; this one only keeps `gh` execs down for repeated panel refreshes.
+    pub account_cache: Arc<AccountCache>,
+    /// Credential source. Production uses [`vst_lifecycle::pr_poller::default_account_source`];
+    /// tests inject a fake so no real `gh` runs.
+    pub account_source: AccountSource,
 }
 
 impl WorktreeRoutes {
@@ -528,6 +541,9 @@ impl WorktreeRoutes {
             paths: Paths::default(),
             artifacts: None,
             terminal_delivery: None,
+            github_base: vst_lifecycle::pr_poller::GITHUB_API_BASE.to_string(),
+            account_cache: Arc::new(AccountCache::default()),
+            account_source: vst_lifecycle::pr_poller::default_account_source(),
         }
     }
 
@@ -538,6 +554,27 @@ impl WorktreeRoutes {
 
     pub fn with_artifacts(mut self, artifacts: vst_artifacts::ArtifactsHandle) -> Self {
         self.artifacts = Some(artifacts);
+        self
+    }
+
+    /// Point the ad-hoc PR lookup at a different GitHub API base (tests).
+    #[must_use]
+    pub fn with_github_base(mut self, base: impl Into<String>) -> Self {
+        self.github_base = base.into();
+        self
+    }
+
+    /// Share an account cache (tests can prime it to avoid real `gh` execs).
+    #[must_use]
+    pub fn with_account_cache(mut self, cache: Arc<AccountCache>) -> Self {
+        self.account_cache = cache;
+        self
+    }
+
+    /// Replace the credential source (tests).
+    #[must_use]
+    pub fn with_account_source(mut self, source: AccountSource) -> Self {
+        self.account_source = source;
         self
     }
 
@@ -2129,6 +2166,11 @@ impl WorktreeRoutes {
     }
 
     // --- 18. GET /worktrees/:id/pr ---
+    //
+    // Ad-hoc lookup for one worktree's branch. The PR poller (vst-lifecycle)
+    // is the sole writer of `session.pr`; this route only answers "what does
+    // GitHub say right now", classified exactly like the poller does
+    // (Decision 3 + Decision 9), so the two never disagree on a state name.
     pub async fn pr(&self, wt_id: &str) -> Result<PrLookupResult, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let worktree = project
@@ -2142,44 +2184,104 @@ impl WorktreeRoutes {
             Err(_) => return Ok(PrLookupResult::NotGithub),
         };
 
-        let gh = match resolve_github_remote(&remote_url) {
-            Some(gh) => gh,
-            None => return Ok(PrLookupResult::NotGithub),
+        // The ssh-config read is blocking — keep it off the async worker.
+        let class = tokio::task::spawn_blocking(move || classify_remote(&remote_url))
+            .await
+            .unwrap_or(RemoteClass::NotGithub);
+        let remote = match class {
+            RemoteClass::Github(remote) => remote,
+            RemoteClass::Unsupported { host } => {
+                return Ok(PrLookupResult::Error {
+                    reason: PrErrorReason::Api,
+                    message: format!("unsupported GitHub host: {host}"),
+                    retry_after_ms: None,
+                });
+            }
+            RemoteClass::NotGithub => return Ok(PrLookupResult::NotGithub),
+            // `classify_remote` never yields this; it exists for the poller's
+            // remote probe. Kept for exhaustiveness.
+            RemoteClass::Transient => {
+                return Err(WorktreeRouteError::ServiceUnavailable(
+                    "git remote probe failed".to_string(),
+                ));
+            }
         };
 
-        let branch = worktree.branch.clone();
-        let res_map = match fetch_prs_for_branches(&gh, std::slice::from_ref(&branch)).await {
-            Ok(m) => m,
-            Err(e) => {
+        let accounts = match self.resolve_github_accounts().await {
+            AccountsOutcome::Accounts(accounts) => accounts,
+            AccountsOutcome::NoCredentials => return Ok(PrLookupResult::NoCredentials),
+            AccountsOutcome::Transient(message) => {
                 return Err(WorktreeRouteError::ServiceUnavailable(format!(
-                    "GitHub API error: {e}"
+                    "GitHub credentials unavailable: {message}"
                 )));
             }
         };
 
-        let res = res_map.get(&branch);
-        match res {
-            Some(vst_lifecycle::github::PrLookupResult::Error { error, .. }) => {
-                Err(WorktreeRouteError::ServiceUnavailable(error.clone()))
-            }
-            Some(vst_lifecycle::github::PrLookupResult::NoPr) => Ok(PrLookupResult::NoPr),
-            Some(vst_lifecycle::github::PrLookupResult::Pr(pr_data)) => Ok(PrLookupResult::Pr {
+        let query = Query::new(remote.owner, remote.repo, worktree.branch.clone());
+        let merged = fetch_all(&self.github_base, &accounts, std::slice::from_ref(&query)).await;
+        let outcome = merged
+            .get(&query.key())
+            .cloned()
+            .unwrap_or(AccountMergedOutcome::NotVisible);
+
+        match outcome {
+            AccountMergedOutcome::Pr(data) => Ok(PrLookupResult::Pr {
                 pr: PrInfo {
-                    number: pr_data.number,
-                    url: pr_data.url.clone(),
-                    title: pr_data.title.clone(),
-                    state: if pr_data.state == "open" {
+                    number: data.number,
+                    url: data.url.clone(),
+                    title: data.title.clone(),
+                    state: if data.state == "open" {
                         PrInfoState::Open
                     } else {
                         PrInfoState::Closed
                     },
-                    merged: pr_data.merged,
-                    draft: pr_data.draft,
+                    merged: data.merged,
+                    draft: data.draft,
                     author: None,
                 },
             }),
-            None => Ok(PrLookupResult::NoPr),
+            AccountMergedOutcome::NoPr => Ok(PrLookupResult::NoPr),
+            AccountMergedOutcome::NotVisible => Ok(PrLookupResult::Error {
+                reason: PrErrorReason::Api,
+                message: "repo not visible to any GitHub account".to_string(),
+                retry_after_ms: None,
+            }),
+            AccountMergedOutcome::Auth => Ok(PrLookupResult::Error {
+                reason: PrErrorReason::Auth,
+                message: "GitHub token lacks the 'repo' scope".to_string(),
+                retry_after_ms: None,
+            }),
+            AccountMergedOutcome::Unauthorized => {
+                self.account_cache.invalidate();
+                Ok(PrLookupResult::NoCredentials)
+            }
+            AccountMergedOutcome::Transient => Err(WorktreeRouteError::ServiceUnavailable(
+                "GitHub API request failed transiently".to_string(),
+            )),
         }
+    }
+
+    /// Resolve GitHub credentials through a TTL cache, so a user clicking
+    /// Refresh repeatedly doesn't spawn `gh` each time.
+    async fn resolve_github_accounts(&self) -> AccountsOutcome {
+        let now = tokio::time::Instant::now();
+        // A user click re-checks a cached "signed out" (one `gh` exec is fine).
+        self.account_cache.invalidate_if_no_credentials();
+        if let Some(cached) = self.account_cache.get(now) {
+            return cached;
+        }
+        let outcome = (self.account_source)().await;
+        self.account_cache.put(now, outcome.clone());
+        outcome
+    }
+
+    /// Whether `wt_id` names an existing worktree (used by the focus route).
+    pub async fn worktree_exists(&self, wt_id: &str) -> bool {
+        self.store
+            .get_all_projects()
+            .await
+            .iter()
+            .any(|project| project.worktrees.iter().any(|w| w.id == wt_id))
     }
 
     // --- 19. POST /worktrees/:id/open-file ---

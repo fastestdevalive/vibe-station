@@ -22,12 +22,14 @@
 //! - Different `project_id` → concurrent execution
 //!
 //! ### pr_poller.rs
-//! - `PR_POLL_INTERVAL_MS = 30_000`
+//! - `PR_TICK_INTERVAL_MS = 45_000`, `PR_MIN_SPACING_MS = 20_000`,
+//!   `PR_DEBOUNCE_MS = 2_000`, `PR_HINT_DEBOUNCE_MS = 1_000`
 //! - `classify_pr_state(merged=true, _, _)` → `Merged`
 //! - `classify_pr_state(false, draft=true, _)` → `Draft`
 //! - `classify_pr_state(false, false, closed=true)` → `Closed`
 //! - `classify_pr_state(false, false, false)` → `Open`
-//! - `pr_status_equivalent` ignores `checked_at`
+//! - `pr_status_equivalent` ignores `checked_at` and error text; compares
+//!   `stale_since` as a boolean
 //!
 //! ### lifecycle.rs
 //! - `POLL_INTERVAL_MS = 1_000`
@@ -279,8 +281,14 @@ fn tool_result_cap_diffs_normal_size_untouched() {
 // ─── pr_poller constants and pure functions ───────────────────────────────────
 
 #[test]
-fn pr_poller_interval_constant() {
-    assert_eq!(vst_lifecycle::pr_poller::PR_POLL_INTERVAL_MS, 30_000);
+fn pr_poller_interval_constants() {
+    use vst_lifecycle::pr_poller::{
+        PR_DEBOUNCE_MS, PR_HINT_DEBOUNCE_MS, PR_MIN_SPACING_MS, PR_TICK_INTERVAL_MS,
+    };
+    assert_eq!(PR_TICK_INTERVAL_MS, 45_000);
+    assert_eq!(PR_MIN_SPACING_MS, 20_000);
+    assert_eq!(PR_DEBOUNCE_MS, 2_000);
+    assert_eq!(PR_HINT_DEBOUNCE_MS, 1_000);
 }
 
 #[test]
@@ -314,7 +322,7 @@ fn pr_poller_classify_open() {
 }
 
 #[test]
-fn pr_status_equivalent_ignores_checked_at() {
+fn pr_status_equivalent_ignores_checked_at_and_error_text() {
     use vst_lifecycle::pr_poller::pr_status_equivalent;
     use vst_types::domain::{PrState, PrStatus};
     let a = PrStatus {
@@ -325,12 +333,41 @@ fn pr_status_equivalent_ignores_checked_at() {
         error: None,
         error_kind: None,
         pr_branch: Some("feat".to_string()),
+        stale_since: None,
     };
     let b = PrStatus {
         checked_at: "2025-06-01T12:00:00Z".to_string(), // different timestamp
+        error: Some("a transient failure".to_string()), // different error text
         ..a.clone()
     };
     assert!(pr_status_equivalent(&a, &b));
+}
+
+#[test]
+fn pr_status_equivalence_tracks_staleness_as_a_boolean() {
+    use vst_lifecycle::pr_poller::pr_status_equivalent;
+    use vst_types::domain::{PrState, PrStatus};
+    let fresh = PrStatus {
+        state: PrState::Open,
+        number: Some(7),
+        url: Some("https://example.com/pull/7".to_string()),
+        checked_at: "2025-01-01T00:00:00Z".to_string(),
+        error: None,
+        error_kind: None,
+        pr_branch: Some("feat".to_string()),
+        stale_since: None,
+    };
+    let stale = PrStatus {
+        stale_since: Some("2025-01-01T00:00:00Z".to_string()),
+        ..fresh.clone()
+    };
+    let stale_later = PrStatus {
+        stale_since: Some("2025-01-02T00:00:00Z".to_string()),
+        ..fresh.clone()
+    };
+    assert!(!pr_status_equivalent(&fresh, &stale));
+    // Two different stale timestamps are still "stale" — no re-broadcast.
+    assert!(pr_status_equivalent(&stale, &stale_later));
 }
 
 #[test]
@@ -346,6 +383,7 @@ fn pr_status_not_equivalent_on_state_change() {
         error: None,
         error_kind: None,
         pr_branch: None,
+        stale_since: None,
     };
     let b = PrStatus {
         state: PrState::Merged,

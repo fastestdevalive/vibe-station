@@ -538,48 +538,62 @@ pub async fn check_github_auth() -> DoctorCheck {
         };
     }
 
-    // Check accounts.
-    let accounts = match tokio::time::timeout(
+    // Check accounts. A `gh` timeout / exec error is `Transient`, never
+    // "Not logged in" — that false positive is what flipped sessions to
+    // `no_credentials` when `gh` was merely slow (Decision 8).
+    let outcome = match tokio::time::timeout(
         Duration::from_secs(10),
-        vst_lifecycle::github_auth::list_accounts(),
+        vst_lifecycle::github_auth::list_accounts_with(std::path::Path::new("gh"), |key: &str| {
+            std::env::var(key).ok()
+        }),
     )
     .await
     {
-        Ok(accounts) => accounts,
-        Err(_) => {
-            return DoctorCheck {
-                name: "github-auth".to_string(),
-                status: DoctorStatus::Error,
-                required: false,
-                group: CheckGroup::Feature,
-                message: "Not logged in — run gh auth login".to_string(),
-                resolved_path: None,
-                ..Default::default()
-            };
-        }
+        Ok(outcome) => outcome,
+        Err(_) => vst_lifecycle::github_auth::AccountsOutcome::Transient(
+            "gh auth status timed out".to_string(),
+        ),
     };
 
-    if !accounts.iter().any(|a| a.token.is_some()) {
-        return DoctorCheck {
-            name: "github-auth".to_string(),
-            status: DoctorStatus::Error,
-            required: false,
-            group: CheckGroup::Feature,
-            message: "Not logged in — run gh auth login".to_string(),
-            resolved_path: None,
-            ..Default::default()
-        };
-    }
+    github_auth_check_from_outcome(&outcome)
+}
 
-    let logins: Vec<String> = accounts.iter().map(|a| a.login.clone()).collect();
-    DoctorCheck {
+/// Pure mapping from a credential resolution to the doctor's `github-auth`
+/// check (Decision 8): a transient `gh` failure must read as "couldn't check",
+/// not as "Not logged in".
+fn github_auth_check_from_outcome(
+    outcome: &vst_lifecycle::github_auth::AccountsOutcome,
+) -> DoctorCheck {
+    use vst_lifecycle::github_auth::AccountsOutcome;
+
+    let failure = |message: String| DoctorCheck {
         name: "github-auth".to_string(),
-        status: DoctorStatus::Ok,
+        status: DoctorStatus::Error,
         required: false,
         group: CheckGroup::Feature,
-        message: format!("Logged in as {}", logins.join(", ")),
+        message,
         resolved_path: None,
         ..Default::default()
+    };
+
+    match outcome {
+        AccountsOutcome::Accounts(accounts) => {
+            if !accounts.iter().any(|a| a.token.is_some()) {
+                return failure("Not logged in — run gh auth login".to_string());
+            }
+            let logins: Vec<String> = accounts.iter().map(|a| a.login.clone()).collect();
+            DoctorCheck {
+                name: "github-auth".to_string(),
+                status: DoctorStatus::Ok,
+                required: false,
+                group: CheckGroup::Feature,
+                message: format!("Logged in as {}", logins.join(", ")),
+                resolved_path: None,
+                ..Default::default()
+            }
+        }
+        AccountsOutcome::NoCredentials => failure("Not logged in — run gh auth login".to_string()),
+        AccountsOutcome::Transient(message) => failure(format!("gh auth check failed: {message}")),
     }
 }
 
@@ -945,6 +959,52 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn github_auth_check_ok_for_logged_in_account() {
+        use vst_lifecycle::github_auth::{AccountsOutcome, GithubAccount};
+        let outcome = AccountsOutcome::Accounts(vec![GithubAccount {
+            login: "alice".into(),
+            token: Some("tok".into()),
+        }]);
+        let check = github_auth_check_from_outcome(&outcome);
+        assert_eq!(check.status, DoctorStatus::Ok);
+        assert!(check.message.contains("alice"), "{}", check.message);
+    }
+
+    #[test]
+    fn github_auth_check_not_logged_in_for_clean_zero_logins() {
+        use vst_lifecycle::github_auth::AccountsOutcome;
+        let check = github_auth_check_from_outcome(&AccountsOutcome::NoCredentials);
+        assert_eq!(check.status, DoctorStatus::Error);
+        assert!(check.message.contains("Not logged in"), "{}", check.message);
+    }
+
+    #[test]
+    fn github_auth_check_not_logged_in_when_every_account_lacks_a_token() {
+        use vst_lifecycle::github_auth::{AccountsOutcome, GithubAccount};
+        let outcome = AccountsOutcome::Accounts(vec![GithubAccount {
+            login: "alice".into(),
+            token: None,
+        }]);
+        let check = github_auth_check_from_outcome(&outcome);
+        assert_eq!(check.status, DoctorStatus::Error);
+        assert!(check.message.contains("Not logged in"), "{}", check.message);
+    }
+
+    #[test]
+    fn github_auth_check_transient_gh_is_not_not_logged_in() {
+        use vst_lifecycle::github_auth::AccountsOutcome;
+        let outcome = AccountsOutcome::Transient("`gh auth status` timed out after 5s".to_string());
+        let check = github_auth_check_from_outcome(&outcome);
+        assert_eq!(check.status, DoctorStatus::Error);
+        assert!(check.message.contains("timed out"), "{}", check.message);
+        assert!(
+            !check.message.contains("Not logged in"),
+            "a slow gh must never read as signed out: {}",
+            check.message
+        );
+    }
 
     // 3.T1
     #[test]
