@@ -44,7 +44,11 @@ pub mod worktree_service;
 pub use branch_validator::{branch_exists_in_repo, validate_branch, ValidationResult};
 pub use diff_text::{file_diff, git_dir, is_valid_base_sha, rename_map, DiffTextError};
 pub use direct_pty::DirectPtyRegistry;
-pub use git::{GitRunner, GitService};
+pub use git::{
+    diff_index_shortstat, diff_shortstat, git_version, is_ancestor, object_exists,
+    parse_git_version, parse_shortstat, rev_parse, run_git_env, short_git_semaphore, DiffStat,
+    GitRunner, GitService, GitVersion, SHORT_GIT_CONCURRENCY,
+};
 pub use paths::Paths;
 pub use prefix::{generate_project_prefix, make_unique_prefix};
 pub use recover::{recover_not_started_sessions, SessionLiveness};

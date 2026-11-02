@@ -29,6 +29,8 @@ import type {
   DetectAndBundleResult,
   DoctorReport,
   DiffStat,
+  DiffStatEntry,
+  DiffStatsSnapshot,
   DiskUsageResponse,
   DraftConfig,
   EnableTailscaleResponse,
@@ -1450,6 +1452,19 @@ export function createMockApi(seed: MockSeed = {}) {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const key = filePath.replace(/^\/+/, "");
       return unifiedDiffs[key] ?? "";
+    },
+
+    async getDiffStats(): Promise<DiffStatsSnapshot> {
+      const stats: Record<string, DiffStatEntry> = {};
+      for (const wt of worktrees) {
+        stats[wt.id] = {
+          state: "ok",
+          insertions: 0,
+          deletions: 0,
+          rev: 1,
+        };
+      }
+      return { stats };
     },
 
     /** Aggregate `+insertions -deletions` against the worktree's base branch —

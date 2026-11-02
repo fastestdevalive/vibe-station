@@ -1195,6 +1195,18 @@
   transition: opacity var(--transition-fast);
 }
 
+.wt-row__diffstat--unknown {
+  opacity: 0.5;
+}
+
+.wt-row__diffstat--unavailable {
+  color: var(--fg-muted);
+}
+
+.wt-row__diffstat--broken {
+  color: var(--warning);
+}
+
 /* `pointer-events` used to gate on `:hover`/`:focus-within` alongside opacity
  * (none at rest, auto on hover) — the same pattern the touch-device fix below
  * already had to abandon: gating clickability on a `:hover` match that hasn't

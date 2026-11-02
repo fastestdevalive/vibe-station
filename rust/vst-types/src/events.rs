@@ -134,6 +134,18 @@ pub enum ServerEvent {
     WorktreeUpdated {
         worktree: serde_json::Map<String, serde_json::Value>,
     },
+    /// One worktree's cached diffstat changed (`vst-diffstat`). Broadcast only
+    /// on a real change; `rev` is monotonic per worktree.
+    #[serde(rename = "worktree:diffstat", rename_all = "camelCase")]
+    WorktreeDiffStat {
+        worktree_id: String,
+        insertions: u64,
+        deletions: u64,
+        state: crate::rest::worktrees::DiffStatState,
+        rev: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint: Option<String>,
+    },
     /// An ordered list was updated.
     #[serde(rename = "orderedList:updated", rename_all = "camelCase")]
     OrderedListUpdated {

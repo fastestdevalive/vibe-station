@@ -45,6 +45,8 @@ pub struct DispatchContext {
     /// `insert`/`remove`/`merge_subtree` as the tree watcher below observes
     /// filesystem changes.
     pub file_search: Arc<FileSearchIndex>,
+    /// Optional hook fired when a tree watcher observes a change in a worktree.
+    pub tree_change_hook: Option<crate::broadcaster::TreeChangeHook>,
 }
 
 impl DispatchContext {
@@ -85,6 +87,7 @@ pub async fn dispatch(conn: &WsConnection, ctx: &DispatchContext, msg: &ClientMe
                 &ctx.watchers,
                 &ctx.resolve_worktree_root,
                 &ctx.file_search,
+                ctx.tree_change_hook.as_ref(),
                 msg,
             )
             .await;

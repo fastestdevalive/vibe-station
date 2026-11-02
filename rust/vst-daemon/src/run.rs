@@ -593,10 +593,11 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // The single Terminal delivery owner (built in `build_state`, shared with the
     // routes): the schedule poller hands tmux rows to it, boot reports to it.
     let terminal_delivery = state.session_routes.terminal_delivery.clone();
-    // The PR poller lives on `AppState` (built in `build_state`, together with
-    // the focus-hint list) — grab its handle before the state is consumed by
-    // the router.
+    // The PR poller and diffstat poller live on `AppState` (built in `build_state`,
+    // together with the focus-hint list) — grab their handles before the state
+    // is consumed by the router.
     let pr_poller = state.pr_poller.clone();
+    let diffstat_poller = state.diffstat_poller.clone();
     let router = router_from_state(state);
 
     // ── Pollers ───────────────────────────────────────────────────────────────
@@ -609,6 +610,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // ONE task: broadcaster subscriber + coalescer driver + 45 s tick, so a
     // single abort stops all three.
     let pr_handle = pr_poller.start();
+    let diffstat_handle = diffstat_poller.start();
 
     let fire_target = terminal_delivery.clone();
     let schedule_poller = Arc::new(
@@ -683,6 +685,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         // Abort pollers and any still-running post-bind boot work.
         lifecycle_handle.abort();
         pr_handle.abort();
+        diffstat_handle.abort();
         schedule_handle.abort();
         // Jobs mid-wait leave their rows `waiting`; the next boot re-arms them.
         terminal_delivery.shutdown();

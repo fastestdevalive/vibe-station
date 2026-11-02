@@ -1,5 +1,5 @@
 import { useViewportWidth, usePortalRoot, useEventTargets, useDemoEnv } from "../../context/DemoEnv";
-import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
 import { fuzzyScore } from "@/lib/fuzzyMatch";
@@ -23,7 +23,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
-import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
+import type { DiffStatEntry, DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
 import { useDoctorStatus } from "@/hooks/useDoctorStatus";
 import { doctorSummary } from "@/components/doctor/doctorSummary";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
@@ -33,7 +33,7 @@ import { createProjectDirectDraft, createProjectWorktreeDraft } from "@/lib/proj
 import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
-import { useSubscription, useWorktreeDiffStats } from "@/hooks/useSubscription";
+import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
@@ -205,17 +205,56 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   return state; // working, idle, waiting_for_human, done, exited all map directly
 }
 
-/** `+N −N` LOC indicator (item 10, Decision 11) — reuses the VCS graph's
- *  existing add/del text-color classes. Renders nothing while the stat is
- *  unknown (still in flight / failed) or genuinely zero-diff. */
-function DiffStatBadge({ stat }: { stat: { insertions: number; deletions: number } | null }) {
-  if (!stat || (stat.insertions === 0 && stat.deletions === 0)) return null;
-  return (
-    <span className="wt-row__diffstat">
-      {stat.insertions > 0 ? <span className="vcs-graph__add">+{stat.insertions}</span> : null}
-      {stat.deletions > 0 ? <span className="vcs-graph__del">−{stat.deletions}</span> : null}
-    </span>
-  );
+/** `+N −N` LOC indicator (item 10, Decision 11, poller-redesign Phase 5.4).
+ *  Renders:
+ *  - "ok": +N −N (nothing if zero-diff)
+ *  - "unknown": muted …
+ *  - "unavailable": – (with tooltip)
+ *  - "broken": warning icon (with repair hint tooltip) */
+function DiffStatBadge({
+  stat,
+}: {
+  stat: DiffStatEntry | { insertions: number; deletions: number; state?: string; hint?: string } | null | undefined;
+}) {
+  if (!stat) return null;
+  const state = stat.state ?? "ok";
+  if (state === "ok") {
+    if (stat.insertions === 0 && stat.deletions === 0) return null;
+    return (
+      <span className="wt-row__diffstat">
+        {stat.insertions > 0 ? <span className="vcs-graph__add">+{stat.insertions}</span> : null}
+        {stat.deletions > 0 ? <span className="vcs-graph__del">−{stat.deletions}</span> : null}
+      </span>
+    );
+  }
+  if (state === "unknown") {
+    return (
+      <span className="wt-row__diffstat wt-row__diffstat--unknown" title="Diffstat unknown">
+        …
+      </span>
+    );
+  }
+  if (state === "unavailable") {
+    return (
+      <span className="wt-row__diffstat wt-row__diffstat--unavailable" title={stat.hint ?? "Diffstat unavailable"}>
+        –
+      </span>
+    );
+  }
+  if (state === "broken") {
+    return (
+      <span className="wt-row__diffstat wt-row__diffstat--broken" title={stat.hint ?? "git worktree repair"}>
+        <AlertTriangle size={12} className="wt-row__broken-icon" aria-label={stat.hint ?? "git worktree repair"} />
+      </span>
+    );
+  }
+  return null;
+}
+
+/** Per-row slice subscription: only this badge re-renders on its worktree's push. */
+function WorktreeDiffStatBadge({ worktreeId }: { worktreeId: string }) {
+  const stat = useServerStore((s) => s.diffStats[worktreeId]);
+  return <DiffStatBadge stat={stat ?? null} />;
 }
 
 function SidebarSessionModeIcon({
@@ -302,13 +341,6 @@ export function LeftSidebar({
     }
     return m;
   }, [worktrees]);
-  /** Non-hidden worktree ids — batched into one `useWorktreeDiffStats` poll
-   *  (Decision 11) instead of each row owning its own interval. */
-  const visibleWorktreeIds = useMemo(
-    () => worktrees.filter((w) => w.hiddenAt == null).map((w) => w.id),
-    [worktrees],
-  );
-  const diffStats = useWorktreeDiffStats(api, visibleWorktreeIds);
   /** Hidden worktrees, grouped by project — feeds the "Archived worktrees" dialog
    *  and the count shown in the project overflow menu. */
   const hiddenWorktreeMap = useMemo(() => {
@@ -1893,7 +1925,7 @@ export function LeftSidebar({
                                 </span>
                               </div>
                               <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                                <DiffStatBadge stat={diffStats[w.id] ?? null} />
+                                <WorktreeDiffStatBadge worktreeId={w.id} />
                                 <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
                                 <button
                                   type="button"
@@ -2838,14 +2870,14 @@ export function LeftSidebar({
                                             worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates) ===
                                             "working"
                                           }
-                                          diffStat={<DiffStatBadge stat={diffStats[w.id] ?? null} />}
+                                          diffStat={<WorktreeDiffStatBadge worktreeId={w.id} />}
                                           jobStatus={bulkStatus}
                                           jobAction={bulkJob?.action}
                                           onToggle={() => bulkToggle(w.id)}
                                         />
                                       ) : (
                                         <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                                          <DiffStatBadge stat={diffStats[w.id] ?? null} />
+                                          <WorktreeDiffStatBadge worktreeId={w.id} />
                                           <RelativeTime className="wt-row__time" at={wtActivity.get(w.id) ?? null} />
                                           <button
                                             type="button"

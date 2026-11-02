@@ -584,12 +584,12 @@ describe("LeftSidebar", () => {
     expect(css).not.toMatch(/(?<!:not\()\.left-sidebar--touch[^{]*\.wt-row__time/);
   });
 
-  // ─── LOC indicator (item 10, 11.T2) ────────────────────────────────────
+  // ─── LOC indicator (poller-redesign Phase 5.4, 5.T2) ───────────────────
   describe("diffstat LOC indicator", () => {
-    it("shows +N −N matching a mocked getDiffStat response", async () => {
-      vi.spyOn(api, "getDiffStat").mockImplementation(async (worktreeId: string) =>
-        worktreeId === "wt-1" ? { insertions: 12, deletions: 4 } : { insertions: 0, deletions: 0 },
-      );
+    it("shows +N −N for state 'ok' seeded in useServerStore", async () => {
+      useServerStore.setState({
+        diffStats: { "wt-1": { insertions: 12, deletions: 4, state: "ok", rev: 1 } },
+      });
       render(
         <MemoryRouter>
           <Harness api={api}>
@@ -605,8 +605,72 @@ describe("LeftSidebar", () => {
       expect(within(row as HTMLElement).getByText("−4")).toBeInTheDocument();
     });
 
-    it("11.T4 regression — collapsed sidebar rail hides the indicator alongside the row time", async () => {
-      vi.spyOn(api, "getDiffStat").mockResolvedValue({ insertions: 7, deletions: 2 });
+    it("renders '…' for state 'unknown'", async () => {
+      useServerStore.setState({
+        diffStats: { "wt-1": { insertions: 0, deletions: 0, state: "unknown", rev: 1 } },
+      });
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row--worktree")!;
+      await waitFor(() => {
+        expect(within(row as HTMLElement).getByText("…")).toBeInTheDocument();
+      });
+    });
+
+    it("renders '–' for state 'unavailable'", async () => {
+      useServerStore.setState({
+        diffStats: { "wt-1": { insertions: 0, deletions: 0, state: "unavailable", rev: 1 } },
+      });
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row--worktree")!;
+      await waitFor(() => {
+        expect(within(row as HTMLElement).getByText("–")).toBeInTheDocument();
+      });
+    });
+
+    it("renders warning icon for state 'broken'", async () => {
+      useServerStore.setState({
+        diffStats: {
+          "wt-1": {
+            insertions: 0,
+            deletions: 0,
+            state: "broken",
+            rev: 1,
+            hint: "git worktree repair",
+          },
+        },
+      });
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row--worktree")!;
+      await waitFor(() => {
+        expect(within(row as HTMLElement).getByLabelText("git worktree repair")).toBeInTheDocument();
+      });
+    });
+
+    it("collapsed sidebar rail hides the indicator alongside the row time", async () => {
+      useServerStore.setState({
+        diffStats: { "wt-1": { insertions: 7, deletions: 2, state: "ok", rev: 1 } },
+      });
       render(
         <MemoryRouter>
           <Harness api={api}>
@@ -616,6 +680,44 @@ describe("LeftSidebar", () => {
       );
       await screen.findByRole("button", { name: /Proj A — agents and worktrees/i });
       expect(screen.queryByText("+7")).not.toBeInTheDocument();
+    });
+
+    it("applyWorktreeDiffStat updates that worktree's badge", async () => {
+      useServerStore.setState({
+        diffStats: { "wt-1": { insertions: 1, deletions: 0, state: "ok", rev: 1 } },
+      });
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row--worktree")! as HTMLElement;
+      await waitFor(() => expect(within(row).getByText("+1")).toBeInTheDocument());
+      act(() => {
+        useServerStore
+          .getState()
+          .applyWorktreeDiffStat("wt-1", { insertions: 9, deletions: 3, state: "ok", rev: 2 });
+      });
+      await waitFor(() => expect(within(row).getByText("+9")).toBeInTheDocument());
+      expect(within(row).getByText("−3")).toBeInTheDocument();
+    });
+
+    it("asserts no setInterval in LeftSidebar diffstat path", () => {
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      // Verify setInterval was not called for diffstat polling
+      // (doctor poller or clock might use interval, but diffstat interval was deleted)
+      expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30_000);
+      setIntervalSpy.mockRestore();
     });
   });
 

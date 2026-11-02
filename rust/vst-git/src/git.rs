@@ -8,18 +8,43 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use tokio::process::Command;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, OnceCell, Semaphore};
 
 /// The well-known empty-tree SHA (`git hash-object -t tree /dev/null`).
 pub const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/// Maximum concurrent *ordinary* git execs process-wide.
+///
+/// Every short-lived invocation (`rev-parse`, `diff-index`, `status`, …) takes
+/// a permit from the process-global semaphore this constant sizes, so a burst
+/// of daemon-side pollers cannot starve the user-facing git routes (plan
+/// Decision 6: "global git semaphore 4 inside `vst-git::run_git`").
+pub const SHORT_GIT_CONCURRENCY: usize = 4;
+
+/// The process-global short-exec semaphore (diagnostics/tests).
+#[must_use]
+pub fn short_git_semaphore() -> &'static Semaphore {
+    static SEM: OnceLock<Semaphore> = OnceLock::new();
+    SEM.get_or_init(|| Semaphore::new(SHORT_GIT_CONCURRENCY))
+}
+
+/// Which execution class an exec belongs to.
+#[derive(Clone, Copy)]
+enum ExecClass {
+    Short,
+    Heavy,
+}
+
 /// Errors surfaced by the low-level git operations.
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
+    /// The invocation timed out.
+    #[error("git {args} timed out")]
+    Timeout { args: String },
     /// `git` exited non-zero; includes the invocation and stderr.
     #[error("git {args} failed: {stderr}")]
     Command { args: String, stderr: String },
@@ -38,14 +63,14 @@ pub const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bounded timeout for long-running git operations (worktree add/remove,
 /// clone/fetch/push, submodule update). These legitimately take minutes on a
 /// large repo or a slow remote.
-pub const HEAVY_GIT_TIMEOUT: Duration = Duration::from_secs(300);
+pub const HEAVY_GIT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Runs the `git` binary with a bounded timeout and kill-on-drop.
 ///
 /// This is the single execution path for every `git` invocation in this
 /// crate: args are passed directly (no shell), the child is killed if its
 /// future is dropped (e.g. by the timeout), and a timeout maps to
-/// [`GitError::Command`] with `stderr == "timed out"`.
+/// [`GitError::Timeout`].
 ///
 /// The program path is injectable so tests can point it at a fake script
 /// without touching the process-global `PATH`.
@@ -93,12 +118,16 @@ impl GitRunner {
 
     /// Run `git <args>` (optionally with `cwd`), returning trimmed stdout.
     ///
+    /// Takes one permit from the process-global short-exec semaphore for the
+    /// duration of the exec only.
+    ///
     /// # Errors
     ///
     /// [`GitError::Command`] on a non-zero exit or a timeout;
     /// [`GitError::Io`] if the program cannot be spawned.
     pub async fn run(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-        self.exec(args, cwd, self.timeout, true).await
+        self.exec(args, cwd, self.timeout, true, &[], ExecClass::Short)
+            .await
     }
 
     /// Like [`Self::run`], but returns raw untrimmed stdout. `git submodule
@@ -110,17 +139,38 @@ impl GitRunner {
     ///
     /// See [`Self::run`].
     pub async fn run_raw(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-        self.exec(args, cwd, self.timeout, false).await
+        self.exec(args, cwd, self.timeout, false, &[], ExecClass::Short)
+            .await
+    }
+
+    /// Run `git <args>` with extra environment variables, returning trimmed
+    /// stdout. Short-exec class (timeout + shared concurrency cap).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::run`].
+    pub async fn run_with_env(
+        &self,
+        args: &[&str],
+        cwd: Option<&Path>,
+        envs: &[(&str, &str)],
+    ) -> GitResult<String> {
+        self.exec(args, cwd, self.timeout, true, envs, ExecClass::Short)
+            .await
     }
 
     /// Run a long-running git operation with [`HEAVY_GIT_TIMEOUT`], returning
     /// trimmed stdout.
     ///
+    /// Takes no semaphore permit (heavy operations are not throttled and never
+    /// consume a short-exec permit).
+    ///
     /// # Errors
     ///
     /// See [`Self::run`].
     pub async fn run_heavy(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, true).await
+        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, true, &[], ExecClass::Heavy)
+            .await
     }
 
     /// Run a long-running git operation with [`HEAVY_GIT_TIMEOUT`], returning
@@ -130,30 +180,38 @@ impl GitRunner {
     ///
     /// See [`Self::run`].
     pub async fn run_raw_heavy(&self, args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
-        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, false).await
+        self.exec(args, cwd, HEAVY_GIT_TIMEOUT, false, &[], ExecClass::Heavy)
+            .await
     }
 
     /// Run `git <args>` and return its exit status without interpreting it —
     /// for commands whose non-zero exit is meaningful (`merge-base
     /// --is-ancestor`: 0 = true, 1 = false).
     ///
+    /// Takes a short-exec permit.
+    ///
     /// # Errors
     ///
-    /// [`GitError::Command`] on a timeout; [`GitError::Io`] if the program
+    /// [`GitError::Timeout`] on a timeout; [`GitError::Io`] if the program
     /// cannot be spawned.
     pub async fn exit_status(
         &self,
         args: &[&str],
         cwd: Option<&Path>,
     ) -> GitResult<std::process::ExitStatus> {
-        let mut cmd = Command::new(&self.program);
-        cmd.args(args);
-        // Dropping the future (timeout) drops the child, which SIGKILLs it.
-        cmd.kill_on_drop(true);
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
-        }
-        match tokio::time::timeout(self.timeout, cmd.status()).await {
+        let run_fut = async {
+            let _permit = short_git_semaphore().acquire().await;
+            let mut cmd = Command::new(&self.program);
+            cmd.args(args);
+            // Dropping the future (timeout) drops the child, which SIGKILLs it.
+            cmd.kill_on_drop(true);
+            cmd.env("GIT_OPTIONAL_LOCKS", "0");
+            if let Some(cwd) = cwd {
+                cmd.current_dir(cwd);
+            }
+            cmd.status().await
+        };
+        match tokio::time::timeout(self.timeout, run_fut).await {
             Ok(Ok(status)) => Ok(status),
             Ok(Err(e)) => Err(GitError::Io(e)),
             Err(_) => Err(timed_out(args)),
@@ -166,15 +224,36 @@ impl GitRunner {
         cwd: Option<&Path>,
         timeout: Duration,
         trim: bool,
+        envs: &[(&str, &str)],
+        class: ExecClass,
     ) -> GitResult<String> {
-        let mut cmd = Command::new(&self.program);
-        cmd.args(args);
-        // Dropping the future (timeout) drops the child, which SIGKILLs it.
-        cmd.kill_on_drop(true);
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
-        }
-        let out = match tokio::time::timeout(timeout, cmd.output()).await {
+        // Permit acquisition for short-exec is placed INSIDE the timeout budget,
+        // ensuring that permit waits are strictly bounded by `timeout` and cannot block unbounded.
+        // Heavy operations do not take a permit from the short pool and are unthrottled.
+        let run_fut = async {
+            let _permit = match class {
+                ExecClass::Short => Some(short_git_semaphore().acquire().await),
+                ExecClass::Heavy => None,
+            };
+            let mut cmd = Command::new(&self.program);
+            cmd.args(args);
+            // Dropping the future (timeout) drops the child, which SIGKILLs it.
+            cmd.kill_on_drop(true);
+            // Default GIT_OPTIONAL_LOCKS=0 for short read-only execs so killed
+            // processes do not leave index.lock behind.
+            if matches!(class, ExecClass::Short) {
+                cmd.env("GIT_OPTIONAL_LOCKS", "0");
+            }
+            for (key, value) in envs {
+                cmd.env(key, value);
+            }
+            if let Some(cwd) = cwd {
+                cmd.current_dir(cwd);
+            }
+            cmd.output().await
+        };
+
+        let out = match tokio::time::timeout(timeout, run_fut).await {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return Err(GitError::Io(e)),
             Err(_) => return Err(timed_out(args)),
@@ -201,9 +280,8 @@ impl Default for GitRunner {
 }
 
 fn timed_out(args: &[&str]) -> GitError {
-    GitError::Command {
+    GitError::Timeout {
         args: args.join(" "),
-        stderr: "timed out".to_string(),
     }
 }
 
@@ -220,6 +298,24 @@ async fn run_git_raw(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
 /// Like [`run_git`], but with [`HEAVY_GIT_TIMEOUT`] for long-running operations.
 async fn run_git_heavy(args: &[&str], cwd: Option<&Path>) -> GitResult<String> {
     GitRunner::new().run_heavy(args, cwd).await
+}
+
+/// Run `git <args>` with extra environment variables, returning trimmed
+/// stdout.
+///
+/// Goes through the same timeout + kill-on-drop + short-exec semaphore path as
+/// every other invocation, so callers (`vst-diffstat`'s compute) never need to
+/// spawn a `git` themselves.
+///
+/// # Errors
+///
+/// See [`GitRunner::run`].
+pub async fn run_git_env(
+    args: &[&str],
+    envs: &[(&str, &str)],
+    cwd: Option<&Path>,
+) -> GitResult<String> {
+    GitRunner::new().run_with_env(args, cwd, envs).await
 }
 
 /// Returns true if `dir` is inside a git repository.
@@ -375,7 +471,10 @@ pub async fn resolve_parent_sha(repo_path: &str, sha: &str) -> GitResult<String>
 
 /// Returns true if `ancestor` is an ancestor of (or equal to) `descendant`.
 /// Exit code 0 = true, 1 = false; any other failure propagates.
-async fn is_ancestor(repo_path: &str, ancestor: &str, descendant: &str) -> GitResult<bool> {
+///
+/// Public because `vst-diffstat`'s ref choice needs it; runs through the
+/// shared runner (timeout + short-exec semaphore).
+pub async fn is_ancestor(repo_path: &str, ancestor: &str, descendant: &str) -> GitResult<bool> {
     let args = [
         "-C",
         repo_path,
@@ -481,12 +580,128 @@ pub async fn get_diff_stat(repo_path: &str, base_sha: &str) -> GitResult<DiffSta
     Ok(parse_shortstat(&stdout))
 }
 
-fn parse_shortstat(stdout: &str) -> DiffStat {
+/// One exec: `git diff-index --shortstat --merge-base <ref>` with
+/// `GIT_OPTIONAL_LOCKS=0`.
+///
+/// `diff-index` never rewrites the index (`git diff`/`git status` can), so a
+/// poller calling this cannot race an agent's own `git add` (plan Decision 4).
+/// `--merge-base <ref>` diffs the working tree against `merge-base(HEAD, ref)`
+/// — the same numbers `diff --shortstat $(merge-base HEAD <ref>)` yields, in
+/// one exec.
+///
+/// # Errors
+///
+/// See [`GitRunner::run`].
+pub async fn diff_index_shortstat(repo_path: &str, r#ref: &str) -> GitResult<DiffStat> {
+    let stdout = run_git_env(
+        &[
+            "-C",
+            repo_path,
+            "diff-index",
+            "--shortstat",
+            "--merge-base",
+            r#ref,
+        ],
+        &[
+            ("GIT_OPTIONAL_LOCKS", "0"),
+            ("LC_ALL", "C"),
+            ("LANGUAGE", "C"),
+        ],
+        Some(Path::new(repo_path)),
+    )
+    .await?;
+    Ok(parse_shortstat(&stdout))
+}
+
+/// One exec: `git diff --shortstat <ref>` with `GIT_OPTIONAL_LOCKS=0`.
+///
+/// ONLY the pre-2.30 fallback path of `vst-diffstat` may use this: unlike
+/// `diff-index`, `git diff` may refresh and rewrite the index.
+///
+/// # Errors
+///
+/// See [`GitRunner::run`].
+pub async fn diff_shortstat(repo_path: &str, r#ref: &str) -> GitResult<DiffStat> {
+    let stdout = run_git_env(
+        &["-C", repo_path, "diff", "--shortstat", r#ref],
+        &[
+            ("GIT_OPTIONAL_LOCKS", "0"),
+            ("LC_ALL", "C"),
+            ("LANGUAGE", "C"),
+        ],
+        Some(Path::new(repo_path)),
+    )
+    .await?;
+    Ok(parse_shortstat(&stdout))
+}
+
+/// Parse a `--shortstat` summary (` 2 files changed, 12 insertions(+), 3
+/// deletions(-)`); missing halves are `0`.
+#[must_use]
+pub fn parse_shortstat(stdout: &str) -> DiffStat {
     let insertions = capture_number(stdout, r"(\d+) insertions?\(\+\)");
     let deletions = capture_number(stdout, r"(\d+) deletions?\(-\)");
     DiffStat {
         insertions,
         deletions,
+    }
+}
+
+/// `git --version`'s numeric triple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GitVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+/// Parse `git version 2.39.3 (Apple Git-154)` → `2.39.3`.
+#[must_use]
+pub fn parse_git_version(output: &str) -> Option<GitVersion> {
+    let token = output
+        .split_whitespace()
+        .find(|token| token.starts_with(|c: char| c.is_ascii_digit()))?;
+    let mut parts = token.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    Some(GitVersion {
+        major,
+        minor,
+        patch,
+    })
+}
+
+/// The local `git` version, probed ONCE per process (plan Decision 4: "detect
+/// once, cached"). `None` when `git --version` cannot run.
+pub async fn git_version() -> Option<GitVersion> {
+    static VERSION: OnceCell<Option<GitVersion>> = OnceCell::const_new();
+    *VERSION
+        .get_or_init(|| async {
+            run_git(&["--version"], None)
+                .await
+                .ok()
+                .as_deref()
+                .and_then(parse_git_version)
+        })
+        .await
+}
+
+/// Whether `object` exists in `repo_path`'s object database (`cat-file -e`).
+///
+/// `Ok(false)` only for a definite "no" (git ran and exited non-zero). A
+/// timeout or a spawn failure is an `Err`: it says nothing about the object, so
+/// callers must not cache it as "absent".
+pub async fn object_exists(repo_path: &str, object: &str) -> GitResult<bool> {
+    match run_git(
+        &["-C", repo_path, "cat-file", "-e", object],
+        Some(Path::new(repo_path)),
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(GitError::Command { .. }) => Ok(false),
+        Err(e) => Err(e),
     }
 }
 

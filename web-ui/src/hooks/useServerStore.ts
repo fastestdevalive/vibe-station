@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Project, Session, Worktree } from "@/api/types";
+import type { DiffStatEntry, Project, Session, Worktree } from "@/api/types";
 
 /**
  * Server-fetched data: the projects/worktrees/sessions trio that every
@@ -18,6 +18,7 @@ interface ServerData {
   projects: Project[];
   worktrees: Worktree[];
   sessions: Session[];
+  diffStats: Record<string, DiffStatEntry>;
   /** Flips to true after the first refresh resolves. UI can render a stable
    *  empty state in the meantime rather than flicker through a half-loaded
    *  view as each list arrives. (We use one Promise.all so in practice all
@@ -38,12 +39,15 @@ interface ServerData {
   applySessionCreated: (s: Session) => void;
   applySessionUpdated: (sessionId: string, patch: Partial<Session>) => void;
   applySessionDeleted: (sessionId: string) => void;
+  applyWorktreeDiffStat: (worktreeId: string, entry: DiffStatEntry) => void;
+  seedDiffStats: (map: Record<string, DiffStatEntry>) => void;
 }
 
 export const useServerStore = create<ServerData>((set) => ({
   projects: [],
   worktrees: [],
   sessions: [],
+  diffStats: {},
   loaded: false,
 
   replaceAll: ({ projects, worktrees, sessions }) =>
@@ -53,14 +57,23 @@ export const useServerStore = create<ServerData>((set) => ({
     set((s) => (s.projects.some((x) => x.id === p.id) ? s : { projects: [...s.projects, p] })),
 
   applyProjectDeleted: (projectId) =>
-    set((s) => ({
-      projects: s.projects.filter((p) => p.id !== projectId),
-      // Cascade — worktrees/sessions for a deleted project shouldn't linger.
-      worktrees: s.worktrees.filter((w) => w.projectId !== projectId),
-      sessions: s.sessions.filter(
-        (sess) => !s.worktrees.some((w) => w.projectId === projectId && w.id === sess.worktreeId),
-      ),
-    })),
+    set((s) => {
+      const deletedWtIds = new Set(
+        s.worktrees.filter((w) => w.projectId === projectId).map((w) => w.id),
+      );
+      const remainingDiffStats = Object.fromEntries(
+        Object.entries(s.diffStats).filter(([id]) => !deletedWtIds.has(id)),
+      );
+      return {
+        projects: s.projects.filter((p) => p.id !== projectId),
+        // Cascade — worktrees/sessions for a deleted project shouldn't linger.
+        worktrees: s.worktrees.filter((w) => w.projectId !== projectId),
+        sessions: s.sessions.filter(
+          (sess) => !s.worktrees.some((w) => w.projectId === projectId && w.id === sess.worktreeId),
+        ),
+        diffStats: remainingDiffStats,
+      };
+    }),
 
   applyProjectUpdated: (p) =>
     set((s) => {
@@ -79,10 +92,14 @@ export const useServerStore = create<ServerData>((set) => ({
     ),
 
   applyWorktreeDeleted: (worktreeId) =>
-    set((s) => ({
-      worktrees: s.worktrees.filter((w) => w.id !== worktreeId),
-      sessions: s.sessions.filter((sess) => sess.worktreeId !== worktreeId),
-    })),
+    set((s) => {
+      const { [worktreeId]: _, ...remainingDiffStats } = s.diffStats;
+      return {
+        worktrees: s.worktrees.filter((w) => w.id !== worktreeId),
+        sessions: s.sessions.filter((sess) => sess.worktreeId !== worktreeId),
+        diffStats: remainingDiffStats,
+      };
+    }),
 
   applyWorktreeUpdated: (w) =>
     set((s) => {
@@ -122,4 +139,32 @@ export const useServerStore = create<ServerData>((set) => ({
 
   applySessionDeleted: (sessionId) =>
     set((s) => ({ sessions: s.sessions.filter((x) => x.id !== sessionId) })),
+
+  applyWorktreeDiffStat: (worktreeId, entry) =>
+    set((s) => {
+      const existing = s.diffStats[worktreeId];
+      if (existing && existing.rev >= entry.rev) {
+        return s;
+      }
+      return {
+        diffStats: {
+          ...s.diffStats,
+          [worktreeId]: entry,
+        },
+      };
+    }),
+
+  seedDiffStats: (map) =>
+    set((s) => {
+      let changed = false;
+      const next = { ...s.diffStats };
+      for (const [id, entry] of Object.entries(map)) {
+        const existing = next[id];
+        if (!existing || entry.rev > existing.rev) {
+          next[id] = entry;
+          changed = true;
+        }
+      }
+      return changed ? { diffStats: next } : s;
+    }),
 }));

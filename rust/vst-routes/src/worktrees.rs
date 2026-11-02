@@ -68,10 +68,10 @@ use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::projects::TreeEntry;
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
-    ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
-    DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, OpenFilesBody,
-    OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrErrorReason,
-    PrInfo, PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult,
+    ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiffStatsSnapshot,
+    DiskDevice, DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody,
+    OpenFilesBody, OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens,
+    PrErrorReason, PrInfo, PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult,
     ReorderWorktreeBody, ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus,
     SubmodulesResult, WorktreeDoneResult, WorktreeOrderBody, WorktreeOrderResult, WorktreeUsage,
 };
@@ -517,7 +517,16 @@ pub struct WorktreeRoutes {
     /// Credential source. Production uses [`vst_lifecycle::pr_poller::default_account_source`];
     /// tests inject a fake so no real `gh` runs.
     pub account_source: AccountSource,
+    /// Injected diffstat snapshot supplier (GET /worktrees/diffstats).
+    pub diffstats_fn: Option<DiffStatsSnapshotFn>,
 }
+
+/// Closure shape supplying the in-memory diffstat snapshot.
+pub type DiffStatsSnapshotFn = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = DiffStatsSnapshot> + Send>>
+        + Send
+        + Sync,
+>;
 
 impl WorktreeRoutes {
     pub fn new(
@@ -544,6 +553,7 @@ impl WorktreeRoutes {
             github_base: vst_lifecycle::pr_poller::GITHUB_API_BASE.to_string(),
             account_cache: Arc::new(AccountCache::default()),
             account_source: vst_lifecycle::pr_poller::default_account_source(),
+            diffstats_fn: None,
         }
     }
 
@@ -576,6 +586,22 @@ impl WorktreeRoutes {
     pub fn with_account_source(mut self, source: AccountSource) -> Self {
         self.account_source = source;
         self
+    }
+
+    /// Inject the diffstats snapshot supplier.
+    #[must_use]
+    pub fn with_diffstats_fn(mut self, f: DiffStatsSnapshotFn) -> Self {
+        self.diffstats_fn = Some(f);
+        self
+    }
+
+    /// Retrieve the diffstat snapshot (calling the injected supplier if present).
+    pub async fn diffstats(&self) -> DiffStatsSnapshot {
+        if let Some(f) = &self.diffstats_fn {
+            f().await
+        } else {
+            DiffStatsSnapshot::default()
+        }
     }
 
     fn build_direct_pty_registry(&self) -> DirectPtyRegistry {

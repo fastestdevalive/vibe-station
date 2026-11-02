@@ -34,11 +34,10 @@ async fn a_slow_program_times_out_promptly() {
     let elapsed = started.elapsed();
 
     match err {
-        GitError::Command { args, stderr } => {
+        GitError::Timeout { args } => {
             assert_eq!(args, "--version");
-            assert_eq!(stderr, "timed out");
         }
-        other @ GitError::Io(_) => panic!("expected a Command timeout error, got {other:?}"),
+        other => panic!("expected a Timeout error, got {other:?}"),
     }
     assert!(
         elapsed < Duration::from_secs(2),
@@ -94,7 +93,7 @@ async fn non_zero_exit_carries_stderr() {
             assert_eq!(args, "status");
             assert_eq!(stderr, "boom");
         }
-        other @ GitError::Io(_) => panic!("expected a Command error, got {other:?}"),
+        other => panic!("expected a Command error, got {other:?}"),
     }
 }
 
@@ -114,5 +113,25 @@ async fn exit_status_times_out_too() {
     let runner = GitRunner::with_program(slow.to_string_lossy().to_string())
         .with_timeout(Duration::from_millis(100));
     let err = runner.exit_status(&[], None).await.unwrap_err();
-    assert!(matches!(err, GitError::Command { .. }));
+    assert!(matches!(err, GitError::Timeout { .. }));
+}
+
+#[tokio::test]
+async fn short_execs_force_git_optional_locks_and_heavy_execs_do_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let print_env = script(
+        dir.path(),
+        "print-env.sh",
+        "#!/bin/sh\nprintf '%s' \"$GIT_OPTIONAL_LOCKS\"\n",
+    );
+    let runner = GitRunner::with_program(print_env.to_string_lossy().to_string());
+    let short_out = runner.run(&[], None).await.unwrap();
+    assert_eq!(short_out, "0");
+
+    // Heavy execs must not force the variable: they see exactly what the parent
+    // process has (CI containers export GIT_OPTIONAL_LOCKS=0 globally, so
+    // asserting "unset" would depend on the environment).
+    let heavy_out = runner.run_heavy(&[], None).await.unwrap();
+    let inherited = std::env::var("GIT_OPTIONAL_LOCKS").unwrap_or_default();
+    assert_eq!(heavy_out, inherited);
 }

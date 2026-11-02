@@ -98,6 +98,8 @@ export function useServerSync(api: ApiInstance): void {
   const applySessionCreated = useServerStore((s) => s.applySessionCreated);
   const applySessionUpdated = useServerStore((s) => s.applySessionUpdated);
   const applySessionDeleted = useServerStore((s) => s.applySessionDeleted);
+  const applyWorktreeDiffStat = useServerStore((s) => s.applyWorktreeDiffStat);
+  const seedDiffStats = useServerStore((s) => s.seedDiffStats);
   const syncSessionsFromApi = useWorkspaceStore((s) => s.syncSessionsFromApi);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
 
@@ -110,12 +112,14 @@ export function useServerSync(api: ApiInstance): void {
       if (inFlightRefresh) return inFlightRefresh;
       inFlightRefresh = (async () => {
         try {
-          const [projects, worktrees, sessions] = await Promise.all([
+          const [projects, worktrees, sessions, diffStatsSnapshot] = await Promise.all([
             api.listProjects(),
             worktreeRepo.listWorktrees(),
             sessionRepo.listSessions(),
+            api.getDiffStats().catch(() => ({ stats: {} })),
           ]);
           replaceAll({ projects, worktrees, sessions });
+          seedDiffStats(diffStatsSnapshot.stats);
           // Overlay fresh REST state onto the persisted live map. Without
           // this, a "done"/"exited" terminal state set by another client
           // while we were offline never overrides our cached "working"/
@@ -245,6 +249,17 @@ export function useServerSync(api: ApiInstance): void {
     });
     const offWtUpdated = worktreeRepo.on("worktree:updated", (ev) => {
       if (ev.type === "worktree:updated") applyWorktreeUpdated(ev.worktree);
+    });
+    const offWtDiffStat = api.on("worktree:diffstat", (ev) => {
+      if (ev.type === "worktree:diffstat") {
+        applyWorktreeDiffStat(ev.worktreeId, {
+          insertions: ev.insertions,
+          deletions: ev.deletions,
+          state: ev.state,
+          rev: ev.rev,
+          hint: ev.hint,
+        });
+      }
     });
     const offSessCreated = sessionRepo.on("session:created", (ev) => {
       if (ev.type !== "session:created") return;
@@ -427,6 +442,7 @@ export function useServerSync(api: ApiInstance): void {
       offWtCreated();
       offWtDeleted();
       offWtUpdated();
+      offWtDiffStat();
       offSessCreated();
       offSessState();
       offSessActivity();
@@ -452,6 +468,8 @@ export function useServerSync(api: ApiInstance): void {
     applySessionCreated,
     applySessionUpdated,
     applySessionDeleted,
+    applyWorktreeDiffStat,
+    seedDiffStats,
     patchSessionState,
   ]);
 }

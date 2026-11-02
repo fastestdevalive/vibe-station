@@ -58,7 +58,9 @@ describe("LeftSidebar — bulk select mode", () => {
   it("replaces the relative time with a checkbox and toggles the row without navigating", async () => {
     const user = userEvent.setup();
     const api = createMockApi();
-    vi.spyOn(api, "getDiffStat").mockResolvedValue({ insertions: 5, deletions: 2 });
+    useServerStore.setState({
+      diffStats: { "wt-1": { insertions: 5, deletions: 2, state: "ok", rev: 1 } },
+    });
     useBulkWorktrees.setState({ mode: "delete" });
     renderSidebar(api);
 

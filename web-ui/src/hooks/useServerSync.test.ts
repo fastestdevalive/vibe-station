@@ -965,5 +965,85 @@ describe("useServerSync — Phase 2 prune ghost tiles on refetch", () => {
       expect(worktreePrStatus(wtSessions, branch)?.state).toBe("open");
     });
   });
+
+  describe("useServerSync — diffstats", () => {
+    it("fetches diffstats snapshot on mount and seeds useServerStore", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "getDiffStats").mockResolvedValue({
+        stats: {
+          "wt-1": { state: "ok", insertions: 10, deletions: 3, rev: 5 },
+        },
+      });
+
+      renderHook(() => useServerSync(api));
+      await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+      expect(useServerStore.getState().diffStats["wt-1"]).toEqual({
+        state: "ok",
+        insertions: 10,
+        deletions: 3,
+        rev: 5,
+      });
+    });
+
+    it("refetches diffstats snapshot on reconnect (ws:open)", async () => {
+      const api = createMockApi();
+      const getDiffStatsSpy = vi.spyOn(api, "getDiffStats").mockResolvedValue({
+        stats: {
+          "wt-1": { state: "ok", insertions: 10, deletions: 3, rev: 5 },
+        },
+      });
+
+      renderHook(() => useServerSync(api));
+      await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+      expect(useServerStore.getState().diffStats["wt-1"]?.rev).toBe(5);
+
+      getDiffStatsSpy.mockResolvedValue({
+        stats: {
+          "wt-1": { state: "ok", insertions: 25, deletions: 8, rev: 6 },
+        },
+      });
+
+      act(() => {
+        api.__test.emit({ type: "ws:open" });
+      });
+
+      await waitFor(() => {
+        expect(useServerStore.getState().diffStats["wt-1"]).toEqual({
+          state: "ok",
+          insertions: 25,
+          deletions: 8,
+          rev: 6,
+        });
+      });
+    });
+
+    it("updates diffStats when worktree:diffstat event is received", async () => {
+      const api = createMockApi();
+      renderHook(() => useServerSync(api));
+      await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+      act(() => {
+        api.__test.emit({
+          type: "worktree:diffstat",
+          worktreeId: "wt-1",
+          state: "ok",
+          insertions: 42,
+          deletions: 17,
+          rev: 20,
+        });
+      });
+
+      await waitFor(() => {
+        expect(useServerStore.getState().diffStats["wt-1"]).toEqual({
+          state: "ok",
+          insertions: 42,
+          deletions: 17,
+          rev: 20,
+        });
+      });
+    });
+  });
 });
+
 

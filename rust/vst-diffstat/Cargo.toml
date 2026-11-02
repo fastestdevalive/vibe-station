@@ -1,0 +1,21 @@
+[package]
+name = "vst-diffstat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+vst-git = { workspace = true }
+vst-store = { workspace = true }
+vst-types = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync", "test-util"] }
+tempfile = "3"
+
+[lints]
+workspace = true

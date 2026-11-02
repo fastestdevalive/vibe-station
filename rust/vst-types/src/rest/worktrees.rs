@@ -158,6 +158,50 @@ pub struct DiffStat {
     pub deletions: i64,
 }
 
+/// State of one daemon-computed worktree diffstat (`vst-diffstat`).
+///
+/// - `ok` — counts are current.
+/// - `unknown` — the compute failed transiently (git timeout / exec error) and
+///   no value has ever been computed for this worktree.
+/// - `unavailable` — no usable base (neither `origin/<base>` nor `<base>` nor
+///   the worktree's recorded `base_sha` resolves).
+/// - `broken` — the worktree's `.git` file points at a missing gitdir (stale
+///   after a container restart / path change); `hint` carries
+///   `git worktree repair`. Never retried on a timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffStatState {
+    Ok,
+    Unknown,
+    Unavailable,
+    Broken,
+}
+
+/// One worktree's cached diffstat (`worktree:diffstat` payload /
+/// `GET /worktrees/diffstats` value).
+///
+/// `rev` is monotonic per worktree (`max(prev + 1, unix_ms_now)`) so a client
+/// drops any snapshot carrying a `rev` it already has or a lower one.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffStatEntry {
+    pub insertions: u64,
+    pub deletions: u64,
+    pub state: DiffStatState,
+    pub rev: u64,
+    /// Repair / explanation hint (`broken` only today).
+    pub hint: Option<String>,
+}
+
+/// `GET /api/worktrees/diffstats` response — the whole in-memory cache.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffStatsSnapshot {
+    /// Keyed by worktree id.
+    pub stats: std::collections::HashMap<String, DiffStatEntry>,
+}
+
 /// `GET /worktrees/:id/commits` response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

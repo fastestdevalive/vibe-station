@@ -16,6 +16,7 @@ members = [
     "vst-agents",
     "vst-agy-stream-acp",
     "vst-lifecycle",
+    "vst-diffstat",
     "vst-harness-limits",
     "vst-ws",
     "vst-routes",
@@ -62,6 +63,7 @@ vst-rpc = { path = "vst-rpc" }
 vst-agents = { path = "vst-agents" }
 vst-agy-stream-acp = { path = "vst-agy-stream-acp" }
 vst-lifecycle = { path = "vst-lifecycle" }
+vst-diffstat = { path = "vst-diffstat" }
 vst-harness-limits = { path = "vst-harness-limits" }
 vst-ws = { path = "vst-ws" }
 vst-routes = { path = "vst-routes" }
