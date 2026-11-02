@@ -616,6 +616,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         {activeSessionId == null ? (
           <motion.span
             layoutId={`tab-indicator-${kind}`}
+            // Without a dependency framer re-measures this indicator on every
+            // render (a forced layout per `session:*` frame). The tab-switch
+            // animation comes from unmount/mount, not re-renders.
+            layoutDependency={activeSessionId}
             style={{
               position: "absolute",
               bottom: -1,
@@ -771,6 +775,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       {active ? (
                         <motion.span
                           layoutId={`tab-indicator-${kind}`}
+                          // Without a dependency framer re-measures this indicator on every
+                          // render (a forced layout per `session:*` frame). The tab-switch
+                          // animation comes from unmount/mount, not re-renders.
+                          layoutDependency={activeSessionId}
                           style={{
                             position: "absolute",
                             bottom: -1,
