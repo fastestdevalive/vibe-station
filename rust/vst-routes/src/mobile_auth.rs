@@ -840,57 +840,65 @@ pub struct ContinueRedeemResponse {
 }
 
 fn pick_best_network_ip() -> Option<(String, ConnectionType)> {
-    use std::net::IpAddr;
-
-    // Use getifaddrs or parse system interfaces
-    // Look for Tailscale (100.64.0.0/10 or 100.x.x.x) first, then private LAN IPv4
-    let mut tailscale_ip = None;
-    let mut lan_ip = None;
-
-    if let Ok(interfaces) = get_system_ipv4_addrs() {
-        for ip in interfaces {
-            if ip.is_loopback() {
-                continue;
-            }
-            if let IpAddr::V4(v4) = ip {
-                let octets = v4.octets();
-                if octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127 {
-                    tailscale_ip = Some(ip.to_string());
-                    break;
-                }
-                if lan_ip.is_none() {
-                    lan_ip = Some(ip.to_string());
-                }
-            }
-        }
-    }
-
-    if let Some(ts) = tailscale_ip {
-        return Some((ts, ConnectionType::Tailscale));
-    }
-    if let Some(lan) = lan_ip {
-        return Some((lan, ConnectionType::Lan));
-    }
-
+    let addrs = get_system_ipv4_addrs().unwrap_or_default();
     // Fallback: 127.0.0.1 for isolated tests
-    Some(("127.0.0.1".to_string(), ConnectionType::Lan))
+    Some(
+        choose_network_ip(&addrs).unwrap_or_else(|| ("127.0.0.1".to_string(), ConnectionType::Lan)),
+    )
 }
 
-fn get_system_ipv4_addrs() -> std::io::Result<Vec<std::net::IpAddr>> {
-    // Read from /proc/net/arp or hostname -I or ip route
-    // Or std::net fallback
-    let mut addrs = Vec::new();
-    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for part in text.split_whitespace() {
-            if let Ok(ip) = part.parse::<std::net::IpAddr>() {
-                if ip.is_ipv4() && !ip.is_loopback() {
-                    addrs.push(ip);
-                }
-            }
-        }
+/// Pick the address a phone should use: Tailscale (100.64.0.0/10) first, then a
+/// private LAN address (RFC 1918), then any other routable IPv4. Loopback,
+/// link-local (169.254/16) and unspecified addresses are never chosen.
+fn choose_network_ip(addrs: &[std::net::Ipv4Addr]) -> Option<(String, ConnectionType)> {
+    let usable = || {
+        addrs
+            .iter()
+            .filter(|ip| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified())
+    };
+    if let Some(ts) = usable().find(|ip| {
+        let o = ip.octets();
+        o[0] == 100 && (64..=127).contains(&o[1])
+    }) {
+        return Some((ts.to_string(), ConnectionType::Tailscale));
     }
-    Ok(addrs)
+    usable()
+        .find(|ip| ip.is_private())
+        .or_else(|| usable().next())
+        .map(|ip| (ip.to_string(), ConnectionType::Lan))
+}
+
+/// IPv4 addresses assigned to this machine's interfaces.
+///
+/// Linux uses `hostname -I`. macOS (and other BSDs) have no `-I` flag, so the
+/// command fails there and the LAN QR used to fall back to 127.0.0.1; read the
+/// `inet` lines of `ifconfig` instead.
+fn get_system_ipv4_addrs() -> std::io::Result<Vec<std::net::Ipv4Addr>> {
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("hostname").arg("-I").output()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|part| part.parse::<std::net::Ipv4Addr>().ok())
+            .collect())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Absolute path: the daemon may be launched with a minimal PATH.
+        let output = std::process::Command::new("/sbin/ifconfig").output()?;
+        Ok(parse_ifconfig_inet(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+}
+
+/// IPv4 addresses from `ifconfig` output (`inet 192.168.1.20 netmask ...`).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn parse_ifconfig_inet(text: &str) -> Vec<std::net::Ipv4Addr> {
+    text.lines()
+        .filter_map(|line| line.trim_start().strip_prefix("inet "))
+        .filter_map(|rest| rest.split_whitespace().next()?.parse().ok())
+        .collect()
 }
 
 const EXPIRED_HTML: &str = r#"<!DOCTYPE html>
@@ -951,3 +959,80 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 </div>
 </body>
 </html>"#;
+
+#[cfg(test)]
+mod network_ip_tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    fn ip(s: &str) -> Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn prefers_tailscale_over_lan() {
+        let got = choose_network_ip(&[ip("192.168.1.20"), ip("100.101.102.103")]);
+        assert_eq!(
+            got,
+            Some(("100.101.102.103".into(), ConnectionType::Tailscale))
+        );
+    }
+
+    #[test]
+    fn prefers_private_lan_over_other_addresses() {
+        let got = choose_network_ip(&[ip("203.0.113.5"), ip("192.168.100.96")]);
+        assert_eq!(got, Some(("192.168.100.96".into(), ConnectionType::Lan)));
+    }
+
+    #[test]
+    fn skips_loopback_and_link_local() {
+        let got = choose_network_ip(&[ip("127.0.0.1"), ip("169.254.10.1"), ip("10.0.0.7")]);
+        assert_eq!(got, Some(("10.0.0.7".into(), ConnectionType::Lan)));
+    }
+
+    #[test]
+    fn none_when_only_unusable_addresses() {
+        assert_eq!(
+            choose_network_ip(&[ip("127.0.0.1"), ip("169.254.1.1")]),
+            None
+        );
+    }
+
+    const MACOS_IFCONFIG: &str = "\
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+\tinet 127.0.0.1 netmask 0xff000000
+\tinet6 ::1 prefixlen 128
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether a1:b2:c3:d4:e5:f6
+\tinet6 fe80::1c2b:3d4e:5f6a:7b8c%en0 prefixlen 64 secured scopeid 0xe
+\tinet 192.168.100.96 netmask 0xffffff00 broadcast 192.168.100.255
+utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1280
+\tinet 100.88.12.34 --> 100.88.12.34 netmask 0xffffffff
+";
+
+    #[test]
+    fn parses_ipv4_from_macos_ifconfig() {
+        assert_eq!(
+            parse_ifconfig_inet(MACOS_IFCONFIG),
+            vec![ip("127.0.0.1"), ip("192.168.100.96"), ip("100.88.12.34")]
+        );
+    }
+
+    #[test]
+    fn macos_lan_only_picks_the_wifi_address_not_loopback() {
+        // Regression: on macOS `hostname -I` fails, which left only the
+        // 127.0.0.1 fallback, so the phone was sent to itself.
+        let lan_only: String = MACOS_IFCONFIG.split("utun4").next().unwrap().into();
+        let got = choose_network_ip(&parse_ifconfig_inet(&lan_only));
+        assert_eq!(got, Some(("192.168.100.96".into(), ConnectionType::Lan)));
+    }
+
+    #[test]
+    fn macos_with_tailscale_picks_the_tailscale_address() {
+        let got = choose_network_ip(&parse_ifconfig_inet(MACOS_IFCONFIG));
+        assert_eq!(
+            got,
+            Some(("100.88.12.34".into(), ConnectionType::Tailscale))
+        );
+    }
+}
