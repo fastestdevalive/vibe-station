@@ -14,14 +14,16 @@
  *
  * Env:
  *   LIVE_URL           running sandbox (default http://localhost:7190)
- *   RELEASE            release tag: selects the shots below and the folder under docs/screenshots/release/ (default v0.0.3-beta)
+ *   RELEASE            release tag: selects the shots below and the folder under docs/screenshots/release/ (default v0.0.4-beta)
  *   PLAYWRIGHT_MODULE  module to import Playwright from (default "@playwright/test")
  *   CHROMIUM_PATH      optional explicit chromium / headless-shell executable
  *   ONLY               comma-separated output file names to produce (default: all)
  *   KEEP_RAW=1         keep the unframed crops in the temp dir
  *
- * The limits snapshot and the chat history are injected for this browser only (REST + WS interception), so the
- * sandbox is never modified and no real accounts are needed.
+ * The limits snapshot, chat histories, extra modes (incl. oh-my-pi), a superseded "previous" session record and the
+ * artifacts list are injected for this browser only (REST + WS interception), so no real accounts are needed. The
+ * review-comment shots (v0.0.4-beta 05/06) create real comments in the sandbox through the UI and delete exactly
+ * those afterwards: point LIVE_URL at a throwaway sandbox, never at a daemon you use.
  */
 
 import { mkdir, writeFile, rm } from "node:fs/promises";
@@ -30,9 +32,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RELEASE = process.env.RELEASE ?? "v0.0.3-beta";
+const RELEASE = process.env.RELEASE ?? "v0.0.4-beta";
 const OUT_DIR = join(ROOT, "docs", "screenshots", "release", RELEASE);
-const RAW_DIR = join(tmpdir(), "vst-release-raw");
+const RAW_DIR = process.env.RAW_DIR ?? join(tmpdir(), "vst-release-raw");
 const LIVE_URL = process.env.LIVE_URL ?? "http://localhost:7190";
 
 const VIEW = { w: 1440, h: 810 };
@@ -98,6 +100,62 @@ const CHAT_HTML = [
   { kind: "text", role: "assistant", text: `Here is the current rollout status:\n\n\`\`\`html\n${HTML_CARD}\n\`\`\`\n\nI can swap in live numbers once the metrics endpoint is wired up.` },
 ];
 
+// v0.0.4-beta: more modes (incl. the new oh-my-pi harness), and a superseded predecessor of SESSION for the
+// start-fresh / previous-sessions shots. Injected for this browser only.
+const EXTRA_MODES = [
+  { id: "mode-codex-001", name: "Codex", cli: "codex", context: "", icon: "codex" },
+  { id: "mode-omp-001", name: "oh-my-pi", cli: "omp", context: "", icon: "omp" },
+  { id: "mode-opencode-001", name: "OpenCode", cli: "opencode", context: "", icon: "opencode" },
+];
+const PREV = "napi-1-prev";
+const HANDOFF_SUMMARY = [
+  "Goal: JWT auth middleware for northstar-api.",
+  "Done: verifyToken(), authMiddleware.ts on /users,",
+  "      9 auth tests passing.",
+  "Open: refresh-token rotation, API.md auth docs.",
+].join("\n");
+const PREV_SESSION = {
+  id: PREV, worktreeId: WORKTREE, projectId: "northstar-api", isMain: false, type: "agent", modeId: "mode-cursor-001",
+  modeIcon: "cursor", name: "auth middleware", nameSource: "user", tmuxName: null, useTmux: false, channel: "json",
+  state: "exited", lifecycleState: "exited", createdAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), pinnedAt: null,
+  archivedAt: new Date(new Date().setHours(10, 42, 0, 0)).toISOString(), /* a fixed daytime clock reading */ sortOrder: 0, handoffSummary: HANDOFF_SUMMARY,
+  carryOver: "summary", parentSessionId: null, supersededBy: SESSION, pr: null, draftPrompt: null, draftConfig: null,
+  lastActivityAt: null, lastLine: null, lastTool: null,
+};
+const CHAT_PREV = [
+  { kind: "user", role: "user", text: "Add JWT auth middleware and protect the /users routes." },
+  { kind: "text", role: "assistant", text: "Added `verifyToken()` in `src/utils/jwt.ts` and `authMiddleware.ts`, then mounted it on the `/users` router. Unauthenticated requests now get a 401 with a JSON error body." },
+  { kind: "user", role: "user", text: "Cover it with tests, including an expired token." },
+  { kind: "text", role: "assistant", text: "Added 9 cases to `tests/auth.test.ts` (valid, missing, malformed and expired tokens, wrong audience). All pass. Expired tokens still return 401; tell me if you want 403 there instead." },
+  { kind: "user", role: "user", text: "Keep 401. What is left before we can ship it?" },
+  { kind: "text", role: "assistant", text: "Two things:\n\n1. **Refresh-token rotation.** Refresh tokens are long-lived and never rotated yet.\n2. **Docs.** `docs/API.md` does not mention the `Authorization` header on the `/users` routes.\n\nI can start with the rotation." },
+];
+const CHAT_AFTER_SWITCH = [
+  { kind: "session_break", role: "system", breakKind: "switch", carryOver: "summary", fromMode: "Cursor Agent", toMode: "Claude Code", fromProvider: "cursor", toProvider: "claude", text: HANDOFF_SUMMARY },
+  { kind: "user", role: "user", text: "Pick up the refresh-token rotation from the summary." },
+  { kind: "text", role: "assistant", text: "On it. I'll add a `refresh_tokens` table, rotate on every use and revoke the whole family when a reused token shows up." },
+];
+const INJECT_PREV = { sessions: [PREV_SESSION], modes: EXTRA_MODES };
+
+/** Artifacts list (08): rows for real demo files, injected for this browser only (the sandbox has no captured runs). */
+function artifactRows() {
+  const at = (min) => new Date(Date.now() - min * 60_000).toISOString();
+  const row = (id, displayPath, kind, size, editCount, writers, min, extra = {}) => ({
+    id, scopeKind: "worktree", scopeId: WORKTREE, path: `/home/vst/projects/northstar-api/${displayPath}`, displayPath,
+    inRepo: true, kind, size, state: "ok", pinned: false, editCount, writers, addedVia: "capture",
+    createdAt: at(min + 30), lastWrittenAt: at(min), ...extra,
+  });
+  const items = [
+    row("art-plan", "docs/PLAN.md", "doc", 4210, 3, [SESSION], 2, { pinned: true }),
+    row("art-mw", "src/middleware/authMiddleware.ts", "other", 1388, 4, [SESSION, PREV], 6),
+    row("art-jwt", "src/utils/jwt.ts", "other", 1675, 2, [PREV], 11),
+    row("art-test", "tests/auth.test.ts", "other", 2934, 3, [PREV, SESSION], 14),
+    row("art-api", "docs/API.md", "doc", 3120, 1, [SESSION], 19, { addedVia: "cli" }),
+    row("art-users", "src/routes/users.ts", "other", 912, 1, ["napi-1-a1"], 41),
+  ];
+  return { rev: 1, cap: 500, total: items.length, items };
+}
+
 // ── REST / WS interception (adapted from capture-readme-screenshots.mjs) ───
 
 /** Rewrite session records for `id` to the json channel, anywhere they appear in a JSON body. */
@@ -110,36 +168,60 @@ function asJsonChannel(node, id) {
   return node;
 }
 
-/** Make SESSION a Rich Chat agent for this browser only: patch REST, answer chat:open with `chat`, then send meta. */
-async function mockRichChat(page, chat) {
-  const events = chat.map((e, i) => ({
-    id: `demo-${i}`, sessionId: SESSION, provider: "claude", turnId: `demo-t${e.kind === "user" ? i : i - 1}`,
+/** Present each session in `chats` (id -> events) as a Rich Chat agent for this browser only: patch REST (plus the
+ *  `inject` extras: session records appended to /api/sessions, modes to /api/modes, per-id session patches), answer
+ *  chat:open with the events, then send meta. */
+async function mockRichChat(page, chats, inject = {}) {
+  const replay = Object.fromEntries(Object.entries(chats).map(([sid, chat]) => [sid, chat.map((e, i) => ({
+    id: `demo-${sid}-${i}`, sessionId: sid, provider: "claude", turnId: `demo-t${e.kind === "user" ? i : i - 1}`,
     ts: Date.now() - (chat.length - i) * 60_000, logSeq: i + 1, ...e,
-  }));
+  }))]));
+  const ids = Object.keys(chats);
   await page.route("**/api/**", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const res = await route.fetch();
     if (!(res.headers()["content-type"] ?? "").includes("json")) return route.fulfill({ response: res });
-    await route.fulfill({ response: res, json: asJsonChannel(await res.json(), SESSION) });
+    let json = await res.json();
+    for (const id of ids) json = asJsonChannel(json, id);
+    const path = new URL(route.request().url()).pathname;
+    if (Array.isArray(json) && /\/api\/sessions$/.test(path) && inject.sessions) {
+      const scope = new URL(route.request().url()).searchParams.get("worktree");
+      json = [...json, ...inject.sessions.filter((s) => !scope || s.worktreeId === scope)];
+    }
+    if (Array.isArray(json) && /\/api\/modes$/.test(path) && inject.modes) json = [...json, ...inject.modes];
+    if (inject.patch) json = patchById(json, inject.patch);
+    await route.fulfill({ response: res, json });
   });
   await page.routeWebSocket(/\/ws/, (ws) => {
     const server = ws.connectToServer();
     server.onMessage((m) => ws.send(m));
     ws.onMessage((m) => {
       const msg = typeof m === "string" ? JSON.parse(m.startsWith("{") ? m : "{}") : {};
-      if (msg.type === "chat:open" && msg.sessionId === SESSION) {
-        ws.send(JSON.stringify({ type: "chat:replay", sessionId: SESSION, events, hasMore: false, oldestSeq: 1 }));
-        ws.send(JSON.stringify({ type: "session:meta", sessionId: SESSION, meta: META }));
+      if (msg.type === "chat:open" && replay[msg.sessionId]) {
+        const sid = msg.sessionId;
+        ws.send(JSON.stringify({ type: "chat:replay", sessionId: sid, events: replay[sid], hasMore: false, oldestSeq: 1 }));
+        ws.send(JSON.stringify({ type: "session:meta", sessionId: sid, meta: { ...META, sessionId: sid, ...(inject.meta?.[sid] ?? {}) } }));
       } else server.send(m);
     });
   });
 }
 
-async function openApp(browser, { chat, path = `/worktree/${WORKTREE}`, patchSessions = false }) {
+/** Shallow-merge `patch[id]` into every record with that id (session lists, single records). */
+function patchById(node, patch) {
+  if (Array.isArray(node)) return node.map((n) => patchById(n, patch));
+  if (node && typeof node === "object") {
+    const out = Object.fromEntries(Object.entries(node).map(([k, v]) => [k, patchById(v, patch)]));
+    return patch[out.id] && "worktreeId" in out ? { ...out, ...patch[out.id] } : out;
+  }
+  return node;
+}
+
+async function openApp(browser, { chat, chats, inject, route, path = `/worktree/${WORKTREE}`, patchSessions = false, hideTools = false }) {
   const ctx = await browser.newContext({ viewport: { width: VIEW.w, height: VIEW.h }, deviceScaleFactor: RAW_DSF });
   await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), THEME);
   const page = await ctx.newPage();
-  if (chat) await mockRichChat(page, chat); // before the routes below: later routes win
+  const allChats = chats ?? (chat ? { [SESSION]: chat } : null);
+  if (allChats || inject) await mockRichChat(page, allChats ?? {}, inject); // before the routes below: later routes win
   await page.route("**/api/limits", (route) =>
     route.request().method() === "GET" ? route.fulfill({ json: limitsSnapshot() }) : route.continue());
   // The daemon's saved themeId wins over the localStorage hint; override it for this browser only.
@@ -148,13 +230,77 @@ async function openApp(browser, { chat, path = `/worktree/${WORKTREE}`, patchSes
     const res = await route.fetch();
     await route.fulfill({ response: res, json: { ...(await res.json()), themeId: THEME } });
   });
+  if (route) await page.route(...route);
   if (patchSessions) await page.route(/\/api\/sessions(\?.*)?$/, decorateSessions);
   await page.goto(`${LIVE_URL}${path}`);
   await page.waitForSelector('button[aria-label="Hide projects sidebar"]');
   // The seed session is "waiting" (red pane border); that status colour is unrelated to what these shots show.
   await page.addStyleTag({ content: ".agent-pane-slot { border-color: var(--border-default) !important; }" });
   await page.waitForTimeout(2500);
+  if (hideTools) {
+    await page.locator('button[aria-label^="Toggle tool panel"][aria-pressed="true"]').first().click();
+    await page.waitForTimeout(600);
+  }
+  if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-open-${Date.now()}.png`) });
   return { ctx, page };
+}
+
+/** Popover + the composer's input box (not its hint line), padded inside the pane: no border or status-bar slivers. */
+async function mentionClip(page, pop) {
+  const p = await box(pop);
+  const send = await box(page.locator(".chat-composer__send").first());
+  return inView({ x: p.x - 10, y: p.y - 10, width: p.width + 20, height: send.y + send.height + 14 - (p.y - 10) });
+}
+
+/** Comment shots: open a demo file in the preview, fullscreen that pane (wide code), and add comments through the
+ *  real UI (gutter "+" then Cmd+Enter). Comments are real daemon rows in the sandbox; `deleteSeededComments` removes
+ *  exactly the ones these shots created (matched by text) so reruns start clean. */
+const COMMENT_TEXTS = {
+  missing: "Return a machine-readable code too, e.g. { error, code: \"missing_token\" }.",
+  expired: "Expired tokens should say so; clients need it to trigger a refresh.",
+  roles: "requireRole() never runs if this is skipped. Add a test for a token without roles.",
+  draft: "Catch the throw from verifyAccess() and map it to a 401 instead of a 500.",
+};
+async function openPreviewFile(page, dirs, file) {
+  for (const d of dirs) {
+    const node = page.getByText(d, { exact: true }).first();
+    await node.click();
+    await page.waitForTimeout(250);
+  }
+  await page.getByText(file, { exact: true }).first().click();
+  await page.locator('button[aria-label="Add comment on line 1"]').waitFor({ state: "attached" });
+  await page.waitForTimeout(800);
+}
+async function fullscreenPreview(page) {
+  const btns = page.locator('button[aria-label="Fullscreen"]');
+  for (let i = 0; i < (await btns.count()); i++) {
+    const b = await btns.nth(i).boundingBox();
+    if (b && b.x > 1000 && b.x < 1200) { await btns.nth(i).click(); break; }
+  }
+  await page.waitForTimeout(800);
+}
+async function addComment(page, line, text) {
+  await page.locator(`button[aria-label="Add comment on line ${line}"]`).click({ force: true });
+  await page.locator('[data-comment-box="new"]').waitFor();
+  await page.keyboard.type(text, { delay: 5 });
+  await page.keyboard.press("Meta+Enter");
+  await page.locator('[data-comment-box="new"]').waitFor({ state: "detached" });
+  await page.waitForTimeout(400);
+}
+async function deleteSeededComments(page) {
+  const texts = new Set(Object.values(COMMENT_TEXTS));
+  const res = await page.request.get(`${LIVE_URL}/api/worktrees/${WORKTREE}/comments`);
+  if (!res.ok()) return;
+  const body = await res.json();
+  for (const c of body.comments ?? []) {
+    if (texts.has(c.text)) await page.request.delete(`${LIVE_URL}/api/comments/${encodeURIComponent(c.id)}`, { headers: { "x-vst-csrf": "1" } });
+  }
+}
+
+/** Close a capture context without in-flight route callbacks throwing after the page is gone. */
+async function closeCtx(ctx) {
+  for (const p of ctx.pages()) await p.unrouteAll({ behavior: "ignoreErrors" });
+  await ctx.close();
 }
 
 const union = (...rs) => {
@@ -212,6 +358,232 @@ async function decorateSessions(route) {
 
 const SHOTS = [
   {
+    release: "v0.0.4-beta",
+    file: "01-start-fresh.png",
+    title: "start fresh",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE }, inject: { modes: EXTRA_MODES } });
+      await page.locator(".chat-composer").first().waitFor();
+      await page.locator(".chat-model-switch__button").first().click();
+      await page.getByText("Start fresh with summary…", { exact: true }).click();
+      const dialog = page.locator(".fresh-dialog").first();
+      await dialog.waitFor();
+      await page.waitForTimeout(600);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const clip = inView(pad(await box(dialog), 18));
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "02-previous-session.png",
+    title: "previous sessions",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_AFTER_SWITCH, [PREV]: CHAT_PREV }, inject: INJECT_PREV });
+      const trigger = page.locator('button[aria-label="Previous sessions"]').first();
+      await trigger.waitFor();
+      await trigger.click();
+      await page.locator(".prev-session__open").first().click(); // open the superseded chat read-only
+      await page.locator(".chat-composer--archived").first().waitFor();
+      await page.waitForTimeout(800);
+      await trigger.click();
+      const menu = page.locator("[data-previous-sessions-panel]").first();
+      await menu.waitFor();
+      await page.waitForTimeout(400);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-menu-${this.file}`) });
+      
+      await menu.locator(".prev-session__toggle").first().click(); // show the handoff summary
+      await page.waitForTimeout(500);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The read-only chat (tab strip down to the archived notice) with the menu beside it over the empty preview pane.
+      const pane = await box(page.locator(".agent-pane-slot").first());
+      const m = await box(menu);
+      // The pane's font-zoom overlay sits on the first bubble; it is not part of this feature.
+      await page.evaluate(() => document.querySelectorAll('button[aria-label="Decrease chat font"]').forEach((b) => { b.parentElement.style.display = "none"; }));
+      await page.waitForTimeout(300);
+      const clip = inView({ x: pane.x - 1, y: 0, width: m.x + m.width + 16 - (pane.x - 1), height: pane.y + pane.height + 1 });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "03-mentions-projects-agents.png",
+    title: "mentions",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE } });
+      const composer = page.locator(".chat-composer").first();
+      await composer.click({ position: { x: 40, y: 24 } });
+      await page.keyboard.type("Ask ", { delay: 20 });
+      await page.keyboard.type("@agents:", { delay: 40 });
+      const pop = page.locator(".chat-mention-popover").first();
+      await pop.waitFor();
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const clip = await mentionClip(page, pop);
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "04-mentions-files.png",
+    title: "mentions",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE } });
+      const composer = page.locator(".chat-composer").first();
+      const pop = page.locator(".chat-mention-popover").first();
+      await composer.click({ position: { x: 40, y: 24 } });
+      const pick = async (query, label) => {
+        await page.keyboard.type(query, { delay: 40 });
+        await pop.waitFor();
+        const row = pop.locator(".chat-mention-popover__option", { hasText: label }).first();
+        await row.waitFor();
+        await row.click();
+        await page.waitForTimeout(300);
+      };
+      await page.keyboard.type("Compare ", { delay: 20 });
+      await pick("@authMid", "authMiddleware.ts");
+      await page.keyboard.type("with ", { delay: 20 });
+      await pick("@jwt", "jwt.ts");
+      await page.keyboard.type("and update the tests in ", { delay: 20 });
+      await page.keyboard.type("@files:test", { delay: 40 });
+      await pop.waitFor();
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const clip = await mentionClip(page, pop);
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "05-comments-inline.png",
+    title: "review comments",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, {});
+      await deleteSeededComments(page);
+      await openPreviewFile(page, ["src", "middleware"], "authMiddleware.ts");
+      await fullscreenPreview(page);
+      await addComment(page, 20, COMMENT_TEXTS.missing);
+      // The `c` shortcut: select code, press c, write a comment (left as a draft for the shot).
+      await page.locator(".preview-body").getByText("verifyAccess", { exact: true }).nth(1).dblclick();
+      await page.keyboard.press("c");
+      const draft = page.locator('[data-comment-box="new"]');
+      await draft.waitFor();
+      await page.keyboard.type(COMMENT_TEXTS.draft, { delay: 5 });
+      // Scroll so the function starts near the top and both boxes clear the tray strip.
+      await page.locator('button[aria-label="Add comment on line 13"]').evaluate((el) => {
+        let sc = el.parentElement;
+        while (sc && !(sc.scrollHeight > sc.clientHeight && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement;
+        const r = el.getBoundingClientRect();
+        if (sc) sc.scrollTop += r.top - sc.getBoundingClientRect().top;
+      });
+      await page.mouse.move(1300, 700); // over the file list: no hover "+" in the gutter
+      await page.waitForTimeout(600);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const d = await box(draft);
+      const top = await box(page.locator('button[aria-label="Add comment on line 14"]'));
+      const row = top.y + top.height / 2 - 11; // top of line 14's row (rows are ~22px)
+      const clip = inView({ x: 0, y: row, width: d.x + d.width + 12, height: d.y + d.height + 6 - row });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await deleteSeededComments(page);
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "06-comments-send.png",
+    title: "review comments",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE } });
+      await deleteSeededComments(page);
+      await openPreviewFile(page, ["src", "middleware"], "authMiddleware.ts");
+      await addComment(page, 20, COMMENT_TEXTS.missing);
+      await addComment(page, 25, COMMENT_TEXTS.expired);
+      await openPreviewFile(page, ["routes"], "users.ts");
+      await addComment(page, 8, COMMENT_TEXTS.roles);
+      await page.locator(".comment-tray").first().waitFor();
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-a-${this.file}`) });
+      await page.locator(".comment-tray").getByRole("button", { name: /comments?/ }).first().click();
+      await page.waitForTimeout(600);
+      // Grow the list so the picker sits over it rather than over the file preview.
+      const h = await box(page.locator(".comment-tray__handle").first());
+      await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(h.x + h.width / 2, 150, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /^Send \d+ to agent/ }).first().click();
+      const picker = page.locator(".comment-picker").first();
+      await picker.waitFor();
+      await picker.locator('[aria-label="Message for the agent"]').click();
+      await page.keyboard.type("Fix these, then rerun the auth tests.", { delay: 5 });
+      await page.mouse.move(400, 600);
+      await page.waitForTimeout(600);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const tray = await box(page.locator(".comment-tray").first());
+      const pk = await box(picker);
+      const y = Math.min(tray.y + 8, pk.y - 12); // below the list's resize handle
+      const clip = inView({ x: tray.x, y, width: tray.x + tray.width - tray.x, height: tray.y + tray.height - y });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await deleteSeededComments(page);
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "07-omp.png",
+    title: "harnesses",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { path: "/settings/modes", inject: { modes: EXTRA_MODES } });
+      await page.locator('[data-testid="harness-tab-omp"]').click();
+      await page.waitForTimeout(1200);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const tabs = await box(page.locator('[role="tablist"][aria-label="Harnesses"]').first());
+      // Down to the bottom of the (injected) oh-my-pi mode card: the nearest card-sized ancestor of its Edit button.
+      const card = await page.getByRole("button", { name: "Edit oh-my-pi" }).evaluate((el) => {
+        let n = el;
+        while (n.parentElement && n.getBoundingClientRect().height < 56) n = n.parentElement;
+        const r = n.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      });
+      const clip = inView({ x: tabs.x - 14, y: tabs.y - 12, width: card.x + card.width + 14 - (tabs.x - 14), height: card.y + card.height + 14 - (tabs.y - 12) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.4-beta",
+    file: "08-artifacts.png",
+    title: "artifacts",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { inject: INJECT_PREV, route: [`**/api/worktrees/${WORKTREE}/artifacts`, (r) => r.fulfill({ json: artifactRows() })] });
+      await page.getByRole("button", { name: "Artifacts" }).first().click();
+      const list = page.locator('[role="listbox"][aria-label="Artifacts"]').first();
+      await list.waitFor();
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // From the session filter row (the title row above it shares the window's top-right actions chip) to the list end.
+      const filter = await box(page.locator("select").filter({ hasText: /Session/ }).first());
+      const l = await box(list);
+      const x = filter.x - 12;
+      const right = l.x + l.width + 4; // the tools rail (with its active-tab marker) starts right at the list's edge
+      const clip = inView({ x, y: filter.y - 7, width: right - x, height: l.y + l.height + 10 - (filter.y - 7) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
     release: "v0.0.3-beta",
     file: "01-bulk-archive.png",
     title: "sidebar",
@@ -233,7 +605,7 @@ const SHOTS = [
       const b = await box(bar);
       const clip = inView({ x: 0, y: head.y - 14, width: b.x + b.width + 1, height: b.y + b.height + 2 - (head.y - 14) });
       await page.screenshot({ path: join(RAW_DIR, this.file), clip });
-      await ctx.close();
+      await closeCtx(ctx);
       return clip;
     },
   },
@@ -251,7 +623,7 @@ const SHOTS = [
       const last = await box(cards.nth(4)); // four working cards + the first "needs you" one: icon, activity and PR chip, no cut-off card
       const clip = inView({ x: inner.x - 14, y: label.y - 18, width: inner.width + 28, height: last.y + last.height + 3 - (label.y - 18) });
       await page.screenshot({ path: join(RAW_DIR, this.file), clip });
-      await ctx.close();
+      await closeCtx(ctx);
       return clip;
     },
   },
@@ -269,7 +641,7 @@ const SHOTS = [
       await page.waitForTimeout(500);
       const clip = inView(pad(union(await box(chip), await box(dialog)), 28));
       await page.screenshot({ path: join(RAW_DIR, this.file), clip });
-      await ctx.close();
+      await closeCtx(ctx);
       return clip;
     },
   },
@@ -294,7 +666,7 @@ const SHOTS = [
       if (popBox) parts.push(popBox);
       const clip = inView(pad(union(...parts), 22));
       await page.screenshot({ path: join(RAW_DIR, this.file), clip });
-      await ctx.close();
+      await closeCtx(ctx);
       return clip;
     },
   },
@@ -311,7 +683,7 @@ const SHOTS = [
       const b = pad(await box(block), 24);
       const clip = inView({ ...b, y: b.y - 12, height: b.height + 48 });
       await page.screenshot({ path: join(RAW_DIR, this.file), clip });
-      await ctx.close();
+      await closeCtx(ctx);
       return clip;
     },
   },

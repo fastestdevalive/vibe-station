@@ -51,9 +51,11 @@ them without recapturing. Scene times and the wallpaper live at the top of the s
 sandbox (demo dataset): the app renders in the same 1440x810 viewport as the `07` shot and is composed at the 1120x630
 stage scale, so type and density match the README and website images. The frame is the website's small-feature
 "mini window" (square 1px hairline, three-dot bar with a dim mono title, L-shaped corner marks) on `#0a0a09`.
-The limits snapshot and chat history are injected for the capture browser only.
+Chat history, the limits snapshot, extra modes, a superseded session and the artifacts list are injected for the
+capture browser only; the review-comment shots create real comments in the sandbox through the UI and delete them
+afterwards, so always point `LIVE_URL` at a throwaway sandbox.
 
 ```bash
 scripts/dev-sandbox.sh up <name> --port=71NN          # then finish onboarding once: POST /api/oobe/step1 + /api/oobe/complete
-LIVE_URL=http://localhost:71NN RELEASE=v0.0.3-beta node scripts/capture-release-screenshots.mjs
+LIVE_URL=http://localhost:71NN RELEASE=v0.0.4-beta node scripts/capture-release-screenshots.mjs
 ```
