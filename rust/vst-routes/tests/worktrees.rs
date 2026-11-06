@@ -22,7 +22,6 @@ use std::sync::Arc;
 use tempfile::tempdir;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
-use vst_proc::tmux::Tmux;
 use vst_routes::worktrees::{
     compute_etag, is_valid_commit_sha, parse_branch_name_status, parse_diff_hunk,
     parse_porcelain_z, resolve_inside_worktree, serialize_worktree, truncate_snippet, FileResponse,
@@ -45,7 +44,7 @@ fn test_env() -> (tempfile::TempDir, StoreHandle, WorktreeRoutes) {
     let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
     let broadcaster = Broadcaster::new(16);
     let json_registry = Arc::new(JsonAgentRegistry::new());
-    let tmux = Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
     let routes = WorktreeRoutes::new(store.clone(), broadcaster, json_registry, tmux, 4000);
     (dir, store, routes)
 }
@@ -842,7 +841,7 @@ async fn test_worktree_patch_lsp_enabled() {
     let broadcaster = Broadcaster::new(16);
     let mut rx = broadcaster.subscribe();
     let json_registry = Arc::new(JsonAgentRegistry::new());
-    let tmux = Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
     let routes = WorktreeRoutes::new(store.clone(), broadcaster, json_registry, tmux, 4000);
 
     let wt_dir = tempdir().unwrap();

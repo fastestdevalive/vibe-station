@@ -149,7 +149,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         direct_streams: std::sync::Arc::new(
             std::sync::Mutex::new(std::collections::HashMap::new()),
         ),
-        tmux: vst_proc::tmux::Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
         subagent_notify: SubagentNotifyHandle::new(),
@@ -161,7 +161,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
             store,
             Broadcaster::new(16),
-            std::sync::Arc::new(vst_proc::tmux::Tmux::new()),
+            std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
     }
@@ -1550,6 +1550,33 @@ async fn create_terminal_defaults_to_tmux() {
         SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
     };
     assert_eq!(s.channel, Channel::Tmux);
+}
+
+/// Regression (zsh/tmux leak): a terminal created against a guarded private
+/// socket is gone once the guard drops, and the default server is never used.
+#[tokio::test]
+async fn terminal_on_guarded_socket_is_cleaned_up_on_drop() {
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let tg = vst_proc::test_support::TmuxGuard::new();
+    let sock = tg.socket().to_string();
+    let r = SessionRoutes {
+        tmux: tg.tmux(),
+        ..routes(store.clone())
+    };
+    let body = serde_json::json!({"target": "direct", "type": "terminal", "projectId": "p1"});
+    r.create_session(&body).await.unwrap();
+    let ls = |s: &str| {
+        std::process::Command::new("tmux")
+            .args(["-L", s, "list-sessions"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    assert!(ls(&sock), "terminal should live on the private socket");
+    drop(tg);
+    assert!(!ls(&sock), "dropping the guard must kill the private server");
 }
 
 /// Build a routes with a claude/Json parent `parent-1` in project `p1`'s

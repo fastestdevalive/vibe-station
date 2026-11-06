@@ -137,7 +137,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         direct_streams: std::sync::Arc::new(
             std::sync::Mutex::new(std::collections::HashMap::new()),
         ),
-        tmux: vst_proc::tmux::Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
         subagent_notify: SubagentNotifyHandle::new(),
@@ -149,7 +149,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
             store,
             Broadcaster::new(16),
-            std::sync::Arc::new(vst_proc::tmux::Tmux::new()),
+            std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
     }
@@ -1114,7 +1114,7 @@ async fn spawn_session_flattens_wire_task_prompt_for_terminal_launch() {
         task_prompts: Default::default(),
     };
     let ptys = std::sync::RwLock::new(std::collections::HashMap::new());
-    let tmux = vst_proc::tmux::Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
 
     let _ = vst_routes::sessions::spawn_session(&vst_routes::sessions::SpawnSessionOpts {
         project: &project,

@@ -21,7 +21,6 @@ use tempfile::tempdir;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_lifecycle::github_auth::{AccountsOutcome, GithubAccount};
 use vst_lifecycle::pr_poller::AccountSource;
-use vst_proc::tmux::Tmux;
 use vst_routes::worktrees::{WorktreeRouteError, WorktreeRoutes};
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
@@ -143,7 +142,7 @@ fn make_routes(
         store,
         Broadcaster::new(16),
         Arc::new(JsonAgentRegistry::new()),
-        Tmux::new(),
+        vst_proc::test_support::isolated_tmux(),
         4000,
     )
     .with_github_base(base)

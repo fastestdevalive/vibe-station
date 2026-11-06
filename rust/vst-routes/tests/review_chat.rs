@@ -252,7 +252,7 @@ impl Env {
             json_registry: Arc::new(vst_agents::json_agent_registry::JsonAgentRegistry::new()),
             direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
             direct_streams: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            tmux: vst_proc::tmux::Tmux::new(),
+            tmux: vst_proc::test_support::isolated_tmux(),
             daemon_port: 3999,
             json_unsupported: Arc::new(|_| None),
             subagent_notify: SubagentNotifyHandle::new(),
@@ -263,7 +263,7 @@ impl Env {
             terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
                 store.clone(),
                 broadcaster.clone(),
-                Arc::new(vst_proc::tmux::Tmux::new()),
+                Arc::new(vst_proc::test_support::isolated_tmux()),
                 None,
             ),
         };
@@ -1176,7 +1176,7 @@ async fn a_reset_that_fails_at_the_archive_step_restores_carried_holds() {
     });
     env.routes.terminal_delivery = vst_review::TerminalDeliveryHandle::new(
         env.store.clone(),
-        Arc::new(vst_proc::tmux::Tmux::new()),
+        Arc::new(vst_proc::test_support::isolated_tmux()),
         vst_routes::terminal_delivery::target_resolver(env.store.clone()),
         notify,
         None,

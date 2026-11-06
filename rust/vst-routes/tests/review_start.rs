@@ -221,7 +221,7 @@ async fn env() -> Env {
         terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
             store.clone(),
             bc.clone(),
-            Arc::new(vst_proc::tmux::Tmux::new()),
+            Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
     };

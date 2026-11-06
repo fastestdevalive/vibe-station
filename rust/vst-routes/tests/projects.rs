@@ -28,7 +28,6 @@ use tempfile::tempdir;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_routes::projects::{
     assert_safe_to_delete, expand_tilde, resolve_inside_dir, serialize_project, ProjectRouteError,
     ProjectRoutes,
@@ -48,7 +47,7 @@ fn test_env() -> (tempfile::TempDir, StoreHandle, Broadcaster, ProjectRoutes) {
     let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
     let broadcaster = Broadcaster::new(32);
     let json_registry = Arc::new(JsonAgentRegistry::new());
-    let tmux = Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
     let paths = Paths::with_home(dir.path().join(".vibe-station"));
     let routes = ProjectRoutes::new(
         store.clone(),
@@ -365,7 +364,7 @@ async fn test_git_init_makes_project_usable_for_worktree_creation() {
     let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
     let broadcaster = Broadcaster::new(32);
     let json_registry = Arc::new(JsonAgentRegistry::new());
-    let tmux = Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
     let project_paths = Paths::with_home(dir.path().join(".vibe-station"));
     let proj_routes = ProjectRoutes::new(
         store.clone(),

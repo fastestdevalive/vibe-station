@@ -155,14 +155,14 @@ fn routes_with_tmux(store: StoreHandle, tmux: vst_proc::tmux::Tmux) -> SessionRo
         terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
             store,
             Broadcaster::new(16),
-            std::sync::Arc::new(vst_proc::tmux::Tmux::new()),
+            std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
     }
 }
 
 fn routes(store: StoreHandle) -> SessionRoutes {
-    routes_with_tmux(store, vst_proc::tmux::Tmux::new())
+    routes_with_tmux(store, vst_proc::test_support::isolated_tmux())
 }
 
 async fn add_project(store: &StoreHandle, p: ProjectRecord) {
@@ -749,7 +749,7 @@ async fn patch_channel_tty_to_json_same_cli_mode_replacement_keeps_chat_id() {
 
 #[tokio::test]
 async fn patch_channel_tty_to_json_unknown_mode_id_does_not_kill_tmux() {
-    use vst_proc::tmux::{NewSessionOptions, Tmux};
+    use vst_proc::tmux::NewSessionOptions;
 
     // Unknown modeId fails validation BEFORE any teardown, so the session's tmux
     // must survive the failed toggle (review #17).
@@ -763,9 +763,8 @@ async fn patch_channel_tty_to_json_unknown_mode_id_does_not_kill_tmux() {
     add_project(&store, p).await;
 
     // Isolate against a dedicated tmux server so the test never touches a live one.
-    let sock = format!("vst-test-{}", std::process::id());
-    let tmux = Tmux::with_socket(&sock);
-    let _ = tmux.kill_server(); // clear any leftover from a prior aborted run
+    let tmux_guard = vst_proc::test_support::TmuxGuard::new(); // kills its server on drop, even on panic
+    let tmux = tmux_guard.tmux();
     tmux.new_session(&NewSessionOptions {
         name: "vst-s1".to_string(),
         cwd: None,
@@ -789,7 +788,6 @@ async fn patch_channel_tty_to_json_unknown_mode_id_does_not_kill_tmux() {
 
     // The tmux session the failed toggle would have killed is still alive.
     assert!(tmux.has_session("vst-s1"));
-    let _ = tmux.kill_server();
 }
 
 #[tokio::test]
@@ -1018,7 +1016,6 @@ async fn meta_rebuilds_from_disk_for_existing_session_ok() {
 // convention as vst-ws/tests/tmux_output.rs. Run with:
 //   cargo test -p vst-routes --test sessions_group_d -- --ignored
 
-const SWITCH_SOCK: &str = "vst-routes-channel-switch-sock";
 
 fn tmux_available() -> bool {
     std::process::Command::new("tmux")
@@ -1088,10 +1085,10 @@ async fn json_to_tmux_switch_leaves_a_live_painted_pane() {
     p.direct_sessions.push(s);
     add_project(&store, p).await;
 
-    let tmux = vst_proc::tmux::Tmux::with_socket(SWITCH_SOCK);
-    tmux.kill_server();
+    let tmux_guard = vst_proc::test_support::TmuxGuard::new(); // kills its server on drop, even on panic
+    let tmux = tmux_guard.tmux();
     let r = SessionRoutes {
-        tmux: vst_proc::tmux::Tmux::with_socket(SWITCH_SOCK),
+        tmux: tmux_guard.tmux(),
         ..routes(store)
     };
 
@@ -1158,5 +1155,4 @@ async fn json_to_tmux_switch_leaves_a_live_painted_pane() {
     );
 
     tmux.kill_session(&persisted.tmux_name);
-    tmux.kill_server();
 }

@@ -27,7 +27,6 @@ use vst_agents::json_agent_session::JsonAgentSession;
 use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
 use vst_types::domain::{
     Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
@@ -50,7 +49,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
         store,
         broadcaster,
         json_registry,
-        tmux: Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
         paths,

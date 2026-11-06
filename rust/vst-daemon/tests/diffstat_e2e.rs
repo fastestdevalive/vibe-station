@@ -10,7 +10,6 @@ use tempfile::tempdir;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::{
@@ -148,7 +147,7 @@ async fn diffstat_e2e_file_edit_activity_and_client_gate() {
         store,
         broadcaster: broadcaster.clone(),
         json_registry: Arc::new(JsonAgentRegistry::<JsonAgentSession>::new()),
-        tmux: Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
         paths,

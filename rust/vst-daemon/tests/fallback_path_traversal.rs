@@ -16,7 +16,6 @@ use tower::ServiceExt;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_routes::auth::AuthState;
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
@@ -41,7 +40,7 @@ fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
         store,
         broadcaster,
         json_registry,
-        tmux: Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
         paths,

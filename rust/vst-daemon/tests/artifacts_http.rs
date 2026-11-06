@@ -21,7 +21,6 @@ use tower::ServiceExt;
 use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_state, router_from_state, AppState, BuildServerOptions};
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
 use vst_types::artifacts::{ArtifactSink, FileEffect, ScopeKey, WriteContext};
 use vst_types::events::{Broadcaster, ServerEvent};
@@ -163,7 +162,7 @@ impl H {
             json_registry: Arc::new(vst_agents::json_agent_registry::JsonAgentRegistry::<
                 vst_agents::json_agent_session::JsonAgentSession,
             >::new()),
-            tmux: Tmux::new(),
+            tmux: vst_proc::test_support::isolated_tmux(),
             started_at: Instant::now(),
             version: "test".into(),
             paths,

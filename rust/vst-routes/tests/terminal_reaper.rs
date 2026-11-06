@@ -114,7 +114,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         json_registry: Arc::new(JsonAgentRegistry::new()),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
         direct_streams: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        tmux: vst_proc::tmux::Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
         subagent_notify: SubagentNotifyHandle::new(),
@@ -126,9 +126,16 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         terminal_delivery: vst_routes::terminal_delivery::build_terminal_delivery(
             store,
             Broadcaster::new(16),
-            Arc::new(vst_proc::tmux::Tmux::new()),
+            Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+    }
+}
+
+/// Kill every PTY a test's `create_session` spawned (real `$SHELL`s) so none outlive the test.
+fn teardown(r: &SessionRoutes) {
+    for (_, h) in r.direct_ptys.write().unwrap().drain() {
+        h.kill();
     }
 }
 
@@ -393,6 +400,7 @@ async fn only_if_none_ignores_exited_terminal_and_creates_one() {
 
     assert_ne!(id, "dt");
     assert!(all_ids(&store, "p1").await.contains(&id));
+    teardown(&r);
 }
 
 #[tokio::test]
@@ -410,6 +418,7 @@ async fn concurrent_only_if_none_creates_one() {
     assert_eq!(session_id(a.unwrap()), session_id(b.unwrap()));
     let p = store.get_project("p1").await.unwrap();
     assert_eq!(p.direct_sessions.len(), 1);
+    teardown(&r);
 }
 
 #[tokio::test]
@@ -429,4 +438,5 @@ async fn create_without_flag_adds_another() {
         store.get_project("p1").await.unwrap().direct_sessions.len(),
         2
     );
+    teardown(&r);
 }

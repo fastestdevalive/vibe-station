@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_git::paths::Paths;
-use vst_proc::tmux::{PaneFlags, Tmux};
+use vst_proc::tmux::PaneFlags;
 use vst_review::{OutcomeObserver, PaneIo};
 use vst_routes::projects::ProjectRoutes;
 use vst_routes::terminal_delivery::build_terminal_delivery;
@@ -175,12 +175,12 @@ async fn env() -> Env {
         store.clone(),
         bc.clone(),
         registry.clone(),
-        Tmux::new(),
+        vst_proc::test_support::isolated_tmux(),
         4000,
     )
     .with_paths(paths.clone())
     .with_terminal_delivery(td.clone());
-    let mut worktree = WorktreeRoutes::new(store.clone(), bc, registry, Tmux::new(), 4000)
+    let mut worktree = WorktreeRoutes::new(store.clone(), bc, registry, vst_proc::test_support::isolated_tmux(), 4000)
         .with_terminal_delivery(td.clone());
     worktree.paths = paths;
     // One held (claimed + waiting) tmux row per session, fired into the owner.

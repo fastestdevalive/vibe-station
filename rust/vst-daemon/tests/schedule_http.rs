@@ -17,7 +17,6 @@ use vst_agents::json_agent_session::JsonAgentSession;
 use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 use vst_git::paths::Paths;
-use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
 use vst_types::{
@@ -138,7 +137,7 @@ async fn schedule_errors_are_error_and_code_and_get_returns_the_snapshot() {
         store,
         broadcaster: Broadcaster::new(16),
         json_registry: Arc::new(JsonAgentRegistry::<JsonAgentSession>::new()),
-        tmux: Tmux::new(),
+        tmux: vst_proc::test_support::isolated_tmux(),
         started_at: Instant::now(),
         version: "test".to_string(),
         paths: Paths::with_home(tmp.path().to_path_buf()),

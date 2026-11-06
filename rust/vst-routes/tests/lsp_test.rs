@@ -12,7 +12,6 @@ use tempfile::tempdir;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_git::paths::Paths;
 use vst_lsp::{LspManager, WorkspaceKey};
-use vst_proc::tmux::Tmux;
 use vst_routes::lsp::LspRoutes;
 use vst_routes::projects::ProjectRoutes;
 use vst_routes::worktrees::WorktreeRoutes;
@@ -44,7 +43,7 @@ async fn test_lsp_root_matches_get_file_exactly() {
 
     let broadcaster = Broadcaster::new(16);
     let json_registry = Arc::new(JsonAgentRegistry::new());
-    let tmux = Tmux::new();
+    let tmux = vst_proc::test_support::isolated_tmux();
 
     let mut worktree_routes = WorktreeRoutes::new(
         store.clone(),
