@@ -4,13 +4,17 @@
 use std::path::Path;
 
 fn scan(dir: &Path, hits: &mut Vec<String>, needle: &str) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
             scan(&p, hits, needle);
         } else if p.extension().is_some_and(|x| x == "rs") {
-            if p.file_name().is_some_and(|n| n == "no_default_tmux_in_tests.rs") {
+            if p.file_name()
+                .is_some_and(|n| n == "no_default_tmux_in_tests.rs")
+            {
                 continue;
             }
             if std::fs::read_to_string(&p).is_ok_and(|s| s.contains(needle)) {

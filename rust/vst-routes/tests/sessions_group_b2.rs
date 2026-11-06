@@ -1576,7 +1576,10 @@ async fn terminal_on_guarded_socket_is_cleaned_up_on_drop() {
     };
     assert!(ls(&sock), "terminal should live on the private socket");
     drop(tg);
-    assert!(!ls(&sock), "dropping the guard must kill the private server");
+    assert!(
+        !ls(&sock),
+        "dropping the guard must kill the private server"
+    );
 }
 
 /// Build a routes with a claude/Json parent `parent-1` in project `p1`'s

@@ -1016,7 +1016,6 @@ async fn meta_rebuilds_from_disk_for_existing_session_ok() {
 // convention as vst-ws/tests/tmux_output.rs. Run with:
 //   cargo test -p vst-routes --test sessions_group_d -- --ignored
 
-
 fn tmux_available() -> bool {
     std::process::Command::new("tmux")
         .arg("-V")

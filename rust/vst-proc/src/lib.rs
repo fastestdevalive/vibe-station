@@ -25,9 +25,9 @@ pub mod pty;
 pub mod raw_fd_write;
 pub mod resolve_use_tmux;
 pub mod shell;
-pub mod tmux;
 #[doc(hidden)]
 pub mod test_support;
+pub mod tmux;
 
 pub use child_stdio::{classify_child_stdio_error, StdioErrorClass};
 pub use daemonize::spawn_detached;

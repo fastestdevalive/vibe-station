@@ -180,8 +180,14 @@ async fn env() -> Env {
     )
     .with_paths(paths.clone())
     .with_terminal_delivery(td.clone());
-    let mut worktree = WorktreeRoutes::new(store.clone(), bc, registry, vst_proc::test_support::isolated_tmux(), 4000)
-        .with_terminal_delivery(td.clone());
+    let mut worktree = WorktreeRoutes::new(
+        store.clone(),
+        bc,
+        registry,
+        vst_proc::test_support::isolated_tmux(),
+        4000,
+    )
+    .with_terminal_delivery(td.clone());
     worktree.paths = paths;
     // One held (claimed + waiting) tmux row per session, fired into the owner.
     for (row, sid) in [("r-d", "sd"), ("r-w", "sw")] {
