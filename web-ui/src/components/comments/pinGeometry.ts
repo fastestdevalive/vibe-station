@@ -1,8 +1,9 @@
 import { surfaceText, surfaceTextPos } from "./surfaceText";
 
-/** Pin diameter in CSS px (`--comment-pin-size`): 16 for a fine pointer, 20 for a coarse one. */
-export const PIN_SIZE = 16;
-export const PIN_SIZE_COARSE = 20;
+/** Pin diameter in CSS px (`--comment-pin-size`): 18 for a fine pointer (under a code line's height, so pins on
+ * adjacent lines stay apart), 22 for a coarse one. */
+export const PIN_SIZE = 18;
+export const PIN_SIZE_COARSE = 22;
 /** Pins closer than this (centre to centre) merge into one stack; coarse pointers keep a 24px target spacing. */
 export const MERGE_DISTANCE = PIN_SIZE;
 export const MERGE_DISTANCE_COARSE = 24;

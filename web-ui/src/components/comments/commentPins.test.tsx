@@ -10,6 +10,8 @@ import { MarkdownView } from "@/components/preview/MarkdownView";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useCommentSurface } from "./CommentSurfaceContext";
 import { CommentSurfaceProvider } from "./CommentSurfaceProvider";
+import { linkRules } from "./commentLinkRules";
+import { DRAFT_ID } from "./draftComment";
 import type { PinMeasurer } from "./pinMeasurer";
 import { useCommentStore } from "./useCommentStore";
 import { useCommentsSync } from "./useCommentsSync";
@@ -211,13 +213,13 @@ describe("diff view (13)", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => rect(0, 60));
     Object.defineProperty(HTMLElement.prototype, "clientHeight", { get: () => 60, configurable: true });
     try {
-      // last character on visual line 2 of 3 (rows 20px): centre y = 30 -> top = 30 - 8
+      // last character on visual line 2 of 3 (rows 20px): centre y = 30 -> top = 30 - 9 (an 18px pin)
       vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([rect(0), rect(20)] as unknown as DOMRectList);
       const api = createMockApi();
       await seed(api, { id: "d1", surface: "diff", diffScope: "local", side: "new", lineStart: 2, lineEnd: 2, newStart: 2, newEnd: 2, quote: "new a" });
       await mount(api, NEW_FILE, diff());
       await waitFor(() => expect(stacks()).toHaveLength(1));
-      expect(stacks()[0]!.style.getPropertyValue("--top")).toBe("22px");
+      expect(stacks()[0]!.style.getPropertyValue("--top")).toBe("21px");
     } finally {
       Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
     }
@@ -262,30 +264,53 @@ describe("hover / focus link and a11y (15, 16)", () => {
     await waitFor(() => expect(document.querySelectorAll("[data-comment-pin]")).toHaveLength(2));
     return api;
   }
-  const rule = () => [...document.querySelectorAll("style")].map((s) => s.textContent).find((t) => t?.includes("data-comment-id"));
+  const rule = () => document.querySelector("style[data-comment-link-rules]")?.textContent ?? "";
 
-  it("hovering a pin injects the rule for that comment; leaving clears it; hovering a mark does the same", async () => {
+  it("the pin <-> span link is a static :has(:hover / :focus) rule per comment, the draft excluded", async () => {
     await two();
-    expect(rule()).toBeUndefined();
-    const pin = document.querySelector('[data-comment-pin="p1"]')!;
-    fireEvent.mouseOver(pin);
-    expect(rule()).toContain('mark.comment-hl[data-comment-id="p1"]');
-    expect(rule()).toContain('[data-comment-pin="p1"]');
-    expect(rule()).toContain("--comment-hl-active");
-    fireEvent.mouseLeave(screen.getByTestId("root"));
-    expect(rule()).toBeUndefined();
-    fireEvent.mouseOver(document.querySelector('mark[data-comment-id="p2"]')!);
-    expect(rule()).toContain('data-comment-id="p2"');
-    fireEvent.mouseOver(document.querySelector(".workspace-code-gutter")!);
-    expect(rule()).toBeUndefined();
+    const css = rule();
+    for (const id of ["p1", "p2"]) {
+      expect(css).toContain(
+        `[data-comment-surface]:has([data-comment-pin="${id}"]:hover,[data-comment-pin="${id}"]:focus,mark[data-comment-id="${id}"]:hover) ` +
+          `mark.comment-hl[data-comment-id="${id}"]{background:var(--comment-hl-active)}`,
+      );
+    }
+    // Hover never restyles the pin itself (no ring / size change under the pointer).
+    expect(css).not.toMatch(/\.comment-pin[^{]*\{/);
+    expect(css).not.toMatch(/box-shadow|transform|scale/);
+    expect(linkRules(["a", DRAFT_ID])).not.toContain(DRAFT_ID);
   });
 
-  it("focusing a pin (keyboard) does it too", async () => {
+  it("the stylesheet sizes pins up at rest (18px, glyph 0.7) and gives :hover no transform / transition / ring", () => {
+    const css = readFileSync(resolve(__dirname, "comments.css"), "utf8");
+    expect(css).toMatch(/\.preview-body\[data-comment-surface\] \{\s*--comment-gutter-w: 24px;\s*--comment-pin-size: 18px;/);
+    expect(css).toMatch(/\.comment-pin__icon \{\s*width: calc\(var\(--comment-pin-size, 18px\) \* 0\.7\);/);
+    for (const [, body] of css.matchAll(/\.comment-pin[\w-]*:hover[^{]*\{([^}]*)\}/g)) {
+      expect(body?.trim()).toMatch(/^background: var\(--[\w-]+\);$/);
+    }
+    // Any rule styling a pin (not the code view's stack, which slides sideways via `--x`) stays still.
+    expect(css).not.toMatch(/\.comment-pin(?!-stack)[^{}]*\{[^}]*(transform|transition|scale|animation)/);
+  });
+
+  it("hovering / focusing a pin or a mark runs no DOM change (no state, no injected node, nothing moves)", async () => {
     await two();
-    fireEvent.focusIn(document.querySelector('[data-comment-pin="p2"]')!);
-    expect(rule()).toContain('data-comment-pin="p2"');
-    fireEvent.focusOut(document.querySelector('[data-comment-pin="p2"]')!);
-    expect(rule()).toBeUndefined();
+    const pin = document.querySelector<HTMLElement>('[data-comment-pin="p1"]')!;
+    const before = rule();
+    const records: MutationRecord[] = [];
+    const mo = new MutationObserver((r) => records.push(...r));
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    fireEvent.mouseOver(pin);
+    fireEvent.mouseEnter(pin);
+    fireEvent.mouseMove(pin);
+    fireEvent.focusIn(pin);
+    fireEvent.mouseOver(document.querySelector('mark[data-comment-id="p2"]')!);
+    fireEvent.focusOut(pin);
+    fireEvent.mouseLeave(screen.getByTestId("root"));
+    await act(async () => {});
+    records.push(...mo.takeRecords());
+    mo.disconnect();
+    expect(records).toEqual([]);
+    expect(rule()).toBe(before);
   });
 
   it("two comments on one visual line: a named group of two real buttons with accessible labels, in pin order", async () => {

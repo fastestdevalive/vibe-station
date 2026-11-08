@@ -1,5 +1,5 @@
 import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { $createParagraphNode, $createTextNode, $getRoot } from "lexical";
+import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from "lexical";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -264,5 +264,63 @@ describe("rendered markdown box in the float: outside taps (round 5)", () => {
     fireEvent.click(pin("c"));
     await waitFor(() => expect(document.querySelector('[data-comment-card="c"]')).not.toBeNull());
     expect(screen.queryByRole("group", { name: "New comment" })).toBeNull();
+  });
+});
+
+describe("rendered markdown box: creating a comment does not scroll (no-scroll-on-create)", () => {
+  const H = 150;
+  /** Scroll container at viewport top with a 600px visible box, scrolled to 400; the float's rect follows its anchor. */
+  function layout(anchorBottom: number) {
+    const root = document.querySelector<HTMLElement>("[data-comment-surface]")!;
+    let scrollTop = 400;
+    Object.defineProperty(root, "scrollTop", { configurable: true, get: () => scrollTop, set: (v: number) => (scrollTop = v) });
+    const anchor = document.querySelector<HTMLElement>(".workspace-markdown-preview p")!;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 600);
+      if (this === anchor) return rect(anchorBottom - 20, 20);
+      if (this.hasAttribute("data-comment-float")) {
+        const top = parseFloat(this.style.top);
+        return Number.isFinite(top) ? rect(top - scrollTop, H) : rect(0, 0);
+      }
+      return rect(0, 0);
+    });
+    return { anchor, scrollTop: () => scrollTop };
+  }
+  async function openAt(anchor: HTMLElement) {
+    await act(async () => {
+      surface!.openNew({ surface: "markdown", lineStart: 1, lineEnd: 1, quote: "beta", prefix: "alpha ", suffix: " gamma", occurrence: 0 }, { anchorEl: anchor });
+    });
+    await screen.findByRole("group", { name: "New comment" });
+  }
+
+  it("the float is already under its anchor when the editor takes focus (Lexical's caret scroll sees the real spot)", async () => {
+    await mount();
+    const { anchor } = layout(300);
+    const proto = Object.getPrototypeOf(createEditor()) as { focus: (...a: unknown[]) => void };
+    const focus = proto.focus;
+    const seen: string[] = [];
+    vi.spyOn(proto, "focus").mockImplementation(function (this: unknown, ...a: unknown[]) {
+      seen.push(float()?.style.top ?? "none");
+      return focus.apply(this, a);
+    });
+    await openAt(anchor);
+    // anchor bottom 300 - root top 0 + scrollTop 400 + 6
+    expect(seen).toEqual(["706px"]);
+  });
+
+  it("a box that fits in the visible area does not change the scroll position", async () => {
+    await mount();
+    const { anchor, scrollTop } = layout(300);
+    await openAt(anchor);
+    expect(float()!.style.top).toBe("706px");
+    expect(scrollTop()).toBe(400);
+  });
+
+  it("a box that would overflow the bottom scrolls by the minimum to show it", async () => {
+    await mount();
+    const { anchor, scrollTop } = layout(550);
+    await openAt(anchor);
+    // float spans 556..706 against a 600px viewport: 106px overflow + 8px margin
+    expect(scrollTop()).toBe(400 + 114);
   });
 });

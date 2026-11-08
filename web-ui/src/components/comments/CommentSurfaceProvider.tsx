@@ -26,7 +26,7 @@ import { buildSurfaceComments, quoteStillAt } from "./rowIndex";
 import { pinAriaLabel } from "./CommentPins";
 import { isInsideCommentLayer, useOutsideTap } from "./useOutsideTap";
 import { registerEscapeLayer } from "@/lib/escapeLayers";
-import { DRAFT_ID, draftFromAnchor, requestFromComment } from "./draftComment";
+import { draftFromAnchor, requestFromComment } from "./draftComment";
 import { PinMeasurer } from "./pinMeasurer";
 import { EditCommentBox, NewCommentBox } from "./CommentRows";
 import {
@@ -38,10 +38,11 @@ import {
 } from "./CommentSurfaceContext";
 import { useCommentScope, usePathComments } from "./commentSelectors";
 import { SelectionPopover } from "./SelectionPopover";
+import { revealInScroller } from "./revealInScroller";
 import type { CommentAnchor } from "./types";
 import { useApiOnline } from "./useApiOnline";
 import { fetchCommentScope, useCommentScopeLoad } from "./useCommentsSync";
-import { cssEscape } from "./commentJump";
+import { linkRules } from "./commentLinkRules";
 import { useCommentShortcut } from "./useCommentShortcut";
 import { useCommentStore } from "./useCommentStore";
 import { useGutterRoving } from "./useGutterRoving";
@@ -110,7 +111,6 @@ export function CommentSurfaceProvider({
 
   const [open, setOpen] = useState<OpenBox | null>(null);
   const [viewing, setViewing] = useState<{ ids: string[]; anchorEl: HTMLElement | null } | null>(null);
-  const [hoverId, setHoverId] = useState<string | null>(null);
   const pinMeasurer = useMemo(() => new PinMeasurer(), []);
   useEffect(() => {
     pinMeasurer.attach(rootEl);
@@ -506,27 +506,12 @@ export function CommentSurfaceProvider({
     onTap: () => setViewing(null),
   });
 
-  // Pin <-> span link: hovering or focusing a pin (or a highlighted span) lights up both (a rule, not DOM edits).
-  useEffect(() => {
-    if (!rootEl || !enabled) return;
-    const idAt = (t: EventTarget | null): string | null => {
-      const el = t instanceof Element ? t.closest<HTMLElement>("[data-comment-pin], mark[data-comment-id]") : null;
-      const id = el?.getAttribute("data-comment-pin") ?? el?.getAttribute("data-comment-id") ?? null;
-      return id && id !== DRAFT_ID ? id : null;
-    };
-    const over = (e: Event) => setHoverId(idAt(e.target));
-    const out = () => setHoverId(null);
-    rootEl.addEventListener("mouseover", over);
-    rootEl.addEventListener("focusin", over);
-    rootEl.addEventListener("mouseleave", out);
-    rootEl.addEventListener("focusout", out);
-    return () => {
-      rootEl.removeEventListener("mouseover", over);
-      rootEl.removeEventListener("focusin", over);
-      rootEl.removeEventListener("mouseleave", out);
-      rootEl.removeEventListener("focusout", out);
-    };
-  }, [rootEl, enabled]);
+  // Pin -> span link: hovering or focusing a pin (or a highlighted span) lights up the comment's span. Pure CSS
+  // (`:has(:hover)`), written once per comment set: hover itself runs no script, sets no state and inserts no
+  // node. It used to set React state and mount a `<style>` per hover, which re-rendered the surface and
+  // invalidated every style in the document under the pointer; with a ring on the pin, the icon shifted while the
+  // pointer was over it, so it could not be clicked.
+  const linkCss = useMemo(() => linkRules(all.map((c) => c.id)), [all]);
 
   if (!value) {
     return <CommentSurfaceContext.Provider value={null}>{children}</CommentSurfaceContext.Provider>;
@@ -539,7 +524,7 @@ export function CommentSurfaceProvider({
   return (
     <CommentSurfaceContext.Provider value={value}>
       {children}
-      {hoverId ? <style>{hoverRule(hoverId)}</style> : null}
+      {linkCss ? <style data-comment-link-rules="">{linkCss}</style> : null}
       <SelectionPopover surface={value} rootEl={rootEl} />
       {deleteError
         ? createPortal(
@@ -564,6 +549,7 @@ export function CommentSurfaceProvider({
               rootEl={rootEl}
               anchorEl={open?.anchorEl ?? viewing?.anchorEl ?? null}
               focusKey={!open && viewing ? viewing.ids.join(" ") : null}
+              revealKey={open ? (open.kind === "edit" ? `edit:${open.id}` : "new") : `view:${viewing?.ids.join(" ") ?? ""}`}
             >
               {open?.kind === "new" ? (
                 <NewCommentBox surface={value} open={open} floating />
@@ -597,46 +583,51 @@ export function CommentSurfaceProvider({
 
 const sameIds = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x));
 
-/** Rule lighting up a comment's span marks and its pin together (`--comment-hl-active`, tokens.css). */
-function hoverRule(id: string): string {
-  const e = cssEscape(id);
-  return (
-    `[data-comment-surface] mark.comment-hl[data-comment-id="${e}"]{background:var(--comment-hl-active)}` +
-    `[data-comment-surface] .comment-pin[data-comment-pin="${e}"]{box-shadow:0 0 0 2px var(--comment)}`
-  );
-}
 
 /** Box for a surface without rows: absolutely placed under the anchor element inside the scroll container. */
 function MarkdownFloat({
   rootEl,
   anchorEl,
   focusKey,
+  revealKey,
   children,
 }: {
   rootEl: HTMLElement;
   anchorEl: HTMLElement | null;
   /** Set while a view card is shown: focus moves to its first action when the key changes. */
   focusKey: string | null;
+  /** Identifies what the float shows (new box / edit box / cards); a change re-checks that it fits. */
+  revealKey: string;
   children: ReactNode;
 }) {
-  const [top, setTop] = useState(16);
   const ref = useRef<HTMLDivElement>(null);
+  // `top` is written to the DOM here, not kept in state: a state update lands one commit late, and the box's own
+  // mount effects (the editor's `focus()`, whose caret scroll-into-view Lexical runs) fired while the float still
+  // sat at its initial position at the very top of the content, so creating a comment scrolled the preview there.
   useLayoutEffect(() => {
     const place = () => {
-      if (!anchorEl?.isConnected) return setTop(rootEl.scrollTop + 16);
-      setTop(anchorEl.getBoundingClientRect().bottom - rootEl.getBoundingClientRect().top + rootEl.scrollTop + 6);
+      const el = ref.current;
+      if (!el) return;
+      const top = anchorEl?.isConnected
+        ? anchorEl.getBoundingClientRect().bottom - rootEl.getBoundingClientRect().top + rootEl.scrollTop + 6
+        : rootEl.scrollTop + 16;
+      el.style.top = `${top}px`;
     };
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [rootEl, anchorEl]);
+  // Once per opened box / card: scroll only when it does not fit, by the minimum (before the editor focuses, so
+  // Lexical then finds its caret already visible and does not scroll on its own).
+  useLayoutEffect(() => {
+    if (ref.current) revealInScroller(ref.current, rootEl);
+  }, [rootEl, anchorEl, revealKey]);
   useLayoutEffect(() => {
     if (focusKey == null) return;
     ref.current?.querySelector<HTMLElement>("[data-comment-card] button")?.focus({ preventScroll: true });
-    ref.current?.scrollIntoView?.({ block: "nearest" });
   }, [focusKey]);
   return (
-    <div ref={ref} className="comment-float" style={{ top }} data-comment-float>
+    <div ref={ref} className="comment-float" data-comment-float>
       {children}
     </div>
   );

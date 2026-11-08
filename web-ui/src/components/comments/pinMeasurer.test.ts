@@ -134,7 +134,7 @@ describe("PinMeasurer", () => {
     vi.spyOn(mark, "getClientRects").mockReturnValue([rect(40)] as unknown as DOMRectList);
     handle.markDirty();
     m.flush();
-    expect(apply).toHaveBeenLastCalledWith([{ top: 42, ids: ["c1"] }]);
+    expect(apply).toHaveBeenLastCalledWith([{ top: 41, ids: ["c1"] }]); // line centre 50 - 18px pin / 2
     mark.remove();
     handle.markDirty();
     m.flush();

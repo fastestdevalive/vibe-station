@@ -139,14 +139,14 @@ mark.comment-hl--outdated {
   border-bottom: 1.5px dashed var(--fg-warning);
 }
 
-/* ── pins (16px circle holding a comment icon; the number is `data-pin` and the accessible name, never drawn) ── */
+/* ── pins (18px circle holding a comment icon; the number is `data-pin` and the accessible name, never drawn) ── */
 .comment-pin {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
   margin: 0 0 0 2px;
   padding: 0;
   border: 0;
@@ -159,8 +159,8 @@ mark.comment-hl--outdated {
 }
 
 .comment-pin__icon {
-  width: calc(var(--comment-pin-size, 16px) * 0.625);
-  height: calc(var(--comment-pin-size, 16px) * 0.625);
+  width: calc(var(--comment-pin-size, 18px) * 0.7);
+  height: calc(var(--comment-pin-size, 18px) * 0.7);
   flex: none;
   pointer-events: none;
 }
@@ -169,7 +169,8 @@ mark.comment-hl--outdated {
   background: var(--fg-warning);
 }
 
-/* The app's global `button:hover` background must not hollow the pin out. */
+/* Hover changes nothing on a pin (no ring, scale or transition): it must stay exactly under the pointer. The
+   app's global `button:hover` background must not hollow it out either. */
 .comment-pin:hover {
   background: var(--comment-pin);
 }
@@ -187,13 +188,13 @@ mark.comment-hl--outdated {
    The gutter width is reserved while the surface is enabled (saving the first comment never reflows a wrap). */
 .preview-body[data-comment-surface] {
   --comment-gutter-w: 24px;
-  --comment-pin-size: 16px;
+  --comment-pin-size: 18px;
 }
 
 @media (pointer: coarse) {
   .preview-body[data-comment-surface] {
     --comment-gutter-w: 28px;
-    --comment-pin-size: 20px;
+    --comment-pin-size: 22px;
   }
 }
 
@@ -231,23 +232,23 @@ mark.comment-hl--outdated {
 .comment-pin-stack > .comment-pin {
   position: relative;
   flex: none;
-  width: var(--comment-pin-size, 16px);
-  height: var(--comment-pin-size, 16px);
-  min-width: var(--comment-pin-size, 16px);
+  width: var(--comment-pin-size, 18px);
+  height: var(--comment-pin-size, 18px);
+  min-width: var(--comment-pin-size, 18px);
   margin: 0;
   vertical-align: baseline;
-  line-height: var(--comment-pin-size, 16px);
+  line-height: var(--comment-pin-size, 18px);
   pointer-events: auto;
   box-shadow: 0 0 0 2px var(--bg-primary);
 }
 
 /* Two comments on one line overlap (the second tucked under the first); from three the rest hide behind it. */
 .comment-pin-stack > .comment-pin + .comment-pin {
-  margin-right: calc(var(--comment-pin-size, 16px) * -0.625);
+  margin-right: calc(var(--comment-pin-size, 18px) * -0.625);
 }
 
 .comment-pin-stack[data-count]:not([data-count="2"]) > .comment-pin + .comment-pin {
-  margin-right: calc(var(--comment-pin-size, 16px) * -1);
+  margin-right: calc(var(--comment-pin-size, 18px) * -1);
 }
 
 .comment-pin-stack > .comment-pin:focus-visible {
@@ -284,7 +285,7 @@ mark.comment-hl--outdated {
   box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--fg-primary) !important;
 }
 
-/* Touch: 20px pins, and a hit area at least 28px wide that never reaches the next line's pin. */
+/* Touch: 22px pins, and a hit area at least 28px wide that never reaches the next line's pin. */
 @media (pointer: coarse) {
   .comment-pin-stack > .comment-pin::before {
     content: "";

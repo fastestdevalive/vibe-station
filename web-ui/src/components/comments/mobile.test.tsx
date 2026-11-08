@@ -201,16 +201,16 @@ describe("comment pins on a coarse pointer (17)", () => {
     return out[0]!;
   }
 
-  it("merges pins closer than 24px (a 16px pin on a fine pointer merges only below 16px)", () => {
+  it("merges pins closer than 24px (an 18px pin on a fine pointer merges only below 18px)", () => {
     matchMedia((q) => q === "(pointer: coarse)");
     expect(placements()).toHaveLength(1);
     matchMedia(() => false);
     expect(placements()).toHaveLength(2);
   });
 
-  it("the stylesheet gives touch a 28px gutter, 20px pins and a 28px-wide hit area", () => {
+  it("the stylesheet gives touch a 28px gutter, 22px pins and a 30px-wide hit area", () => {
     const css = readFileSync(resolve(__dirname, "comments.css"), "utf8");
-    expect(css).toMatch(/@media \(pointer: coarse\) \{\s*\.preview-body\[data-comment-surface\] \{\s*--comment-gutter-w: 28px;\s*--comment-pin-size: 20px;/);
+    expect(css).toMatch(/@media \(pointer: coarse\) \{\s*\.preview-body\[data-comment-surface\] \{\s*--comment-gutter-w: 28px;\s*--comment-pin-size: 22px;/);
     expect(css).toMatch(/\.comment-pin-stack > \.comment-pin::before \{[^}]*inset: 0 -4px;/);
   });
 
