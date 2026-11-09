@@ -60,15 +60,11 @@ pub enum CheckGroup {
     Feature,
 }
 
+/// Resolve `binary` on the daemon's PATH in-process (no `which` subprocess).
+/// The daemon PATH is the effective PATH once boot adopted it
+/// (`env_setup::adopt_effective_path`), so this matches what a spawn will find.
 fn resolve_bin_path(binary: &str) -> Option<String> {
-    Command::new("which")
-        .arg(binary)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    vst_proc::path_lookup::which(binary).map(|p| p.display().to_string())
 }
 
 /// Whether `path` is a script whose shebang runs under `bun` (the npm/bun-installed
@@ -130,11 +126,21 @@ pub fn check_tmux() -> DoctorCheck {
             status: DoctorStatus::Error,
             required: true,
             group: CheckGroup::Required,
-            message: "tmux not found on PATH".to_string(),
+            message: tmux_missing_message(
+                &std::env::var_os("PATH")
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
             resolved_path: None,
             ..Default::default()
         }
     }
+}
+
+/// Names the searched PATH so a "not found" from a GUI-launched daemon is
+/// self-diagnosing (it is the daemon's PATH, not the user's terminal's).
+fn tmux_missing_message(path: &str) -> String {
+    format!("tmux not found on PATH (searched: {path})")
 }
 
 /// Check git version is >= 2.20.
@@ -1007,6 +1013,14 @@ mod tests {
     }
 
     // 3.T1
+    #[test]
+    fn tmux_missing_message_names_the_searched_path() {
+        assert_eq!(
+            tmux_missing_message("/usr/bin:/bin"),
+            "tmux not found on PATH (searched: /usr/bin:/bin)"
+        );
+    }
+
     #[test]
     fn check_daemon_reachable_returns_ok_required() {
         let check = check_daemon_reachable();

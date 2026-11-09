@@ -253,10 +253,35 @@ pub fn shell_command_v(name: &str, timeout: Duration) -> Option<String> {
     (!text.is_empty()).then(|| text.to_string())
 }
 
+/// Package-manager bin dirs a GUI-launched daemon (launchd PATH
+/// `/usr/bin:/bin:/usr/sbin:/sbin`) never inherits, appended last when they
+/// exist. They only matter when the shell capture failed or timed out: the
+/// result is cached for the daemon's lifetime, and without them a slow rc file
+/// at boot would leave Homebrew's tmux/gh unreachable until a restart.
+const WELL_KNOWN_BIN_DIRS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+];
+
+/// Pure core of the effective PATH: `daemon` order wins, then unseen dirs from
+/// the interactive `shell` capture (if any), then unseen `fallback_dirs`.
+#[must_use]
+pub fn compose_effective_path(daemon: &str, shell: Option<&str>, fallback_dirs: &[&str]) -> String {
+    let merged = merge_paths(daemon, shell.unwrap_or(""));
+    merge_paths(&merged, &fallback_dirs.join(":"))
+}
+
 fn capture_effective_path() -> String {
     let daemon_path = std::env::var("PATH").unwrap_or_else(|_| FALLBACK_PATH.to_string());
     let shell_path = capture_shell_path();
-    merge_paths(&daemon_path, shell_path.as_deref().unwrap_or(""))
+    let fallback: Vec<&str> = WELL_KNOWN_BIN_DIRS
+        .iter()
+        .copied()
+        .filter(|d| std::path::Path::new(d).is_dir())
+        .collect();
+    compose_effective_path(&daemon_path, shell_path.as_deref(), &fallback)
 }
 
 /// Options for `build_vst_env`.
@@ -325,6 +350,35 @@ mod tests {
     #[test]
     fn merge_paths_drops_empty_and_relative_entries() {
         assert_eq!(merge_paths("/a::/b", "/c:.:bin"), "/a:/b:/c");
+    }
+
+    #[test]
+    fn compose_effective_path_launchd_daemon_gains_shell_then_fallback_dirs() {
+        // GUI-launched daemon: launchd PATH, shell capture has Homebrew.
+        assert_eq!(
+            compose_effective_path(
+                "/usr/bin:/bin",
+                Some("/opt/homebrew/bin:/usr/bin:/home/u/.local/bin"),
+                &["/opt/homebrew/bin", "/usr/local/bin"],
+            ),
+            "/usr/bin:/bin:/opt/homebrew/bin:/home/u/.local/bin:/usr/local/bin"
+        );
+    }
+
+    #[test]
+    fn compose_effective_path_failed_capture_still_gets_fallback_dirs() {
+        assert_eq!(
+            compose_effective_path("/usr/bin:/bin", None, &["/opt/homebrew/bin"]),
+            "/usr/bin:/bin:/opt/homebrew/bin"
+        );
+    }
+
+    #[test]
+    fn compose_effective_path_no_fallback_keeps_daemon_then_shell() {
+        assert_eq!(
+            compose_effective_path("/a:/b", Some("/b:/c:/a"), &[]),
+            "/a:/b:/c"
+        );
     }
 
     #[test]
