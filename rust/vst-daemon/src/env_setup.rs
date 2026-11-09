@@ -146,6 +146,43 @@ pub async fn patch_shell_configs(vst_home: &Path) {
     let _ = fs::write(sentinel, "installed\n");
 }
 
+/// Make the daemon's own `PATH` the effective PATH (daemon PATH + the user's
+/// interactive-shell dirs + existing Homebrew/`/usr/local` dirs; see
+/// `vst_agents::context::effective_path`).
+///
+/// A daemon started by the macOS app inherits launchd's
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, so every bare-name spawn — `tmux` (vst-proc,
+/// vst-ws, vst-routes), `gh` (PR poller, doctor), the doctor's lookups — missed
+/// Homebrew and the UI reported "tmux required" while tmux was installed. Agents
+/// were unaffected because `build_vst_env` already passes `effective_path()`.
+/// Adopting it once here fixes every call site and the tmux server it starts.
+///
+/// Daemon-first order is kept on purpose: a dir already on the daemon PATH keeps
+/// its precedence and missing dirs are appended, so a terminal-launched dev
+/// daemon resolves as before (`merge_paths` does drop empty/relative entries).
+///
+/// Must run at boot before the server, pollers or any background task start
+/// (it is called from the warm-up `spawn_blocking` in `run.rs`, when nothing
+/// else is scheduled yet). `set_var` is a
+/// safe call under edition 2021; an edition-2024 bump makes it `unsafe` and
+/// this call must then be revisited rather than wrapped blindly.
+pub fn adopt_effective_path() {
+    let effective = vst_agents::context::effective_path();
+    let current = std::env::var("PATH").unwrap_or_default();
+    if effective.is_empty() || effective == current {
+        return;
+    }
+    let count = |p: &str| p.split(':').filter(|d| !d.is_empty()).count();
+    std::env::set_var("PATH", &effective);
+    tracing::info!(
+        "[vst] daemon PATH extended from {} to {} dirs (tmux: {})",
+        count(&current),
+        count(&effective),
+        vst_proc::path_lookup::which("tmux")
+            .map_or_else(|| "not found".to_string(), |p| p.display().to_string())
+    );
+}
+
 /// Resolve directories where external harnesses look for skills.
 pub fn resolve_harness_skill_dirs() -> Vec<PathBuf> {
     let home = home_dir();

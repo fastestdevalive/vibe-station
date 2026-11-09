@@ -29,7 +29,6 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 
-use vst_agents::context::effective_path;
 use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_git::recover::{recover_not_started_sessions, sweep_direct_pty_sessions_on_boot};
@@ -391,8 +390,10 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Runs the one-time interactive-shell capture off the hot path so no spawn
     // pays the ~5s worst case. Non-fatal: `effective_path()` always falls back
     // to the daemon PATH. `spawn_blocking` so the blocking capture never stalls
-    // the async runtime.
-    let warm_handle = tokio::task::spawn_blocking(effective_path);
+    // the async runtime. The same closure then adopts it as the daemon's own
+    // PATH (GUI launches inherit launchd's bare PATH, which hid Homebrew's
+    // tmux/gh) — nothing else is scheduled yet at this point of boot.
+    let warm_handle = tokio::task::spawn_blocking(crate::env_setup::adopt_effective_path);
     let _ = warm_handle.await;
     tracing::debug!("[vst] effective PATH cached");
 
