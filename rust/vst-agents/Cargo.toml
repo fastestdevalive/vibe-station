@@ -21,7 +21,7 @@ serde_json = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 notify = "6"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # Pinned exact (04-spike, frozen before any 04a/04b/04c session touches it —
 # see arch doc Gotcha #5 and the vst-agents<->external-agent-CLIs System
 # Boundary row). Bump only via a deliberate, reviewed amendment, never a

@@ -80,4 +80,24 @@ describe("useOpenFilesChanged (review Fix E)", () => {
     expect(s.activeFileTabIdxByWorktree["wt-1"]).toBe(1);
     expect(s.activeFilePath).toBe("b");
   });
+  it("a replaced tab does not resurrect from the daemon echo (2.T4)", async () => {
+    const { createMockApi } = await import("@/api/mock");
+    const mock = createMockApi();
+    await mock.openFileDurable("wt-1", "/a");
+    await mock.openFileDurable("wt-1", "/b");
+    vi.spyOn(api, "openFileDurable").mockImplementation((...args) => mock.openFileDurable(...args));
+    const emit = capture();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { "wt-1": ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { "wt-1": 0 },
+    });
+    const spy = vi.mocked(api.openFileDurable);
+    useWorkspaceStore.getState().setActiveFile("/c");
+    const res = await spy.mock.results[0]!.value;
+    expect(res.paths).toEqual(["/c", "/b"]);
+    emit(res.paths);
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree["wt-1"]).toEqual(["/c", "/b"]);
+  });
 });

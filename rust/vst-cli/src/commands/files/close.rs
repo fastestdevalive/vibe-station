@@ -43,6 +43,7 @@ pub async fn run_files_close(opts: FilesCloseOptions) -> Result<(), (String, i32
     let (id, seg) = &opts.scope;
     let body = OpenFilesBody {
         path: opts.path.clone(),
+        ..Default::default()
     };
     let result = daemon_request::<OpenFilesResult, _>(
         Method::DELETE,

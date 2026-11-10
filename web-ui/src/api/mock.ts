@@ -1514,9 +1514,27 @@ export function createMockApi(seed: MockSeed = {}) {
       return { paths: [...tabs] };
     },
 
-    async openFileDurable(id: string, path: string, _scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+    async openFileDurable(
+      id: string,
+      path: string,
+      _scope: FileScope = "worktree",
+      replaces?: string,
+    ): Promise<{ paths: string[] }> {
       const set = (mockOpenFiles[id] ??= new Set<string>());
-      set.add(path);
+      if (replaces && set.has(replaces)) {
+        const next: string[] = [];
+        for (const f of set) {
+          if (f === replaces) {
+            if (!set.has(path) || path === replaces) next.push(path);
+          } else {
+            next.push(f);
+          }
+        }
+        set.clear();
+        for (const f of next) set.add(f);
+      } else {
+        set.add(path);
+      }
       return { paths: [...set] };
     },
 
@@ -1524,6 +1542,11 @@ export function createMockApi(seed: MockSeed = {}) {
       const set = mockOpenFiles[id];
       if (set) set.delete(path);
       return { paths: [...(set ?? [])] };
+    },
+
+    async closeAllFilesDurable(id: string, _scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      mockOpenFiles[id]?.clear();
+      return { paths: [] };
     },
 
     async search(
