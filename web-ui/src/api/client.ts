@@ -71,6 +71,7 @@ import type {
   WorktreeOrderResult,
 } from "./types";
 import { ApiError } from "./errors";
+import { createLatestOnly } from "./latestOnly";
 import { createArtifactsClient } from "./artifactsClient";
 import { createCommentsClient, parseReviewJson } from "./commentsClient";
 
@@ -228,6 +229,9 @@ export function createClientApi() {
   const chatSubs = new Map<string, { refs: number; sinceSeq?: number }>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
+  /** Bounds the watcher-driven reads below (file body/blob, diff, gutter, tree,
+   *  changed paths) to one in flight + one queued per URL — see `latestOnly.ts`. */
+  const latestOnly = createLatestOnly();
 
   let connState: ConnectionState = "offline";
   const connListeners = new Set<(s: ConnectionState) => void>();
@@ -1033,25 +1037,32 @@ export function createClientApi() {
 
     async getFileBlob(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<Blob> {
       const path = filePath.replace(/^\/+/, "");
-      const res = await apiFetch(`${fileBase(scope, worktreeId)}/files/${path}`);
-      if (!res.ok) throw new ApiError("Failed to fetch file", res.status);
-      return res.blob();
+      const url = `${fileBase(scope, worktreeId)}/files/${path}`;
+      // Same URL as `getFile`, different body type: the key prefix keeps the two from sharing a result.
+      return latestOnly(`blob ${url}`, async () => {
+        const res = await apiFetch(url);
+        if (!res.ok) throw new ApiError("Failed to fetch file", res.status);
+        return res.blob();
+      });
     },
 
     async getFile(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
-      const res = await apiFetch(`${fileBase(scope, worktreeId)}/files/${path}`);
-      if (res.status === 422) throw new ApiError("File too large to preview", 422);
-      if (!res.ok) {
-        const text = await res.text();
-        let msg = text;
-        try {
-          const j = JSON.parse(text) as { error?: string; message?: string };
-          msg = j.error ?? j.message ?? text;
-        } catch { /* not JSON, keep raw text */ }
-        throw new ApiError(msg, res.status);
-      }
-      return res.text();
+      const url = `${fileBase(scope, worktreeId)}/files/${path}`;
+      return latestOnly(`text ${url}`, async () => {
+        const res = await apiFetch(url);
+        if (res.status === 422) throw new ApiError("File too large to preview", 422);
+        if (!res.ok) {
+          const text = await res.text();
+          let msg = text;
+          try {
+            const j = JSON.parse(text) as { error?: string; message?: string };
+            msg = j.error ?? j.message ?? text;
+          } catch { /* not JSON, keep raw text */ }
+          throw new ApiError(msg, res.status);
+        }
+        return res.text();
+      });
     },
 
     async getDiff(
@@ -1066,27 +1077,30 @@ export function createClientApi() {
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
       if (submodule) q.set("submodule", submodule);
-      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/diff/${path}?${q}`);
-      const text = await res.text();
-      if (!res.ok) {
-        if (res.status === 422) {
-          try {
-            const j = JSON.parse(text) as { message?: string; error?: string };
-            throw new ApiError(j.message ?? j.error ?? text, 422);
-          } catch (e) {
-            if (e instanceof ApiError) throw e;
-            throw new ApiError(text, 422);
+      const url = `${fileBase(fileScope, worktreeId)}/diff/${path}?${q}`;
+      return latestOnly(url, async () => {
+        const res = await apiFetch(url);
+        const text = await res.text();
+        if (!res.ok) {
+          if (res.status === 422) {
+            try {
+              const j = JSON.parse(text) as { message?: string; error?: string };
+              throw new ApiError(j.message ?? j.error ?? text, 422);
+            } catch (e) {
+              if (e instanceof ApiError) throw e;
+              throw new ApiError(text, 422);
+            }
           }
+          throw new ApiError(text || res.statusText, res.status);
         }
-        throw new ApiError(text || res.statusText, res.status);
-      }
-      return text;
+        return text;
+      });
     },
 
     async tree(worktreeId: string, path: string, scope: FileScope = "worktree"): Promise<TreeEntry[]> {
       const q = new URLSearchParams({ path: path.replace(/^\/+/, "") });
-      const res = await apiFetch(`${fileBase(scope, worktreeId)}/tree?${q}`);
-      return parseJson<TreeEntry[]>(res);
+      const url = `${fileBase(scope, worktreeId)}/tree?${q}`;
+      return latestOnly(url, async () => parseJson<TreeEntry[]>(await apiFetch(url)));
     },
 
     /**
@@ -1191,8 +1205,10 @@ export function createClientApi() {
     ): Promise<GutterResult> {
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const q = gutterScope === "branch" && scope === "worktree" ? "?scope=branch" : "";
-      const res = await apiFetch(`${fileBase(scope, worktreeId)}/gutter/${encodedPath}${q}`, { signal });
-      return parseJson<GutterResult>(res);
+      const url = `${fileBase(scope, worktreeId)}/gutter/${encodedPath}${q}`;
+      // A caller-owned abort signal must not cancel a request other callers share.
+      if (signal) return parseJson<GutterResult>(await apiFetch(url, { signal }));
+      return latestOnly(url, async () => parseJson<GutterResult>(await apiFetch(url)));
     },
 
     async listChangedPaths(
@@ -1205,8 +1221,8 @@ export function createClientApi() {
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
       if (submodule) q.set("submodule", submodule);
-      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/changed-paths?${q}`);
-      return parseJson<ChangedPathEntry[]>(res);
+      const url = `${fileBase(fileScope, worktreeId)}/changed-paths?${q}`;
+      return latestOnly(url, async () => parseJson<ChangedPathEntry[]>(await apiFetch(url)));
     },
 
     /** Fetch the whole in-memory diffstat cache (GET /worktrees/diffstats). */

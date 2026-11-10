@@ -45,6 +45,26 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     spy.mockRestore();
   });
 
+  it("a failed watcher refetch keeps the last good content instead of flipping to the raw error", async () => {
+    // Regression: every refetch cleared the error and every failure set the browser's raw message, so a
+    // run of failing refetches (worktree churn, a flaky link) strobed the pane between file and error.
+    useWorkspaceStore.setState({ activeWorktreeId: "wt-1", activeFilePath: "README.md", diffScopeByWorktree: {} });
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument());
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const spy = vi.spyOn(api, "getFile").mockRejectedValue(new TypeError("Failed to fetch"));
+    act(() => {
+      api.__test.emit({ type: "tree:changed", worktreeId: "wt-1", path: "", kind: "added" });
+    });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("keeping last content")));
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument();
+    spy.mockRestore();
+    warn.mockRestore();
+  });
+
   it("9.T2 — scope 'branch' on a .md file populates fileBody (not null) after the fetch effect resolves", async () => {
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",

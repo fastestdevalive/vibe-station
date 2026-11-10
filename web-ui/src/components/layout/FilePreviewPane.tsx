@@ -220,8 +220,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => clearInterval(id);
   }, [worktreeId, path, scope, gutterMissing, artifactSourced]);
 
-  const [error, setError] = useState<string | null>(null);
-  const [tooLarge, setTooLarge] = useState(false);
+  // Keyed to `bodyKey` like `loaded`: a refetch of the SAME file (watcher, reconnect) must not blank the
+  // error while it is in flight, and a failed refetch must not replace content that is on screen. Clearing
+  // on every refetch start and setting the raw browser error on every failure made the pane strobe between
+  // the file and "Failed to fetch" whenever refetches failed in a row (worktree churn, a flaky link).
+  const [errorState, setError] = useState<{ key: string; text: string } | null>(null);
+  const error = errorState && errorState.key === bodyKey ? errorState.text : null;
+  // Keyed for the same reason: an unkeyed flag reset on every refetch start showed the cached body between
+  // two 422s of the same file, and leaked the previous file's "too large" into the next file's first render.
+  const [tooLargeKey, setTooLargeKey] = useState<string | null>(null);
+  const tooLarge = bodyKey != null && tooLargeKey === bodyKey;
+  // Whether `bodyKey` has a body (fresh or cached) — read by the fetch effect's failure path.
+  const shownKeyRef = useRef<string | null>(null);
+  shownKeyRef.current = bodyKey && (loaded?.key === bodyKey || cached) ? bodyKey : null;
   const [artifactRemoveError, setArtifactRemoveError] = useState<{ path: string; text: string } | null>(null);
 
   useEffect(() => {
@@ -230,7 +241,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (!bodyKey || !worktreeId || !path || isImagePath(path) || artifactSource.kind === "loading" || artifactSource.kind === "evicted" || artifactSource.kind === "error") {
       setLoaded(null);
       setError(null);
-      setTooLarge(false);
+      setTooLargeKey(null);
       return;
     }
     // `getFile` has no `submodule` query param, so a submodule-relative path
@@ -238,8 +249,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     // `submodule` separately and keeps the submodule-relative path.
     const rootedPath = submodule && path ? `${submodule}/${path}` : path;
     let cancelled = false;
-    setError(null);
-    setTooLarge(false);
+    const fail = (text: string) => setError({ key: bodyKey, text });
     void (async () => {
       try {
         if (artifactRowId) {
@@ -252,7 +262,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             setTruncated(content.truncatedTotal != null ? { key: bodyKey, total: content.truncatedTotal } : null);
             setArtifactFailure(null);
           } else {
-            setError("Unexpected image content for a text file");
+            fail("Unexpected image content for a text file");
+            return;
           }
         } else if (isExternalPeek && externalToken) {
           const text = await getExternalFile(api, fileScope, worktreeId, externalToken);
@@ -294,6 +305,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           const d = await api.getDiff(worktreeId, path, "commit", commitSha, fileScope, submodule);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
+        if (!cancelled) {
+          setError(null);
+          setTooLargeKey(null);
+        }
       } catch (e) {
         const panel = artifactRowId ? panelForReadError(e) : null;
         if (panel) {
@@ -303,14 +318,21 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           }
         } else if (e instanceof ApiError && e.status === 422) {
           if (!cancelled) {
-            setTooLarge(true);
+            setTooLargeKey(bodyKey);
             setLoaded(null);
           }
         } else if (e instanceof ApiError && e.status === 404) {
           // A comment's file can be gone (deleted, renamed): say so plainly instead of the daemon's raw text.
-          if (!cancelled) setError("File not found");
+          if (!cancelled) fail("File not found");
         } else if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load");
+          if (shownKeyRef.current === bodyKey) {
+            // A transient failure (network, proxy, 5xx) of a REFETCH: keep the last good content. The next
+            // watcher event or `ws:open` refetches; a gone file still reports 404 above. Leaves `error` alone:
+            // a "File not found" already on screen must not flip back to the stale body.
+            console.warn(`[vst] preview refetch failed, keeping last content: ${e instanceof Error ? e.message : String(e)}`);
+          } else {
+            fail(e instanceof Error ? e.message : "Failed to load");
+          }
         }
       }
     })();

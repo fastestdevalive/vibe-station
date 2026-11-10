@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope, SessionState, WSEvent } from "@/api/types";
 import { useWorkspaceStore } from "./useStore";
@@ -89,13 +89,48 @@ export function useSessionOutput(
   return { sessionState };
 }
 
+/** Minimum spacing between two `lastChanged` bumps of one watch hook. */
+export const WATCH_COALESCE_MS = 300;
+
+/**
+ * `lastChanged` plus a coalesced `bump`: the first event bumps immediately (a
+ * single save still refreshes at once), further events inside
+ * `WATCH_COALESCE_MS` collapse into ONE trailing bump.
+ *
+ * The daemon sends one `tree:changed` per changed PATH, each a separate WS
+ * frame, and every bump re-runs each consumer's fetch effects (file body, diff,
+ * gutter, tree, changed paths). Unthrottled, a checkout/rewrite/build in the
+ * worktree turned into hundreds of requests per second — see `api/latestOnly.ts`.
+ */
+function useCoalescedBump() {
+  const [lastChanged, setLastChanged] = useState(0);
+  const state = useRef<{ last: number; timer: ReturnType<typeof setTimeout> | null }>({ last: 0, timer: null });
+  const cancel = useCallback(() => {
+    if (state.current.timer) clearTimeout(state.current.timer);
+    state.current.timer = null;
+  }, []);
+  const bump = useCallback(() => {
+    const s = state.current;
+    if (s.timer) return; // a trailing bump is already scheduled and will cover this event
+    const fire = () => {
+      s.timer = null;
+      s.last = Date.now();
+      setLastChanged(s.last);
+    };
+    const wait = s.last + WATCH_COALESCE_MS - Date.now();
+    if (wait <= 0) fire();
+    else s.timer = setTimeout(fire, wait);
+  }, []);
+  return { lastChanged, bump, cancel };
+}
+
 export function useFileWatch(
   api: ApiInstance,
   worktreeId: string | null,
   path: string | null,
   scope: FileScope = "worktree",
 ) {
-  const [lastChanged, setLastChanged] = useState(0);
+  const { lastChanged, bump: bumpChanged, cancel } = useCoalescedBump();
   useEffect(() => {
     if (!worktreeId || !path) return undefined;
     void api.send({
@@ -106,12 +141,13 @@ export function useFileWatch(
     });
     const bump = (ev: WSEvent) => {
       if ((ev.type === "file:changed" || ev.type === "file:deleted") && ev.worktreeId === worktreeId && ev.path === path) {
-        setLastChanged(Date.now());
+        bumpChanged();
       }
     };
     const offChanged = api.on("file:changed", bump);
     const offDeleted = api.on("file:deleted", bump);
     return () => {
+      cancel();
       offChanged();
       offDeleted();
       void api.send({
@@ -121,7 +157,7 @@ export function useFileWatch(
         ...(scope === "project" ? { scope: "project" as const } : {}),
       });
     };
-  }, [api, path, worktreeId, scope]);
+  }, [api, path, worktreeId, scope, bumpChanged, cancel]);
   return { lastChanged };
 }
 
@@ -130,7 +166,7 @@ export function useTreeWatch(
   worktreeId: string | null,
   scope: FileScope = "worktree",
 ) {
-  const [lastChanged, setLastChanged] = useState(0);
+  const { lastChanged, bump, cancel } = useCoalescedBump();
   useEffect(() => {
     if (!worktreeId) return undefined;
     void api.send({
@@ -139,9 +175,10 @@ export function useTreeWatch(
       ...(scope === "project" ? { scope: "project" as const } : {}),
     });
     const off = api.on("tree:changed", (ev) => {
-      if (ev.type === "tree:changed" && ev.worktreeId === worktreeId) setLastChanged(Date.now());
+      if (ev.type === "tree:changed" && ev.worktreeId === worktreeId) bump();
     });
     return () => {
+      cancel();
       off();
       void api.send({
         type: "tree:unwatch",
@@ -149,6 +186,6 @@ export function useTreeWatch(
         ...(scope === "project" ? { scope: "project" as const } : {}),
       });
     };
-  }, [api, worktreeId, scope]);
+  }, [api, worktreeId, scope, bump, cancel]);
   return { lastChanged };
 }
