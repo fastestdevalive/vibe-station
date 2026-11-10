@@ -71,6 +71,28 @@ describe("FilesPanel (post docked-list extraction)", () => {
     }
   });
 
+  it("Close all files appears with 2+ tabs and clears them; absent with 1 tab", async () => {
+    const user = userEvent.setup();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      openFileTabsByWorktree: { "wt-1": ["src/App.tsx"] },
+      activeFileTabIdxByWorktree: { "wt-1": 0 },
+    });
+    render(<FilesPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("README.md");
+    expect(screen.queryByRole("button", { name: "Close all files" })).toBeNull();
+
+    act(() => {
+      useWorkspaceStore.setState({
+        openFileTabsByWorktree: { "wt-1": ["src/App.tsx", "README.md"] },
+      });
+    });
+    await user.click(await screen.findByRole("button", { name: "Close all files" }));
+    expect(screen.getByText("No file open")).toBeInTheDocument();
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree["wt-1"]).toEqual([]);
+  });
+
   it("opening a file shows the open-file tab with its name; closing it clears activeFilePath", async () => {
     const user = userEvent.setup();
     useWorkspaceStore.setState({

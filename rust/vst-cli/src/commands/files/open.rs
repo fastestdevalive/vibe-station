@@ -39,6 +39,7 @@ pub async fn run_files_open(opts: FilesOpenOptions) -> Result<(), (String, i32)>
     let (id, seg) = &opts.scope;
     let body = OpenFilesBody {
         path: opts.path.clone(),
+        ..Default::default()
     };
     let result = daemon_post::<OpenFilesResult, _>(&format!("/{seg}/{id}/open-files"), Some(&body))
         .await

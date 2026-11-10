@@ -1624,11 +1624,13 @@ describe("useWorkspaceStore - durable open-file sync (review Fix C)", () => {
     expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/src/foo.ts"]);
   });
 
-  it("setActiveFile(null) closes the active tab and reports the close to the daemon", () => {
+  it("setActiveFile(null) closes the active tab and reports the close to the daemon", async () => {
     const closeSpy = vi.spyOn(api, "closeFileDurable").mockResolvedValue({ paths: [] });
     useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
     useWorkspaceStore.getState().setActiveFile("/src/foo.ts");
     useWorkspaceStore.getState().setActiveFile(null);
+    // The close is queued behind the in-flight open (ordered durable calls).
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(closeSpy).toHaveBeenCalledWith(W1, "/src/foo.ts", "worktree");
   });
@@ -1639,5 +1641,141 @@ describe("useWorkspaceStore - durable open-file sync (review Fix C)", () => {
     useWorkspaceStore.getState().setActiveFilePathAtLine(W1, "/src/bar.ts", 12, "bar");
 
     expect(openSpy).toHaveBeenCalledWith(W1, "/src/bar.ts", "worktree");
+  });
+  it("setActiveFile replacing the active tab sends the old path as `replaces` (2.T1)", () => {
+    const openSpy = vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+    });
+    useWorkspaceStore.getState().setActiveFile("/c");
+
+    expect(openSpy).toHaveBeenCalledWith(W1, "/c", "worktree", "/a");
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/c", "/b"]);
+  });
+
+  it("setActiveFile append (no active tab) calls openFileDurable with exactly 3 args (2.T2)", () => {
+    const openSpy = vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/x");
+    expect(openSpy.mock.calls[0]).toHaveLength(3);
+  });
+
+  it("closeAllFileTabs clears tabs/active/peek and sends one close-all (2.T3)", () => {
+    const allSpy = vi.spyOn(api, "closeAllFilesDurable").mockResolvedValue({ paths: [] });
+    const closeSpy = vi.spyOn(api, "closeFileDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      activeFilePath: "/a",
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+      peekFile: { worktreeId: W1, path: "/p" } as never,
+      pendingLineTarget: { worktreeId: W1, path: "/a" } as never,
+    });
+    useWorkspaceStore.getState().closeAllFileTabs(W1, "worktree");
+
+    const st = useWorkspaceStore.getState();
+    expect(st.openFileTabsByWorktree[W1]).toEqual([]);
+    expect(st.activeFileTabIdxByWorktree[W1]).toBe(-1);
+    expect(st.activeFilePath).toBeNull();
+    expect(st.peekFile).toBeNull();
+    expect(st.pendingLineTarget).toBeNull();
+    expect(allSpy).toHaveBeenCalledTimes(1);
+    expect(allSpy).toHaveBeenCalledWith(W1, "worktree");
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("closeAllFileTabs leaves another worktree's peek alone (2.T3)", () => {
+    vi.spyOn(api, "closeAllFilesDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      peekFile: { worktreeId: "wt-other", path: "/p" } as never,
+    });
+    useWorkspaceStore.getState().closeAllFileTabs(W1, "worktree");
+    expect(useWorkspaceStore.getState().peekFile).not.toBeNull();
+  });
+
+  it("durable calls reach the daemon in issue order even when the first is slow (2.T3b)", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    vi.spyOn(api, "openFileDurable").mockImplementation(async (_id, path, _scope, replaces) => {
+      order.push(`${path}<-${replaces}`);
+      if (path === "/c") await firstDone;
+      return { paths: [] };
+    });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+    });
+    useWorkspaceStore.getState().setActiveFile("/c");
+    useWorkspaceStore.getState().setActiveFile("/d");
+    await Promise.resolve();
+    expect(order).toEqual(["/c<-/a"]); // second is held behind the slow first
+    releaseFirst();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(["/c<-/a", "/d<-/c"]);
+  });
+
+  it("a failed durable call does not block later calls on the same key (2.T3d)", async () => {
+    const openSpy = vi
+      .spyOn(api, "openFileDurable")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValue({ paths: [] });
+    const allSpy = vi.spyOn(api, "closeAllFilesDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+    });
+    useWorkspaceStore.getState().setActiveFile("/c");
+    useWorkspaceStore.getState().setActiveFile("/d");
+    useWorkspaceStore.getState().closeAllFileTabs(W1, "worktree");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openSpy.mock.calls).toEqual([
+      [W1, "/c", "worktree", "/a"],
+      [W1, "/d", "worktree", "/c"],
+    ]);
+    expect(allSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a synchronously-throwing durable call does not block later calls (2.T3e)", async () => {
+    const openSpy = vi
+      .spyOn(api, "openFileDurable")
+      .mockImplementationOnce(() => {
+        throw new Error("sync");
+      })
+      .mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      openFileTabsByWorktree: { [W1]: ["/a", "/b"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+    });
+    useWorkspaceStore.getState().setActiveFile("/c");
+    useWorkspaceStore.getState().setActiveFile("/d");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    expect(openSpy.mock.calls[1]).toEqual([W1, "/d", "worktree", "/c"]);
+  });
+
+  it("pushJump permanent-tab commit reports the open; an already-open tab does not (2.T3c)", () => {
+    const openSpy = vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().pushJump({ worktreeId: W1, path: "/j.ts", line: 3, matchText: null, source: "definition" });
+    expect(openSpy).toHaveBeenCalledWith(W1, "/j.ts", "worktree");
+    openSpy.mockClear();
+    useWorkspaceStore.getState().pushJump({ worktreeId: W1, path: "/j.ts", line: 9, matchText: null, source: "definition" });
+    expect(openSpy).not.toHaveBeenCalled();
   });
 });

@@ -1114,11 +1114,16 @@ export function createClientApi() {
     },
 
     /** Add a path to the durable open-file set; returns the full updated list. */
-    async openFileDurable(id: string, path: string, scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+    async openFileDurable(
+      id: string,
+      path: string,
+      scope: FileScope = "worktree",
+      replaces?: string,
+    ): Promise<{ paths: string[] }> {
       const res = await apiFetch(`${fileBase(scope, id)}/open-files`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify(replaces ? { path, replaces } : { path }),
       });
       return parseJson<{ paths: string[] }>(res);
     },
@@ -1129,6 +1134,16 @@ export function createClientApi() {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
+      });
+      return parseJson<{ paths: string[] }>(res);
+    },
+
+    /** Clear the whole durable open-file set (Close all); returns the (empty) list. */
+    async closeAllFilesDurable(id: string, scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const res = await apiFetch(`${fileBase(scope, id)}/open-files`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true }),
       });
       return parseJson<{ paths: string[] }>(res);
     },

@@ -8185,7 +8185,8 @@ button.dashboard-card {
   padding: 0 var(--space-3);
 }
 
-.files-topbar__add svg {
+.files-topbar__add svg,
+.files-topbar__close-all svg {
   flex-shrink: 0;
 }
 
@@ -8289,6 +8290,9 @@ button.dashboard-card {
     min-width: 28px;
     min-height: 28px;
   }
+  .files-topbar__close-all {
+    min-height: 28px;
+  }
   .files-topbar__tab {
     max-width: 100%;
     gap: var(--space-1);
@@ -8314,7 +8318,8 @@ button.dashboard-card {
   white-space: nowrap;
 }
 
-.files-topbar__add {
+.files-topbar__add,
+.files-topbar__close-all {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8326,7 +8331,8 @@ button.dashboard-card {
   cursor: pointer;
 }
 
-.files-topbar__add:disabled {
+.files-topbar__add:disabled,
+.files-topbar__close-all:disabled {
   opacity: 0.5;
   cursor: default;
 }

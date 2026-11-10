@@ -2373,6 +2373,11 @@ impl WorktreeRoutes {
         wt_id: &str,
         body: OpenFilesBody,
     ) -> Result<OpenFilesResult, WorktreeRouteError> {
+        if body.all {
+            return Err(WorktreeRouteError::Validation(
+                "all is not valid on POST".to_string(),
+            ));
+        }
         let path_str = body.path.trim();
         if path_str.is_empty() {
             return Err(WorktreeRouteError::Validation("path required".to_string()));
@@ -2381,6 +2386,14 @@ impl WorktreeRoutes {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let rel = self.open_key(wt_id, &wt_path, path_str).await?;
+        let old_key = match body.replaces.as_deref().map(str::trim) {
+            Some(r) if !r.is_empty() => Some(
+                self.open_key(wt_id, &wt_path, r)
+                    .await
+                    .unwrap_or_else(|_| r.to_string()),
+            ),
+            _ => None,
+        };
 
         let wt_id_owned = wt_id.to_string();
         let rel_owned = rel.clone();
@@ -2391,9 +2404,7 @@ impl WorktreeRoutes {
                 let Some(wt) = wt else {
                     return Err(StoreError::Mutation("Worktree not found".to_string()));
                 };
-                if !wt.open_files.contains(&rel_owned) {
-                    wt.open_files.push(rel_owned);
-                }
+                apply_open_swap(&mut wt.open_files, rel_owned, old_key.as_deref());
                 Ok(p.clone())
             })
             .await
@@ -2421,27 +2432,36 @@ impl WorktreeRoutes {
         wt_id: &str,
         body: OpenFilesBody,
     ) -> Result<OpenFilesResult, WorktreeRouteError> {
+        if body.replaces.is_some() {
+            return Err(WorktreeRouteError::Validation(
+                "replaces is not valid on DELETE".to_string(),
+            ));
+        }
         let path_str = body.path.trim();
-        if path_str.is_empty() {
+        let clear_all = body.all;
+        if !clear_all && path_str.is_empty() {
             return Err(WorktreeRouteError::Validation("path required".to_string()));
         }
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
-        let rel = match resolve_inside_worktree(&wt_path, path_str) {
-            Ok(_) => self.open_key(wt_id, &wt_path, path_str).await?,
-            // An out-of-repo artifact tab: closable whenever it is stored, even
-            // after its row was evicted or removed (Decision 6).
-            Err(_)
-                if Path::new(path_str).is_absolute()
-                    && project
-                        .worktrees
-                        .iter()
-                        .any(|w| w.id == wt_id && w.open_files.iter().any(|f| f == path_str)) =>
-            {
-                path_str.to_string()
+        let rel = if clear_all {
+            String::new()
+        } else {
+            match resolve_inside_worktree(&wt_path, path_str) {
+                Ok(_) => self.open_key(wt_id, &wt_path, path_str).await?,
+                // An out-of-repo artifact tab: closable whenever it is stored, even
+                // after its row was evicted or removed (Decision 6).
+                Err(_)
+                    if Path::new(path_str).is_absolute()
+                        && project.worktrees.iter().any(|w| {
+                            w.id == wt_id && w.open_files.iter().any(|f| f == path_str)
+                        }) =>
+                {
+                    path_str.to_string()
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         };
 
         let wt_id_owned = wt_id.to_string();
@@ -2452,7 +2472,11 @@ impl WorktreeRoutes {
                 let Some(wt) = wt else {
                     return Err(StoreError::Mutation("Worktree not found".to_string()));
                 };
-                wt.open_files.retain(|f| f != &rel);
+                if clear_all {
+                    wt.open_files.clear();
+                } else {
+                    wt.open_files.retain(|f| f != &rel);
+                }
                 Ok(p.clone())
             })
             .await
@@ -3073,5 +3097,24 @@ mod redact_tests {
             redact_paths("fatal: /a/b/wt/x: bad", &[Path::new("/a/b/wt")]),
             "fatal: <worktree>/x: bad"
         );
+    }
+}
+
+/// Add `rel` to a durable open-files list. When `old` is present in the list the
+/// path is swapped at the same index (or `old` is dropped if `rel` is already
+/// open elsewhere); otherwise it is appended. The list never holds duplicates.
+pub(crate) fn apply_open_swap(files: &mut Vec<String>, rel: String, old: Option<&str>) {
+    if let Some(old) = old {
+        if let Some(i) = files.iter().position(|f| f == old) {
+            if files.contains(&rel) && old != rel {
+                files.remove(i);
+            } else {
+                files[i] = rel;
+            }
+            return;
+        }
+    }
+    if !files.contains(&rel) {
+        files.push(rel);
     }
 }

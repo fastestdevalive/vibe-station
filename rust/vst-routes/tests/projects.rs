@@ -36,7 +36,7 @@ use vst_routes::worktrees::{FileResponse, WorktreeRoutes};
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::projects::{
-    CreateNewProjectBody, CreateProjectBody, PatchProjectBody, StartAgent,
+    CreateNewProjectBody, CreateProjectBody, OpenFilesBody, PatchProjectBody, StartAgent,
 };
 use vst_types::rest::shared::Mode;
 use vst_types::rest::worktrees::CreateWorktreeBody;
@@ -1982,4 +1982,102 @@ async fn test_project_file_search() {
         .await
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::NotFound(_)));
+}
+
+fn pofb(path: &str, replaces: Option<&str>, all: bool) -> OpenFilesBody {
+    OpenFilesBody {
+        path: path.into(),
+        replaces: replaces.map(String::from),
+        all,
+    }
+}
+
+#[tokio::test]
+async fn test_project_open_files_swap_and_clear_all() {
+    let (dir, store, b, routes) = test_env();
+    let proj_dir = dir.path().join("of-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    register_git_project(&store, "of-proj", &proj_dir).await;
+
+    for n in ["a", "b", "c"] {
+        routes
+            .open_file_durable("of-proj", pofb(n, None, false))
+            .await
+            .unwrap();
+    }
+    let mut rx = b.subscribe();
+    let res = routes
+        .open_file_durable("of-proj", pofb("d", Some("b"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["a", "d", "c"]);
+    assert_one_open_files_changed(&mut rx, "of-proj", &["a", "d", "c"]);
+    let res = routes
+        .open_file_durable("of-proj", pofb("a", Some("c"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["a", "d"]);
+
+    let err = routes
+        .close_file_durable("of-proj", pofb("", None, false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)), "{err:?}");
+    let mut rx = b.subscribe();
+    let res = routes
+        .close_file_durable("of-proj", pofb("", None, true))
+        .await
+        .unwrap();
+    assert!(res.paths.is_empty());
+    assert_one_open_files_changed(&mut rx, "of-proj", &[]);
+}
+
+/// Exactly ONE `openFiles:changed` for the project, carrying the full list.
+fn assert_one_open_files_changed(
+    rx: &mut tokio::sync::broadcast::Receiver<ServerEvent>,
+    project: &str,
+    want: &[&str],
+) {
+    match rx.try_recv() {
+        Ok(ServerEvent::OpenFilesChanged {
+            project_id, paths, ..
+        }) => {
+            assert_eq!(project_id.as_deref(), Some(project));
+            assert_eq!(paths, want);
+        }
+        other => panic!("expected one OpenFilesChanged, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected exactly one broadcast");
+}
+
+#[tokio::test]
+async fn test_project_open_files_shared_body_rules() {
+    let (dir, store, _b, routes) = test_env();
+    let proj_dir = dir.path().join("of-proj2");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    register_git_project(&store, "of-proj2", &proj_dir).await;
+    routes
+        .open_file_durable("of-proj2", pofb("a", None, false))
+        .await
+        .unwrap();
+
+    let err = routes
+        .open_file_durable("of-proj2", pofb("x", None, true))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)), "{err:?}");
+    let err = routes
+        .close_file_durable("of-proj2", pofb("a", Some("a"), false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)), "{err:?}");
+    let err = routes
+        .open_file_durable("of-proj2", pofb("../../etc/passwd", Some("a"), false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::AccessDenied(_)), "{err:?}");
+    assert_eq!(
+        routes.list_open_files("of-proj2").await.unwrap().paths,
+        vec!["a"]
+    );
 }

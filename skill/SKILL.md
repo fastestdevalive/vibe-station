@@ -225,7 +225,7 @@ vst agent send <sessionId> --file=./instructions.md --wait
 
 ## 10. Open a file in the UI
 
-When you want the user to see a specific file in the vibe-station web UI, open it in the Files panel with:
+Open a file in the user's Files panel ONLY when the user explicitly asks to see it. Never open files you wrote or artifacts you registered; the user opens those from the Artifacts tab. The command:
 
 ```bash
 vst file open <worktreeId> <path>
@@ -506,6 +506,7 @@ vst artifact pin <id|path> [--unpin] [--worktree <id> | --project <id>] [--json]
   vst-internal paths are refused (`ARTIFACT_DENIED`).
 - Exit codes: `0` ok, `2` not found (every path, or the session), `1` any other failure. Per-path errors print to stderr.
 - Pin limit is 50 per scope; 500 artifacts per scope (oldest unpinned dropped).
+- Registering an artifact does not open it in the user's UI; see section 10 before opening anything.
 
 ---
 

@@ -72,6 +72,13 @@ mod tests {
         assert!(!try_lock_exclusive(&f2).expect("lock f2 attempt"));
 
         // Dropping f1 releases the flock; a third attempt now succeeds.
+        //
+        // Bounded retry: other tests in this binary spawn child processes in
+        // parallel (e.g. `tmux::tests`). A child forked while f1 was open
+        // shares f1's open file description — and so its flock — until it
+        // `exec`s (O_CLOEXEC closes it only at exec), so the lock can outlive
+        // `drop(f1)` by a few milliseconds. Production is unaffected: the
+        // daemon takes this lock once at startup.
         drop(f1);
         let f3 = OpenOptions::new()
             .create(true)
@@ -79,6 +86,13 @@ mod tests {
             .write(true)
             .open(&path)
             .expect("open f3");
-        assert!(try_lock_exclusive(&f3).expect("lock f3"));
+        let acquired = (0..100).any(|_| {
+            if try_lock_exclusive(&f3).expect("lock f3") {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            false
+        });
+        assert!(acquired, "lock not released within 2s of dropping f1");
     }
 }

@@ -484,6 +484,8 @@ export interface WorkspaceState {
   navigateForward: (key: string) => void;
   /** Close the tab at index idx; adjacent tab becomes active. Updates lastFileByWorktree. */
   closeFileTab: (worktreeId: string, idx: number) => void;
+  /** Close every file tab for the worktree/project key and clear the daemon's durable set (one request). */
+  closeAllFileTabs: (worktreeId: string, scope: FileScope) => void;
   /** Switch to existing tab at index idx. Updates lastFileByWorktree. */
   setActiveFileTabIdx: (worktreeId: string, idx: number) => void;
   /** Set (or clear with null) which flat/tree list owns arrow-key focus. */
@@ -930,6 +932,26 @@ export function __resetForDemo(): void {
   layoutTransitionTimer = null;
 }
 
+// Per-key FIFO for durable open-file calls: the daemon must see them in issue
+// order or an in-place `replaces` can miss. A failed call never blocks the chain.
+const durableChains = new Map<string, Promise<unknown>>();
+function enqueueDurable(key: string, fn: () => Promise<unknown>): void {
+  const prev = durableChains.get(key);
+  const run = (): Promise<unknown> => {
+    try {
+      return Promise.resolve(fn());
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  };
+  // Idle chain: issue synchronously (same timing as the old fire-and-forget).
+  const tail: Promise<unknown> = (prev ? prev.then(run) : run()).catch(() => undefined);
+  durableChains.set(key, tail);
+  void tail.then(() => {
+    if (durableChains.get(key) === tail) durableChains.delete(key);
+  });
+}
+
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => {
@@ -1293,7 +1315,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               // Durable-state sync (Phase 7): report the closed path so the
               // daemon's view doesn't keep a tab the client closed.
               if (closingPath != null) {
-                void api.closeFileDurable(key, closingPath, scope).catch(() => undefined);
+                enqueueDurable(key, () => api.closeFileDurable(key, closingPath, scope));
               }
               return {
                 ...history,
@@ -1316,7 +1338,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (alreadyOpen >= 0) {
               // Durable-state sync (Phase 7): still report the path as open so
               // the daemon keeps it in the set.
-              void api.openFileDurable(key, path, scope).catch(() => undefined);
+              enqueueDurable(key, () => api.openFileDurable(key, path, scope));
               return {
                 ...history,
                 activeFilePath: path,
@@ -1328,7 +1350,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             let nextTabs: string[];
             let nextIdx: number;
+            let replaced: string | undefined;
             if (idx >= 0 && idx < tabs.length) {
+              replaced = tabs[idx];
               nextTabs = tabs.map((t, i) => (i === idx ? path : t));
               nextIdx = idx;
             } else {
@@ -1336,8 +1360,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               nextIdx = nextTabs.length - 1;
             }
             // Durable-state sync (Phase 7): report the newly opened/replaced
-            // path so `openFiles:changed` echoes don't wipe it.
-            void api.openFileDurable(key, path, scope).catch(() => undefined);
+            // path so `openFiles:changed` echoes don't wipe it. An in-place
+            // replace passes the old path so the daemon swaps it (one request,
+            // one echo) instead of leaking it in the durable set.
+            enqueueDurable(key, () =>
+              replaced !== undefined
+                ? api.openFileDurable(key, path, scope, replaced)
+                : api.openFileDurable(key, path, scope),
+            );
             return {
               ...history,
               activeFilePath: path,
@@ -1380,7 +1410,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           });
           // Durable-state sync (Phase 7): best-effort mirror to the daemon's
           // openFiles column so `vst files ls` reflects what the UI shows.
-          void api.openFileDurable(worktreeId, path, scope).catch(() => undefined);
+          enqueueDurable(worktreeId, () => api.openFileDurable(worktreeId, path, scope));
         },
         setActiveFilePathAtLine: (worktreeId, path, line, matchText) => {
           const scope: FileScope =
@@ -1402,7 +1432,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             // Durable-state sync (Phase 7): search/quick-open jumps add a real
             // tab — report it so `openFiles:changed` echoes don't wipe it.
-            void api.openFileDurable(worktreeId, path, scope).catch(() => undefined);
+            enqueueDurable(worktreeId, () => api.openFileDurable(worktreeId, path, scope));
             const nextTabs = [...tabs, path];
             const nextIdx = nextTabs.length - 1;
             return {
@@ -1488,6 +1518,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (next.source !== "search" && !next.external) {
               const tabs = s.openFileTabsByWorktree[next.worktreeId] ?? [];
               const nextTabs = [...tabs, next.path];
+              // Report the permanent tab to the daemon's durable set, or the
+              // next `openFiles:changed` echo deletes it.
+              const jumpScope: FileScope =
+                useWorkspaceStore.getState().activeWorktreeId === next.worktreeId ? "worktree" : "project";
+              enqueueDurable(next.worktreeId, () =>
+                api.openFileDurable(next.worktreeId, next.path, jumpScope),
+              );
               return {
                 ...history,
                 openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [next.worktreeId]: nextTabs },
@@ -1635,8 +1672,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           });
           // Durable-state sync (Phase 7): best-effort mirror to the daemon.
           if (closingPath != null) {
-            void api.closeFileDurable(worktreeId, closingPath, scope).catch(() => undefined);
+            enqueueDurable(worktreeId, () => api.closeFileDurable(worktreeId, closingPath, scope));
           }
+        },
+        closeAllFileTabs: (worktreeId, scope) => {
+          set((s) => {
+            const ws = useWorkspaceStore.getState();
+            const isActive = (ws.activeWorktreeId ?? ws.activeDirectContextId) === worktreeId;
+            return {
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: [] },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: -1 },
+              ...(isActive ? { activeFilePath: null } : {}),
+              ...(s.peekFile?.worktreeId === worktreeId ? { peekFile: null } : {}),
+              ...(s.pendingLineTarget?.worktreeId === worktreeId ? { pendingLineTarget: null } : {}),
+            };
+          });
+          enqueueDurable(worktreeId, () => api.closeAllFilesDurable(worktreeId, scope));
         },
         setActiveFileTabIdx: (worktreeId, idx) =>
           set((s) => {

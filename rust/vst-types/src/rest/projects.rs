@@ -81,10 +81,18 @@ pub struct OpenFilesResult {
 }
 
 /// `POST/DELETE /projects/:id/open-files` request body.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// `replaces` is POST-only (swap that path for `path` in place); `all` is
+/// DELETE-only (clear the whole set, `path` may be empty).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenFilesBody {
+    #[serde(default)]
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
 }
 
 /// `PATCH /projects/:id` request body.

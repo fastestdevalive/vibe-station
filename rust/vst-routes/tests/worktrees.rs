@@ -2174,6 +2174,7 @@ async fn test_open_files_append_is_idempotent() {
             "wt-1",
             OpenFilesBody {
                 path: "src/a.rs".into(),
+                ..Default::default()
             },
         )
         .await
@@ -2189,6 +2190,7 @@ async fn test_open_files_append_is_idempotent() {
             "wt-1",
             OpenFilesBody {
                 path: "src/a.rs".into(),
+                ..Default::default()
             },
         )
         .await
@@ -2212,6 +2214,7 @@ async fn test_open_files_delete_removes_path() {
             "wt-1",
             OpenFilesBody {
                 path: "src/a.rs".into(),
+                ..Default::default()
             },
         )
         .await
@@ -2221,6 +2224,7 @@ async fn test_open_files_delete_removes_path() {
             "wt-1",
             OpenFilesBody {
                 path: "src/a.rs".into(),
+                ..Default::default()
             },
         )
         .await
@@ -2244,6 +2248,7 @@ async fn test_open_files_rejects_escaping_path() {
             "wt-1",
             OpenFilesBody {
                 path: "../../etc/passwd".into(),
+                ..Default::default()
             },
         )
         .await
@@ -2496,4 +2501,127 @@ async fn create_worktree_record_honours_an_explicit_sort_order() {
     .await
     .unwrap();
     assert_eq!(wt.sort_order, 7.0, "a promoted draft keeps its slot");
+}
+
+fn ofb(path: &str, replaces: Option<&str>, all: bool) -> OpenFilesBody {
+    OpenFilesBody {
+        path: path.into(),
+        replaces: replaces.map(String::from),
+        all,
+    }
+}
+
+async fn open_all(routes: &WorktreeRoutes, names: &[&str]) {
+    for n in names {
+        routes
+            .open_file_durable("wt-1", ofb(n, None, false))
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_open_files_replaces_swaps_in_place() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(make_sample_project("proj-1", "wt-1", wt_dir.path()))
+        .await
+        .unwrap();
+    open_all(&routes, &["a", "b", "c"]).await;
+    let res = routes
+        .open_file_durable("wt-1", ofb("d", Some("b"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["a", "d", "c"]);
+}
+
+#[tokio::test]
+async fn test_open_files_replaces_missing_appends() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(make_sample_project("proj-1", "wt-1", wt_dir.path()))
+        .await
+        .unwrap();
+    open_all(&routes, &["a", "b"]).await;
+    let res = routes
+        .open_file_durable("wt-1", ofb("d", Some("zzz"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["a", "b", "d"]);
+    // replaces an already-open other tab: old removed, no duplicate.
+    let res = routes
+        .open_file_durable("wt-1", ofb("b", Some("a"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["b", "d"]);
+    // replaces == path: no-op swap to itself.
+    let res = routes
+        .open_file_durable("wt-1", ofb("b", Some("b"), false))
+        .await
+        .unwrap();
+    assert_eq!(res.paths, vec!["b", "d"]);
+}
+
+#[tokio::test]
+async fn test_open_files_delete_all_clears() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(make_sample_project("proj-1", "wt-1", wt_dir.path()))
+        .await
+        .unwrap();
+    open_all(&routes, &["a", "b"]).await;
+    let err = routes
+        .close_file_durable("wt-1", ofb("", None, false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Validation(_)), "{err:?}");
+    let res = routes
+        .close_file_durable("wt-1", ofb("", None, true))
+        .await
+        .unwrap();
+    assert!(res.paths.is_empty());
+}
+
+#[tokio::test]
+async fn test_open_files_shared_body_rules() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(make_sample_project("proj-1", "wt-1", wt_dir.path()))
+        .await
+        .unwrap();
+    open_all(&routes, &["a"]).await;
+    let err = routes
+        .open_file_durable("wt-1", ofb("x", None, true))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Validation(_)), "{err:?}");
+    let err = routes
+        .close_file_durable("wt-1", ofb("a", Some("a"), false))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Validation(_)), "{err:?}");
+    let err = routes
+        .open_file_durable("wt-1", ofb("../../etc/passwd", Some("a"), false))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, WorktreeRouteError::AccessDenied(_)),
+        "{err:?}"
+    );
+    assert_eq!(
+        routes.list_open_files("wt-1").await.unwrap().paths,
+        vec!["a"]
+    );
+}
+
+#[test]
+fn test_open_files_body_wire_defaults() {
+    let b: OpenFilesBody = serde_json::from_str(r#"{"path":"a"}"#).unwrap();
+    assert_eq!((b.replaces, b.all), (None, false));
+    let b: OpenFilesBody = serde_json::from_str(r#"{"all":true}"#).unwrap();
+    assert!(b.all && b.path.is_empty());
 }

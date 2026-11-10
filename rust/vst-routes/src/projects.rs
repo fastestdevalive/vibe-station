@@ -353,6 +353,9 @@ impl ProjectRoutes {
         project_id: &str,
         body: OpenFilesBody,
     ) -> Result<OpenFilesResult, ProjectRouteError> {
+        if body.all {
+            return Err(ProjectRouteError::validation("all is not valid on POST"));
+        }
         let path_str = body.path.trim();
         if path_str.is_empty() {
             return Err(ProjectRouteError::validation("path required"));
@@ -363,15 +366,21 @@ impl ProjectRoutes {
         })?;
         let root = Path::new(&project.absolute_path);
         let rel = self.open_key(project_id, root, path_str).await?;
+        let old_key = match body.replaces.as_deref().map(str::trim) {
+            Some(r) if !r.is_empty() => Some(
+                self.open_key(project_id, root, r)
+                    .await
+                    .unwrap_or_else(|_| r.to_string()),
+            ),
+            _ => None,
+        };
 
         let rel_owned = rel.clone();
         let id_owned = project_id.to_string();
         let mutated = self
             .store
             .mutate_project(project_id, move |p| {
-                if !p.open_files.contains(&rel_owned) {
-                    p.open_files.push(rel_owned);
-                }
+                crate::worktrees::apply_open_swap(&mut p.open_files, rel_owned, old_key.as_deref());
                 Ok(p.clone())
             })
             .await
@@ -397,8 +406,14 @@ impl ProjectRoutes {
         project_id: &str,
         body: OpenFilesBody,
     ) -> Result<OpenFilesResult, ProjectRouteError> {
+        if body.replaces.is_some() {
+            return Err(ProjectRouteError::validation(
+                "replaces is not valid on DELETE",
+            ));
+        }
         let path_str = body.path.trim();
-        if path_str.is_empty() {
+        let clear_all = body.all;
+        if !clear_all && path_str.is_empty() {
             return Err(ProjectRouteError::validation("path required"));
         }
 
@@ -406,24 +421,32 @@ impl ProjectRoutes {
             ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
         })?;
         let root = Path::new(&project.absolute_path);
-        let rel = match resolve_inside_dir(root, path_str) {
-            Ok(_) => self.open_key(project_id, root, path_str).await?,
-            // An out-of-repo artifact tab stays closable once stored, even
-            // after its row was evicted or removed (Decision 6).
-            Err(_)
-                if Path::new(path_str).is_absolute()
-                    && project.open_files.iter().any(|f| f == path_str) =>
-            {
-                path_str.to_string()
+        let rel = if clear_all {
+            String::new()
+        } else {
+            match resolve_inside_dir(root, path_str) {
+                Ok(_) => self.open_key(project_id, root, path_str).await?,
+                // An out-of-repo artifact tab stays closable once stored, even
+                // after its row was evicted or removed (Decision 6).
+                Err(_)
+                    if Path::new(path_str).is_absolute()
+                        && project.open_files.iter().any(|f| f == path_str) =>
+                {
+                    path_str.to_string()
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         };
 
         let id_owned = project_id.to_string();
         let mutated = self
             .store
             .mutate_project(project_id, move |p| {
-                p.open_files.retain(|f| f != &rel);
+                if clear_all {
+                    p.open_files.clear();
+                } else {
+                    p.open_files.retain(|f| f != &rel);
+                }
                 Ok(p.clone())
             })
             .await

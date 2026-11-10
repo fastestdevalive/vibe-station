@@ -1,4 +1,4 @@
-import { ArrowUpRight, FileText, FolderOutput, List, ListTree, Plus, Search, X } from "lucide-react";
+import { ArrowUpRight, FileText, FolderOutput, List, ListTree, ListX, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -65,6 +65,7 @@ export function FilesPanel({
   const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
   const activeIdx = useWorkspaceStore((s) => s.activeFileTabIdxByWorktree[wt] ?? -1);
   const closeFileTab = useWorkspaceStore((s) => s.closeFileTab);
+  const closeAllFileTabs = useWorkspaceStore((s) => s.closeAllFileTabs);
   const setActiveFileTabIdx = useWorkspaceStore((s) => s.setActiveFileTabIdx);
   const setActiveFilePathAtLine = useWorkspaceStore((s) => s.setActiveFilePathAtLine);
   const peekFile = useWorkspaceStore((s) => s.peekFile);
@@ -238,6 +239,17 @@ export function FilesPanel({
           );
         })()}
       </div>
+      {openTabs.length >= 2 && (
+        <button
+          type="button"
+          className="files-topbar__close-all"
+          aria-label="Close all files"
+          title="Close all files"
+          onClick={() => closeAllFileTabs(wt, scope)}
+        >
+          <ListX size={13} />
+        </button>
+      )}
       <button
         type="button"
         className="files-topbar__add"
