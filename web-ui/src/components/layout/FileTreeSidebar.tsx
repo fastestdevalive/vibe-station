@@ -191,8 +191,9 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     }
     let cancelled = false;
     void (async () => {
-      const list = await api.tree(activeWorktreeId, "", fileScope);
-      if (!cancelled) setRoot(sortEntries(list));
+      // A failed refetch keeps the last known root (and was an unhandled rejection before).
+      const list = await api.tree(activeWorktreeId, "", fileScope).catch(() => null);
+      if (!cancelled && list) setRoot(sortEntries(list));
     })();
     return () => {
       cancelled = true;
