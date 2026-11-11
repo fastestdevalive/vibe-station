@@ -490,6 +490,7 @@ fn test_previous_walks_three_session_chain() {
             use_tmux: false,
             channel: Channel::Json,
             state: LifecycleState::Exited,
+            state_reason: None,
             lifecycle_state: LifecycleState::Exited,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             pinned_at: None,

@@ -65,6 +65,17 @@ export function clearOrderedListWrite(p: Promise<unknown>): void {
 }
 
 /**
+ * Record patch for a `session:exited` / `session:error{gone}` event. Those
+ * events carry no reason, and the daemon's `session:state{exited, reason}` (the
+ * only carrier of the reason) normally lands first — so a session already
+ * `exited` keeps its reason instead of having it wiped by the follow-up.
+ */
+function exitedPatch(sessionId: string): Partial<Session> {
+  const known = useServerStore.getState().sessions.find((s) => s.id === sessionId);
+  return known?.state === "exited" ? { state: "exited" } : { state: "exited", stateReason: null };
+}
+
+/**
  * Mount once at the top of the authenticated app (in `Workspace`). Owns:
  *
  *   1. The initial bundle fetch (projects/worktrees/sessions in parallel).
@@ -308,7 +319,10 @@ export function useServerSync(api: ApiInstance): void {
     });
     const offSessState = sessionRepo.on("session:state", (ev) => {
       if (ev.type === "session:state") {
-        applySessionUpdated(ev.sessionId, { state: ev.state });
+        applySessionUpdated(ev.sessionId, {
+          state: ev.state,
+          stateReason: ev.state === "exited" ? (ev.reason ?? null) : null,
+        });
         patchSessionState(ev.sessionId, ev.state);
       }
     });
@@ -325,7 +339,7 @@ export function useServerSync(api: ApiInstance): void {
     });
     const offSessExited = sessionRepo.on("session:exited", (ev) => {
       if (ev.type === "session:exited") {
-        applySessionUpdated(ev.sessionId, { state: "exited" });
+        applySessionUpdated(ev.sessionId, exitedPatch(ev.sessionId));
         patchSessionState(ev.sessionId, "exited");
       }
     });
@@ -350,12 +364,12 @@ export function useServerSync(api: ApiInstance): void {
       if (ev.type !== "session:error" || ev.reason !== "gone") return;
       const known = useWorkspaceStore.getState().sessionStates[ev.sessionId];
       if (known === "not_started") return; // race during fresh spawn
-      applySessionUpdated(ev.sessionId, { state: "exited" });
+      applySessionUpdated(ev.sessionId, exitedPatch(ev.sessionId));
       patchSessionState(ev.sessionId, "exited");
     });
     const offSessResumed = sessionRepo.on("session:resumed", (ev) => {
       if (ev.type === "session:resumed") {
-        applySessionUpdated(ev.sessionId, { state: "working" });
+        applySessionUpdated(ev.sessionId, { state: "working", stateReason: null });
         patchSessionState(ev.sessionId, "working");
       }
     });

@@ -74,6 +74,7 @@ async fn rapid_resizes_apply_in_order_and_last_one_wins() {
             "-c".to_string(),
             "sleep 30".to_string(),
         ]),
+        remain_on_exit: false,
     })
     .expect("new-session should succeed");
 
@@ -125,6 +126,7 @@ async fn attach_emits_opened_and_initial_redraw_then_detach_closes_and_keeps_ses
             "-c".to_string(),
             "printf 'hello-from-pane'; sleep 30".to_string(),
         ]),
+        remain_on_exit: false,
     })
     .expect("new-session should succeed");
 

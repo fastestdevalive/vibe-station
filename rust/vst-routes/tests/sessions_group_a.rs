@@ -177,6 +177,38 @@ fn serialize_session_flattens_lifecycle_and_wire_fields() {
 }
 
 #[test]
+fn serialize_session_state_reason_only_when_exited() {
+    let mut s = make_session("s1", "p1");
+    s.lifecycle.reason = Some("killed by signal 15 (TERM)".into());
+
+    s.lifecycle.state = LifecycleState::Exited;
+    let out = serialize_session(None, "p1", &s);
+    assert_eq!(
+        out.state_reason.as_deref(),
+        Some("killed by signal 15 (TERM)")
+    );
+    let json = serde_json::to_value(&out).unwrap();
+    assert_eq!(json["stateReason"], "killed by signal 15 (TERM)");
+
+    // A stale reason on a non-exited row is never exposed, and the key is
+    // absent from the wire (not null).
+    for state in [LifecycleState::Working, LifecycleState::Done] {
+        s.lifecycle.state = state;
+        let out = serialize_session(None, "p1", &s);
+        assert_eq!(out.state_reason, None, "{state:?}");
+        assert!(serde_json::to_value(&out)
+            .unwrap()
+            .get("stateReason")
+            .is_none());
+    }
+
+    // Exited without a recorded reason: absent too.
+    s.lifecycle.state = LifecycleState::Exited;
+    s.lifecycle.reason = None;
+    assert_eq!(serialize_session(None, "p1", &s).state_reason, None);
+}
+
+#[test]
 fn serialize_session_direct_has_null_worktree_id_and_json_channel() {
     let mut s = make_session("s1", "p1");
     s.use_tmux = false;

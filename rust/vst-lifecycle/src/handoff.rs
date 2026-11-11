@@ -64,7 +64,7 @@ pub async fn run_handoff_turn(
     match channel {
         Channel::Tmux => {
             let tmux = Tmux::new();
-            let target = tmux_name.to_string();
+            let target = vst_proc::tmux::exact_pane(tmux_name);
             let data = instruction.to_string();
             let buf_id = format!("handoff-{tmux_name}");
             // paste_buffer uses bracketed paste, which only types the text into

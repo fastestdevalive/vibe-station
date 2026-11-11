@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use vst_proc::tmux::{describe_exit, SessionPaneInfo};
 use vst_proc::Tmux;
 use vst_store::StoreHandle;
 use vst_types::{Channel, LifecycleState, SessionLifecycle, SessionRecord};
@@ -22,11 +23,45 @@ const KNOWN_TURN_BINARIES: &[&str] = &["claude", "cursor-agent", "opencode", "ag
 /// unit-tested without a real tmux server (the TS mocks `tmux.hasSession`).
 pub trait SessionLiveness {
     fn has_session(&self, name: &str) -> bool;
+
+    /// Exit state of the session's active pane. `None` = unknown (default):
+    /// callers then treat an existing session as running, never as dead.
+    fn pane_exit_info(&self, _name: &str) -> Option<SessionPaneInfo> {
+        None
+    }
+
+    /// Kill the session if its pane is dead (default: no-op).
+    fn kill_if_dead(&self, _name: &str) {}
 }
 
 impl SessionLiveness for Tmux {
     fn has_session(&self, name: &str) -> bool {
         Tmux::has_session(self, name)
+    }
+
+    fn pane_exit_info(&self, name: &str) -> Option<SessionPaneInfo> {
+        Tmux::pane_exit_info(self, name)
+    }
+
+    fn kill_if_dead(&self, name: &str) {
+        self.kill_session_if_dead(name);
+    }
+}
+
+/// Boot decision for a `not_started` tmux session. A dead pane kept by
+/// `remain-on-exit` is NOT running: it becomes `Exited` with the recorded exit
+/// reason (and is killed). A missing session keeps the restart slug; an
+/// unreadable pane counts as running.
+fn tmux_not_started_decision(tmux: &dyn SessionLiveness, name: &str) -> SessionLifecycle {
+    if !tmux.has_session(name) {
+        return lifecycle(LifecycleState::Exited, "daemon-restart-during-spawn");
+    }
+    match tmux.pane_exit_info(name).filter(|i| i.dead) {
+        Some(info) => {
+            tmux.kill_if_dead(name);
+            lifecycle(LifecycleState::Exited, &describe_exit(&info))
+        }
+        None => lifecycle(LifecycleState::Working, "recovered-from-not-started"),
     }
 }
 
@@ -239,10 +274,8 @@ pub async fn recover_not_started_sessions(
                     } else {
                         lifecycle(LifecycleState::Exited, "daemon-restart-during-spawn")
                     }
-                } else if tmux.has_session(&session.tmux_name) {
-                    lifecycle(LifecycleState::Working, "recovered-from-not-started")
                 } else {
-                    lifecycle(LifecycleState::Exited, "daemon-restart-during-spawn")
+                    tmux_not_started_decision(tmux, &session.tmux_name)
                 };
                 worktree_decisions.insert(session.id.clone(), decision);
             }
@@ -265,10 +298,8 @@ pub async fn recover_not_started_sessions(
                 } else {
                     lifecycle(LifecycleState::Exited, "daemon-restart-during-spawn")
                 }
-            } else if tmux.has_session(&session.tmux_name) {
-                lifecycle(LifecycleState::Working, "recovered-from-not-started")
             } else {
-                lifecycle(LifecycleState::Exited, "daemon-restart-during-spawn")
+                tmux_not_started_decision(tmux, &session.tmux_name)
             };
             direct_decisions.insert(session.id.clone(), decision);
         }

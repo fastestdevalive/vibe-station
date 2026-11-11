@@ -45,7 +45,7 @@ pub async fn handle_session_resize(conn: &WsConnection, store: &StoreHandle, msg
                 .args([
                     "resize-window",
                     "-t",
-                    &session.tmux_name,
+                    &vst_proc::tmux::exact_pane(&session.tmux_name),
                     "-x",
                     &cols.to_string(),
                     "-y",

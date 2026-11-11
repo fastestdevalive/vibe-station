@@ -325,6 +325,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn embedded_skill_forbids_kill_by_name() {
+        assert!(VST_SKILL_MD.contains("pkill -f"));
+        assert!(VST_SKILL_MD.contains("Never kill processes by name or pattern"));
+    }
+
+    #[test]
     fn install_skill_writes_when_missing_then_only_when_bytes_differ() {
         let tmp = tempfile::tempdir().unwrap();
         let vst_home = tmp.path();

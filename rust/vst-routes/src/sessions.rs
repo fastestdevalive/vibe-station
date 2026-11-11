@@ -348,6 +348,9 @@ pub fn serialize_session(
         use_tmux: s.use_tmux,
         channel: session_channel(s.channel, Some(s.use_tmux)),
         state: s.lifecycle.state,
+        state_reason: (s.lifecycle.state == LifecycleState::Exited)
+            .then(|| s.lifecycle.reason.clone())
+            .flatten(),
         lifecycle_state: s.lifecycle.state,
         created_at: s.lifecycle.last_transition_at.clone(),
         pinned_at: s.pinned_at.clone(),
@@ -829,7 +832,7 @@ impl SessionRoutes {
         let output = self
             .tmux
             .capture_pane(
-                &session.tmux_name,
+                &vst_proc::tmux::exact_pane(&session.tmux_name),
                 &CapturePaneOptions {
                     escape: false,
                     lines: Some(n as usize),
@@ -1494,6 +1497,7 @@ impl SessionRoutes {
                     cwd: Some(cwd),
                     env: HashMap::new(),
                     command: None,
+                    remain_on_exit: false,
                 })
                 .map_err(|e| e.to_string())
         } else {
@@ -3134,7 +3138,10 @@ impl SessionRoutes {
         // redundant resume (double-click, or resume racing the create-time
         // spawn). If something is already alive, report current state.
         let already_running = if session.use_tmux {
+            // A dead pane kept by `remain-on-exit` is NOT running (an unknown
+            // probe result counts as running, so a live agent is never torn down).
             self.tmux.has_session(&session.tmux_name)
+                && !pane_is_dead(&self.tmux, &session.tmux_name)
         } else {
             self.direct_ptys.read().unwrap().contains_key(id)
         };
@@ -3475,6 +3482,7 @@ impl SessionRoutes {
                 cwd: Some(PathBuf::from(cwd)),
                 env,
                 command: Some(argv.clone()),
+                remain_on_exit: true,
             })
             .map_err(|e| e.to_string())?;
         await_ready_tmux(&self.tmux, &session.tmux_name, ready, &argv).await
@@ -4336,7 +4344,7 @@ impl SessionRoutes {
                             .map(str::to_string)
                             .collect();
                         let tmux = self.tmux.clone();
-                        let target = session.tmux_name.clone();
+                        let target = vst_proc::tmux::exact_pane(&session.tmux_name);
                         let _ = tokio::task::spawn_blocking(move || {
                             for key in keys {
                                 let _ = tmux.send_keys(&target, &key, false);
@@ -4499,7 +4507,7 @@ impl SessionRoutes {
                     let scrollback = self
                         .tmux
                         .capture_pane(
-                            &session.tmux_name,
+                            &vst_proc::tmux::exact_pane(&session.tmux_name),
                             &CapturePaneOptions {
                                 lines: Some(10_000),
                                 escape: false,
@@ -4816,12 +4824,12 @@ impl SessionRoutes {
         // into the data) — matches the spawn.ts convention.
         if !data.is_empty() {
             self.tmux
-                .paste_buffer(&tmux_name, &buffer_id, &data)
+                .paste_buffer(&vst_proc::tmux::exact_pane(&tmux_name), &buffer_id, &data)
                 .map_err(|e| ChatRouteError::Internal(format!("Failed to send input: {e}")))?;
         }
         if send_enter {
             self.tmux
-                .send_keys(&tmux_name, "", true)
+                .send_keys(&vst_proc::tmux::exact_pane(&tmux_name), "", true)
                 .map_err(|e| ChatRouteError::Internal(format!("Failed to send input: {e}")))?;
         }
         Ok(ChatActionResult { ok: true })
@@ -6767,12 +6775,22 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     }
 
     // Tmux path.
+    // A Resume that falls back to a fresh launch reaches here with no prior
+    // kill: a dead pane kept by `remain-on-exit` would make `new-session -s`
+    // fail "duplicate session". Kill ONLY a session positively read as dead
+    // (`pane_exit_info` = `Some(dead)`); an unknown probe result never kills.
+    if opts.tmux.has_session(&opts.session.tmux_name)
+        && pane_is_dead(opts.tmux, &opts.session.tmux_name)
+    {
+        opts.tmux.kill_session(&opts.session.tmux_name);
+    }
     opts.tmux
         .new_session(&NewSessionOptions {
             name: opts.session.tmux_name.clone(),
             cwd: Some(PathBuf::from(&cwd)),
             env: base_env,
             command: Some(command_parts),
+            remain_on_exit: true,
         })
         .map_err(|e| e.to_string())?;
 
@@ -6791,7 +6809,9 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
         tokio::time::sleep(Duration::from_millis(d)).await;
     }
     if let Some(input) = &composed.post_launch_input {
-        if !opts.tmux.has_session(&opts.session.tmux_name) {
+        if !opts.tmux.has_session(&opts.session.tmux_name)
+            || pane_is_dead(opts.tmux, &opts.session.tmux_name)
+        {
             eprintln!(
                 "[spawn] Skipping post-launch prompt for {}: pane {} is gone",
                 opts.session.id, opts.session.tmux_name
@@ -6799,12 +6819,16 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
             return Ok(captured_chat_id);
         }
         let _ = opts.tmux.paste_buffer(
-            &opts.session.tmux_name,
+            &vst_proc::tmux::exact_pane(&opts.session.tmux_name),
             &format!("vst-prompt-{}", opts.session.id),
             input.as_str(),
         );
         if composed.post_launch_submit {
-            let _ = opts.tmux.send_keys(&opts.session.tmux_name, "", true);
+            let _ = opts.tmux.send_keys(
+                &vst_proc::tmux::exact_pane(&opts.session.tmux_name),
+                "",
+                true,
+            );
         }
     }
     // MUST come after post_launch_input, not before, and only when a
@@ -6875,9 +6899,29 @@ async fn await_ready_tmux(
     // user's tmux config the session outlives its pane, so `has-session` would
     // report a crashed CLI as a successful launch.
     if !tmux.pane_is_alive(tmux_name) {
-        return Err(immediate_exit_error(argv));
+        // Read the exit status BEFORE cleaning up: the launch-failure reason
+        // ("exited with status 1") would be lost with the session. The session
+        // is then killed so a `remain-on-exit` dead pane never leaks.
+        // Only a positively-dead pane is killed: an unknown probe must not
+        // take down a live, just-launched agent.
+        let exit = tmux.pane_exit_info(tmux_name).filter(|i| i.dead);
+        if exit.is_some() {
+            tmux.kill_session_if_dead(tmux_name);
+        }
+        let base = immediate_exit_error(argv);
+        return Err(match exit {
+            Some(info) => format!("{base} ({})", vst_proc::tmux::describe_exit(&info)),
+            None => base,
+        });
     }
     Ok(())
+}
+
+/// True only when tmux positively reports `name`'s pane as dead. A missing
+/// session or an unreadable probe is `false` — unknown must never be treated
+/// as dead where the answer gates a kill.
+fn pane_is_dead(tmux: &Tmux, name: &str) -> bool {
+    tmux.pane_exit_info(name).is_some_and(|i| i.dead)
 }
 
 /// Direct-PTY twin of [`await_ready_tmux`]: same wait, same grace, same
@@ -6919,7 +6963,7 @@ async fn wait_for_sentinel(tmux: &Tmux, tmux_name: &str, sentinel: &str, timeout
             return false;
         }
         if let Ok(output) = tmux.capture_pane(
-            tmux_name,
+            &vst_proc::tmux::exact_pane(tmux_name),
             &CapturePaneOptions {
                 escape: false,
                 lines: Some(50),
@@ -7897,6 +7941,7 @@ mod tests {
                 "-c".to_string(),
                 "printf 'ctrl+p commands'; exit 1".to_string(),
             ]),
+            ..Default::default()
         })
         .expect("new-session");
 
@@ -7919,7 +7964,8 @@ mod tests {
     /// `remain-on-exit on` keeps the *session* alive after its command exits,
     /// leaving a dead pane. A liveness check that only asked `has-session`
     /// would call that a successful launch — the same silent-dead-pane class
-    /// this change exists to remove.
+    /// this change exists to remove. The failure also carries the exit status
+    /// and kills the lingering session.
     #[tokio::test]
     #[ignore = "requires a real tmux binary; run with --ignored"]
     async fn ready_wait_reports_failure_when_the_pane_is_dead_but_the_session_lingers() {
@@ -7973,6 +8019,7 @@ mod tests {
                 "-c".to_string(),
                 "printf 'ctrl+p commands'; exit 1".to_string(),
             ]),
+            ..Default::default()
         })
         .expect("new-session");
 
@@ -7985,12 +8032,12 @@ mod tests {
             .expect_err("a dead pane must not be reported as a successful launch");
         assert!(err.contains("exited immediately"), "{err}");
         assert!(
-            tmux.has_session(name),
-            "the session should still linger — that is the point of the test"
+            err.contains("status 1"),
+            "the exit status must survive the cleanup: {err}"
         );
         assert!(
-            !tmux.pane_is_alive(name),
-            "the pane must be reported dead while the session exists"
+            !tmux.has_session(name),
+            "the dead session must be killed so it does not leak"
         );
 
         tmux.kill_server();
@@ -8017,6 +8064,7 @@ mod tests {
                 "-c".to_string(),
                 "printf 'ctrl+p commands'; sleep 30".to_string(),
             ]),
+            ..Default::default()
         })
         .expect("new-session");
 

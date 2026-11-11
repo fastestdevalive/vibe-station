@@ -315,6 +315,50 @@ impl StoreHandle {
         .map_err(|e| StoreError::Mutation(e.to_string()))?
     }
 
+    /// Compare-and-set lifecycle write: applies only if the row still has
+    /// `expected_state` AND `expected_last_transition_at` (the snapshot the
+    /// caller decided on). Returns `false` (nothing changed) when the row moved
+    /// on or is missing — e.g. a Resume re-created the session in between.
+    pub async fn update_session_lifecycle_if(
+        &self,
+        project_id: &str,
+        session_id: &str,
+        expected_state: vst_types::LifecycleState,
+        expected_last_transition_at: &str,
+        lifecycle: SessionLifecycle,
+    ) -> StoreResult<bool> {
+        let _lock = self.project_lock(project_id).await;
+        self.ensure_loaded().await;
+        let inner = self.0.clone();
+        let project_id = project_id.to_string();
+        let session_id = session_id.to_string();
+        let expected_ts = expected_last_transition_at.to_string();
+        tokio::task::spawn_blocking(move || -> StoreResult<bool> {
+            let conn = inner.conn.lock().unwrap();
+            let changes = conn.execute(
+                "UPDATE sessions SET state = ?1, reason = ?2, lastTransitionAt = ?3 \
+                 WHERE id = ?4 AND state = ?5 AND lastTransitionAt = ?6",
+                params![
+                    lifecycle_state_str(lifecycle.state),
+                    lifecycle.reason,
+                    lifecycle.last_transition_at,
+                    session_id,
+                    lifecycle_state_str(expected_state),
+                    expected_ts
+                ],
+            )?;
+            if changes == 0 {
+                return Ok(false);
+            }
+            if let Some(p) = refresh_project(&conn, &project_id) {
+                inner.cache.write().unwrap().insert(project_id.clone(), p);
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|e| StoreError::Mutation(e.to_string()))?
+    }
+
     /// Fast-path PR-status write. Returns false if the session isn't in the DB.
     pub async fn update_session_pr(
         &self,

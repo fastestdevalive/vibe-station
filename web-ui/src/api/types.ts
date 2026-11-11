@@ -182,6 +182,9 @@ export interface Session {
   /** True for a worktree's single main agent session (non-closable). Replaces the old `slot === "m"` check. */
   isMain: boolean;
   state: SessionState;
+  /** Why the session is `exited` (e.g. "killed by signal 15 (TERM)"); only
+   *  present when `state === "exited"` and the daemon recorded a reason. */
+  stateReason?: string | null;
   lifecycleState: SessionState;
   tmuxName: string;
   useTmux?: boolean;

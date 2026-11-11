@@ -124,6 +124,17 @@ function resolveTerminalTheme(themed: boolean): ITheme {
   return terminalThemeFromCssVars(useThemeStore.getState().themeId);
 }
 
+/** Daemon recovery slugs (vst-git recover.rs) are internal codes; show words. */
+const RECOVERY_REASON_TEXT: Record<string, string> = {
+  "daemon-restart-during-spawn": "the daemon restarted while it was starting",
+  "direct-pty-died-with-daemon": "it ended when the daemon stopped",
+  "json-restart-reconcile": "it ended when the daemon restarted",
+  "recovered-from-not-started": "it never finished starting",
+};
+function exitReasonText(reason: string): string {
+  return RECOVERY_REASON_TEXT[reason] ?? reason;
+}
+
 export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMount = true, themed = true }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -712,7 +723,12 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   const showBanner = state === "done" || state === "exited" || sessionState === "exited";
   // `done` is checked before the local `sessionState`, which the dying pty can
   // push to "exited" — the deliberate state must win over the side effect.
-  const bannerMsg = state === "done" ? "Session marked done." : "Session exited.";
+  const bannerMsg =
+    state === "done"
+      ? "Session marked done."
+      : session?.stateReason
+        ? `Session exited. (${exitReasonText(session.stateReason)})`
+        : "Session exited.";
 
   // Offline overlay (Phase 4.4): shown whenever the WS isn't online, as long as
   // there is a live session to attach to and the pane hasn't been released /

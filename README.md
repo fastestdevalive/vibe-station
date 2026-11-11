@@ -388,7 +388,7 @@ vst doctor
 - **Port 7421 in use** — the daemon picks the next free port up to 7520; the one in use is in `~/.vibe-station/config.json`.
 - **Desktop window won't close** — by design, ✕ hides to the tray. Use **Quit completely**.
 - **Phone can't connect / 403 on writes** — the daemon is loopback-only until you enable network access, and enforces exact origins; see [Mobile access](#mobile-access--pwa) and [`docs/AUTH.md`](docs/AUTH.md).
-- **Orphaned tmux sessions after a crash** — `tmux kill-session -t <name>` for leftover `vst-*` sessions.
+- **Orphaned tmux sessions after a crash** — `tmux kill-session -t =<name>` (the `=` makes the match exact) for leftover `vst-*` sessions.
 - **Claude sessions not resuming** — you need a Claude Code build with `--resume` (`claude --version`).
 - **No PWA install option** — you're on a non-secure origin; see above.
 

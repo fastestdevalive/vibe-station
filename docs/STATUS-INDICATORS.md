@@ -260,6 +260,17 @@ and a parent agent is no longer woken with "<terminal> is waiting for your reply
 `vst agent send <terminal>` returns right after sending instead of waiting to settle (a terminal
 never reaches `idle`/`waiting_for_human`, and has no reply to print).
 
+### tmux `exited` carries a recorded reason
+
+No matrix, colour or bucket change: this only adds *why* a tmux session is `exited`. Agent tmux
+sessions keep a dead pane (per-session `remain-on-exit`, never `-g`) when their command dies;
+the lifecycle poller (still the only state writer) detects it via `pane_dead`, writes `exited`
+with `reason` from the pane's exit status/signal (e.g. `killed by signal 15 (TERM)`), broadcasts
+`session:state{reason}` and then kills the dead session. The reason is served as
+`Session.stateReason` (only while `exited`) and shown in the Terminal banner ("Session exited.
+(killed by signal 15 (TERM))"). A session whose tmux name simply vanished (pre-upgrade sessions,
+a pane that died before the option was set, plain terminals) is still `exited` with no reason.
+
 ## Per-session vs per-worktree
 
 - The **dot** is always per session.

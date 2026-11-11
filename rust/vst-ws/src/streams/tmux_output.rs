@@ -128,7 +128,11 @@ impl TmuxOutputStream {
         if let Some(sock) = &self.inner.socket {
             cmd.arg("-L").arg(sock);
         }
-        cmd.args(["has-session", "-t", &self.inner.tmux_name]);
+        cmd.args([
+            "has-session",
+            "-t",
+            &vst_proc::tmux::exact_session(&self.inner.tmux_name),
+        ]);
         match cmd.output().await {
             Err(e) => SessionProbe::Unreachable(format!("io: {e}")),
             Ok(out) if out.status.success() => SessionProbe::Exists,
@@ -166,7 +170,7 @@ impl TmuxOutputStream {
             .run_async(&[
                 "resize-window",
                 "-t",
-                &self.inner.tmux_name,
+                &vst_proc::tmux::exact_pane(&self.inner.tmux_name),
                 "-x",
                 &cols.to_string(),
                 "-y",
@@ -203,13 +207,14 @@ impl SessionStream for TmuxOutputStream {
         // sees — runs before the two best-effort `set-option`s, which are the
         // ones that could plausibly be rejected (older tmux, unknown option)
         // and take the rest of the chain down with them.
-        let name = self.inner.tmux_name.clone();
+        let name = vst_proc::tmux::exact_pane(&self.inner.tmux_name);
+        let session_name = vst_proc::tmux::exact_session(&self.inner.tmux_name);
         let cols_s = cols.to_string();
         let rows_s = rows.to_string();
         let preflight: Vec<&str> = vec![
             "has-session",
             "-t",
-            &name,
+            &session_name,
             ";",
             "resize-window",
             "-t",
@@ -313,7 +318,7 @@ impl SessionStream for TmuxOutputStream {
                 // Same-connection duplicate clients are prevented by the
                 // session lock and by `detach()` killing the old client.
                 argv.push("-t".to_string());
-                argv.push(tmux_name);
+                argv.push(vst_proc::tmux::exact_session(&tmux_name));
                 cmd.args(&argv);
                 cmd.env("TERM", "xterm-256color");
                 // Belt-and-braces alongside `-u`: some tmux-internal paths

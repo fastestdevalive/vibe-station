@@ -54,7 +54,16 @@ pub async fn handle_session_input(conn: &WsConnection, store: &StoreHandle, msg:
         // Applying that same escaping to an argv element corrupts every
         // literal `'` the user types (e.g. while responding to an agent's
         // permission prompt) into four literal characters.
-        match run_tmux(conn, &["send-keys", "-t", &session.tmux_name, "-l", data]) {
+        match run_tmux(
+            conn,
+            &[
+                "send-keys",
+                "-t",
+                &vst_proc::tmux::exact_pane(&session.tmux_name),
+                "-l",
+                data,
+            ],
+        ) {
             Ok(()) => {}
             Err(msg) => {
                 conn.send(ServerMessage::SessionError {

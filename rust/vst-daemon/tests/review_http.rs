@@ -138,6 +138,7 @@ impl H {
                     cwd: None,
                     env: Default::default(),
                     command: Some(vec!["sleep".into(), "600".into()]),
+                    remain_on_exit: false,
                 })
                 .unwrap();
             vst_agents::home::with_home(tmp.path().join("home"))

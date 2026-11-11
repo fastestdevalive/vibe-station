@@ -443,3 +443,61 @@ fn script_named(name: &str) -> PathBuf {
     std::mem::forget(tmp);
     path
 }
+
+/// Fake that reports one session's pane as dead with a recorded signal.
+struct DeadPaneLiveness {
+    dead: &'static str,
+    killed: std::sync::Mutex<Vec<String>>,
+}
+
+impl SessionLiveness for DeadPaneLiveness {
+    fn has_session(&self, name: &str) -> bool {
+        name == self.dead
+    }
+    fn pane_exit_info(&self, name: &str) -> Option<vst_proc::tmux::SessionPaneInfo> {
+        (name == self.dead).then(|| vst_proc::tmux::SessionPaneInfo {
+            dead: true,
+            dead_status: None,
+            dead_signal: Some("term".into()),
+        })
+    }
+    fn kill_if_dead(&self, name: &str) {
+        self.killed.lock().unwrap().push(name.to_string());
+    }
+}
+
+#[tokio::test]
+async fn not_started_session_with_a_dead_pane_exits_with_the_pane_reason() {
+    let tmp = tempdir().unwrap();
+    let store = open_store(&tmp).await;
+    store.add_project(make_record()).await.unwrap();
+
+    let tmux = DeadPaneLiveness {
+        dead: "alive-pane",
+        killed: Default::default(),
+    };
+    recover_not_started_sessions(&store, &tmux, &Default::default(), &paths_for(&tmp)).await;
+
+    let proj = store.get_project("proj-r").await.unwrap();
+    let s = proj.worktrees[0]
+        .sessions
+        .iter()
+        .find(|s| s.id == "sess-alive")
+        .unwrap();
+    assert_eq!(s.lifecycle.state, LifecycleState::Exited);
+    assert_eq!(
+        s.lifecycle.reason.as_deref(),
+        Some("killed by signal 15 (TERM)")
+    );
+    assert_eq!(tmux.killed.lock().unwrap().as_slice(), ["alive-pane"]);
+    // A session with no tmux session at all keeps the restart slug.
+    let gone = proj.worktrees[0]
+        .sessions
+        .iter()
+        .find(|s| s.id == "sess-dead")
+        .unwrap();
+    assert_eq!(
+        gone.lifecycle.reason.as_deref(),
+        Some("daemon-restart-during-spawn")
+    );
+}

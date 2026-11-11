@@ -1047,3 +1047,125 @@ describe("useServerSync — Phase 2 prune ghost tiles on refetch", () => {
 });
 
 
+
+// --- exit reason (`Session.stateReason`) rides `session:state` and is cleared
+// by the other lifecycle events. ---
+describe("useServerSync — stateReason", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useWorkspaceStore.setState({ sessionStates: {} });
+  });
+
+  const reasonOf = () =>
+    useServerStore.getState().sessions.find((s) => s.id === "sess-main")?.stateReason;
+
+  async function mounted() {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    return api;
+  }
+
+  it("session:state sets the reason and a later state without one clears it", async () => {
+    const api = await mounted();
+    act(() => {
+      api.__test.emit({
+        type: "session:state",
+        sessionId: "sess-main",
+        state: "exited",
+        reason: "killed by signal 15 (TERM)",
+      });
+    });
+    await waitFor(() => expect(reasonOf()).toBe("killed by signal 15 (TERM)"));
+
+    act(() => {
+      api.__test.emit({ type: "session:state", sessionId: "sess-main", state: "working" });
+    });
+    await waitFor(() => expect(reasonOf()).toBeNull());
+  });
+
+  it("session:state for a non-exited state drops any reason it carries", async () => {
+    const api = await mounted();
+    act(() => {
+      api.__test.emit({
+        type: "session:state",
+        sessionId: "sess-main",
+        state: "working",
+        reason: "recovered-from-not-started",
+      });
+    });
+    await waitFor(() =>
+      expect(
+        useServerStore.getState().sessions.find((s) => s.id === "sess-main")?.state,
+      ).toBe("working"),
+    );
+    expect(reasonOf()).toBeNull();
+  });
+
+  it("session:resumed clears the reason", async () => {
+    const api = await mounted();
+    act(() => {
+      api.__test.emit({
+        type: "session:state",
+        sessionId: "sess-main",
+        state: "exited",
+        reason: "pane exited",
+      });
+    });
+    await waitFor(() => expect(reasonOf()).toBe("pane exited"));
+    act(() => {
+      api.__test.emit({
+        type: "session:resumed",
+        sessionId: "sess-main",
+        restoredFromHistory: false,
+      });
+    });
+    await waitFor(() => expect(reasonOf()).toBeNull());
+  });
+
+  it("session:exited and session:error{gone} set null on a live session", async () => {
+    const api = await mounted();
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", { stateReason: "stale" });
+      api.__test.emit({ type: "session:exited", sessionId: "sess-main" });
+    });
+    await waitFor(() => expect(reasonOf()).toBeNull());
+
+    act(() => {
+      useServerStore
+        .getState()
+        .applySessionUpdated("sess-main", { state: "working", stateReason: "stale" });
+      useWorkspaceStore.getState().patchSessionState("sess-main", "working");
+      api.__test.emit({
+        type: "session:error",
+        sessionId: "sess-main",
+        message: "gone",
+        reason: "gone",
+      });
+    });
+    await waitFor(() => expect(reasonOf()).toBeNull());
+  });
+
+  it("an already-exited session keeps its reason through the follow-up exited/gone events", async () => {
+    const api = await mounted();
+    act(() => {
+      api.__test.emit({
+        type: "session:state",
+        sessionId: "sess-main",
+        state: "exited",
+        reason: "killed by signal 15 (TERM)",
+      });
+    });
+    await waitFor(() => expect(reasonOf()).toBe("killed by signal 15 (TERM)"));
+    act(() => {
+      api.__test.emit({ type: "session:exited", sessionId: "sess-main" });
+      api.__test.emit({
+        type: "session:error",
+        sessionId: "sess-main",
+        message: "gone",
+        reason: "gone",
+      });
+    });
+    expect(reasonOf()).toBe("killed by signal 15 (TERM)");
+  });
+});

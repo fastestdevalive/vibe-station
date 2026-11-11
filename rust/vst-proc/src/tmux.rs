@@ -9,7 +9,7 @@
 //! exactly like the TS. A socket-named instance is used by tests to isolate
 //! against a dedicated server so they never clobber a live user session.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -54,6 +54,19 @@ pub fn classify_list_sessions_error(stderr: &str) -> ListErrorClass {
     }
 }
 
+/// Session-level exact target (`=name`) for `has-session`, `kill-session` and
+/// `attach-session`. A bare name prefix-matches another session (`ab` -> `abc`).
+pub fn exact_session(name: &str) -> String {
+    format!("={name}")
+}
+
+/// Window/pane-level exact target (`=name:`) for `display-message`,
+/// `capture-pane`, `send-keys`, `paste-buffer`, `resize-window`, `set-option`.
+/// These reject the bare `=name` form, so the trailing colon is mandatory.
+pub fn exact_pane(name: &str) -> String {
+    format!("={name}:")
+}
+
 /// Options for `tmux new-session -d`.
 #[derive(Debug, Clone, Default)]
 pub struct NewSessionOptions {
@@ -65,6 +78,150 @@ pub struct NewSessionOptions {
     pub env: std::collections::HashMap<String, String>,
     /// Command + args to run as the initial command (must be the last argv).
     pub command: Option<Vec<String>>,
+    /// Keep the session (with a dead pane) after the pane command exits, so the
+    /// exit status/signal can be read. Set per session AFTER creation via
+    /// [`Tmux::set_remain_on_exit`] (best-effort; failure only logs) — never
+    /// `-g`, and never chained into the `new-session` argv (tmux splits an
+    /// argv element ending in `;`).
+    pub remain_on_exit: bool,
+}
+
+/// Exit state of a session's active pane, from `#{pane_dead}` and friends.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionPaneInfo {
+    /// `#{pane_dead}`: the pane command exited (session kept by `remain-on-exit`).
+    pub dead: bool,
+    /// `#{pane_dead_status}`: exit status, when the command exited normally.
+    pub dead_status: Option<i32>,
+    /// `#{pane_dead_signal}`: lowercase signal name (`term`, `kill`, ...), when
+    /// the command was killed by a signal. Needs tmux >= 3.3.
+    pub dead_signal: Option<String>,
+}
+
+/// Bounded re-reads (about 0.5 s total) for a dead pane whose exit status has
+/// not been reaped yet; see [`Tmux::pane_exit_info`].
+const PANE_STATUS_SETTLE_TRIES: u32 = 10;
+const PANE_STATUS_SETTLE_DELAY: Duration = Duration::from_millis(50);
+
+/// Format for [`Tmux::list_session_panes`] / [`Tmux::pane_exit_info`].
+const PANE_INFO_FORMAT: &str = "#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}";
+
+/// Parse the `dead|status|signal` tail of a pane-info line.
+fn parse_pane_info(dead: &str, status: &str, signal: &str) -> Option<SessionPaneInfo> {
+    let dead = match dead {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    let status = status.trim();
+    let signal = signal.trim();
+    Some(SessionPaneInfo {
+        dead,
+        dead_status: if status.is_empty() {
+            None
+        } else {
+            Some(status.parse().ok()?)
+        },
+        dead_signal: (!signal.is_empty()).then(|| normalize_signal(signal)),
+    })
+}
+
+/// tmux builds differ: macOS tmux 3.8 prints the signal as a name (`term`),
+/// the Linux builds in CI print its number (`15`). Store one spelling — the
+/// lowercase name when the number is a known signal, else the raw text.
+fn normalize_signal(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    match lower.parse::<i32>() {
+        Ok(n) => SIGNALS
+            .iter()
+            .find(|(_, num)| *num == n)
+            .map_or(lower, |(name, _)| (*name).to_string()),
+        Err(_) => lower,
+    }
+}
+
+/// Parse `list-sessions -F '#{session_name}|<pane info>'` output. The session
+/// name is everything before the last three `|` separators, so a name
+/// containing `|` still parses. A listed line is always *present*: one whose
+/// pane info cannot be parsed counts as present and alive (never as vanished),
+/// so a parse quirk can never make a live session look gone.
+pub fn parse_list_session_panes(stdout: &str) -> HashMap<String, SessionPaneInfo> {
+    let mut map = HashMap::new();
+    let mut fallbacks = 0usize;
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.rsplitn(4, '|').collect();
+        // rsplitn yields [signal, status, dead, name].
+        if let [signal, status, dead, name] = parts.as_slice() {
+            if name.is_empty() {
+                continue;
+            }
+            match parse_pane_info(dead, status, signal) {
+                Some(info) => {
+                    map.insert((*name).to_string(), info);
+                }
+                None => {
+                    fallbacks += 1;
+                    map.insert((*name).to_string(), SessionPaneInfo::default());
+                }
+            }
+        } else {
+            let name = line.trim();
+            if !name.is_empty() {
+                fallbacks += 1;
+                map.insert(name.to_string(), SessionPaneInfo::default());
+            }
+        }
+    }
+    if fallbacks > 0 {
+        tracing::warn!(
+            lines = fallbacks,
+            "tmux list-sessions: unparseable pane info treated as present and alive"
+        );
+    }
+    map
+}
+
+const SIGNALS: [(&str, i32); 9] = [
+    ("hup", 1),
+    ("int", 2),
+    ("quit", 3),
+    ("abrt", 6),
+    ("kill", 9),
+    ("segv", 11),
+    ("pipe", 13),
+    ("alrm", 14),
+    ("term", 15),
+];
+
+fn signal_number(name: &str) -> Option<i32> {
+    SIGNALS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, num)| *num)
+        .or_else(|| name.parse().ok())
+}
+
+/// Human description of why a pane died. Never blank.
+pub fn describe_exit(info: &SessionPaneInfo) -> String {
+    if let Some(sig) = info.dead_signal.as_deref().filter(|s| !s.is_empty()) {
+        let upper = sig.to_ascii_uppercase();
+        return match signal_number(sig) {
+            Some(n) if upper != n.to_string() => format!("killed by signal {n} ({upper})"),
+            Some(n) => format!("killed by signal {n}"),
+            None => format!("killed by signal {upper}"),
+        };
+    }
+    match info.dead_status {
+        Some(0) => "exited normally (status 0)".to_string(),
+        Some(n) if (129..=192).contains(&n) => {
+            format!(
+                "exited with status {n} (likely killed by signal {})",
+                n - 128
+            )
+        }
+        Some(n) => format!("exited with status {n}"),
+        None => "pane exited".to_string(),
+    }
 }
 
 /// Options for `tmux capture-pane`.
@@ -274,7 +431,8 @@ impl Tmux {
     /// True if the named tmux session exists. A failing `has-session` (session
     /// absent, or server down) is `false`.
     pub fn has_session(&self, name: &str) -> bool {
-        self.run(&["has-session", "-t", name]).is_ok()
+        self.run(&["has-session", "-t", &exact_session(name)])
+            .is_ok()
     }
 
     /// True if the session's pane is still running its command.
@@ -286,14 +444,20 @@ impl Tmux {
     ///
     /// `false` when the session is gone or the probe fails.
     pub fn pane_is_alive(&self, name: &str) -> bool {
-        self.run(&["display-message", "-p", "-t", name, "#{pane_dead}"])
-            .map(|out| out.trim() == "0")
-            .unwrap_or(false)
+        self.run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &exact_pane(name),
+            "#{pane_dead}",
+        ])
+        .map(|out| out.trim() == "0")
+        .unwrap_or(false)
     }
 
     /// Kill a tmux session by name. Best-effort — does not error if absent.
     pub fn kill_session(&self, name: &str) {
-        let _ = self.run(&["kill-session", "-t", name]);
+        let _ = self.run(&["kill-session", "-t", &exact_session(name)]);
     }
 
     /// Kill the whole (isolated) tmux server this client points at.
@@ -325,7 +489,99 @@ impl Tmux {
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.run(&refs)?;
+        if opts.remain_on_exit {
+            if let Err(e) = self.set_remain_on_exit(&opts.name) {
+                tracing::warn!(
+                    "[tmux] could not set remain-on-exit on a new session (exit reason will not be recorded): {}",
+                    e.stderr().trim()
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// Per-session `remain-on-exit on` (a window option in tmux >= 3.x, set on
+    /// the session's window via `-w`; never `-g`).
+    pub fn set_remain_on_exit(&self, name: &str) -> Result<(), TmuxError> {
+        self.run(&[
+            "set-option",
+            "-w",
+            "-t",
+            &exact_pane(name),
+            "remain-on-exit",
+            "on",
+        ])?;
+        Ok(())
+    }
+
+    /// Kill the session only if its pane is still dead, atomically server-side
+    /// (`if-shell -F`), so a same-name session re-created live in between
+    /// survives. Best-effort.
+    pub fn kill_session_if_dead(&self, name: &str) {
+        let _ = self.run(&[
+            "if-shell",
+            "-F",
+            "-t",
+            &exact_pane(name),
+            "#{pane_dead}",
+            &format!("kill-session -t {}", exact_session(name)),
+        ]);
+    }
+
+    /// Fresh single read of a session's active-pane exit state. `None` = the
+    /// session is missing or the output is not understood (never "dead").
+    ///
+    /// tmux flips `pane_dead` when the pane's PTY closes, but fills in the exit
+    /// status/signal only once it has reaped the child — under load the gap is
+    /// visible. A dead pane that has neither yet is re-read for a short, bounded
+    /// time so the poller never records a bare "pane exited" (and then kills the
+    /// session) for a pane whose real reason lands a few milliseconds later.
+    pub fn pane_exit_info(&self, name: &str) -> Option<SessionPaneInfo> {
+        let mut info = self.pane_exit_info_once(name)?;
+        for _ in 0..PANE_STATUS_SETTLE_TRIES {
+            if !info.dead || info.dead_status.is_some() || info.dead_signal.is_some() {
+                break;
+            }
+            std::thread::sleep(PANE_STATUS_SETTLE_DELAY);
+            info = self.pane_exit_info_once(name)?;
+        }
+        Some(info)
+    }
+
+    fn pane_exit_info_once(&self, name: &str) -> Option<SessionPaneInfo> {
+        let out = self
+            .run(&[
+                "display-message",
+                "-p",
+                "-t",
+                &exact_pane(name),
+                PANE_INFO_FORMAT,
+            ])
+            .ok()?;
+        let mut it = out.trim().splitn(3, '|');
+        parse_pane_info(it.next()?, it.next()?, it.next()?)
+    }
+
+    /// Exit state of every session's ACTIVE pane in one call (same NoServer /
+    /// uninterpretable semantics as [`Self::list_session_names`]).
+    ///
+    /// Known limitation: only the active pane is read. Agent sessions are one
+    /// window / one pane; a user-split pane can hide the agent's death.
+    pub fn list_session_panes(&self) -> Option<HashMap<String, SessionPaneInfo>> {
+        let format = format!("#{{session_name}}|{PANE_INFO_FORMAT}");
+        match self.run(&["list-sessions", "-F", &format]) {
+            Ok(stdout) => Some(parse_list_session_panes(&stdout)),
+            Err(e) => match classify_list_sessions_error(e.stderr()) {
+                ListErrorClass::NoServer => Some(HashMap::new()),
+                ListErrorClass::Uninterpretable => {
+                    tracing::warn!(
+                        "[tmux] list-sessions failed, skipping liveness check: {}",
+                        e.stderr().trim()
+                    );
+                    None
+                }
+            },
+        }
     }
 
     /// Send keys to a tmux session/pane, optionally followed by `Enter`.

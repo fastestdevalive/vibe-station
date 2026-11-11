@@ -1054,11 +1054,13 @@ async fn send_direct_pty_unescapes_wire_text_once() {
 /// `/bin/cat` so `spawn_session` can complete on a direct pty.
 struct ComposeRecorder {
     task_prompts: std::sync::Mutex<Vec<Option<String>>>,
+    /// Plugin name = the binary `spawn_session` requires on PATH.
+    bin: &'static str,
 }
 
 impl vst_agents::AgentPlugin for ComposeRecorder {
     fn name(&self) -> &str {
-        "recorder"
+        self.bin
     }
     fn default_model(&self) -> &str {
         "m"
@@ -1112,6 +1114,7 @@ async fn spawn_session_flattens_wire_task_prompt_for_terminal_launch() {
     let session = pty_session("s1", "p1");
     let plugin = ComposeRecorder {
         task_prompts: Default::default(),
+        bin: "recorder",
     };
     let ptys = std::sync::RwLock::new(std::collections::HashMap::new());
     let tmux = vst_proc::test_support::isolated_tmux();
@@ -1135,6 +1138,80 @@ async fn spawn_session_flattens_wire_task_prompt_for_terminal_launch() {
     assert_eq!(
         plugin.task_prompts.lock().unwrap().as_slice(),
         [Some(r"C:\temp {a} /review a}b".to_string())]
+    );
+}
+
+/// Resume's fresh-launch fallback reaches `spawn_session` with a dead pane still
+/// lingering under the session's tmux name (per-session `remain-on-exit`). The
+/// launch must clear it instead of failing "duplicate session", and the new
+/// pane must be alive. Private tmux socket only.
+#[tokio::test]
+#[ignore = "requires a real tmux binary; run with --ignored"]
+async fn spawn_session_replaces_a_lingering_dead_pane() {
+    use vst_proc::{NewSessionOptions, Tmux};
+    if !std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        eprintln!("tmux not available; skipping");
+        return;
+    }
+    let home = tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    let proj_dir = tempdir().unwrap();
+    let mut project = make_project("p1");
+    project.absolute_path = proj_dir.path().display().to_string();
+    project.is_git = false;
+    let session = make_session("s1", "p1"); // use_tmux, tmux_name "vst-s1"
+    let plugin = ComposeRecorder {
+        task_prompts: Default::default(),
+        bin: "cat", // present on PATH; launches /bin/cat, which stays alive on its pty
+    };
+    let ptys = std::sync::RwLock::new(std::collections::HashMap::new());
+    let tmux_guard = vst_proc::test_support::TmuxGuard::new();
+    let tmux: Tmux = tmux_guard.tmux();
+    tmux.new_session(&NewSessionOptions {
+        name: "anchor".into(),
+        command: Some(vec!["sleep".into(), "120".into()]),
+        ..Default::default()
+    })
+    .unwrap();
+    tmux.new_session(&NewSessionOptions {
+        name: session.tmux_name.clone(),
+        command: Some(vec!["sh".into(), "-c".into(), "sleep 0.3; exit 1".into()]),
+        remain_on_exit: true,
+        ..Default::default()
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !tmux
+        .pane_exit_info(&session.tmux_name)
+        .is_some_and(|i| i.dead)
+    {
+        assert!(std::time::Instant::now() < deadline, "pane never died");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    vst_routes::sessions::spawn_session(&vst_routes::sessions::SpawnSessionOpts {
+        project: &project,
+        worktree: None,
+        session: &session,
+        plugin: &plugin,
+        daemon_port: 3999,
+        system_prompt: "sys".into(),
+        task_prompt: None,
+        model: None,
+        tmux: &tmux,
+        direct_ptys: &ptys,
+    })
+    .await
+    .expect("fresh launch must clear the lingering dead session");
+
+    assert!(tmux.has_session(&session.tmux_name));
+    assert!(
+        tmux.pane_is_alive(&session.tmux_name),
+        "the new pane must be alive"
     );
 }
 

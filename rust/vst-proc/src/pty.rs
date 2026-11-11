@@ -594,6 +594,7 @@ pub fn spawn_tmux(opts: &TmuxSpawnOptions) -> Result<(), ProcError> {
         cwd: opts.cwd.clone(),
         env: opts.env.clone(),
         command: opts.command.clone(),
+        remain_on_exit: false,
     })?;
     Ok(())
 }
