@@ -287,6 +287,38 @@ describe("TerminalPane", () => {
     expect(screen.getByText(/Session exited/i)).toBeInTheDocument();
   });
 
+  it("exited banner shows the recorded exit reason", () => {
+    useWorkspaceStore.setState({ sessionStates: { "sess-main": "exited" } });
+    render(
+      <TerminalPane
+        api={api}
+        sessionId="sess-main"
+        session={{ ...sessionRecord("exited"), stateReason: "killed by signal 15 (TERM)" }}
+      />,
+    );
+    expect(screen.getByText("Session exited. (killed by signal 15 (TERM))")).toBeInTheDocument();
+  });
+
+  it("exited banner translates daemon recovery slugs", () => {
+    useWorkspaceStore.setState({ sessionStates: { "sess-main": "exited" } });
+    render(
+      <TerminalPane
+        api={api}
+        sessionId="sess-main"
+        session={{ ...sessionRecord("exited"), stateReason: "daemon-restart-during-spawn" }}
+      />,
+    );
+    expect(
+      screen.getByText("Session exited. (the daemon restarted while it was starting)"),
+    ).toBeInTheDocument();
+  });
+
+  it("exited banner without a reason stays plain", () => {
+    useWorkspaceStore.setState({ sessionStates: { "sess-main": "exited" } });
+    render(<TerminalPane api={api} sessionId="sess-main" session={sessionRecord("exited")} />);
+    expect(screen.getByText("Session exited.")).toBeInTheDocument();
+  });
+
   it("3.T1 — resume banner shown with done copy when the session was marked done", () => {
     useWorkspaceStore.setState({
       sessionStates: { "sess-main": "done" },

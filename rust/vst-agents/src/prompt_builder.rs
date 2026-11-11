@@ -259,4 +259,12 @@ mod mention_docs_tests {
             assert!(SKILL_MD.contains(needle), "asset missing `{needle}`");
         }
     }
+
+    /// The L1 prompt must forbid kill-by-name/pattern (a `pkill -f` matches other
+    /// agents' full command lines, which carry their system prompts).
+    #[test]
+    fn asset_forbids_kill_by_name() {
+        assert!(SKILL_MD.contains("pkill -f"));
+        assert!(SKILL_MD.contains("$!"));
+    }
 }

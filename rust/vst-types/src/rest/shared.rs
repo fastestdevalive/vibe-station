@@ -32,6 +32,10 @@ pub struct Session {
     pub use_tmux: bool,
     pub channel: Channel,
     pub state: LifecycleState,
+    /// Why the session is `exited` (e.g. "killed by signal 15 (TERM)"); only
+    /// present when `state == exited` and a reason was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_reason: Option<String>,
     pub lifecycle_state: LifecycleState,
     pub created_at: String,
     pub pinned_at: Option<String>,

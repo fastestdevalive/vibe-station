@@ -199,3 +199,10 @@ waiting in the user's panel; you cannot create or resolve comments.
 - Ignore test failures and commit anyway.
 - After `vst worktree create`, do NOT run `vst agent create` for the same worktree — the main session already exists.
 - Run `vst agent start-fresh`, `vst agent clear` or `vst agent switch` (on yourself or anyone) unless the user explicitly asked for exactly that. They are not for delegating or using another model: "plan with Opus, implement with Sonnet" means spawn a new agent with `vst agent create --mode=...`, never `switch`.
+- Never kill processes by name or pattern: no `pkill`, `killall`, `pkill -f`, or `kill $(pgrep …)`. `pkill -f` matches other agents' FULL command lines (including their system prompts) and kills unrelated sessions. Kill only PIDs you started yourself, captured at launch (`$!`).
+
+```bash
+my-server & PID=$!      # capture the PID you started
+# ... use it ...
+kill "$PID"             # kill exactly that PID, never by name
+```

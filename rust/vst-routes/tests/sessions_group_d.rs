@@ -770,6 +770,7 @@ async fn patch_channel_tty_to_json_unknown_mode_id_does_not_kill_tmux() {
         cwd: None,
         env: std::collections::HashMap::new(),
         command: None,
+        remain_on_exit: false,
     })
     .unwrap();
 

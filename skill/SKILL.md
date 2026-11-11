@@ -435,6 +435,7 @@ When to use each:
 - **Set a meaningful `prompt`** when spawning sessions. The clearer the task description, the better the agent's output.
 - **Poll `state`, don't spin.** Check `vst agent info` every 5–10 s rather than hammering repeatedly.
 - **Never run `vst agent start-fresh` / `clear` / `switch` on your own initiative** — they replace a running agent's conversation (see §17). To use another model or mode for part of a task, spawn a new agent (`vst agent create`).
+- **Never kill processes by name or pattern**: no `pkill`, `killall`, `pkill -f`, or `kill $(pgrep …)`. `pkill -f` matches other agents' FULL command lines (including their system prompts) and kills unrelated sessions. Kill only PIDs you started yourself, captured at launch (`$!`).
 
 ---
 

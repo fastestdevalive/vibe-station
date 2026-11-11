@@ -33,7 +33,7 @@ pub async fn run_session_attach(id: &str) -> Result<(), (String, i32)> {
     };
 
     let status = Command::new("tmux")
-        .args(["attach", "-t", &tmux_name])
+        .args(["attach", "-t", &vst_proc::tmux::exact_session(&tmux_name)])
         .status()
         .map_err(|e| (format!("Failed to execute tmux: {e}"), 1))?;
 

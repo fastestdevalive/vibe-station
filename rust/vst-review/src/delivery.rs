@@ -785,7 +785,7 @@ impl Inner {
             // tmux hiccup: never fail on it.
             _ => return Tick::Wait,
         }
-        let tmux_target = format!("={name}:");
+        let tmux_target = vst_proc::tmux::exact_pane(&name);
         let t = tmux_target.clone();
         let Some(Some(flags)) = self
             .blocking_until(deadline, move |io| io.pane_flags(&t))
@@ -1080,7 +1080,7 @@ impl Inner {
             Some(Some(names)) if names.contains(&name) => {}
             _ => return TerminalReadiness::Unknown,
         }
-        let tmux_target = format!("={name}:");
+        let tmux_target = vst_proc::tmux::exact_pane(&name);
         let t = tmux_target.clone();
         match self.blocking(move |io| io.pane_flags(&t)).await {
             Some(Some(f)) if !f.dead => {}

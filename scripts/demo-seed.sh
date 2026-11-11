@@ -1141,7 +1141,7 @@ ALL_TMUX=(
   vr-ldoc-1-m
 )
 for name in "${ALL_TMUX[@]}"; do
-  tmux kill-session -t "$name" 2>/dev/null || true
+  tmux kill-session -t "=$name" 2>/dev/null || true
 done
 
 # Idle session: prints transcript (or banner) once, then a static prompt.

@@ -351,7 +351,7 @@ pub async fn check_orphan_sessions(store: &StoreHandle, tmux: &Tmux) -> DoctorCh
             items: orphans
                 .into_iter()
                 .map(|name| DoctorItemDto {
-                    command: format!("tmux kill-session -t {}", shell_quote(&name)),
+                    command: format!("tmux kill-session -t {}", shell_quote(&format!("={name}"))),
                     id: name.clone(),
                     label: name,
                     path: None,

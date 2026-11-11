@@ -374,3 +374,23 @@ fn artifacts_hint_depends_on_channel() {
     assert!(rich.contains("Only deliverables, never scratch or log files"));
     assert!(rich.contains("Do not register scratch, intermediate, temp or log files"));
 }
+
+#[test]
+fn system_prompt_forbids_killing_by_name_for_tty_and_rich_chat() {
+    reset_skill_cache_for_test();
+    let tmp = tempfile::tempdir().unwrap();
+    for rich_chat in [false, true] {
+        let r = build_prompt(&BuildPromptInput {
+            project: make_project(tmp.path().to_str().unwrap()),
+            worktree: make_worktree(),
+            mode_context: None,
+            user_prompt: None,
+            rich_chat,
+        });
+        assert!(
+            r.system_prompt
+                .contains("Never kill processes by name or pattern"),
+            "rich_chat={rich_chat}"
+        );
+    }
+}

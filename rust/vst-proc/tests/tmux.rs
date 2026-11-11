@@ -338,7 +338,7 @@ fn exact_target_does_not_prefix_match() {
     assert!(read(&out_agent2).is_empty(), "agent2 must not receive it");
 
     // With only `agent2` alive, the bare name prefix-matches but `=agent:` does not.
-    srv.tmux.kill_session("=agent:");
+    srv.tmux.kill_session("agent");
     assert!(
         srv.tmux.pane_flags("agent").is_some(),
         "bare name prefix-matches"
@@ -396,4 +396,244 @@ fn parse_pane_flags_is_strict() {
     for bad in ["", "1", "1 0 0", "x y", "2 0", "0 \n"] {
         assert_eq!(parse_pane_flags(bad), None, "{bad:?}");
     }
+}
+
+// --- Phase 1: exact session targets ---
+
+#[test]
+fn exact_helpers_format_session_and_pane_targets() {
+    assert_eq!(vst_proc::tmux::exact_session("ab"), "=ab");
+    assert_eq!(vst_proc::tmux::exact_pane("ab"), "=ab:");
+}
+
+#[test]
+fn session_methods_do_not_prefix_match() {
+    let Some(srv) = Server::new() else { return };
+    srv.session("abc", &["sleep", "60"]);
+    srv.session("abcdef", &["sleep", "60"]);
+
+    assert!(!srv.tmux.has_session("ab"), "bare prefix must not match");
+    assert!(srv.tmux.has_session("abc"));
+
+    srv.tmux.kill_session("abc");
+    assert!(!srv.tmux.has_session("abc"));
+    assert!(srv.tmux.has_session("abcdef"), "sibling must survive");
+    assert!(
+        !srv.tmux.pane_is_alive("abc"),
+        "abc is gone; abcdef must not answer for it"
+    );
+    assert!(srv.tmux.pane_is_alive("abcdef"));
+}
+
+#[test]
+fn every_exact_target_form_works_against_real_tmux() {
+    let Some(srv) = Server::new() else { return };
+    let out = srv.raw_cat("n1");
+    let n = "n1";
+    let pane = vst_proc::tmux::exact_pane(n);
+    let sess = vst_proc::tmux::exact_session(n);
+
+    srv.tmux.send_keys(&pane, "hi", false).expect("send-keys");
+    wait_for("send-keys echo", || read(&out) == b"hi");
+    srv.tmux
+        .capture_pane(&pane, &Default::default())
+        .expect("capture-pane");
+    srv.tmux
+        .paste_buffer(&pane, "b", "x")
+        .expect("paste-buffer");
+    let ok = |args: &[&str]| {
+        std::process::Command::new("tmux")
+            .arg("-L")
+            .arg(&srv.socket)
+            .args(args)
+            .output()
+            .expect("tmux")
+            .status
+            .success()
+    };
+    assert!(ok(&["resize-window", "-t", &pane, "-x", "100", "-y", "30"]));
+    assert!(ok(&["set-option", "-t", &pane, "status", "off"]));
+    assert!(ok(&["has-session", "-t", &sess]));
+}
+
+// --- Phase 3: dead-pane exit info ---
+
+use vst_proc::tmux::{describe_exit, parse_list_session_panes, SessionPaneInfo};
+
+fn info(status: Option<i32>, signal: Option<&str>) -> SessionPaneInfo {
+    SessionPaneInfo {
+        dead: true,
+        dead_status: status,
+        dead_signal: signal.map(str::to_string),
+    }
+}
+
+#[test]
+fn describe_exit_covers_every_mapping_row() {
+    let cases = [
+        (info(None, Some("term")), "killed by signal 15 (TERM)"),
+        (info(None, Some("kill")), "killed by signal 9 (KILL)"),
+        (info(None, Some("hup")), "killed by signal 1 (HUP)"),
+        (info(None, Some("int")), "killed by signal 2 (INT)"),
+        (info(None, Some("quit")), "killed by signal 3 (QUIT)"),
+        (info(None, Some("abrt")), "killed by signal 6 (ABRT)"),
+        (info(None, Some("segv")), "killed by signal 11 (SEGV)"),
+        (info(None, Some("pipe")), "killed by signal 13 (PIPE)"),
+        (info(None, Some("alrm")), "killed by signal 14 (ALRM)"),
+        (info(None, Some("usr1")), "killed by signal USR1"),
+        (info(Some(0), None), "exited normally (status 0)"),
+        (
+            info(Some(143), None),
+            "exited with status 143 (likely killed by signal 15)",
+        ),
+        (
+            info(Some(129), None),
+            "exited with status 129 (likely killed by signal 1)",
+        ),
+        (
+            info(Some(192), None),
+            "exited with status 192 (likely killed by signal 64)",
+        ),
+        (info(Some(7), None), "exited with status 7"),
+        (info(Some(128), None), "exited with status 128"),
+        (info(Some(193), None), "exited with status 193"),
+        (info(None, None), "pane exited"),
+    ];
+    for (i, want) in cases {
+        assert_eq!(describe_exit(&i), want, "{i:?}");
+    }
+}
+
+#[test]
+fn list_session_panes_parser_handles_each_shape() {
+    let out = "a|1||term\nb|1|7|\nc|0||\nbroken line\nd|2||\ne|x|y|z\nweird|name|1|3|\n";
+    let m = parse_list_session_panes(out);
+    assert_eq!(m["a"], info(None, Some("term")));
+    assert_eq!(m["b"], info(Some(7), None));
+    assert_eq!(
+        m["c"],
+        SessionPaneInfo {
+            dead: false,
+            ..Default::default()
+        }
+    );
+    assert_eq!(m["weird|name"], info(Some(3), None));
+    let alive = SessionPaneInfo::default();
+    assert_eq!(
+        m["broken line"], alive,
+        "unparseable line is present, alive"
+    );
+    assert_eq!(m["d"], alive, "bad dead flag is present, alive");
+    assert_eq!(m["e"], alive, "bad dead flag is present, alive");
+    assert_eq!(m.len(), 7);
+}
+
+#[test]
+fn unparseable_pane_info_never_makes_a_listed_session_vanish() {
+    let m = parse_list_session_panes("vst-s1|?||\n");
+    assert!(!m["vst-s1"].dead);
+}
+
+#[test]
+fn numeric_pane_dead_signal_is_normalised_to_the_name() {
+    // Linux tmux prints `15`, macOS tmux 3.8 prints `term`; both must agree.
+    let m = parse_list_session_panes("a|1||15\nb|1||term\nc|1||TERM\nd|1||64\n");
+    for k in ["a", "b", "c"] {
+        assert_eq!(m[k].dead_signal.as_deref(), Some("term"), "{k}");
+        assert_eq!(describe_exit(&m[k]), "killed by signal 15 (TERM)");
+    }
+    assert_eq!(m["d"].dead_signal.as_deref(), Some("64"));
+    assert_eq!(describe_exit(&m["d"]), "killed by signal 64");
+}
+
+#[test]
+fn list_session_panes_without_a_server_is_an_empty_map() {
+    if !tmux_on_path() {
+        return;
+    }
+    let t = Tmux::with_socket(unique_socket());
+    assert_eq!(t.list_session_panes(), Some(Default::default()));
+}
+
+fn pane_pid(srv: &Server, name: &str) -> String {
+    srv.tmux_cmd(&[
+        "display-message",
+        "-p",
+        "-t",
+        &format!("={name}:"),
+        "#{pane_pid}",
+    ])
+}
+
+#[test]
+fn remain_on_exit_is_per_session_and_reports_the_signal() {
+    let Some(srv) = Server::new() else { return };
+    srv.session("anchor", &["sleep", "60"]);
+    let opts = |name: &str, remain: bool| NewSessionOptions {
+        name: name.to_string(),
+        command: Some(vec!["sh".into(), "-c".into(), "exec sleep 60".into()]),
+        remain_on_exit: remain,
+        ..Default::default()
+    };
+    srv.tmux.new_session(&opts("keep", true)).unwrap();
+    srv.tmux.new_session(&opts("plain", false)).unwrap();
+
+    let kill = |name: &str| {
+        let pid = pane_pid(&srv, name);
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .expect("kill");
+    };
+    kill("plain");
+    wait_for("unflagged session to vanish", || {
+        !srv.tmux.has_session("plain")
+    });
+    kill("keep");
+    wait_for("flagged pane to be dead", || {
+        srv.tmux.pane_exit_info("keep").is_some_and(|i| i.dead)
+    });
+    assert!(srv.tmux.has_session("keep"), "dead pane keeps the session");
+    assert!(!srv.tmux.pane_is_alive("keep"));
+    let i = srv.tmux.pane_exit_info("keep").unwrap();
+    assert_eq!(i.dead_signal.as_deref(), Some("term"));
+    assert_eq!(describe_exit(&i), "killed by signal 15 (TERM)");
+    assert!(srv
+        .tmux
+        .list_session_panes()
+        .is_some_and(|m| m.get("keep").is_some_and(|i| i.dead)));
+    assert_eq!(srv.tmux.pane_exit_info("missing"), None);
+
+    srv.tmux.kill_session_if_dead("keep");
+    assert!(!srv.tmux.has_session("keep"));
+}
+
+#[test]
+fn kill_session_if_dead_leaves_a_live_session_alone() {
+    let Some(srv) = Server::new() else { return };
+    srv.session("anchor", &["sleep", "60"]);
+    srv.session("live", &["sleep", "60"]);
+    srv.tmux.kill_session_if_dead("live");
+    assert!(srv.tmux.has_session("live"));
+    assert!(srv.tmux.pane_is_alive("live"));
+}
+
+#[test]
+fn exit_status_is_reported_for_a_normal_exit() {
+    let Some(srv) = Server::new() else { return };
+    srv.session("anchor", &["sleep", "60"]);
+    srv.tmux
+        .new_session(&NewSessionOptions {
+            name: "seven".into(),
+            command: Some(vec!["sh".into(), "-c".into(), "sleep 0.3; exit 7".into()]),
+            remain_on_exit: true,
+            ..Default::default()
+        })
+        .unwrap();
+    wait_for("dead pane", || {
+        srv.tmux.pane_exit_info("seven").is_some_and(|i| i.dead)
+    });
+    let i = srv.tmux.pane_exit_info("seven").unwrap();
+    assert_eq!(i.dead_status, Some(7));
+    assert_eq!(describe_exit(&i), "exited with status 7");
 }
