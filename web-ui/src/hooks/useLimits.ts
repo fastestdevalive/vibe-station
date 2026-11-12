@@ -69,10 +69,19 @@ function boot(): void {
 
 export interface UseLimitsResult extends LimitsState {
   slots: [LimitSlotRef, LimitSlotRef];
+  /** The window for a pinned slot, matching harness + window + account
+   *  (`accountId` absent = the CLI's System login). */
   windowFor(ref: LimitSlotRef): LimitWindow | undefined;
-  resultFor(harness: string): LimitsResult | undefined;
+  /** The harness result for one account (`accountId` absent = System login). */
+  resultFor(harness: string, accountId?: string): LimitsResult | undefined;
   refresh(): Promise<void>;
   assignSlot(slotIndex: SlotIndex, picked: LimitSlotRef): Promise<void>;
+}
+
+/** Limits carry an account id only for NON-System accounts; `"system"`/empty/
+ *  absent all mean the CLI's System login (mirror of `normalize_account_id`). */
+function limitAccountOf(accountId: string | null | undefined): string | null {
+  return !accountId || accountId === "system" ? null : accountId;
 }
 
 export function useLimits(): UseLimitsResult {
@@ -89,12 +98,20 @@ export function useLimits(): UseLimitsResult {
   const slots: [LimitSlotRef, LimitSlotRef] = snapshot?.slots ?? DEFAULT_SLOTS;
 
   const windowFor = (ref: LimitSlotRef): LimitWindow | undefined => {
-    const result = snapshot?.harnesses.find((h) => h.harness === ref.harness);
-    return result?.windows.find((w) => w.windowId === ref.windowId);
+    const account = limitAccountOf(ref.accountId);
+    const result = snapshot?.harnesses.find(
+      (h) => h.harness === ref.harness && limitAccountOf(h.accountId) === account,
+    );
+    return result?.windows.find(
+      (w) => w.windowId === ref.windowId && limitAccountOf(w.accountId) === account,
+    );
   };
 
-  const resultFor = (harness: string): LimitsResult | undefined => {
-    return snapshot?.harnesses.find((h) => h.harness === harness);
+  const resultFor = (harness: string, accountId?: string): LimitsResult | undefined => {
+    const account = limitAccountOf(accountId);
+    return snapshot?.harnesses.find(
+      (h) => h.harness === harness && limitAccountOf(h.accountId) === account,
+    );
   };
 
   const refresh = async (): Promise<void> => {

@@ -23,6 +23,7 @@ import { worktreePrStatus } from "@/lib/statusColor";
 import { rollupPrSessionsByWorktree, type PrWorktreeGroup } from "@/lib/prWorktreeRollup";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { useModeIcon } from "@/store/modesStore";
+import { AccountBadge } from "@/components/accounts/AccountBadge";
 import { sessionModeId } from "@/lib/modeIcon";
 
 interface DashboardPanelProps {
@@ -245,6 +246,7 @@ function DashboardSessionItem({
           groupLabel={proj?.name ? `direct · ${proj.name}` : "direct"}
           isDirect={true}
           modeIconKey={modeIconKey ?? undefined}
+          accountMark={<AccountBadge session={s} api={api} />}
           channel={s.channel}
           {...chipActivity}
           href={href}
@@ -269,6 +271,7 @@ function DashboardSessionItem({
         groupLabel={groupLabel}
         isDirect={false}
         modeIconKey={modeIconKey ?? undefined}
+        accountMark={<AccountBadge session={s} api={api} />}
         channel={s.channel}
         {...chipActivity}
         href={href}
@@ -336,6 +339,7 @@ function DashboardWorktreePrItem({
         projectLabel={proj?.name ?? wt.projectId}
         groupLabel={proj?.name ?? "project"}
         modeIconKey={modeIconKey ?? undefined}
+        accountMark={mainSession ? <AccountBadge session={mainSession} api={api} /> : undefined}
         channel={mainSession?.channel}
         activityAt={activityAt ?? mainSession?.createdAt ?? wt.createdAt}
         href={href}

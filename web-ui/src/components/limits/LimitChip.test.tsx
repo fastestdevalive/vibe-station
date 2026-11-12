@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { LimitWindow } from "@/api/types";
+import type { AccountSummary } from "@/api/types";
 import { LimitChip } from "./LimitChip";
 
 function win(over: Partial<LimitWindow> = {}): LimitWindow {
@@ -97,5 +98,36 @@ describe("LimitChip", () => {
     const btn = screen.getByRole("button");
     expect(btn.className).toContain("limit-chip--dim");
     expect(btn.getAttribute("title") ?? "").toContain("as of");
+  });
+});
+
+const WORK_ACCOUNT: AccountSummary = {
+  id: "acc_work",
+  cli: "claude",
+  label: null,
+  displayName: "Work",
+  email: null,
+  plan: null,
+  method: "sign_in",
+  auth: "signed_in",
+  isDefault: false,
+  limited: null,
+  createdAt: null,
+};
+
+describe("LimitChip per-account mark (R1F-14)", () => {
+  it("shows the account mark after the percentage when the caller passes one", () => {
+    const w = win({ usedPct: 42 });
+    const { unmount } = render(
+      <LimitChip harness="claude" window={w} nowMs={NOW} variant="bar" account={WORK_ACCOUNT} />,
+    );
+    const mark = document.querySelector(".account-chip--mark");
+    expect(mark).toHaveAttribute("aria-label", "Account: Work");
+    expect(screen.getByRole("button").getAttribute("aria-label")).toContain("Work");
+    expect(screen.getByRole("button").getAttribute("title")).toContain("Work");
+    unmount();
+
+    render(<LimitChip harness="claude" window={w} nowMs={NOW} variant="bar" />);
+    expect(document.querySelector(".account-chip")).toBeNull();
   });
 });

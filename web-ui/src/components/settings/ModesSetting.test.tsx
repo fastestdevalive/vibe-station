@@ -95,7 +95,7 @@ describe("ModesSetting harness tabs", () => {
 
   it("default-channel select is wired per harness (Rich Chat disabled when unsupported)", async () => {
     render(<ModesSetting api={testApi} />);
-    const sel = await screen.findByLabelText("Default channel for claude");
+    const sel = await screen.findByLabelText("Default channel for Claude");
     expect(sel).toBeEnabled();
   });
 

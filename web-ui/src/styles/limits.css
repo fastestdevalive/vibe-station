@@ -113,13 +113,26 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: var(--space-2) 0;
+  /* One group per account can outgrow a short window: scroll inside. */
+  max-height: calc(100vh - var(--global-status-bar-h, 24px) - 2 * var(--space-3));
+  max-height: calc(100dvh - var(--global-status-bar-h, 24px) - 2 * var(--space-3));
+  overflow-y: auto;
 }
 
 .limits-popup__group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg-muted);
+}
+
+.limits-popup__group-title .account-chip__name {
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .limits-popup__row {
@@ -188,9 +201,33 @@
   color: var(--fg-muted);
 }
 
+.limits-popup__tag {
+  color: var(--fg-muted);
+}
+
 @media (max-width: 768px) {
   .limit-chip__countdown {
     display: none;
+  }
+
+  /* Touch targets: popup rows and Refresh reach 44px; chips get a 44px hit area. */
+  .limits-popup__row,
+  .limits-popup__footer .limit-chip {
+    min-height: var(--h-touch);
+  }
+
+  .limits-bar > .limit-chip {
+    position: relative;
+  }
+
+  .limits-bar > .limit-chip::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: var(--h-touch);
+    transform: translateY(-50%);
   }
 
   .limits-popup {

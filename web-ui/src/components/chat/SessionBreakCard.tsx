@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { CarryOver } from "@/api/types";
 import { ModeIcon } from "@/components/agent/ModeIcon";
+import { AccountChip } from "@/components/accounts/AccountChip";
 
 /** Provider chip in a legacy (pre-`carryOver`) switch card — mono provider id
  *  with its brand glyph, matching the design's chip-mono. */
@@ -24,6 +25,13 @@ function ModePill({ mode, provider }: { mode: string; provider?: string }) {
   );
 }
 
+/** Sub-line of an account-switch card, by how the conversation was carried. */
+function accountSubLine(carryOver?: CarryOver): string {
+  if (carryOver === "native") return "Context kept";
+  if (carryOver === "transcript") return "Context carried by a transcript the agent reads first";
+  return "Started fresh";
+}
+
 /**
  * Reset / switch divider between two chat eras.
  *
@@ -42,6 +50,8 @@ export function SessionBreakCard({
   toMode,
   fromProvider,
   toProvider,
+  fromAccount,
+  toAccount,
   text,
   ts,
   onOpenPrevious,
@@ -54,6 +64,10 @@ export function SessionBreakCard({
   toMode?: string;
   fromProvider?: string;
   toProvider?: string;
+  /** Display names of the accounts replaced / the replacement account. Present
+   *  on an account switch (Decision 7: Rich Chat always writes the marker). */
+  fromAccount?: string;
+  toAccount?: string;
   /** The summary or transcript instruction passed to the next agent. */
   text?: string;
   /** RFC-3339 timestamp of the break, formatted as the card's time. */
@@ -65,6 +79,7 @@ export function SessionBreakCard({
   const isSwitch = kind === "switch";
   const hasText = typeof text === "string" && text.trim().length > 0;
   const isTranscript = carryOver === "transcript";
+  const isAccountSwitch = !!fromAccount && !!toAccount;
 
   let time: string | undefined;
   if (ts) {
@@ -72,8 +87,9 @@ export function SessionBreakCard({
     if (!Number.isNaN(d.getTime())) time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
 
-  const title =
-    carryOver !== undefined
+  const title = isAccountSwitch
+    ? "Switched account"
+    : carryOver !== undefined
       ? isSwitch
         ? `Switched to ${toMode ?? toProvider ?? "another mode"}`
         : "Fresh start"
@@ -81,8 +97,9 @@ export function SessionBreakCard({
         ? "Switched provider"
         : "Agent restarted";
 
-  const sub =
-    carryOver !== undefined
+  const sub = isAccountSwitch
+    ? accountSubLine(carryOver)
+    : carryOver !== undefined
       ? isTranscript
         ? "Transcript linked. The new agent can read the earlier chat from a file."
         : "Summary carried over. The new agent can't see the messages above this line."
@@ -116,7 +133,19 @@ export function SessionBreakCard({
           {time ? <span className="chat-session-break__time">{time}</span> : null}
         </div>
 
-        {carryOver !== undefined
+        {isAccountSwitch ? (
+          <div className="chat-session-break__providers">
+            <span className="chat-session-break__pill">
+              <AccountChip variant="inline" name={fromAccount!} />
+            </span>
+            <svg className="chat-session-break__arrow" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 8h10M9.5 4.5 13 8l-3.5 3.5" />
+            </svg>
+            <span className="chat-session-break__pill">
+              <AccountChip variant="inline" name={toAccount!} />
+            </span>
+          </div>
+        ) : carryOver !== undefined
           ? isSwitch && fromMode && toMode
             ? (
                 <div className="chat-session-break__providers">

@@ -720,6 +720,16 @@
     min-width: 0;
     max-width: none;
   }
+  /* The account chip (shown for a CLI with 2+ accounts) does not fit beside
+     Start on a narrow composer: the row wraps and Start stays at the right
+     edge of the card (R4F-01). Without the chip everything still fits on
+     one row, so nothing changes there. */
+  .draft-composer .chat-composer__toolbar {
+    flex-wrap: wrap;
+  }
+  .draft-composer .chat-composer__toolbar > .chat-composer__send {
+    margin-left: auto;
+  }
 }
 
 /* Very narrow composer (≈360px phones): Start goes icon-only, as the chat

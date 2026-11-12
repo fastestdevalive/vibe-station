@@ -8921,10 +8921,63 @@ button.dashboard-card {
 .folder-chooser__nav {
   display: flex;
   gap: var(--space-2);
-  align-items: center;
+  align-items: stretch;
 }
 .folder-chooser__path-input {
   flex: 1;
+}
+/* Inline completion: the remainder of the top match, drawn over the input's
+ * own text so it reads as a continuation. The typed part is transparent. */
+.folder-chooser__input-wrap {
+  font-size: var(--fs-input);
+}
+.path-ghost-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+/* The real input must inherit the font, or no ghost can match it. */
+.path-ghost-field > input {
+  font: inherit;
+}
+.path-ghost {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--path-ghost-left, calc(var(--border-width) + var(--space-3)));
+  right: calc(var(--border-width) + var(--space-3));
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: pre;
+  font: inherit;
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+.path-ghost__track {
+  flex: none;
+  will-change: transform;
+}
+.path-ghost__typed {
+  visibility: hidden;
+}
+/* Typed-path fields outside the folder chooser (OOBE, project combobox):
+ * the wrapper owns the font so input and ghost match; 44px / 16px on phones. */
+.path-ghost-field--field {
+  font-size: var(--font-size-sm);
+  --path-ghost-h: var(--h-md);
+}
+.path-ghost-note {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+@media (max-width: 640px) {
+  .path-ghost-field--field {
+    font-size: var(--fs-input);
+    --path-ghost-h: var(--h-touch);
+  }
 }
 .folder-chooser__list-container {
   flex: 1;
@@ -8974,7 +9027,8 @@ button.dashboard-card {
 .folder-chooser__item-icon {
   font-size: var(--font-size-md);
 }
-.folder-chooser__truncated-hint {
+.folder-chooser__more {
+  padding: var(--space-2) var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
@@ -8984,6 +9038,23 @@ button.dashboard-card {
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* Phones: every tappable part of the folder chooser meets the touch target. */
+@media (max-width: 640px) {
+  .folder-chooser__item,
+  .folder-chooser__path-input,
+  .folder-chooser__nav .btn,
+  .dialog-card--folder-chooser .dialog-card__header .icon-btn,
+  .dialog-card--folder-chooser .dialog-actions .btn {
+    min-height: var(--h-touch);
+  }
+  .dialog-card--folder-chooser .dialog-card__header .icon-btn {
+    min-width: var(--h-touch);
+  }
+  .folder-chooser__list-container {
+    min-height: 120px;
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────

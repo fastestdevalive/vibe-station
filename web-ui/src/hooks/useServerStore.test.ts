@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useServerStore } from "./useServerStore";
-import type { Project } from "@/api/types";
+import type { AccountSummary, Project } from "@/api/types";
 
 function proj(id: string, hidden = false): Project {
   return {
@@ -113,6 +113,130 @@ describe("useServerStore diffStats slice (rev monotonic)", () => {
     });
     expect(useServerStore.getState().diffStats["wt-1"]?.rev).toBe(1730000000000);
     expect(useServerStore.getState().diffStats["wt-1"]?.insertions).toBe(12);
+  });
+});
+
+function acct(over: Partial<AccountSummary> & Pick<AccountSummary, "id" | "cli">): AccountSummary {
+  return {
+    label: null,
+    displayName: over.id,
+    email: null,
+    plan: null,
+    method: "sign_in",
+    auth: "signed_in",
+    isDefault: false,
+    limited: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...over,
+  };
+}
+
+const CLAUDE_SYSTEM = acct({
+  id: "system",
+  cli: "claude",
+  method: "system",
+  displayName: "System login",
+  isDefault: true,
+  createdAt: null,
+});
+const CLAUDE_WORK = acct({ id: "acc_1a2b3c4d", cli: "claude", label: "Work", displayName: "Work" });
+const CURSOR_SYSTEM = acct({
+  id: "system",
+  cli: "cursor",
+  method: "system",
+  displayName: "System login",
+  isDefault: true,
+  createdAt: null,
+});
+
+describe("useServerStore accounts slice", () => {
+  beforeEach(() => {
+    useServerStore.setState({ accounts: [], accountsLoaded: false });
+  });
+
+  it("applyAccountUpdated upserts by (cli,id)", () => {
+    useServerStore.getState().replaceAccounts([CLAUDE_SYSTEM, CLAUDE_WORK, CURSOR_SYSTEM]);
+    expect(useServerStore.getState().accountsLoaded).toBe(true);
+
+    // Same (cli,id) — replace in place, do not append.
+    useServerStore.getState().applyAccountUpdated({
+      ...CLAUDE_WORK,
+      displayName: "Work (renamed)",
+      auth: "signed_out",
+    });
+    let rows = useServerStore.getState().accounts;
+    expect(rows).toHaveLength(3);
+    expect(rows.find((a) => a.cli === "claude" && a.id === "acc_1a2b3c4d")?.displayName).toBe("Work (renamed)");
+    expect(rows.find((a) => a.cli === "claude" && a.id === "acc_1a2b3c4d")?.auth).toBe("signed_out");
+    expect(rows.find((a) => a.cli === "cursor" && a.id === "system")).toBe(CURSOR_SYSTEM);
+
+    // A new (cli,id) — append.
+    useServerStore.getState().applyAccountUpdated(acct({ id: "acc_9f9f9f9f", cli: "claude", label: "Side" }));
+    rows = useServerStore.getState().accounts;
+    expect(rows).toHaveLength(4);
+    expect(rows.some((a) => a.id === "acc_9f9f9f9f")).toBe(true);
+  });
+
+  it("applyAccountUpdated never collides the per-CLI System rows", () => {
+    useServerStore.getState().replaceAccounts([CLAUDE_SYSTEM, CURSOR_SYSTEM]);
+    useServerStore.getState().applyAccountUpdated({
+      ...CLAUDE_SYSTEM,
+      email: "me@personal.dev",
+    });
+    const rows = useServerStore.getState().accounts;
+    expect(rows).toHaveLength(2);
+    expect(rows.find((a) => a.cli === "claude")?.email).toBe("me@personal.dev");
+    expect(rows.find((a) => a.cli === "cursor")?.email).toBeNull();
+  });
+
+  it("applyAccountRemoved removes only the matching (cli,id)", () => {
+    useServerStore.getState().replaceAccounts([CLAUDE_SYSTEM, CLAUDE_WORK, CURSOR_SYSTEM]);
+    useServerStore.getState().applyAccountRemoved("claude", "acc_1a2b3c4d");
+    expect(useServerStore.getState().accounts.map((a) => `${a.cli}:${a.id}`)).toEqual([
+      "claude:system",
+      "cursor:system",
+    ]);
+
+    // Removing the claude System row leaves cursor's System row alone.
+    useServerStore.getState().applyAccountRemoved("claude", "system");
+    expect(useServerStore.getState().accounts.map((a) => `${a.cli}:${a.id}`)).toEqual(["cursor:system"]);
+  });
+
+  it("applyAccountLimited patches only `limited`", () => {
+    useServerStore.getState().replaceAccounts([CLAUDE_SYSTEM, CLAUDE_WORK]);
+    const limited = { windowId: "five_hour", resetsAt: "2026-01-01T02:00:00.000Z", source: "poller" as const };
+
+    useServerStore.getState().applyAccountLimited("claude", "acc_1a2b3c4d", limited);
+    const work = useServerStore.getState().accounts.find((a) => a.id === "acc_1a2b3c4d");
+    expect(work?.limited).toEqual(limited);
+    // Everything else is untouched.
+    expect(work?.displayName).toBe("Work");
+    expect(work?.auth).toBe("signed_in");
+    expect(work?.isDefault).toBe(false);
+
+    // A null accountId means the CLI's System row.
+    useServerStore.getState().applyAccountLimited("claude", null, limited);
+    expect(useServerStore.getState().accounts.find((a) => a.id === "system")?.limited).toEqual(limited);
+
+    // An identical broadcast is a no-op (no new array).
+    const before = useServerStore.getState().accounts;
+    useServerStore.getState().applyAccountLimited("claude", "acc_1a2b3c4d", limited);
+    expect(useServerStore.getState().accounts).toBe(before);
+
+    // null clears.
+    useServerStore.getState().applyAccountLimited("claude", "acc_1a2b3c4d", null);
+    expect(useServerStore.getState().accounts.find((a) => a.id === "acc_1a2b3c4d")?.limited).toBeNull();
+  });
+
+  it("applyAccountLimited ignores an unknown account", () => {
+    useServerStore.getState().replaceAccounts([CLAUDE_SYSTEM]);
+    const before = useServerStore.getState().accounts;
+    useServerStore.getState().applyAccountLimited("claude", "acc_missing", {
+      windowId: "five_hour",
+      resetsAt: null,
+      source: "chat",
+    });
+    expect(useServerStore.getState().accounts).toBe(before);
   });
 });
 

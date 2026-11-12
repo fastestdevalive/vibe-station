@@ -12,6 +12,7 @@ import {
   nextSlots,
   resetCountdown,
   sameRef,
+  slotKey,
   statusReason,
   windowLabel,
 } from "./limitsModel";
@@ -39,6 +40,24 @@ describe("sameRef", () => {
     expect(sameRef({ harness: "claude", windowId: "five_hour" }, { harness: "claude", windowId: "five_hour" })).toBe(true);
     expect(sameRef({ harness: "claude", windowId: "five_hour" }, { harness: "claude", windowId: "seven_day" })).toBe(false);
   });
+
+  it("distinguishes accounts (absent accountId = System)", () => {
+    const system = { harness: "claude", windowId: "five_hour" };
+    const work = { harness: "claude", windowId: "five_hour", accountId: "acc_1a2b3c4d" };
+    const side = { harness: "claude", windowId: "five_hour", accountId: "acc_2b3c4d5e" };
+    expect(sameRef(work, work)).toBe(true);
+    expect(sameRef(work, side)).toBe(false);
+    expect(sameRef(system, work)).toBe(false);
+  });
+});
+
+describe("slotKey", () => {
+  it("is `<harness>/<windowId>` for System and `<...>@<accountId>` for an account", () => {
+    expect(slotKey({ harness: "claude", windowId: "five_hour" })).toBe("claude/five_hour");
+    expect(slotKey({ harness: "claude", windowId: "five_hour", accountId: "acc_1a2b3c4d" })).toBe(
+      "claude/five_hour@acc_1a2b3c4d",
+    );
+  });
 });
 
 describe("nextSlots", () => {
@@ -53,6 +72,12 @@ describe("nextSlots", () => {
     const picked: LimitSlotRef = { harness: "codex", windowId: "primary" };
     expect(nextSlots(SLOTS, 1, picked)).toEqual([SLOTS[0], picked]);
     expect(nextSlots(SLOTS, 0, picked)).toEqual([picked, SLOTS[1]]);
+  });
+  it("swaps account refs (same harness/window, different account)", () => {
+    const work: LimitSlotRef = { harness: "claude", windowId: "five_hour", accountId: "acc_1a2b3c4d" };
+    const side: LimitSlotRef = { harness: "claude", windowId: "five_hour", accountId: "acc_2b3c4d5e" };
+    expect(nextSlots([work, side], 0, side)).toEqual([side, work]);
+    expect(nextSlots([work, side], 1, work)).toEqual([side, work]);
   });
 });
 
@@ -243,7 +268,7 @@ describe("statusReason", () => {
   it("ok → null; others map", () => {
     expect(statusReason("ok", null)).toBeNull();
     expect(statusReason("not_installed", null)).toBe("Not installed");
-    expect(statusReason("signed_out", null)).toBe("Signed out");
+    expect(statusReason("signed_out", null)).toBe("Signed out. Sign in from Settings.");
     expect(statusReason("no_plan_limits", null)).toContain("No plan limits");
     expect(statusReason("no_data", null)).toBe("No data yet");
     expect(statusReason("error", "boom")).toBe("boom");

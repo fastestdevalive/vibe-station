@@ -1,0 +1,1214 @@
+/* Settings → Harnesses → Accounts block + its dialogs. Tokens only — no bare
+   hex values (the palette lives in styles/tokens.css). */
+
+.accounts-block {
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--border-subtle, var(--border-default));
+}
+
+.accounts-block__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.accounts-block__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+}
+
+.accounts-block__count {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.accounts-block__spacer {
+  flex: 1;
+}
+
+.accounts-block__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--fg-muted);
+}
+
+.accounts-block__rows {
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.accounts-block__error {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--destructive);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--destructive-soft);
+}
+
+/* ── One account row ─────────────────────────────────────────────────────── */
+
+.accounts-row {
+  --account-action-h: var(--h-md);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-width) solid var(--border-subtle, var(--border-default));
+}
+
+.accounts-row:last-child {
+  border-bottom: 0;
+}
+
+.accounts-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The meter lines up under the name, past the monogram. */
+.accounts-row__meter,
+.account-picker__meter {
+  padding-left: calc(var(--space-6) + var(--space-3));
+}
+
+.accounts-row__meter:empty,
+.account-picker__meter:empty {
+  display: none;
+}
+
+.accounts-row__error {
+  margin-top: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+}
+
+.accounts-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  /* Centres the action band on the chip's 24px first-line band. */
+  margin-block: calc((var(--space-6) - var(--account-action-h)) / 2);
+}
+
+.accounts-row__actions .account-chip__state {
+  align-self: center;
+  white-space: nowrap;
+}
+
+.accounts-row__action,
+.accounts-row__menu-btn {
+  box-sizing: border-box;
+  height: var(--account-action-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.accounts-row__action {
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+}
+
+.accounts-row__action:hover {
+  color: var(--fg-primary);
+}
+
+.accounts-row__action:focus-visible,
+.accounts-row__menu-btn:focus-visible,
+.accounts-row__menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.accounts-row__menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.accounts-row__menu-btn {
+  width: var(--account-action-h);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+}
+
+.accounts-row__menu-btn:hover,
+.accounts-row__menu-btn[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.accounts-row__menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popover);
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.accounts-row__menu-item {
+  display: flex;
+  align-items: center;
+  min-height: var(--h-lg);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.accounts-row__menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.accounts-row__menu-item--destructive {
+  color: var(--destructive);
+}
+
+/* ── Dialogs (shared Dialog shell; body/footer styling only) ─────────────── */
+
+.accounts-dialog__tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.accounts-dialog__tab {
+  min-height: var(--h-md);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.accounts-dialog__tab[aria-selected="true"] {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.accounts-dialog__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.accounts-dialog__mode-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Tall enough for the taller mode so "Use an API key instead" does not jump. */
+  min-height: 13rem;
+}
+
+.accounts-dialog__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.accounts-dialog__label {
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+}
+
+.accounts-dialog__input {
+  min-height: var(--h-lg);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-base);
+}
+
+.accounts-dialog__input:disabled {
+  opacity: 0.6;
+}
+
+.accounts-dialog__help,
+.accounts-dialog__text,
+.accounts-dialog__account-meta {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--fg-muted);
+}
+
+.accounts-dialog__status {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--fg-primary);
+}
+
+.accounts-dialog__status--warn {
+  color: var(--fg-warning);
+}
+
+.accounts-dialog__error {
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--destructive);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--destructive-soft);
+}
+
+/* Phone: every row target keeps the 44px minimum. */
+@media (max-width: 768px) {
+  .accounts-row {
+    --account-action-h: var(--h-touch);
+  }
+
+  .accounts-row__menu-item {
+    min-height: var(--h-touch);
+  }
+
+  /* A row with a contextual button puts its buttons on a second line, so the
+     chip keeps the full row width (name, folder and state word stay readable). */
+  .accounts-row--action {
+    flex-wrap: wrap;
+  }
+
+  .accounts-row--action .accounts-row__actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+    margin-block: 0;
+  }
+
+  .accounts-dialog__tab,
+  .accounts-dialog__input {
+    min-height: var(--h-touch);
+  }
+}
+
+/* ── Session surfaces (plan B3): draft picker, sidebar badge, banner, switch
+   menu and the composer's account label. Tokens only — no bare hex. ──────── */
+
+.account-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* A long name ellipsises before it pushes the next toolbar item out. */
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.account-picker__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--h-md);
+  max-width: 14rem;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.account-picker__chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.account-picker__chip:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.account-picker__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.account-picker__popover {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+}
+
+/* The switch menu is portaled and placed by SwitchAccountMenu (inline top/left),
+   so it never depends on the element that mounts its trigger. */
+.account-menu {
+  position: fixed;
+}
+
+.account-picker__popover,
+.account-menu {
+  z-index: var(--z-popover);
+  width: max-content;
+  min-width: 18rem;
+  max-width: min(26rem, calc(100vw - 2 * var(--space-3)));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.account-picker__row,
+.account-menu__row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-menu__row {
+  position: relative;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.account-picker__row:hover,
+.account-menu__row:hover {
+  background: var(--bg-hover);
+}
+
+.account-picker__row:focus-visible,
+.account-menu__row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.account-picker__row[aria-disabled="true"],
+.account-menu__row[aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--fg-muted);
+}
+
+.account-picker__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.account-picker__body .account-chip--row,
+.account-menu__row .account-chip--row {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-menu__caption {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.account-picker__check {
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.account-picker__hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-warning);
+}
+
+.account-picker__help {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* The session account mark (AccountChip variant "mark") sits inline after a
+ * name; in the pinned (two-line) rows it joins the project line. */
+.pinned-row__subhead .account-chip {
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+
+/* ── Banner (above the composer / under the tabs strip) ───────────────────── */
+
+.account-banner {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+}
+
+.account-banner--limited {
+  border-color: var(--fg-warning);
+}
+
+.account-banner--signed-out {
+  border-color: var(--border-strong);
+}
+
+.account-banner--compact {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  border-radius: 0;
+  border-width: 0 0 var(--border-width) 0;
+}
+
+.account-banner__text {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+.account-banner__hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.account-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.account-banner__btn {
+  min-height: var(--h-md);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.account-banner__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.account-banner__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.account-banner__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.account-banner__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+}
+
+.account-banner__error-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.account-banner__toast {
+  margin-top: var(--space-2);
+}
+
+/* Refused switch (SwitchRefusal): portaled popover, wraps; a bottom sheet on phones. */
+.switch-refusal {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: min(24rem, calc(100vw - 2 * var(--space-3)));
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  outline: none;
+}
+
+.switch-refusal__text {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+  overflow-wrap: anywhere;
+}
+
+.switch-refusal__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Session account control (chat status bar and terminal toolbar). */
+.session-account {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.session-account__anchor {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.session-account__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--h-chip);
+  min-width: 0;
+  max-width: 14rem;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.session-account__btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.session-account__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+@media (max-width: 768px) {
+  .account-picker__chip,
+  .account-picker__row,
+  .account-menu__row,
+  .account-banner__btn,
+  .account-picker__add {
+    min-height: var(--h-touch);
+  }
+
+  /* A 44px hit area that does not grow the thin status bar. */
+  .session-account__btn {
+    position: relative;
+    z-index: 1;
+  }
+
+  .session-account__btn::before {
+    content: "";
+    position: absolute;
+    inset: -12px 0;
+  }
+
+  /* At the very top of the pane: the same 44px, shifted down to stay inside it. */
+  .agent-pane-header .session-account__btn::before {
+    inset: -4px 0 -20px;
+  }
+
+  .switch-refusal {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: var(--global-status-bar-h, 24px);
+    width: auto;
+    max-width: none;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+
+  /* Bottom sheet: the same shape LimitsPopup takes on phones. */
+  .account-picker__popover,
+  .account-menu {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: var(--global-status-bar-h, 24px);
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+}
+
+/* ── Sign-in steps (SignInSteps): numbered guide, command + Copy ─────────── */
+
+.sign-in-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sign-in-steps__list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+}
+
+.sign-in-steps__label {
+  line-height: var(--line-height-normal);
+}
+
+.sign-in-steps__command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.sign-in-steps__code {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.sign-in-steps__copy {
+  min-height: var(--h-md);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.sign-in-steps__copy:hover {
+  color: var(--fg-primary);
+}
+
+/* Reserved line for the copy hint and "Still not signed in." so nothing shifts. */
+.sign-in-steps__feedback {
+  min-height: var(--lh-meta);
+}
+
+.sign-in-steps__hint {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.sign-in-steps__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sign-in-steps__actions button {
+  min-height: var(--h-md);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.sign-in-steps__actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sign-in-steps__status,
+.sign-in-steps__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+
+.sign-in-steps__status {
+  color: var(--fg-warning);
+}
+
+.sign-in-steps__error {
+  color: var(--destructive-soft);
+}
+
+/* ── Account folder field (FolderField) ──────────────────────────────────── */
+
+.accounts-folder-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  position: relative;
+}
+
+.accounts-folder-field__row {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.accounts-folder-field__ghost-wrap {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.accounts-folder-field__input {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--h-lg);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font: inherit;
+}
+
+.accounts-folder-field__input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+.accounts-folder-field__browse {
+  min-height: var(--h-lg);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.accounts-folder-field__list {
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  max-height: 180px;
+  overflow-y: auto;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.accounts-folder-field__option {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.accounts-folder-field__option:hover,
+.accounts-folder-field__option--active {
+  background: var(--bg-hover);
+}
+
+.accounts-folder-field__ok,
+.accounts-folder-field__help {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--fg-muted);
+}
+
+.accounts-folder-field__ok {
+  color: var(--fg-primary);
+}
+
+.accounts-folder-field__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-warning);
+}
+
+.accounts-folder-field__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--destructive-soft);
+}
+
+/* ── Choice cards (folder radio cards, e.g. "create" vs "choose") ─────────── */
+
+.accounts-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  cursor: pointer;
+}
+
+.accounts-choice:has(input:checked) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.accounts-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.accounts-choice__title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+}
+
+.accounts-choice__text {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--fg-muted);
+}
+
+/* Dialog sheet: full width on phones (the shared Dialog shell, one class). */
+@media (max-width: 640px) {
+  .dialog-card.accounts-dialog-card {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .sign-in-steps__copy,
+  .sign-in-steps__actions button,
+  .accounts-folder-field__browse {
+    min-height: var(--h-touch);
+  }
+
+  .accounts-folder-field__option {
+    min-height: var(--h-touch);
+  }
+
+  /* 16px input text: iOS zooms the page on focus below that. */
+  .accounts-folder-field__ghost-wrap,
+  .accounts-folder-field__option {
+    font-size: var(--fs-input);
+  }
+
+  .accounts-dialog-card .dialog-card__footer button,
+  .accounts-dialog-card .dialog-card__header .icon-btn {
+    min-height: var(--h-touch);
+    min-width: var(--h-touch);
+  }
+
+  .accounts-dialog__radio,
+  .accounts-dialog__link {
+    min-height: var(--h-touch);
+  }
+
+  .accounts-dialog__link {
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+/* Add dialog (B2b): folder radios, links and the waiting/added status line. */
+.accounts-dialog__fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.accounts-dialog__legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.accounts-dialog__radio {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.accounts-dialog__link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-link, var(--fg-secondary));
+  font-size: var(--font-size-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Settings rows (B2b.2): folder line, signed-out state, pending and expanded steps. */
+.accounts-block__empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Picker footer (B2b.3). */
+.account-picker__add {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-top: var(--border-width) solid var(--border-subtle, var(--border-default));
+  background: none;
+  color: var(--fg-link, var(--fg-secondary));
+  font-size: var(--font-size-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+/* ── Account chip (AccountChip): neutral monogram + name / state. The monogram
+   carries no hue (it must never read as a status colour); signed out, waiting
+   and removed use a dashed border instead. Tokens only. ─────────────────── */
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.account-chip__mark {
+  flex: none;
+  box-sizing: border-box;
+  width: var(--space-4);
+  height: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-secondary);
+  font-size: 8px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.account-chip[data-state="signed_out"] .account-chip__mark,
+.account-chip[data-state="pending"] .account-chip__mark,
+.account-chip[data-state="removed"] .account-chip__mark {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.account-chip__name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-ui);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+}
+
+.account-chip--inline {
+  min-height: var(--h-chip);
+}
+
+.account-chip--inline .account-chip__name {
+  max-width: 14rem;
+}
+
+.account-chip--mark {
+  gap: 0;
+  flex: none;
+}
+
+.account-chip--row {
+  --account-band: var(--space-6);
+  display: flex;
+  align-items: flex-start;
+  flex: 1;
+  min-height: var(--account-band);
+  gap: var(--space-3);
+}
+
+.account-chip--row .account-chip__mark {
+  align-self: flex-start;
+  width: var(--account-band);
+  height: var(--account-band);
+  font-size: var(--font-size-xs);
+}
+
+.account-chip--row .account-chip__name {
+  line-height: var(--account-band);
+}
+
+.account-chip__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-chip__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
+.account-chip__line .chip {
+  flex: none;
+}
+
+.account-chip__secondary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--fg-muted);
+}
+
+.account-chip__state {
+  flex: none;
+  align-self: flex-start;
+  font-size: var(--fs-meta);
+  line-height: var(--account-band, var(--space-6));
+  color: var(--fg-muted);
+}
+
+.account-chip__state[data-state-word="signed_out"],
+.account-chip__state[data-state-word="limited"] {
+  color: var(--fg-warning);
+}
+
+.account-chip__trailing {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--account-band, var(--space-6));
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+}
+
+/* ── Account limit meter (AccountLimitMeter): 2px bar per window ─────────── */
+.account-meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  min-width: 0;
+}
+
+.account-meter__win {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-meta);
+  color: var(--fg-muted);
+}
+
+.account-meter__track {
+  flex: none;
+  position: relative;
+  width: 4rem;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.account-meter__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--fg-secondary);
+}
+
+.account-meter__fill--warn {
+  background: var(--ctx-warn);
+}
+
+.account-meter__fill--danger {
+  background: var(--ctx-danger);
+}
+
+.account-meter__pct {
+  min-width: 3ch;
+  font-variant-numeric: tabular-nums;
+}

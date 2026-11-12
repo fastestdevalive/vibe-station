@@ -39,4 +39,47 @@ describe("OobeStep1Location", () => {
     });
     expect(screen.queryByTestId("oobe-step1-error")).toBeNull();
   });
+
+  describe("inline folder suggestion ghost", () => {
+    const entries = [{ name: "projects", path: "/mock/projects" }];
+    function setup(fsComplete: () => Promise<unknown>) {
+      const api = createMockApi();
+      vi.spyOn(api, "fsComplete").mockImplementation(fsComplete as never);
+      render(
+        <OobeStep1Location api={api} defaultProjectsDir="" vstHome="" onConfirmed={vi.fn()} />,
+      );
+      return screen.getByLabelText("Default projects directory") as HTMLInputElement;
+    }
+    const ok = async () => ({ base: "/mock/", entries, truncated: false });
+
+    it("shows a directory ghost for a completion, none for a trailing slash, and Tab accepts", async () => {
+      const input = setup(ok);
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "/mock/pro" } });
+      await waitFor(() => expect(document.querySelector(".path-ghost")?.textContent).toBe("/mock/projects/"));
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+      expect(input.value).toBe("/mock/projects/");
+      expect(document.querySelector(".path-ghost")).toBeNull();
+    });
+
+    it("ArrowRight at the caret end accepts", async () => {
+      const input = setup(ok);
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "/mock/pro" } });
+      await waitFor(() => expect(document.querySelector(".path-ghost")).not.toBeNull());
+      input.setSelectionRange(9, 9);
+      expect(fireEvent.keyDown(input, { key: "ArrowRight" })).toBe(false);
+      expect(input.value).toBe("/mock/projects/");
+    });
+
+    it("no ghost when nothing completes; a failed fetch shows a muted note", async () => {
+      const input = setup(async () => {
+        throw new Error("boom");
+      });
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "/mock/pro" } });
+      expect(await screen.findByTestId("oobe-step1-suggest-error")).toHaveClass("path-ghost-note");
+      expect(document.querySelector(".path-ghost")).toBeNull();
+    });
+  });
 });

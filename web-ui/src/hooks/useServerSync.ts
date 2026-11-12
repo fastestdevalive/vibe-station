@@ -100,6 +100,10 @@ export function useServerSync(api: ApiInstance): void {
   const worktreeRepo = useMemo(() => createWorktreeRepository(api), [api]);
 
   const replaceAll = useServerStore((s) => s.replaceAll);
+  const replaceAccounts = useServerStore((s) => s.replaceAccounts);
+  const applyAccountUpdated = useServerStore((s) => s.applyAccountUpdated);
+  const applyAccountRemoved = useServerStore((s) => s.applyAccountRemoved);
+  const applyAccountLimited = useServerStore((s) => s.applyAccountLimited);
   const applyProjectCreated = useServerStore((s) => s.applyProjectCreated);
   const applyProjectDeleted = useServerStore((s) => s.applyProjectDeleted);
   const applyProjectUpdated = useServerStore((s) => s.applyProjectUpdated);
@@ -123,13 +127,18 @@ export function useServerSync(api: ApiInstance): void {
       if (inFlightRefresh) return inFlightRefresh;
       inFlightRefresh = (async () => {
         try {
-          const [projects, worktrees, sessions, diffStatsSnapshot] = await Promise.all([
+          const [projects, worktrees, sessions, diffStatsSnapshot, accounts] = await Promise.all([
             api.listProjects(),
             worktreeRepo.listWorktrees(),
             sessionRepo.listSessions(),
             api.getDiffStats().catch(() => ({ stats: {} })),
+            // Accounts ride the same load/reconnect fetch (plan B1.4). A failure
+            // is non-fatal: `accountsLoaded` stays false and every account
+            // surface stays hidden, instead of blocking sessions/projects.
+            api.getAccounts().catch(() => null),
           ]);
           replaceAll({ projects, worktrees, sessions });
+          if (accounts) replaceAccounts(accounts);
           seedDiffStats(diffStatsSnapshot.stats);
           // Overlay fresh REST state onto the persisted live map. Without
           // this, a "done"/"exited" terminal state set by another client
@@ -232,7 +241,7 @@ export function useServerSync(api: ApiInstance): void {
     return off;
     // `api` stays a dep — `listProjects()` above and `ws:open` here are both
     // direct `api` calls, out of Session/WorktreeRepository's scope (Decision 4).
-  }, [api, sessionRepo, worktreeRepo, replaceAll, syncSessionsFromApi]);
+  }, [api, sessionRepo, worktreeRepo, replaceAll, replaceAccounts, syncSessionsFromApi]);
 
   // Incremental WS event reducers — keep the store current between full
   // refreshes so we don't have to refetch for every transition.
@@ -449,6 +458,18 @@ export function useServerSync(api: ApiInstance): void {
         useWorkspaceStore.getState().setSortOrder("pinned-all", ev.itemIds);
       }
     });
+    // Accounts: upserts/removals/limited flags are stored centrally. The
+    // `account:signin` progress event is deliberately NOT stored — the
+    // sign-in dialog consumes it through `api.on("account:signin")`.
+    const offAccountUpdated = api.on("account:updated", (ev) => {
+      if (ev.type === "account:updated") applyAccountUpdated(ev.account);
+    });
+    const offAccountRemoved = api.on("account:removed", (ev) => {
+      if (ev.type === "account:removed") applyAccountRemoved(ev.cli, ev.accountId);
+    });
+    const offAccountLimited = api.on("account:limited", (ev) => {
+      if (ev.type === "account:limited") applyAccountLimited(ev.cli, ev.accountId, ev.limited);
+    });
     return () => {
       offProjCreated();
       offProjDeleted();
@@ -466,6 +487,9 @@ export function useServerSync(api: ApiInstance): void {
       offSessDeleted();
       offSessUpdated();
       offOrderedListUpdated();
+      offAccountUpdated();
+      offAccountRemoved();
+      offAccountLimited();
     };
     // `api` stays a dep — `project:*` listeners above are direct `api` calls,
     // out of Session/WorktreeRepository's scope (Decision 4).
@@ -485,5 +509,8 @@ export function useServerSync(api: ApiInstance): void {
     applyWorktreeDiffStat,
     seedDiffStats,
     patchSessionState,
+    applyAccountUpdated,
+    applyAccountRemoved,
+    applyAccountLimited,
   ]);
 }

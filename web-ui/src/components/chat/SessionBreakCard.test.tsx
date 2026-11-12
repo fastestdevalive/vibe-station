@@ -101,3 +101,35 @@ describe("SessionBreakCard", () => {
     expect(screen.queryByText("Show summary")).not.toBeInTheDocument();
   });
 });
+
+describe("SessionBreakCard — account switch (plan B3.8)", () => {
+  it("titles an account switch and shows both account pills", () => {
+    render(<SessionBreakCard kind="switch" carryOver="native" fromAccount="Work" toAccount="System login" />);
+    expect(screen.getByText("Switched account")).toBeInTheDocument();
+    const pills = document.querySelectorAll(".chat-session-break__pill");
+    expect(pills).toHaveLength(2);
+    expect(pills[0]!.textContent).toContain("Work");
+    expect(pills[1]!.textContent).toContain("System login");
+    expect(screen.getByText("Context kept")).toBeInTheDocument();
+    // No mode/provider copy leaks into an account switch.
+    expect(screen.queryByText(/Switched to /)).toBeNull();
+  });
+
+  it("labels a transcript account switch by a transcript", () => {
+    render(<SessionBreakCard kind="switch" carryOver="transcript" fromAccount="Work" toAccount="gb@side.dev" />);
+    expect(screen.getByText("Context carried by a transcript the agent reads first")).toBeInTheDocument();
+  });
+
+  it("labels a fresh account switch as nothing to carry", () => {
+    render(<SessionBreakCard kind="switch" carryOver="none" fromAccount="Work" toAccount="gb@side.dev" />);
+    expect(screen.getByText("Started fresh")).toBeInTheDocument();
+  });
+
+  it("keeps the legacy mode-switch card unchanged when no accounts are present", () => {
+    render(
+      <SessionBreakCard kind="switch" carryOver="summary" fromMode="opus" toMode="sonnet" fromProvider="claude" toProvider="claude" />,
+    );
+    expect(screen.getByText("Switched to sonnet")).toBeInTheDocument();
+    expect(screen.queryByText("Switched account")).toBeNull();
+  });
+});

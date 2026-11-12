@@ -98,7 +98,7 @@
    to the project and vice versa. Never wraps. */
 .acard__path {
   display: grid;
-  grid-template-columns: minmax(0, max-content) max-content minmax(10%, max-content);
+  grid-template-columns: minmax(0, max-content) max-content minmax(10%, max-content) max-content;
   justify-content: start;
   align-items: center;
   column-gap: 5px;
@@ -143,11 +143,16 @@
 }
 /* Direct agent: project + .dtag, no glyph, no slash, never a PR chip */
 .acard__path--direct {
-  grid-template-columns: minmax(0, max-content) max-content;
+  grid-template-columns: minmax(0, max-content) max-content max-content;
   column-gap: 6px;
 }
 .acard__path--plain {
-  grid-template-columns: minmax(0, max-content);
+  grid-template-columns: minmax(0, max-content) max-content;
+}
+/* The account mark (AccountBadge) sits above the stretched name link so its tooltip works. */
+.acard__path .account-chip {
+  position: relative;
+  z-index: 1;
 }
 .dtag {
   display: inline-flex;

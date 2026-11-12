@@ -3,6 +3,9 @@ import { motion } from "framer-motion";
 import type { ApiInstance } from "@/api";
 import { Input } from "@/components/ui/Input";
 import { FolderChooserDialog } from "@/components/dialogs/FolderChooserDialog";
+import { PathGhost } from "@/components/dialogs/PathGhost";
+import { usePathGhost } from "@/components/dialogs/usePathGhost";
+import { useDirSuggestions } from "@/hooks/useDirSuggestions";
 import { Logo } from "@/components/shared/Logo";
 
 /** Inline-code styling for the vst-home/worktrees note below — this app's
@@ -64,6 +67,13 @@ export function OobeStep1Location({ api, defaultProjectsDir, vstHome, onConfirme
   const [browseOpen, setBrowseOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const dirSuggs = useDirSuggestions(api);
+  function typed(next: string) {
+    setPath(next);
+    if (next.trim()) dirSuggs.scheduleFetch(next);
+    else dirSuggs.reset();
+  }
+  const pathGhost = usePathGhost({ suggestions: dirSuggs, value: path, onAccept: typed });
 
   async function handleNext() {
     setError(null);
@@ -93,18 +103,35 @@ export function OobeStep1Location({ api, defaultProjectsDir, vstHome, onConfirme
       >
         <div className="field-label">Where should projects live by default?</div>
         <div style={{ display: "flex", gap: "var(--space-2)" }}>
-          <Input
-            type="text"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            aria-label="Default projects directory"
-            placeholder="/home/you/projects"
-            data-testid="oobe-step1-path"
-          />
+          <span className="path-ghost-field path-ghost-field--field">
+            <Input
+              ref={pathGhost.inputRef}
+              type="text"
+              value={path}
+              onChange={(e) => typed(e.target.value)}
+              onFocus={pathGhost.onFocus}
+              onBlur={pathGhost.onBlur}
+              onKeyDown={pathGhost.onKeyDown}
+              aria-label="Default projects directory"
+              placeholder="/home/you/projects"
+              autoComplete="off"
+              spellCheck={false}
+              data-testid="oobe-step1-path"
+              style={{ minHeight: "var(--path-ghost-h)" }}
+            />
+            {pathGhost.ghost ? (
+              <PathGhost getInput={() => pathGhost.inputRef.current} typed={path} remainder={pathGhost.ghost.remainder} onClippedChange={pathGhost.onGhostClipped} />
+            ) : null}
+          </span>
           <button type="button" onClick={() => setBrowseOpen(true)} className="btn btn--secondary">
             Browse
           </button>
         </div>
+        {pathGhost.error ? (
+          <p className="path-ghost-note" role="status" data-testid="oobe-step1-suggest-error">
+            {pathGhost.error}
+          </p>
+        ) : null}
         {vstHome ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
             <p style={{ margin: 0, fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", lineHeight: 1.5 }}>

@@ -1,6 +1,6 @@
-import type { InputHTMLAttributes } from "react";
+import type { ComponentPropsWithRef } from "react";
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+export function Input(props: ComponentPropsWithRef<"input">) {
   return (
     <input
       {...props}

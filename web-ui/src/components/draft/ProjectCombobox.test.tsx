@@ -194,4 +194,62 @@ describe("summarizeFields", () => {
       "vibe-station · fix-x",
     );
   });
+
+  describe("inline path ghost", () => {
+    const entries = [{ name: "projects", path: "/mock/projects" }];
+    let api: MockApi;
+    function renderCombo(projects: Project[]) {
+      return render(
+        <ProjectCombobox
+          api={api as never}
+          projects={projects}
+          settings={null}
+          onSelectExisting={vi.fn()}
+          onNewName={vi.fn()}
+          onAddPath={vi.fn()}
+          onClear={vi.fn()}
+        />,
+      );
+    }
+    beforeEach(() => {
+      api = createMockApi();
+      vi.spyOn(api, "fsComplete").mockResolvedValue({ base: "/mock/", entries, truncated: false });
+    });
+
+    it("project search: absolute path ghosts a directory completion; Tab accepts; trailing slash has none", async () => {
+      renderCombo([]);
+      fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }));
+      const input = screen.getByRole("combobox") as HTMLInputElement;
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "/mock/pro" } });
+      await waitFor(() => expect(document.querySelector(".path-ghost")?.textContent).toBe("/mock/projects/"));
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+      expect(input.value).toBe("/mock/projects/");
+      expect(document.querySelector(".path-ghost")).toBeNull();
+    });
+
+    it("project search: no ghost for a plain name", async () => {
+      renderCombo([]);
+      fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }));
+      const input = screen.getByRole("combobox");
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "pro" } });
+      await new Promise((r) => setTimeout(r, 250));
+      expect(document.querySelector(".path-ghost")).toBeNull();
+    });
+
+    it("parent folder: ghost for a completion and ArrowRight accepts", async () => {
+      renderCombo([]);
+      fireEvent.click(screen.getByRole("button", { name: /Choose a project/ }));
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "my-app" } });
+      fireEvent.mouseDown(await screen.findByRole("option", { name: /Create new project "my-app"/ }));
+      const dir = (await screen.findByPlaceholderText(/projects/)) as HTMLInputElement;
+      fireEvent.focus(dir);
+      fireEvent.change(dir, { target: { value: "/mock/pro" } });
+      await waitFor(() => expect(document.querySelector(".path-ghost")?.textContent).toBe("/mock/projects/"));
+      dir.setSelectionRange(9, 9);
+      expect(fireEvent.keyDown(dir, { key: "ArrowRight" })).toBe(false);
+      expect(dir.value).toBe("/mock/projects/");
+    });
+  });
 });

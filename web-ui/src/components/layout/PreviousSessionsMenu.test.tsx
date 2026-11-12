@@ -133,11 +133,11 @@ describe("PreviousSessionsMenu", () => {
 
     const aEntry = screen.getByText("Session A").closest(".prev-session");
     expect(aEntry).toBeDefined();
-    expect(aEntry!.textContent).toContain("claude");
+    expect(aEntry!.textContent).toContain("Claude");
     expect(aEntry!.textContent).toContain("Switched to m-cursor");
 
     const bEntry = screen.getByText("Session B").closest(".prev-session");
-    expect(bEntry!.textContent).toContain("cursor");
+    expect(bEntry!.textContent).toContain("Cursor");
     expect(bEntry!.textContent).toContain("Started fresh");
   });
 

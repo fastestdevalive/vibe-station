@@ -329,6 +329,10 @@ export interface Session {
   useTmux?: boolean;
   /** Execution channel; absent on legacy rows (treat as tmux/pty). */
   channel?: Channel;
+  /** Account the session runs under (mirror of `SessionRecord.account_id`).
+   *  null/absent = the CLI's System login. Carried on the `session:created`
+   *  snapshot too (the snapshot is a `Session`). */
+  accountId?: string | null;
   createdAt: string;
   /** When set, the session is pinned to the top of its sidebar group. */
   pinnedAt?: string | null;
@@ -399,6 +403,19 @@ export interface DraftConfig {
   useTmux?: boolean;
   // global entry point
   useWorktree?: boolean;
+  /** Account this draft will start under (mirror of `DraftConfig.account_id`);
+   *  absent = the CLI's default/System login. Stamped onto the session at
+   *  promotion. */
+  accountId?: string;
+}
+
+/** `POST /sessions/:id/start` success (mirror of `StartDraftResult`). */
+export interface StartDraftResult {
+  ok: true;
+  worktreeId?: string;
+  worktree?: Worktree;
+  /** Account the promoted session runs under; absent/null = System login. */
+  accountId?: string | null;
 }
 
 /** Body for `POST /sessions` with `state: "drafting"` (create a draft).
@@ -513,8 +530,10 @@ export type NormalizedEventKind =
 
 export type SessionBreakKind = "reset" | "switch";
 
-/** How much of the previous chat a reset/switch carries (mirror of `CarryOver`). */
-export type CarryOver = "none" | "summary" | "transcript";
+/** How much of the previous chat a reset/switch carries (mirror of `CarryOver`).
+ *  `native` = the CLI resumes its own conversation on the new account (no
+ *  summary text); see `rust/vst-types/src/domain.rs` (`CarryOver::Native`). */
+export type CarryOver = "none" | "summary" | "transcript" | "native";
 
 /** How a reset treats a running turn. */
 export type WhenBusy = "stop" | "wait";
@@ -527,6 +546,43 @@ export interface CancelResetResult {
   ok: true;
   /** False when no reset is in flight or it already passed its point of no return. */
   cancelled: boolean;
+}
+
+/** How an account switch handed the conversation over (mirror of
+ *  `AccountSwitchInfo` in `rust/vst-types/src/rest/sessions.rs`). `native` =
+ *  the CLI resumes its own conversation on the new account; `transcript` = the
+ *  visible rows were copied; `fresh` = nothing was carried. */
+export interface AccountSwitchInfo {
+  fromAccountId: string | null;
+  toAccountId: string | null;
+  handover: "native" | "transcript" | "fresh";
+}
+
+/** Body for `POST /sessions/:id/reset` (mirror of `ResetBody`). */
+export interface ResetBody {
+  handoff?: boolean;
+  prompt?: string;
+  handoffText?: string;
+  modeId?: string;
+  channel?: "json" | "tmux";
+  carryOver?: CarryOver;
+  whenBusy?: WhenBusy;
+  queued?: QueuedPolicy;
+  /** Explicit account pick (an account id, its label, or `"system"`); omitted
+   *  = keep the session's stored account (or the new CLI's default when
+   *  `modeId` changes the CLI). */
+  accountId?: string;
+}
+
+/** Response from `POST /sessions/:id/reset` (mirror of `ResetResult`). */
+export interface ResetResult {
+  ok: true;
+  archivedSessionId: string;
+  newSessionId: string;
+  carryOver: CarryOver;
+  breakKind?: SessionBreakKind;
+  /** Present when the reset was an explicit account switch. */
+  accountSwitch?: AccountSwitchInfo;
 }
 
 /** Normalized non-text (or text-in-a-mixed-array) content block (mirror of daemon `NormalizedContentBlock`). */
@@ -630,6 +686,10 @@ export interface NormalizedEvent {
   fromMode?: string;
   /** `session_break` only — display name of the replacement mode. */
   toMode?: string;
+  /** `session_break` only — display name of the account being replaced. */
+  fromAccount?: string;
+  /** `session_break` only — display name of the replacement account. */
+  toAccount?: string;
   /** Tool events only — tool call id of the subagent this nested event ran under. */
   parentToolUseId?: string;
   /** `task_signal` only — harness-specific task lifecycle payload (claude: whitelisted raw SDK message). Never rendered. */
@@ -961,6 +1021,24 @@ export interface SupportedCli {
    * distinctly from an explicit override (round-2 m3).
    */
   defaultChannelOverridden: boolean;
+  /**
+   * Whether this CLI supports named accounts (mirror of `SupportedCli.
+   * supportsAccounts`, R3: the UI reads this data, never a harness name).
+   * OPTIONAL in TS — absent means `false` (fixtures/tests written before the
+   * field existed); the server always sends it.
+   */
+  supportsAccounts?: boolean;
+  /**
+   * How an account switch hands the conversation over (mirror of
+   * `SupportedCli.accountSwitch`). OPTIONAL in TS — absent means `"none"`.
+   * `none` iff `supportsAccounts` is false.
+   */
+  accountSwitch?: "native" | "transcript" | "none";
+  /** The plugin's reason when `supportsAccounts` is false (shown in Settings). */
+  accountsNote?: string | null;
+  /** Folder-field copy for the add-account dialog (mirror of
+   *  `SupportedCli.accountLink`). Null/absent when `supportsAccounts` is false. */
+  accountLink?: AccountLink | null;
   /** Install guidance from the daemon's hint table; present only when `detected` is false. */
   installHint?: DoctorHintDto | null;
 }
@@ -1120,6 +1198,9 @@ export interface LimitWindow {
   resetsAt: string | null;
   asOf: string;
   status: LimitStatus;
+  /** Account this window belongs to (mirror of `LimitWindow.account_id`).
+   *  ABSENT = the CLI's System login (so pre-accounts slots keep working). */
+  accountId?: string;
 }
 
 export interface LimitsResult {
@@ -1128,11 +1209,18 @@ export interface LimitsResult {
   message: string | null;
   asOf: string;
   windows: LimitWindow[];
+  /** Account this result belongs to (mirror of `LimitsResult.account_id`).
+   *  ABSENT = the CLI's System login. Within one harness the System result is
+   *  listed FIRST. */
+  accountId?: string;
 }
 
 export interface LimitSlotRef {
   harness: string;
   windowId: string;
+  /** Account the pinned slot shows (mirror of `LimitSlotRef.account_id`).
+   *  ABSENT = the CLI's System login. */
+  accountId?: string;
 }
 
 export interface LimitsSnapshot {
@@ -1146,6 +1234,214 @@ export interface LimitsRefreshResult {
   retryAfterSecs: number | null;
   snapshot: LimitsSnapshot;
 }
+
+// ── Accounts (mirrors rust/vst-types/src/accounts.rs + rest/accounts.rs) ──
+
+/** How an account authenticates (mirror of `AccountMethod`). */
+export type AccountMethod = "system" | "sign_in" | "api_key";
+
+/** Auth state of an account (mirror of `AccountAuth`). Decided ONLY by the
+ *  plugin's identity command (`signed_in == Some(false)`), never by a limits
+ *  read alone. */
+export type AccountAuth = "signed_in" | "signed_out" | "unknown";
+
+/** "This account hit a limit" (mirror of `AccountLimited`). */
+export interface AccountLimited {
+  windowId: string;
+  resetsAt: string | null;
+  source: "poller" | "chat";
+}
+
+/** Copy and capability facts for a CLI's account folder field (mirror of
+ *  `AccountLink` in `rust/vst-types/src/rest/modes.rs`). The UI shows these
+ *  strings; it never branches on the CLI name. */
+export interface AccountLink {
+  /** Field label, e.g. "Claude config folder" or "XDG root folder". */
+  fieldLabel: string;
+  /** Helper text under the field (XDG roots warn that gh/git config is hidden);
+   *  null = no note. */
+  fieldNote: string | null;
+  /** Placeholder example, e.g. "~/.claude-work". */
+  exampleDir: string;
+  /** Display path of the harness's own folder, e.g. "~/.claude"; null = none. */
+  systemDir: string | null;
+  /** Whether "Use an API key instead" is offered for this CLI. */
+  supportsApiKey: boolean;
+  /** False (pi/omp): no identity command, so the check button reads "I've signed in". */
+  verifiesIdentity: boolean;
+  /** The harness's own first-run behaviour in a new folder (shown by the add dialog);
+   *  absent/null = none. */
+  firstRunNote?: string | null;
+}
+
+/** Copyable sign-in steps for a pending or signed-out account (mirror of
+ *  `SignInSteps` in `rust/vst-types/src/accounts.rs`). */
+export interface SignInSteps {
+  /** Copyable shell line, e.g. "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login";
+   *  null = no login command. */
+  command: string | null;
+  /** Plugin sentence replacing step 2's label; null = the default label. */
+  hint: string | null;
+}
+
+/** Body of `POST /api/accounts/validate-path` and `POST /api/accounts/folder`
+ *  (mirror of `AccountFolderBody`). `create` ignores `dir`; `choose` requires it. */
+export interface AccountFolderBody {
+  cli: string;
+  mode: "create" | "choose";
+  dir?: string;
+  label?: string;
+}
+
+/** `POST /api/accounts/validate-path` response (mirror of
+ *  `ValidateAccountPathResponse`). Read-only: nothing is created. */
+export interface ValidateAccountPathResponse {
+  /** Display path (home collapsed to `~`). */
+  dir: string;
+  exists: boolean;
+  isEmpty: boolean;
+  /** True when the folder holds the names this harness expects. */
+  looksValid: boolean;
+}
+
+/** `POST /api/accounts/folder` response (mirror of `AddFolderAccountResponse`). */
+export interface AddFolderAccountResponse {
+  account: AccountSummary;
+  /** Always `!account.pending`. */
+  signedIn: boolean;
+}
+
+/** One account row as returned by `GET /api/accounts` (mirror of
+ *  `AccountSummary`). */
+export interface AccountSummary {
+  /** `"system"` (virtual, one per CLI) or `"acc_"` + 8 lowercase hex. */
+  id: string;
+  /** CLI id, e.g. "claude". */
+  cli: string;
+  /** User-chosen name; null = none. */
+  label: string | null;
+  /** Server-computed: `label ?? email ?? folder name ?? id`; System => "System login" unless
+   *  labelled. */
+  displayName: string;
+  /** Read via the vendor's own command, never from credential files. */
+  email: string | null;
+  /** e.g. "Max"; null if unknown. */
+  plan: string | null;
+  method: AccountMethod;
+  auth: AccountAuth;
+  /** Exactly one true per CLI. */
+  isDefault: boolean;
+  limited: AccountLimited | null;
+  /** ISO8601; null for the System row. */
+  createdAt: string | null;
+  /** Display path of the account folder, home collapsed to `~`; null for the
+   *  System row. OPTIONAL in TS (the server always sends it). */
+  dir?: string | null;
+  /** True when vibe-station created the folder, so Remove deletes it; false
+   *  for the System row and chosen folders (Remove only forgets them).
+   *  OPTIONAL in TS. */
+  createdByUs?: boolean;
+  /** True while "Waiting for sign-in": never selectable, not counted toward
+   *  "2+ accounts". OPTIONAL in TS. */
+  pending?: boolean;
+  /** Present iff method is `sign_in` and the account is pending or signed out
+   *  (System login included). OPTIONAL in TS. */
+  signIn?: SignInSteps | null;
+}
+
+/** `GET /api/accounts/:cli/:id/usage` (mirror of `AccountUsage`). */
+export interface AccountUsage {
+  running: { id: string; name: string | null }[];
+  pastCount: number;
+}
+
+/** `POST /api/accounts` — create an API-key account (mirror of
+ *  `CreateApiKeyAccountBody`). `apiKey` is never echoed back by any route. */
+export interface CreateApiKeyAccountBody {
+  cli: string;
+  method: "api_key";
+  apiKey: string;
+  label: string;
+}
+
+/** `POST /api/accounts/sign-in` (mirror of `StartSignInBody`). */
+export interface StartSignInBody {
+  cli: string;
+  /** Worktree that hosts the login Terminal session. */
+  worktreeId: string;
+  label?: string;
+}
+
+/** 202 response from starting a sign-in (mirror of `StartSignInResponse`).
+ *  `sessionId` = the Terminal session running the vendor's login command. */
+export interface StartSignInResponse {
+  attemptId: string;
+  accountId: string;
+  sessionId: string;
+}
+
+/** `POST /api/accounts/sign-in/:attemptId/finish` (mirror of
+ *  `FinishSignInBody`); omitted label => email, else id. */
+export interface FinishSignInBody {
+  label?: string;
+}
+
+/** `PATCH /api/accounts/:cli/:id` (mirror of `RenameAccountBody`). */
+export interface RenameAccountBody {
+  label: string | null;
+}
+
+/** `PUT /api/accounts/:cli/default` (mirror of `SetDefaultBody`). */
+export interface SetDefaultBody {
+  accountId: string;
+}
+
+/** `DELETE /api/accounts/:cli/:id` (mirror of `RemoveAccountResponse`). */
+export interface RemoveAccountResponse {
+  ok: true;
+  stoppedSessionIds: string[];
+  /** True when the account's folder was deleted (it was created by us).
+   *  OPTIONAL in TS: absent on responses from older daemons. */
+  folderDeleted?: boolean;
+}
+
+/** `account:signin` state (mirror of `SignInState`). */
+export type SignInState = "waiting" | "done" | "failed" | "duplicate" | "expired";
+
+/** Machine-readable codes the account routes return beside `error`/`code`
+ *  (see "Boundary contracts" in the multi-account plan). */
+export type AccountErrorCode =
+  | "label_required"
+  | "invalid_key"
+  | "unknown_cli"
+  | "label_taken"
+  | "accounts_unsupported"
+  | "accounts_storage_failed"
+  | "accounts_unavailable"
+  | "signin_start_failed"
+  | "invalid_method"
+  | "worktree_not_found"
+  | "attempt_not_found"
+  | "attempt_not_done"
+  | "duplicate_account"
+  | "account_not_found"
+  | "cannot_remove_system"
+  | "account_signed_out"
+  | "account_pending"
+  | "account_removed"
+  | "account_cli_mismatch"
+  | "already_on_account"
+  | "handover_failed"
+  | "agent_busy"
+  | "path_invalid"
+  | "folder_not_found"
+  | "folder_not_directory"
+  | "folder_unreadable"
+  | "folder_is_system"
+  | "folder_in_accounts_root"
+  | "folder_duplicate"
+  | "folder_nested"
+  | "folder_create_failed";
 
 export type WSEvent =
   | {
@@ -1417,6 +1713,39 @@ export type WSEvent =
       /** Broadcast when cached harness limits or the pinned slots change (full snapshot, replace). */
       type: "limits:updated";
       limits: LimitsSnapshot;
+    }
+  | {
+      /** Account added / renamed / default flipped / auth changed — an upsert
+       *  keyed by `(cli, account.id)`. */
+      type: "account:updated";
+      account: AccountSummary;
+    }
+  | {
+      /** Account removed (its folder is gone; sessions keep their stored id). */
+      type: "account:removed";
+      cli: string;
+      accountId: string;
+    }
+  | {
+      /** The account's "limited" state changed. `limited: null` = cleared;
+       *  `accountId: null` = the CLI's System login. */
+      type: "account:limited";
+      cli: string;
+      accountId: string | null;
+      limited: AccountLimited | null;
+    }
+  | {
+      /** A sign-in attempt changed state. NOT stored in `useServerStore` — the
+       *  dialog consumes it via `api.on("account:signin")`. */
+      type: "account:signin";
+      attemptId: string;
+      cli: string;
+      accountId: string;
+      state: SignInState;
+      email?: string;
+      plan?: string;
+      /** The vendor's last line, <= 200 chars. */
+      message?: string;
     }
   | {
       /** Artifact rows added/changed/moved/missing in a scope (<= 200 per event). */
@@ -2003,6 +2332,10 @@ export interface CreateWorktreeBody {
    * JSON channel.
    */
   skipAutoTurn?: boolean;
+  /** See `CreateSessionBody.accountId` — the main session runs under this
+   *  account (id, label, or `"system"`; the server resolves it). Absent = the
+   *  server's default rule. */
+  accountId?: string;
 }
 
 export interface CreateSessionBody {
@@ -2023,6 +2356,9 @@ export interface CreateSessionBody {
    * both create one). Absent ≡ false.
    */
   onlyIfNone?: boolean;
+  /** Account to run the session under (id, label, or `"system"`; the server
+   *  resolves it). Absent = the server's default rule. */
+  accountId?: string;
 }
 
 /** Body for creating a direct session (no worktree). */
@@ -2040,6 +2376,8 @@ export interface CreateDirectSessionBody {
   skipAutoTurn?: boolean;
   /** See `CreateSessionBody.onlyIfNone`. */
   onlyIfNone?: boolean;
+  /** See `CreateSessionBody.accountId` — the same `POST /sessions` body. */
+  accountId?: string;
 }
 
 /** Body for adding a new project. */

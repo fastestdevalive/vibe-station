@@ -11,6 +11,9 @@ import { RescheduleHost, type EditingScheduled } from "@/components/schedule/Res
 import { useScheduledSends } from "@/components/schedule/useScheduledSends";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
+import { SessionAccountSwitch } from "@/components/accounts/SessionAccountSwitch";
+import { sessionCli } from "@/lib/accounts";
+import { useModesStore } from "@/store/modesStore";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
 import { PaneDialogHost } from "./PaneDialogHost";
@@ -147,6 +150,11 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
   // them in-flow BELOW its "Session exited / Resume" banner. The scheduled
   // strip joins them (exited AND done) so a pending or failed row stays
   // visible and cancellable once the live header is gone.
+  const modes = useModesStore((st) => st.modes);
+  const accountSwitch = session ? (
+    <SessionAccountSwitch api={api} session={session} cli={sessionCli(session, modes)} />
+  ) : null;
+
   const exitedControls = isTerminal && !terminalLive ? (
     <>
     <div className="terminal-font-overlay">
@@ -157,6 +165,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
         <Plus size={11} />
       </button>
       <FontResetButton />
+      {accountSwitch}
       <TerminalChannelToggle api={api} session={session!} />
     </div>
     {renderScheduleStrip("inline")}
@@ -239,6 +248,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
                 <FontResetButton />
               </div>
               <ScheduleButton api={api} session={session!} rows={scheduledRows} />
+              {accountSwitch}
               <TerminalChannelToggle api={api} session={session!} />
             </div>
           </div>

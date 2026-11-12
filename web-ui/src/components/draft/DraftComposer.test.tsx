@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi, type MockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
-import type { Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
+import type { AccountSummary, Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
 import { DraftComposer } from "./DraftComposer";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -767,6 +767,19 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(send.mock.calls[0]![2]).toHaveLength(1);
   });
 
+  it("start patches the session's accountId from the response", async () => {
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([makeCli({ id: "claude" })]);
+    vi.spyOn(api, "startDraft").mockResolvedValue({ ok: true, accountId: "acc_work" });
+    renderTier1(makeDraftSession({ modeId: "claude-mode" }));
+    await findChannelSwitch();
+    await typePrompt("do it");
+    await startTier1Draft();
+    await waitFor(() =>
+      expect(useServerStore.getState().sessions.find((x) => x.id === "t1-draft")?.accountId).toBe("acc_work"),
+    );
+  });
+
   it("a staged chip can be removed before Start", async () => {
     renderTier1(makeDraftSession({}));
     await findChannelSwitch();
@@ -1415,5 +1428,308 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
       const stub = screen.getByTestId("skill-editor-stub");
       expect(stub).toHaveAttribute("data-worktree-id", "wt-tab-123");
     });
+  });
+});
+
+// ── Multi-account: the draft's account picker (plan B3.2) ────────────────────
+describe("Phase B3 — draft account picker", () => {
+  let api: MockApi;
+  let onStarted: Mock<(...args: unknown[]) => void>;
+
+  function account(over: Partial<AccountSummary> & Pick<AccountSummary, "id" | "cli">): AccountSummary {
+    return {
+      label: null,
+      displayName: over.id,
+      email: null,
+      plan: null,
+      method: "sign_in",
+      auth: "signed_in",
+      isDefault: false,
+      limited: null,
+      createdAt: null,
+      ...over,
+    };
+  }
+
+  const SYSTEM = account({ id: "system", cli: "claude", displayName: "System login", method: "system", isDefault: true });
+  const WORK = account({ id: "acc_work", cli: "claude", displayName: "Work" });
+  const CLIENT_B = account({ id: "acc_client", cli: "claude", displayName: "Client B", auth: "signed_out" });
+
+  const claudeMode = { id: "claude-mode", name: "Claude mode", cli: "claude" as const, context: "" };
+  const cursorMode = { id: "cursor-mode", name: "Cursor mode", cli: "cursor" as const, context: "" };
+
+  beforeEach(() => {
+    api = makeApi();
+    onStarted = vi.fn();
+    useGlobalDraftStore.setState({ draft: null });
+    useServerStore.setState({
+      projects: [],
+      worktrees: [],
+      sessions: [],
+      loaded: false,
+      accounts: [SYSTEM, WORK, CLIENT_B],
+      accountsLoaded: true,
+    });
+    vi.spyOn(api, "listModes").mockResolvedValue([claudeMode, cursorMode]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([
+      { id: "claude", defaultModel: "sonnet", supportsJson: true, supportsTerminalDelivery: false, supportsTerminalComments: false, importsNativeHistory: true, supportsJsonToTerminalResume: true, detected: true, starterBundleNames: [], usingFallbackOnly: false, defaultChannel: "json", defaultChannelOverridden: false },
+      { id: "cursor", defaultModel: "auto", supportsJson: true, supportsTerminalDelivery: false, supportsTerminalComments: false, importsNativeHistory: false, supportsJsonToTerminalResume: false, detected: true, starterBundleNames: [], usingFallbackOnly: false, defaultChannel: "json", defaultChannelOverridden: false },
+    ] as SupportedCli[]);
+  });
+
+  function draft(over: Partial<Session> = {}): Session {
+    return {
+      id: "t1-draft",
+      worktreeId: "wt-1",
+      projectId: "p1",
+      modeId: "claude-mode",
+      type: "agent",
+      isMain: false,
+      state: "drafting",
+      lifecycleState: "drafting",
+      tmuxName: "tmux-t1-draft",
+      channel: "json",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draftPrompt: "",
+      draftConfig: { entryPoint: "tab", modeId: "claude-mode" },
+      ...over,
+    };
+  }
+
+  function renderDraft(session: Session) {
+    const project: Project = {
+      id: "p1",
+      name: "P1",
+      path: "/tmp/p1",
+      prefix: "p",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hidden: false,
+      lspEnabled: false,
+    };
+    useServerStore.setState({ projects: [project], worktrees: [], sessions: [session], loaded: true });
+    return render(
+      <MemoryRouter initialEntries={[`/draft/${session.id}`]}>
+        <DraftComposer api={api as never} draftSessionId={session.id} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  function startButton() {
+    return screen.getByRole("button", { name: "Start agent" });
+  }
+
+  async function pickAccount(name: string) {
+    fireEvent.click(await screen.findByRole("button", { name: /^Account: / }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(name) }));
+  }
+
+  async function pickMode(name: string) {
+    fireEvent.click(screen.getByRole("button", { name: "Mode" }));
+    fireEvent.click(await screen.findByRole("option", { name: new RegExp(name) }));
+  }
+
+  it("shows the picker for a CLI with 2+ accounts, preselecting the CLI default", async () => {
+    renderDraft(draft());
+    const chip = await screen.findByRole("button", { name: "Account: System login" });
+    expect(chip).toBeInTheDocument();
+  });
+
+  it("hides the picker for a single-account CLI", async () => {
+    useServerStore.setState({ accounts: [SYSTEM] });
+    renderDraft(draft());
+    await findChannelSwitch();
+    expect(screen.queryByRole("button", { name: /^Account: / })).toBeNull();
+  });
+
+  it("sends no accountId when the draft keeps the default", async () => {
+    const startSpy = vi.spyOn(api, "startDraft");
+    renderDraft(draft());
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    await act(async () => {
+      startButton().click();
+    });
+    await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(1));
+    const body = startSpy.mock.calls[0]![1] as { draftConfig: { accountId?: string } };
+    expect(body.draftConfig.accountId).toBeUndefined();
+  });
+
+  it("adds an explicitly picked accountId to the start call", async () => {
+    const startSpy = vi.spyOn(api, "startDraft");
+    renderDraft(draft());
+    await findChannelSwitch();
+    await pickAccount("Work");
+    await typePrompt("do the thing");
+    await act(async () => {
+      startButton().click();
+    });
+    await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(1));
+    const body = startSpy.mock.calls[0]![1] as { draftConfig: { accountId?: string } };
+    expect(body.draftConfig.accountId).toBe("acc_work");
+  });
+
+  it("clears the explicit pick when the mode moves to another CLI", async () => {
+    const startSpy = vi.spyOn(api, "startDraft");
+    renderDraft(draft());
+    await findChannelSwitch();
+    await pickAccount("Work");
+    expect(screen.getByRole("button", { name: "Account: Work" })).toBeInTheDocument();
+
+    await pickMode("Cursor mode");
+    // cursor has no accounts in this fixture, so the picker disappears.
+    expect(screen.queryByRole("button", { name: /^Account: / })).toBeNull();
+
+    await pickMode("Claude mode");
+    // Back on claude the explicit pick is gone: the default shows again.
+    expect(await screen.findByRole("button", { name: "Account: System login" })).toBeInTheDocument();
+
+    await typePrompt("do the thing");
+    await act(async () => {
+      startButton().click();
+    });
+    await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(1));
+    const body = startSpy.mock.calls[0]![1] as { draftConfig: { accountId?: string } };
+    expect(body.draftConfig.accountId).toBeUndefined();
+  });
+
+  it("picker_add_account_opens_dialog_with_draft_harness_and_keeps_text", async () => {
+    renderDraft(draft());
+    await findChannelSwitch();
+    await typePrompt("keep this draft");
+    fireEvent.click(await screen.findByRole("button", { name: /^Account: / }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "+ Add account…" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Add Claude account")).toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
+    expect((screen.getByTestId("prompt-input") as HTMLTextAreaElement).value).toBe("keep this draft");
+  });
+
+  it("shows the inline message for a signed-out account and keeps Start disabled", async () => {
+    vi.spyOn(api, "startDraft").mockRejectedValue(
+      new ApiError(JSON.stringify({ error: "Signed out", code: "account_signed_out" }), 409, "account_signed_out", "system"),
+    );
+    renderDraft(draft());
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    // The daemon's identity check has flagged the displayed (System) account.
+    act(() => useServerStore.getState().applyAccountUpdated({ ...SYSTEM, auth: "signed_out" }));
+    await act(async () => {
+      startButton().click();
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to System login from Settings.");
+    expect(startButton()).toBeDisabled();
+
+    // Picking another account clears the block.
+    await pickAccount("Work");
+    expect(startButton()).toBeEnabled();
+  });
+
+  it("shows the server's reason when the store does not know the account is signed out", async () => {
+    vi.spyOn(api, "startDraft").mockRejectedValue(
+      new ApiError("This account is signed out. Sign in, then try again.", 409, "account_signed_out", "system"),
+    );
+    renderDraft(draft());
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    await act(async () => {
+      startButton().click();
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("signed out");
+  });
+
+  it("re-enables Start once the blocked account signs in again, without a re-pick", async () => {
+    vi.spyOn(api, "startDraft").mockRejectedValue(
+      new ApiError(JSON.stringify({ error: "Signed out", code: "account_signed_out" }), 409, "account_signed_out", "system"),
+    );
+    renderDraft(draft());
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    act(() => useServerStore.getState().applyAccountUpdated({ ...SYSTEM, auth: "signed_out" }));
+    await act(async () => {
+      startButton().click();
+    });
+    await waitFor(() => expect(startButton()).toBeDisabled());
+
+    act(() => useServerStore.getState().applyAccountUpdated({ ...SYSTEM, auth: "signed_in" }));
+    await waitFor(() => expect(startButton()).toBeEnabled());
+    expect(screen.queryByText(/Sign in to System login/)).toBeNull();
+  });
+
+  // Tier 2 (`/draft/new`): "new project + new worktree" calls createWorktree,
+  // which must carry the account pick exactly like the direct-session branch.
+  const tier2Project: Project = {
+    id: "tier2-proj",
+    name: "tier2-proj",
+    path: "/tmp/tier2-proj",
+    prefix: "t2",
+    isGit: true,
+    defaultBranch: "main",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    hidden: false,
+    lspEnabled: false,
+  };
+
+  function renderTier2() {
+    return render(
+      <MemoryRouter initialEntries={["/draft/new"]}>
+        <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  async function startTier2WithAddPath() {
+    await act(async () => {
+      screen.getByTestId("add-path-btn").click();
+    });
+    await act(async () => {
+      screen.getByTestId("start-btn").click();
+    });
+  }
+
+  it("passes an explicitly picked accountId to createWorktree (Tier 2)", async () => {
+    vi.spyOn(api, "addProject").mockResolvedValue(tier2Project);
+    const createWorktreeSpy = vi.spyOn(api, "createWorktree");
+
+    renderTier2();
+    await findChannelSwitch();
+    await pickAccount("Work");
+    await typePrompt("do the thing");
+    await startTier2WithAddPath();
+
+    await waitFor(() => expect(createWorktreeSpy).toHaveBeenCalledTimes(1));
+    const body = createWorktreeSpy.mock.calls[0]![0] as { accountId?: string };
+    expect(body.accountId).toBe("acc_work");
+  });
+
+  it("sends no accountId to createWorktree when the draft keeps the default", async () => {
+    vi.spyOn(api, "addProject").mockResolvedValue(tier2Project);
+    const createWorktreeSpy = vi.spyOn(api, "createWorktree");
+
+    renderTier2();
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    await startTier2WithAddPath();
+
+    await waitFor(() => expect(createWorktreeSpy).toHaveBeenCalledTimes(1));
+    const body = createWorktreeSpy.mock.calls[0]![0] as { accountId?: string };
+    expect(body.accountId).toBeUndefined();
+  });
+
+  it("maps createWorktree's 409 account_signed_out to the inline block (Tier 2)", async () => {
+    vi.spyOn(api, "addProject").mockResolvedValue(tier2Project);
+    vi.spyOn(api, "createWorktree").mockRejectedValue(
+      new ApiError(JSON.stringify({ error: "Signed out", code: "account_signed_out" }), 409, "account_signed_out", "system"),
+    );
+    act(() => useServerStore.getState().applyAccountUpdated({ ...SYSTEM, auth: "signed_out" }));
+
+    renderTier2();
+    await findChannelSwitch();
+    await typePrompt("do the thing");
+    await startTier2WithAddPath();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to System login from Settings.");
+    expect(startButton()).toBeDisabled();
   });
 });

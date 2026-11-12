@@ -10,6 +10,7 @@ const css = loadCascade([
   read("../components/comments/tray.css"),
   read("../components/comments/comments.css"),
   read("../components/artifacts/artifacts.css"),
+  read("../components/accounts/accounts.css"),
 ]);
 
 // L5-01: both are `position: fixed` portals to <body>; a fullscreen tools pane (`.pane-viewport-fullscreen`) must not cover them.
@@ -22,6 +23,10 @@ describe("portaled popover layer", () => {
       expect(css.decls(sel)["z-index"], sel).toBe("var(--z-popover)");
       expect(css.px(sel, "z-index"), sel).toBeGreaterThan(fullscreen!);
     }
+  });
+
+  it("the account switch menu uses the same token", () => {
+    expect(css.decls(".account-menu")["z-index"]).toBe("var(--z-popover)");
   });
 
   it("the artifacts menu uses the same token (no private z-index)", () => {

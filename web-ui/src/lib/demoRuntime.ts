@@ -3,6 +3,7 @@
  * REAL app several times in one page (m1, m2, m3 in turn); every singleton the app keeps at module level
  * must therefore be returned to its freshly-imported state before the next mount.
  */
+import { useSwitchNotices } from "@/components/accounts/useAccountSwitch";
 import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
 import { useDetailsStore } from "@/components/details/detailsStore";
 import { useVcsCacheStore, resetVcsCache } from "@/components/vcs/vcsCacheStore";
@@ -51,6 +52,7 @@ export const APP_STORES = [
   useUpdateStore,
   useDetailsStore,
   useVcsCacheStore,
+  useSwitchNotices,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

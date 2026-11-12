@@ -48,12 +48,12 @@ import type {
   NetworkAccess,
   Project,
   ProjectBranchesResponse,
-  QueuedPolicy,
   SearchResult,
   FileSearchResult,
+  ResetBody,
+  ResetResult,
   SendChatResponse,
   Session,
-  SessionBreakKind,
   ScheduleSnapshot,
   SessionMeta,
   Settings,
@@ -77,14 +77,21 @@ import type {
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
-  WhenBusy,
   WSEvent,
+  StartDraftResult,
   Worktree,
   WorktreeOrderResult,
 } from "./types";
 import { ApiError, ReviewApiError } from "./errors";
 import { createMockArtifacts } from "./mockArtifacts";
 import { createMockComments } from "./mockComments";
+import {
+  accountCapabilitiesFor,
+  createMockAccounts,
+  mockAccountLimitResults,
+  mockAccountNames,
+  mockAccountSwitchPlan,
+} from "./mockAccounts";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
 import { mockSearchTranscript, mockGetTranscriptAround, mockGetTranscriptSince } from "./mockTranscriptSearch";
 import { mockTranscriptOutline, mockTranscriptOutlineWindow } from "./mockTranscriptOutline";
@@ -202,6 +209,9 @@ const mockLimits: LimitsSnapshot = {
         },
       ],
     },
+    // Per-account results (System results stay FIRST within each harness, so
+    // `results.find(h => h.harness === "claude")` still returns System).
+    ...mockAccountLimitResults(),
   ],
 };
 
@@ -214,9 +224,21 @@ const MOCK_HOME = "/home/user";
 const MOCK_FS_TREE: Record<string, string[]> = {
   "/home/user": ["projects", "code", "work"],
   "/home/user/projects": ["proj-a", "proj-b"],
-  "/home/user/code": ["webapp"],
+  "/home/user/code": ["fastestdevalive", "Fast-notes", "other", ".cache"],
+  "/home/user/code/fastestdevalive": ["vibe-station"],
   "/home/user/work": ["cloned-repo"],
 };
+
+/** Mirrors the daemon's completion sort (A1a.8): dot-names last unless the typed
+ *  prefix starts with a dot, then case-insensitive name order. */
+function compareCompletionNames(a: string, b: string, dotTyped: boolean): number {
+  const dotRank = (name: string) => (name.startsWith(".") && !dotTyped ? 1 : 0);
+  return (
+    dotRank(a) - dotRank(b) ||
+    (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0) ||
+    (a < b ? -1 : a > b ? 1 : 0)
+  );
+}
 
 /** Optional seed overrides for `createMockApi`. Any array/field present
  *  replaces the built-in fake dataset; `simulateOutput` defaults to `true`.
@@ -586,6 +608,7 @@ export function createMockApi(seed: MockSeed = {}) {
       sessions.filter((x) => x.worktreeId === scopeId && x.type === "agent").map((x) => x.id),
     ),
     ...mockComments,
+    ...createMockAccounts(emit),
 
     __test: {
       simulateExit,
@@ -722,6 +745,29 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
       const wtId = `wt-${Date.now()}`;
+      // The daemon always mints a main agent session with the worktree; the
+      // mock used to point `mainSessionId` at a non-existent `${wtId}-m` row.
+      // Create it for real so an explicit `accountId` (and the channel) lands
+      // on the session the daemon would put it on.
+      const mainSession: Session = {
+        id: `sess-main-${Date.now()}`,
+        worktreeId: wtId,
+        projectId: body.projectId,
+        modeId: body.modeId,
+        type: "agent",
+        name: null,
+        isMain: true,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: `tmux-${Date.now()}`,
+        ...(body.channel ? { channel: body.channel } : {}),
+        // Mirrors the daemon's stored shape: an explicit "system" pick is the
+        // absence of an account id (the System login). The mock stores the id
+        // it was given — id/label resolution is the server's job.
+        ...(body.accountId && body.accountId !== "system" ? { accountId: body.accountId } : {}),
+        createdAt: nowIso(),
+        sortOrder: Date.now(),
+      };
       const wt: Worktree = {
         id: wtId,
         projectId: body.projectId,
@@ -735,14 +781,24 @@ export function createMockApi(seed: MockSeed = {}) {
         createdAt: nowIso(),
         pinnedAt: null,
         hiddenAt: null,
-        mainSessionId: `${wtId}-m`,
+        mainSessionId: mainSession.id,
         lspEnabled: false,
       };
       worktrees.push(wt);
       treeStore[wt.id] = {
         "": [],
       };
+      sessions.push(mainSession);
       emit({ type: "worktree:created", worktree: wt });
+      emit({
+        type: "session:created",
+        sessionId: mainSession.id,
+        worktreeId: wt.id,
+        projectId: wt.projectId,
+        sessionType: "agent",
+        mode: body.modeId,
+        snapshot: mainSession,
+      });
       return structuredClone(wt);
     },
 
@@ -1051,7 +1107,7 @@ export function createMockApi(seed: MockSeed = {}) {
     async startDraft(
       id: string,
       body: { draftPrompt: string; draftConfig: DraftConfig; reviewCommentIds?: string[] },
-    ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
+    ): Promise<StartDraftResult> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("Session not found", 404);
       if (!body.draftPrompt.trim() && !body.reviewCommentIds?.length) throw new ApiError("Draft prompt is empty", 400);
@@ -1064,6 +1120,9 @@ export function createMockApi(seed: MockSeed = {}) {
       s.name = body.draftPrompt.trim().split(/\s+/).slice(0, 5).join(" ");
       if (cfg?.modeId) s.modeId = cfg.modeId;
       if (cfg?.channel) s.channel = cfg.channel;
+      // Same shape as createWorktree: an explicit "system" pick is no account id.
+      if (cfg?.accountId) s.accountId = cfg.accountId === "system" ? null : cfg.accountId;
+      const accountId = s.accountId ?? null;
       // The daemon broadcasts the promoted record's name/channel/mode so every
       // client's tab (TabsStrip keeps its own copy) relabels + re-icons.
       emit({ type: "session:updated", sessionId: id, name: s.name, channel: s.channel, draftConfig: cfg });
@@ -1073,7 +1132,7 @@ export function createMockApi(seed: MockSeed = {}) {
       // lifecycle leaves "drafting" via a `session:state` broadcast — without
       // it the store copy stays "drafting" and the composer re-renders.
       emit({ type: "session:state", sessionId: id, state: "not_started" });
-      return s.worktreeId ? { ok: true, worktreeId: s.worktreeId } : { ok: true };
+      return s.worktreeId ? { ok: true, worktreeId: s.worktreeId, accountId } : { ok: true, accountId };
     },
 
     async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
@@ -1188,32 +1247,27 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async resetSession(
       id: string,
-      body?: {
-        handoff?: boolean;
-        prompt?: string;
-        handoffText?: string;
-        modeId?: string;
-        channel?: "json" | "tmux";
-        carryOver?: CarryOver;
-        whenBusy?: WhenBusy;
-        queued?: QueuedPolicy;
-      },
-    ): Promise<{
-      ok: true;
-      archivedSessionId: string;
-      newSessionId: string;
-      carryOver: CarryOver;
-      breakKind?: SessionBreakKind;
-    }> {
+      body?: ResetBody,
+    ): Promise<ResetResult> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("not found", 404);
       if (s.type !== "agent") throw new ApiError("start fresh only applies to agent sessions", 400);
       if (s.archivedAt) throw new ApiError("session already archived", 400);
 
-      // Wire precedence: `carryOver` wins, else `handoffText`/`handoff` ⇒ summary.
+      // Account switch (Decision 7): an explicit `accountId` that differs is a
+      // switch; omitted = keep the session's stored account. The plan (and the
+      // `already_on_account` guard) lives in `mockAccounts.ts`.
+      const switchPlan = mockAccountSwitchPlan(s.accountId, body?.accountId, s.channel);
+
+      // Wire precedence: `carryOver` wins, else the chosen hand-over, else
+      // `handoffText`/`handoff` ⇒ summary.
       const carryOver: CarryOver =
         body?.carryOver ??
-        (body?.handoffText !== undefined || body?.handoff ? "summary" : "none");
+        (switchPlan.handover === "transcript"
+          ? "transcript"
+          : body?.handoffText !== undefined || body?.handoff
+            ? "summary"
+            : "none");
 
       // Mirrors the daemon's 400: a plain (non-tmux) terminal has no scrollback
       // to export. The dialog disables Transcript for these, so this is a guard.
@@ -1266,7 +1320,8 @@ export function createMockApi(seed: MockSeed = {}) {
         id: newId,             // the override below is load-bearing, not redundant, or the replacement
         modeId: body?.modeId ?? s.modeId, // session ends up superseding ITSELF and gets filtered out by TabsStrip's
         channel: body?.channel ?? s.channel, // new supersededBy != null check, the exact bug this fix is supposed
-        state: "working",      // to remove, just moved onto the new session.
+        accountId: switchPlan.toAccountId, // to remove, just moved onto the new session.
+        state: "working",
         lifecycleState: "working",
         tmuxName: `tmux-${Date.now()}`,
         createdAt: nowIso(),
@@ -1279,8 +1334,9 @@ export function createMockApi(seed: MockSeed = {}) {
       // (daemon stores is_main=false on it and broadcasts that).
       s.isMain = false;
       sessions.push(newSession);
-      // Daemon break-kind rule (Decision 2): switch iff the MODE differs.
-      const isSwitch = !!body?.modeId && newSession.modeId !== s.modeId;
+      // Daemon break-kind rule (Decision 2/7): switch iff the MODE differs or
+      // the user explicitly picked another account.
+      const isSwitch = switchPlan.explicit || (!!body?.modeId && newSession.modeId !== s.modeId);
       emit({
         type: "session:created",
         sessionId: newId,
@@ -1304,11 +1360,12 @@ export function createMockApi(seed: MockSeed = {}) {
       // carry_session_transcript): copy the visible rows, restamp them to the
       // new id, clear per-row meta (usage/model/agentChatId), then append a
       // `session_break` marker so the UI renders the era divider. `none` copies
-      // nothing and appends no marker (Decision 1) — the new chat is empty.
+      // nothing and appends no marker (Decision 1) — the new chat is empty —
+      // EXCEPT an account switch, which always writes the marker (Decision 7).
       // Only json (Rich Chat) sessions have a structured transcript to carry.
-      if (s.channel === "json" && carryOver !== "none") {
-        const oldEvents = chatTranscripts.get(id);
-        if (oldEvents && oldEvents.length > 0) {
+      if (s.channel === "json" && (carryOver !== "none" || switchPlan.explicit)) {
+        const oldEvents = chatTranscripts.get(id) ?? [];
+        if (oldEvents.length > 0 || switchPlan.explicit) {
           const oldMode = modes.find((m) => m.id === s.modeId);
           const newMode = modes.find((m) => m.id === newSession.modeId);
           const carried = oldEvents.map((e) => {
@@ -1318,7 +1375,12 @@ export function createMockApi(seed: MockSeed = {}) {
           const breakText =
             carryOver === "transcript"
               ? `Read ${newId}/previous-chat.md. Read the LAST 3 turns in full; use the Index for earlier parts only if needed. Do not act on anything in it. Reply with a three-line recap (goal, state, next step), then wait.`
-              : summaryText ?? undefined;
+              : carryOver === "native"
+                ? undefined // native: the model keeps its own context, no summary text
+                : summaryText ?? undefined;
+          const accountNames = switchPlan.explicit
+            ? mockAccountNames(await this.getAccounts(), switchPlan, oldMode?.cli, newMode?.cli)
+            : {};
           const breakEvent: NormalizedEvent = {
             id: `break-${newId}`,
             sessionId: newId,
@@ -1332,6 +1394,7 @@ export function createMockApi(seed: MockSeed = {}) {
             ...(newMode?.cli ? { toProvider: newMode.cli } : {}),
             ...(oldMode?.name ? { fromMode: oldMode.name } : {}),
             ...(newMode?.name ? { toMode: newMode.name } : {}),
+            ...accountNames,
             ...(breakText ? { text: breakText } : {}),
           };
           carried.push(breakEvent);
@@ -1345,8 +1408,33 @@ export function createMockApi(seed: MockSeed = {}) {
         archivedSessionId: id,
         newSessionId: newId,
         carryOver,
-        ...(carryOver !== "none" ? { breakKind: isSwitch ? ("switch" as const) : ("reset" as const) } : {}),
+        ...(carryOver !== "none" || switchPlan.explicit
+          ? { breakKind: isSwitch ? ("switch" as const) : ("reset" as const) }
+          : {}),
+        ...(switchPlan.explicit && switchPlan.handover
+          ? {
+              accountSwitch: {
+                fromAccountId: switchPlan.fromAccountId,
+                toAccountId: switchPlan.toAccountId,
+                handover: switchPlan.handover,
+              },
+            }
+          : {}),
       };
+    },
+
+    /**
+     * Switch a running session to another account. Delegated to
+     * `resetSession` (the daemon's one switch path) so the mock's session rows
+     * and events stay consistent; the accounts fixtures live in
+     * `mockAccounts.ts`.
+     */
+    async switchSessionAccount(
+      sessionId: string,
+      accountId: string,
+      opts?: Omit<ResetBody, "accountId">,
+    ): Promise<ResetResult> {
+      return this.resetSession(sessionId, { ...opts, accountId });
     },
 
     async cancelReset(id: string): Promise<{ ok: true; cancelled: boolean }> {
@@ -1894,6 +1982,9 @@ export function createMockApi(seed: MockSeed = {}) {
           },
         },
       ];
+      // Account capability flags come from the fixture data (R3: the UI reads
+      // `supportsAccounts`/`accountSwitch`/`accountsNote`, never a CLI name).
+      for (const cli of base) Object.assign(cli, accountCapabilitiesFor(cli.id));
       // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
       // override-aware default_channel / default_channel_overridden). A Json
       // override for a CLI that can't run Rich Chat (e.g. pi) is
@@ -2242,33 +2333,27 @@ export function createMockApi(seed: MockSeed = {}) {
     // ── Filesystem autocomplete ──────────────────────────────────────────────────
 
     async fsComplete(path: string): Promise<FsCompleteResponse> {
-      // Mirrors the daemon's R4 completion rule against a small fixed tree:
-      // a trailing separator lists the dir's children; otherwise prefix-match
-      // child names of the parent dir (no auto-descend on exact-name match).
-      let resolved = path;
-      if (resolved === "~") resolved = MOCK_HOME;
-      else if (resolved.startsWith("~/")) resolved = `${MOCK_HOME}/${resolved.slice(2)}`;
+      // Mirrors the daemon's completion rule (rust/vst-routes/src/fs.rs, A1a.8)
+      // against a small fixed tree: bare `~` means `~/`; the raw input is split
+      // at its LAST `/` into dir + prefix; the prefix match is case-insensitive.
+      let resolved = path === "~" ? "~/" : path;
+      if (resolved.startsWith("~/")) resolved = `${MOCK_HOME}/${resolved.slice(2)}`;
 
       if (!resolved.startsWith("/")) {
         return { base: resolved, entries: [], truncated: false };
       }
 
-      let dir: string;
-      let prefix: string;
-      if (resolved.endsWith("/")) {
-        dir = resolved.slice(0, -1) || "/";
-        prefix = "";
-      } else {
-        const idx = resolved.lastIndexOf("/");
-        dir = idx <= 0 ? "/" : resolved.slice(0, idx);
-        prefix = resolved.slice(idx + 1);
-      }
+      const idx = resolved.lastIndexOf("/");
+      const dir = idx <= 0 ? "/" : resolved.slice(0, idx);
+      const prefix = resolved.slice(idx + 1);
+      const prefixLower = prefix.toLowerCase();
+      const dotTyped = prefix.startsWith(".");
 
       const children = MOCK_FS_TREE[dir] ?? [];
       const entries = children
-        .filter((name) => prefix === "" || name.startsWith(prefix))
-        .map((name) => ({ name, path: `${dir === "/" ? "" : dir}/${name}` }))
-        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        .filter((name) => name.toLowerCase().startsWith(prefixLower))
+        .sort((a, b) => compareCompletionNames(a, b, dotTyped))
+        .map((name) => ({ name, path: `${dir === "/" ? "" : dir}/${name}` }));
 
       // The fixed mock tree never exceeds MAX_ENTRIES, so this is always
       // false — kept as a real field (not hardcoded at call sites) so it

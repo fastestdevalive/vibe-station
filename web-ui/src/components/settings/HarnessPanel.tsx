@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { SupportedCli } from "@/api/types";
+import { AccountsBlock } from "@/components/accounts/AccountsBlock";
 import { DoctorHintBlock } from "@/components/doctor/DoctorHintBlock";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
@@ -105,26 +106,29 @@ export function HarnessPanel({ api, cli, hasAnyMode, onChanged }: HarnessPanelPr
         </p>
       )}
       {cli.detected ? (
-        <SettingsRow
-          label="Default channel"
-          description="Used when a new session of this harness doesn't pick one."
-          control={
-            <div data-testid={`default-channel-${cli.id}`}>
-              <Select
-                aria-label={`Default channel for ${name}`}
-                value={current}
-                onChange={(e) => onChannelChange(e.target.value as "json" | "tmux")}
-                disabled={channelPending}
-                style={{ width: "auto", padding: "4px 8px", fontSize: 13 }}
-              >
-                <option value="json" disabled={!cli.supportsJson}>
-                  Rich Chat{defaultOption === "json" ? " (built-in)" : ""}
-                </option>
-                <option value="tmux">Terminal (tmux){defaultOption === "tmux" ? " (built-in)" : ""}</option>
-              </Select>
-            </div>
-          }
-        />
+        <>
+          <SettingsRow
+            label="Default channel"
+            description="Used when a new session of this harness doesn't pick one."
+            control={
+              <div data-testid={`default-channel-${cli.id}`}>
+                <Select
+                  aria-label={`Default channel for ${name}`}
+                  value={current}
+                  onChange={(e) => onChannelChange(e.target.value as "json" | "tmux")}
+                  disabled={channelPending}
+                  style={{ width: "auto", padding: "4px 8px", fontSize: 13 }}
+                >
+                  <option value="json" disabled={!cli.supportsJson}>
+                    Rich Chat{defaultOption === "json" ? " (built-in)" : ""}
+                  </option>
+                  <option value="tmux">Terminal (tmux){defaultOption === "tmux" ? " (built-in)" : ""}</option>
+                </Select>
+              </div>
+            }
+          />
+          <AccountsBlock api={api} cli={cli} />
+        </>
       ) : cli.installHint ? (
         <DoctorHintBlock hint={cli.installHint} hostOs="any" />
       ) : (

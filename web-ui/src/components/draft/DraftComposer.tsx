@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { DraftAttachment } from "@/hooks/useAttachmentDrafts";
 import type { CreateWorktreeBody, DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
-import { ApiError, ReviewApiError } from "@/api/errors";
+import { ApiError, ReviewApiError, isAccountError } from "@/api/errors";
 import { ReviewAttachButton, ReviewChip } from "@/components/comments/ReviewAttachButton";
 import { reviewErrorText } from "@/components/comments/reviewActions";
 import { useCommentStore } from "@/components/comments/useCommentStore";
@@ -21,6 +21,9 @@ import { NonGitWorktreeDialog } from "../dialogs/NonGitWorktreeDialog";
 import { ProjectCombobox } from "./ProjectCombobox";
 import { DraftFieldRow } from "./DraftFieldRow";
 import { ModePopover } from "./ModePopover";
+import { AccountPicker } from "../accounts/AccountPicker";
+import { AddAccountDialog } from "../accounts/AddAccountDialog";
+import { accountOf, draftAccountId, parentSessionFor } from "@/lib/accounts";
 import { isAbsoluteQuery, summarizeFields, type Mode_ } from "./draftComposerHelpers";
 import { useShortPane } from "./useShortPane";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -187,6 +190,11 @@ function DraftComposerInner({
   const [channel, setChannel] = useState<"json" | "terminal">(
     initialConfig?.channel && initialConfig.channel !== "json" ? "terminal" : "json",
   );
+  // Account pick: `""` = untouched (server applies parent > CLI default > System);
+  // only an explicit pick is sent. Reset when the mode moves to another CLI.
+  const [accountId, setAccountId] = useState(initialConfig?.accountId ?? "");
+  // The account the server refused as signed out; blocks Start while it is the displayed one and still signed out.
+  const [blockedAccountId, setBlockedAccountId] = useState<string | null>(null);
   // Terminal always means tmux now — the plain-pty option is gone from the UI.
   // A persisted `initialConfig.useTmux` (older drafts) is deliberately ignored.
   const [worktreeChoice, setWorktreeChoice] = useState<"new" | "existing">(initialConfig?.worktreeChoice ?? "new");
@@ -201,6 +209,7 @@ function DraftComposerInner({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newModeOpen, setNewModeOpen] = useState(false);
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Phase 4 (CUJ 3): the ORIGINAL request held while the NonGitWorktreeDialog
   // recovery flow runs. Non-null → the dialog is open. Discriminated union
@@ -343,11 +352,26 @@ function DraftComposerInner({
 
   // Rich Chat availability gated on the selected mode's CLI.
   const selectedCli = modes.find((m) => m.id === modeId)?.cli;
+  // The draft harness's SupportedCli (loaded with the modes) feeds the add dialog.
+  const addAccountCli = selectedCli ? clis.find((c) => c.id === selectedCli) : undefined;
   const jsonSupported =
     selectedCli == null || clis.length === 0
       ? true
       : (clis.find((c) => c.id === selectedCli)?.supportsJson ?? true);
   const isJson = channel === "json";
+
+  // Accounts: the picker shows only for a CLI with 2+ accounts. An untouched
+  // draft DISPLAYS what the server would choose but sends nothing.
+  const accounts = useServerStore((s) => s.accounts);
+  const parentSession = useServerStore((s) => parentSessionFor(s.sessions, session?.worktreeId));
+  const accountExplicit = accountId !== "";
+  const displayAccountId = accountExplicit ? accountId : draftAccountId(accounts, selectedCli, parentSession);
+  // Start stays blocked only while the refused account is the displayed one and is still signed out.
+  const blockedAccount =
+    blockedAccountId !== null && selectedCli && blockedAccountId === (displayAccountId ?? "system")
+      ? accountOf(accounts, selectedCli, blockedAccountId)
+      : undefined;
+  const accountBlocked = blockedAccount?.auth === "signed_out";
 
   useEffect(() => {
     if (!jsonSupported && channel === "json") setChannel("terminal");
@@ -376,6 +400,7 @@ function DraftComposerInner({
       channel: isJson ? "json" : "tmux",
       channelExplicit: channelTouchedRef.current,
     };
+    if (accountExplicit) base.accountId = accountId;
     if (entryPoint === "worktree") {
       base.worktreeChoice = worktreeChoice;
       if (worktreeChoice === "existing") {
@@ -412,7 +437,7 @@ function DraftComposerInner({
       }
     }
     return base;
-  }, [entryPoint, modeId, isJson, worktreeChoice, existingWorktreeId, branch, baseBranch, useWorktree]);
+  }, [entryPoint, modeId, isJson, worktreeChoice, existingWorktreeId, branch, baseBranch, useWorktree, accountExplicit, accountId]);
 
   // Keep the unmount flush's source of truth in sync with the live values.
   useEffect(() => {
@@ -525,7 +550,7 @@ function DraftComposerInner({
       clearGlobalDraft();
       navigate(`/draft/${created.id}`);
     } catch (err) {
-      setError(errorMessage(err, "Failed to create draft."));
+      reportStartError(err, "Failed to create draft.");
     } finally {
       selectingRef.current = false;
     }
@@ -553,6 +578,19 @@ function DraftComposerInner({
   }
 
   // ── Start handlers. ───────────────────────────────────────────────────────
+  /** A signed-out account blocks the draft (Start stays disabled) — not just a message. */
+  function reportStartError(err: unknown, fallback: string) {
+    if (isAccountError(err, "account_signed_out")) {
+      const id = (err as ApiError).accountId ?? displayAccountId ?? "system";
+      setBlockedAccountId(id);
+      // The inline "Sign in to <name>" line needs the store to know; otherwise show the server's reason.
+      const known = !!selectedCli && accountOf(accounts, selectedCli, id)?.auth === "signed_out";
+      setError(known ? null : errorMessage(err, fallback));
+      return;
+    }
+    setError(errorMessage(err, fallback));
+  }
+
   async function startTier1() {
     if (!draftSessionId) return;
     if (!prompt.trim() && !hasReview) {
@@ -617,6 +655,7 @@ function DraftComposerInner({
       useServerStore.getState().applySessionUpdated(draftSessionId, {
         channel: currentConfig.channel,
         ...(currentConfig.modeId ? { modeId: currentConfig.modeId } : {}),
+        accountId: res.accountId ?? null,
       });
       if (hasReview) {
         if (review.scope) useCommentStore.getState().removeLocal(review.scope.scopeId, reviewIds);
@@ -626,7 +665,7 @@ function DraftComposerInner({
       committedRef.current = true;
       onStarted({ worktreeId: res.worktreeId, sessionId: draftSessionId });
     } catch (err) {
-      setError(errorMessage(err, "Failed to start agent."));
+      reportStartError(err, "Failed to start agent.");
     } finally {
       setSubmitting(false);
     }
@@ -659,7 +698,7 @@ function DraftComposerInner({
         committedRef.current = true;
         navigate(`/draft/${created.id}`);
       } catch (err) {
-        setError(errorMessage(err, "Failed to create draft."));
+        reportStartError(err, "Failed to create draft.");
       } finally {
         setSubmitting(false);
       }
@@ -718,6 +757,10 @@ function DraftComposerInner({
           // showed a terminal session spawning).
           channel: currentConfig.channel,
           skipAutoTurn: true,
+          // Same rule as the direct-session branch below: only an explicit
+          // pick travels; an untouched draft lets the server apply its own
+          // default (parent > CLI default > System).
+          ...(accountExplicit ? { accountId } : {}),
         };
         try {
           const wt = await api.createWorktree(payload);
@@ -742,6 +785,7 @@ function DraftComposerInner({
           prompt: toPlainText(prompt.trim()),
           channel: currentConfig.channel,
           skipAutoTurn: true,
+          ...(accountExplicit ? { accountId } : {}),
         });
         const sessionId = sess.id;
         // Same as the worktree branch: register the direct session before
@@ -760,7 +804,7 @@ function DraftComposerInner({
         onStarted({ worktreeId: undefined, sessionId });
       }
     } catch (err) {
-      setError(errorMessage(err, "Failed to create project."));
+      reportStartError(err, "Failed to create project.");
     } finally {
       setSubmitting(false);
     }
@@ -838,6 +882,7 @@ function DraftComposerInner({
       useServerStore.getState().applySessionUpdated(pending.sessionId, {
         channel: pending.draftConfig.channel,
         ...(pending.draftConfig.modeId ? { modeId: pending.draftConfig.modeId } : {}),
+        accountId: res.accountId ?? null,
       });
       if (pending.skipAutoTurn) {
         await sendJsonFirstTurn(api, pending.sessionId, pending.prompt, files);
@@ -848,6 +893,8 @@ function DraftComposerInner({
   }
 
   async function handleStart() {
+    // A signed-out account blocks the draft until another one is picked.
+    if (accountBlocked) return;
     // Remember the mode for the next draft (fire-and-forget).
     if (modeId) void api.updateSettings({ lastModeId: modeId }).catch(() => {});
     // A global Tier 1 draft (server-backed but no project yet) cannot be started
@@ -1240,7 +1287,13 @@ function DraftComposerInner({
               ) : null}
             </div>
 
-            {error ? <div className="draft-composer__error error-text" role="alert">{error}</div> : null}
+            {accountBlocked ? (
+              <div className="draft-composer__error error-text" role="alert">
+                Sign in to {blockedAccount?.displayName ?? "that account"} from Settings.
+              </div>
+            ) : error ? (
+              <div className="draft-composer__error error-text" role="alert">{error}</div>
+            ) : null}
 
             <div className="draft-composer__composer">
               {editorReady ? (
@@ -1288,14 +1341,35 @@ function DraftComposerInner({
                         modeId={modeId}
                         channel={isJson ? "json" : "pty"}
                         disabled={submitting}
-                        onSelect={setModeId}
+                        onSelect={(id) => {
+                          // An account belongs to a CLI: moving the mode to
+                          // another CLI drops an explicit account pick.
+                          if (modes.find((m) => m.id === id)?.cli !== selectedCli) {
+                            setAccountId("");
+                            setBlockedAccountId(null);
+                          }
+                          setModeId(id);
+                        }}
                         onNewMode={() => setNewModeOpen(true)}
                       />
+                      {selectedCli ? (
+                        <AccountPicker
+                          cli={selectedCli}
+                          value={displayAccountId}
+                          disabled={submitting}
+                          onChange={(id) => {
+                            setAccountId(id);
+                            setBlockedAccountId(null);
+                            setError(null);
+                          }}
+                          onAddAccount={() => setAddAccountOpen(true)}
+                        />
+                      ) : null}
                       <button
                         type="button"
                         className="btn btn--primary chat-composer__send"
                         onClick={() => void handleStart()}
-                        disabled={submitting || (!prompt.trim() && !hasReview)}
+                        disabled={submitting || (!prompt.trim() && !hasReview) || accountBlocked}
                         aria-label="Start agent"
                       >
                         <Play size={12} />
@@ -1348,6 +1422,15 @@ function DraftComposerInner({
         </div>
       </div>
 
+      {addAccountCli ? (
+        <AddAccountDialog
+          open={addAccountOpen}
+          api={api}
+          cli={addAccountCli}
+          onClose={() => setAddAccountOpen(false)}
+        />
+      ) : null}
+
       {newModeOpen ? (
         <NewModeDialog
           open
@@ -1356,7 +1439,11 @@ function DraftComposerInner({
           onSaved={async () => {
             const ms = await api.listModes();
             setModes(ms);
-            if (ms[ms.length - 1]) setModeId(ms[ms.length - 1]!.id);
+            if (ms[ms.length - 1]) {
+              setModeId(ms[ms.length - 1]!.id);
+              setAccountId("");
+              setBlockedAccountId(null);
+            }
             setNewModeOpen(false);
           }}
         />

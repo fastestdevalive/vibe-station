@@ -1,4 +1,4 @@
-import type { ArtifactErrorCode, CommentErrorCode } from "./types";
+import type { AccountErrorCode, ArtifactErrorCode, CommentErrorCode } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -6,6 +6,8 @@ export class ApiError extends Error {
     public status: number,
     /** Machine-readable `code` from the daemon's `{ error, code }` body, when present. */
     public code?: string,
+    /** The account an account-route failure is about (`account_signed_out` body field). */
+    public accountId?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -95,3 +97,9 @@ export function parseErrorBody(text: string, fallback: string): ParsedErrorBody 
 
 /** Error-code compare for an unknown thrown value (works for any `ApiError` subclass). */
 export const errorCodeOf = (e: unknown): string | undefined => (e instanceof ApiError ? e.code : undefined);
+
+/** True when a thrown account-route failure carries `code` (`label_taken`,
+ *  `account_signed_out`, ...). Never match on the message text. */
+export function isAccountError(e: unknown, code: AccountErrorCode): boolean {
+  return errorCodeOf(e) === code;
+}

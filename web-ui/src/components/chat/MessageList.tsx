@@ -86,6 +86,8 @@ export type RenderItem =
       toMode?: string;
       fromProvider?: string;
       toProvider?: string;
+      fromAccount?: string;
+      toAccount?: string;
       text?: string;
       ts?: string;
     };
@@ -479,6 +481,8 @@ export function groupEvents(events: NormalizedEvent[], seqIndex?: Map<number, st
           toMode: ev.toMode,
           fromProvider: ev.fromProvider,
           toProvider: ev.toProvider,
+          fromAccount: ev.fromAccount,
+          toAccount: ev.toAccount,
           text: ev.text,
           ts: ev.ts,
         });
@@ -1330,6 +1334,8 @@ export function MessageList({
             toMode={item.toMode}
             fromProvider={item.fromProvider}
             toProvider={item.toProvider}
+            fromAccount={item.fromAccount}
+            toAccount={item.toAccount}
             text={item.text}
             ts={item.ts}
             onOpenPrevious={onOpenPrevious}
