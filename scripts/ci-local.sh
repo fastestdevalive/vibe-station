@@ -56,6 +56,9 @@ elif ! git diff --quiet HEAD 2>/dev/null; then
 fi
 
 if [ "$NATIVE" = 1 ]; then
+  # On the host: never start a real daemon binary (ci-steps.sh skips those tests
+  # unless it is in the CI container).
+  unset VST_NATIVE_DAEMON_TESTS VST_CI_CONTAINER
   CI_STEPS="$STEPS" exec "$SRC/scripts/ci-steps.sh"
 fi
 
@@ -92,7 +95,8 @@ fi
 # mount that dir read-only at the same path so git works inside the container.
 GITCOMMON="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 KEY="$(basename "$TOP" | tr -c 'A-Za-z0-9_.-\n' '_')-$(printf '%s' "$TOP" | shasum | cut -c1-6)"
-docker run --rm -t \
+# --init: a real PID 1 that reaps orphans (tests start, kill and orphan processes).
+docker run --rm -t --init \
   --name "vst-ci-$KEY-$$" \
   -v "$SRC":/work \
   -v "$GITCOMMON":"$GITCOMMON":ro -e GIT_OPTIONAL_LOCKS=0 \
@@ -103,7 +107,7 @@ docker run --rm -t \
   -v "vst-ci-nm-web-$KEY":/work/web-ui/node_modules \
   -v "vst-ci-nm-desktop-$KEY":/work/desktop/node_modules \
   -v vst-ci-pnpm-store:/home/ci/.local/share/pnpm \
-  -e CI_STEPS="$STEPS" -e CARGO_TERM_COLOR=always \
+  -e CI_STEPS="$STEPS" -e CARGO_TERM_COLOR=always -e VST_CI_CONTAINER=1 \
   -e CARGO_BUILD_JOBS="${VST_CI_CARGO_JOBS:-3}" -e CARGO_INCREMENTAL=0 \
   -e CARGO_PROFILE_DEV_DEBUG=0 -e CARGO_PROFILE_TEST_DEBUG=0 \
   "$IMG" scripts/ci-steps.sh

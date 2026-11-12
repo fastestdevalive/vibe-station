@@ -3132,6 +3132,7 @@ dependencies = [
  "vst-daemon",
  "vst-lifecycle",
  "vst-proc",
+ "vst-testkit",
  "vst-types",
 ]
 
@@ -3172,6 +3173,7 @@ dependencies = [
  "vst-routes",
  "vst-rpc",
  "vst-store",
+ "vst-testkit",
  "vst-types",
  "vst-ws",
 ]
@@ -3391,6 +3393,7 @@ version = "0.0.4-beta"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "vst-types",
 ]
 

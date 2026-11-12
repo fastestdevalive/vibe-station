@@ -30,6 +30,7 @@ embed-ui = ["vst-daemon/embed-ui"]
 insecure-no-auth = ["vst-daemon/insecure-no-auth"]
 
 [dev-dependencies]
+vst-testkit = { workspace = true }
 axum = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }

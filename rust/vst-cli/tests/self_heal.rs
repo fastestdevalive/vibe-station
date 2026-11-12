@@ -8,6 +8,12 @@
 //! parallel-thread execution within a binary can't race across tests that
 //! assume different display state (mirrors the `dispatch.rs` env-var lesson
 //! from Part 00). Each test takes `ENV_LOCK` for its duration.
+//!
+//! These start real, deliberately detached daemons, so they run only with
+//! `VST_NATIVE_DAEMON_TESTS=1` (Docker/CI). Each test creates a
+//! `DaemonHomeGuard` BEFORE anything can spawn; its `Drop` kills the daemon
+//! of that temp `HOME` even when an assert fails. Declare it after the
+//! tempdir so it drops (and kills) before the directory is removed.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -15,6 +21,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use vst_cli::launch::ensure_daemon_reachable_with_exe;
+use vst_testkit::{native_daemon_tests_enabled, DaemonHomeGuard};
 
 static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -36,28 +43,16 @@ fn clear_display_vars() {
     std::env::set_var("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22");
 }
 
-/// Kill the daemon `config.json` in `home` points at, if any — test cleanup
-/// (spawned daemons are deliberately detached, so nothing reaps them
-/// automatically).
-fn kill_daemon_for_home(home: &std::path::Path) {
-    let config_path = home.join(".vibe-station").join("config.json");
-    let Ok(content) = std::fs::read_to_string(&config_path) else {
-        return;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return;
-    };
-    if let Some(pid) = json.get("pid").and_then(|p| p.as_i64()) {
-        let _ = Command::new("kill").arg(pid.to_string()).status();
-    }
-}
-
 #[tokio::test]
 async fn ensure_daemon_reachable_spawns_a_headless_daemon_when_none_exists() {
+    if !native_daemon_tests_enabled("self_heal") {
+        return;
+    }
     let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
+    let _daemon = DaemonHomeGuard::new(tmp.path());
     std::env::set_var("HOME", tmp.path());
 
     let result = ensure_daemon_reachable_with_exe(&vst_exe()).await;
@@ -68,16 +63,18 @@ async fn ensure_daemon_reachable_spawns_a_headless_daemon_when_none_exists() {
         config_path.exists(),
         "a fresh daemon should have written config.json"
     );
-
-    kill_daemon_for_home(tmp.path());
 }
 
 #[tokio::test]
 async fn preflight_exempt_dies_fast_without_attempting_self_heal() {
+    if !native_daemon_tests_enabled("self_heal") {
+        return;
+    }
     let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
+    let _daemon = DaemonHomeGuard::new(tmp.path());
     // No config.json at all -- daemon is genuinely absent.
 
     let start = std::time::Instant::now();
@@ -119,6 +116,9 @@ async fn preflight_exempt_dies_fast_without_attempting_self_heal() {
 /// a real `config.json` on disk, pointing at a port nothing is listening on.
 #[tokio::test]
 async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
+    if !native_daemon_tests_enabled("self_heal") {
+        return;
+    }
     let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
@@ -134,6 +134,9 @@ async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
         r#"{"port": 1, "pid": 999999, "cliToken": "stale-token", "tauriToken": "stale-token"}"#,
     )
     .unwrap();
+    // After the stale config is on disk, so its placeholder pid is recorded as
+    // pre-existing and never signalled; still before anything can spawn.
+    let _daemon = DaemonHomeGuard::new(tmp.path());
 
     let project_dir = tmp.path().join("myproject");
     std::fs::create_dir_all(&project_dir).unwrap();
@@ -166,16 +169,18 @@ async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
         Some(999999),
         "config.json's stale placeholder pid should have been replaced by a real spawn"
     );
-
-    kill_daemon_for_home(tmp.path());
 }
 
 #[tokio::test]
 async fn two_concurrent_self_heals_converge_on_one_daemon() {
+    if !native_daemon_tests_enabled("self_heal") {
+        return;
+    }
     let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
+    let _daemon = DaemonHomeGuard::new(tmp.path());
     std::env::set_var("HOME", tmp.path());
 
     let exe = vst_exe();
@@ -202,6 +207,4 @@ async fn two_concurrent_self_heals_converge_on_one_daemon() {
         pid.is_some(),
         "config.json should record a single winning pid"
     );
-
-    kill_daemon_for_home(tmp.path());
 }

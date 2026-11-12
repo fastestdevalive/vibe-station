@@ -3,9 +3,9 @@ name: Rust CI
 on:
   push:
     branches: [main]
-    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml"]
   pull_request:
-    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "package.json", "desktop/package.json", "web-ui/package.json", "desktop/src-tauri/**", "scripts/check-version-sync.sh", "scripts/check-native-daemon-tests.sh", ".github/workflows/rust-ci.yml"]
 
 concurrency:
   group: rust-ci-${{ github.ref }}
@@ -15,6 +15,10 @@ jobs:
   gate:
     name: rust-gate.sh --workspace
     runs-on: ubuntu-latest
+    env:
+      # Opt in to the tests that start a real daemon binary (vst-testkit
+      # proc_guard); they are skipped on dev hosts.
+      VST_NATIVE_DAEMON_TESTS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,6 +89,9 @@ jobs:
 
       - name: Run the gate
         run: rust/scripts/rust-gate.sh --workspace
+
+      - name: Daemon-spawning tests really ran (not skipped)
+        run: bash scripts/check-native-daemon-tests.sh
 
       # A name filter without `--exact` passes with "0 passed" if the test is ever
       # renamed, so require exactly one test to have run, in both configurations:
