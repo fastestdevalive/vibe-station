@@ -7,6 +7,9 @@ import { CodeView } from "@/components/preview/CodeView";
 import { useThemeStore } from "@/hooks/useThemeStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { __resetThemeSyncForTests } from "@/hooks/useTheme";
+import { loadShikiBeforeAll } from "@/test/shikiReady";
+
+loadShikiBeforeAll();
 
 let testApi: MockApi;
 

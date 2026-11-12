@@ -4,6 +4,9 @@ import { ReferencesPanel } from "./ReferencesPanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { ApiError } from "@/api/errors";
 import * as lspApi from "@/lib/lspApi";
+import { loadShikiBeforeAll } from "@/test/shikiReady";
+
+loadShikiBeforeAll();
 
 const headerTitle = () => document.querySelector(".references-panel__title")?.textContent ?? null;
 const countPill = () => document.querySelector(".references-panel__count-pill")?.textContent ?? null;

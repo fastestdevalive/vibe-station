@@ -234,8 +234,9 @@ pub struct ServerHandle {
     /// request, because LSP-conformant servers (rust-analyzer 1.98.1 etc.)
     /// reject/crash on traffic sent before `initialized`.
     pub initialized: watch::Receiver<bool>,
-    /// Last health warning/error message from `experimental/serverStatus`
-    /// (`None` while healthy, or for servers that never send it). The server
+    /// Last health note: a warning/error from `experimental/serverStatus`, or
+    /// a failed-project-import progress message (`HealthTracker`)
+    /// (`None` while healthy, or for servers that send neither). The server
     /// keeps answering while degraded, so this does NOT change `status`.
     pub health: Arc<RwLock<Option<String>>>,
 }
@@ -303,6 +304,68 @@ impl ReadinessTracker {
         } else {
             Readiness::Indexing
         }
+    }
+}
+
+/// Progress `report`/`end` text that means the server could not load the
+/// project (kotlin-lsp: "Workspace is not imported" after a failed Gradle
+/// sync). The server keeps answering, but only from the open file, so
+/// cross-file results (references, rename) are silently incomplete.
+fn import_failure_message(p: &ProgressNotification) -> Option<String> {
+    if p.kind == ProgressKind::Begin {
+        return None;
+    }
+    let msg = p.message.as_deref()?;
+    let lower = msg.to_ascii_lowercase();
+    let failed = lower.contains("not imported")
+        || lower.contains("import failed")
+        || lower.contains("failed to import");
+    failed.then(|| {
+        format!(
+            "Project import failed ({msg}); results such as references may be limited to the open file"
+        )
+    })
+}
+
+/// Titles of `$/progress` `begin`s that start a (re)import attempt; seeing one
+/// retires a stale import-failure note. Deliberately not a bare "import":
+/// that also matches "Organize/Optimizing imports".
+fn starts_project_import(p: &ProgressNotification) -> bool {
+    p.kind == ProgressKind::Begin
+        && p.title.as_deref().is_some_and(|t| {
+            let t = t.to_ascii_lowercase();
+            t.contains("importing") || t.contains("sync") || t.contains("gradle")
+        })
+}
+
+/// The two independent sources of the published `degraded` note, kept in
+/// separate slots so neither can erase the other. A server's own
+/// `serverStatus` warning wins when both are set.
+#[derive(Debug, Default)]
+struct HealthTracker {
+    server_health: Option<String>,
+    import_note: Option<String>,
+}
+
+impl HealthTracker {
+    fn on_server_status(&mut self, status: &ServerStatusNotification) -> Option<String> {
+        self.server_health = health_message(status);
+        self.published()
+    }
+
+    fn on_progress(&mut self, p: &ProgressNotification) -> Option<String> {
+        if let Some(note) = import_failure_message(p) {
+            self.import_note = Some(note);
+        } else if starts_project_import(p) {
+            self.import_note = None;
+        }
+        self.published()
+    }
+
+    fn published(&self) -> Option<String> {
+        self.server_health
+            .clone()
+            .or_else(|| self.import_note.clone())
     }
 }
 
@@ -1549,12 +1612,17 @@ impl ServerTask {
         let ready_debounce = tokio::time::sleep(READY_DEBOUNCE);
         tokio::pin!(ready_debounce);
         let mut server_status_open = true;
+        let mut health_tracker = HealthTracker::default();
 
         loop {
             let readiness = tokio::select! {
                 progress = progress_rx.recv() => {
                     match progress {
-                        Some(p) => tracker.on_progress(&p.kind, &p.token),
+                        Some(p) => {
+                            let published = health_tracker.on_progress(&p);
+                            *health.write().await = published;
+                            tracker.on_progress(&p.kind, &p.token)
+                        }
                         None => {
                             // progress channel closed = the reader task hit
                             // EOF / an I/O error = the child process died.
@@ -1565,7 +1633,7 @@ impl ServerTask {
                 server_status = server_status_rx.recv(), if server_status_open => {
                     match server_status {
                         Some(st) => {
-                            *health.write().await = health_message(&st);
+                            *health.write().await = health_tracker.on_server_status(&st);
                             tracker.on_server_status(&st)
                         }
                         None => {
@@ -2153,6 +2221,77 @@ mod tests {
         assert_eq!(
             t.on_server_status(&server_status(ServerHealth::Warning, true)),
             Readiness::ReadyNow
+        );
+    }
+
+    fn progress(kind: ProgressKind, message: Option<&str>) -> ProgressNotification {
+        ProgressNotification {
+            token: json!(1),
+            kind,
+            title: None,
+            message: message.map(String::from),
+            percentage: None,
+        }
+    }
+
+    #[test]
+    fn import_failure_detected_from_progress_message() {
+        let note = import_failure_message(&progress(
+            ProgressKind::Report,
+            Some("Workspace is not imported"),
+        ))
+        .expect("flagged");
+        assert!(note.contains("Workspace is not imported"));
+        assert!(
+            import_failure_message(&progress(ProgressKind::End, Some("Import failed"))).is_some()
+        );
+        assert!(
+            import_failure_message(&progress(ProgressKind::Report, Some("Indexing 40%"))).is_none()
+        );
+        assert!(
+            import_failure_message(&progress(ProgressKind::Begin, Some("not imported"))).is_none()
+        );
+        assert!(import_failure_message(&progress(ProgressKind::Report, None)).is_none());
+    }
+
+    fn titled(kind: ProgressKind, title: &str) -> ProgressNotification {
+        ProgressNotification {
+            title: Some(title.into()),
+            ..progress(kind, None)
+        }
+    }
+
+    #[test]
+    fn import_note_set_cleared_and_not_clobbered() {
+        let mut h = HealthTracker::default();
+        let failed = progress(ProgressKind::Report, Some("Workspace is not imported"));
+        assert!(h.on_progress(&failed).is_some());
+        // Unrelated progress and "Organize imports" keep the note.
+        assert!(h
+            .on_progress(&titled(ProgressKind::Begin, "Indexing"))
+            .is_some());
+        assert!(h
+            .on_progress(&titled(ProgressKind::Begin, "Organize imports"))
+            .is_some());
+        // A server Ok does not erase it; a server warning outranks it.
+        assert!(h
+            .on_server_status(&server_status(ServerHealth::Ok, true))
+            .is_some());
+        let mut warn = server_status(ServerHealth::Warning, true);
+        warn.message = Some("rust-analyzer warn".into());
+        assert_eq!(
+            h.on_server_status(&warn).as_deref(),
+            Some("rust-analyzer warn")
+        );
+        // A fresh import attempt retires only the import note.
+        assert_eq!(
+            h.on_progress(&titled(ProgressKind::Begin, "Importing"))
+                .as_deref(),
+            Some("rust-analyzer warn")
+        );
+        assert_eq!(
+            h.on_server_status(&server_status(ServerHealth::Ok, true)),
+            None
         );
     }
 

@@ -285,10 +285,26 @@ fn garbage_never_panics() {
 
 // ---- review regressions -----------------------------------------------------
 
+/// Fastest of up to five runs. The callers bound 3 to 14 ms of real work (debug
+/// build) at 0.5 to 1 s to catch superlinear work, which is slow on every run;
+/// a test thread stalled by a loaded host is slow on one, so only the former
+/// can fail all five. Stops at the first run under every caller's bound.
 fn timed(cmd: &str) -> (Vec<String>, std::time::Duration) {
-    let t0 = std::time::Instant::now();
-    let out = t(cmd);
-    (out, t0.elapsed())
+    let run = || {
+        let t0 = std::time::Instant::now();
+        (t(cmd), t0.elapsed())
+    };
+    let mut best = run();
+    for _ in 0..4 {
+        if best.1.as_millis() < 250 {
+            break;
+        }
+        let next = run();
+        if next.1 < best.1 {
+            best = next;
+        }
+    }
+    best
 }
 
 #[test]
@@ -345,18 +361,31 @@ fn values_at_the_cap_resolve_and_one_more_byte_does_not() {
     );
 }
 
+/// Work charged for `cmd`, and whether the run stopped because the budget ran out.
+fn work(cmd: &str) -> (usize, bool) {
+    let run = run_bounded(cmd, None);
+    (run.work.get(), run.exhausted())
+}
+
 #[test]
 fn many_references_and_scopes_stay_within_the_work_budget() {
+    // Asserted on the work counter, not the clock: this test's ~170 ms of real
+    // work (debug build) sat within 6x of the old 1 s wall-clock bound, and a
+    // loaded CI host stretched it past that (1.1 s and 3.2 s observed). The
+    // counter is the same on every machine. A run stops at the first command
+    // that takes it over the budget, so it can overshoot by one charge at most.
     let v = "z".repeat(4000);
-    let cmd = format!("a={v};{}", " echo > /tmp/$a ;".repeat(3000));
-    let (_, took) = timed(&cmd);
-    assert!(took.as_millis() < 1000, "{took:?}");
-    let cmd = format!("a={v};{}", " ( echo > /tmp/x.md ) ;".repeat(2500));
-    let (_, took) = timed(&cmd);
-    assert!(took.as_millis() < 1000, "{took:?}");
-    let cmd = format!("a=1;{}", "( ".repeat(5000));
-    let (out, took) = timed(&format!("{cmd} cd /tmp; echo > rel.md"));
-    assert!(out.is_empty() && took.as_millis() < 1000);
+    // 3000 references to a 4000-byte value: 12 MB if unbounded.
+    let (w, exhausted) = work(&format!("a={v};{}", " echo > /tmp/$a ;".repeat(3000)));
+    assert!(exhausted && w <= WORK_BUDGET + MAX_RESOLVED, "{w}");
+    // 2500 subshell snapshots of that value: 10 MB if unbounded.
+    let (w, exhausted) = work(&format!("a={v};{}", " ( echo > /tmp/x.md ) ;".repeat(2500)));
+    assert!(exhausted && w <= WORK_BUDGET + MAX_RESOLVED + 128, "{w}");
+    // Unclosed nesting is cut off by the depth cap, long before the budget.
+    let cmd = format!("a=1;{} cd /tmp; echo > rel.md", "( ".repeat(5000));
+    let (w, exhausted) = work(&cmd);
+    assert!(!exhausted && w <= MAX_GROUP_DEPTH * 128, "{w}");
+    assert!(t(&cmd).is_empty());
 }
 
 #[test]
