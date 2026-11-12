@@ -656,3 +656,19 @@ Mentions inside the editor, drafts, and all UI components below `useChat` use **
   4. `mentionRows.ts` ranks non-file kinds client-side; `file` keeps server order (never re-filter/re-sort server-ranked kinds).
   5. Daemon: id-resolution/validation for the new kind. Tests for the kind def, the source hook and rows.
   Unknown kinds (stale clients) must keep rendering a generic chip: `mentionKindDef` never throws.
+
+---
+
+## Transcript search — one insert path, one index owner
+
+**Files:** `rust/vst-store/src/transcript_search.rs` · `rust/vst-store/src/transcript.rs` · `rust/vst-agents/src/json_agent_session/transcript_search.rs`
+
+- **The index unit is the contiguous text run**, not single delta rows, so words split across streaming chunks match.
+- **Single writer path:** all message rows insert via `insert_message` (sole exception: `migrate_jsonl_into_db`), which also indexes in the same txn; a new `INSERT INTO message` fails `guard_single_insert_site`.
+- **Lock discipline:** the store mutex is released between backfill chunks; `BACKFILL_CHUNK_ROWS` must not grow (keeps chunks well under rusqlite's 5s timeout). The whole-chat outline is a persisted `turn_outline` table (`turn_outline.rs`, single writer `OutlineWriter`: applied in `insert_message`'s txn only while `caught_up`, else by the read-driven chunked `catch_up_step` under `backfill_within`; fork deletes rows and bumps `revision`; nested `parentToolUseId` calls are never counted) read by `transcript_outline.rs` (`outline_summary` bucketed O(turns), `outline_window` O(limit)); labels are never logged.
+- **Stale rebuilds:** `stale = 1` resets `message_fts` and `backfill_next_seq = 0`, then lazily backfills.
+- **Privacy:** message/tool bodies are never logged (IDs and counts only).
+- **Measured baseline (62 MB session):** 59 → 127 MB, append 0.03 → 0.21 ms, backfill ≈2 s.
+
+---
+

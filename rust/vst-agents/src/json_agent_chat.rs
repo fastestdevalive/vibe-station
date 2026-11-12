@@ -9,7 +9,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use vst_store::transcript::{SincePage, TranscriptMeta, TranscriptPage};
+use vst_store::transcript::{AroundPage, SincePage, TranscriptMeta, TranscriptPage};
+use vst_store::transcript_outline::{OutlineSummary, OutlineWindow};
+use vst_store::transcript_search::{SearchError, SearchOutcome, SearchRequest};
 use vst_store::StoreHandle;
 use vst_types::domain::{
     Attachment, Channel, CliId, LifecycleState, Mention, NormalizedEventProvider, ProjectRecord,
@@ -25,6 +27,8 @@ use crate::json_agent_session::{
     meta::{build_meta_from_store_meta, MetaOptions},
     probe_disk_transcript, read_meta_from_data_dir, read_page_before_from_data_dir,
     read_since_from_data_dir, read_tail_from_data_dir, read_transcript_from_data_dir,
+    transcript_outline::{outline_summary_from_data_dir, outline_window_from_data_dir},
+    transcript_search::{read_page_around_from_data_dir, search_from_data_dir},
     JsonAgentSession, JsonAgentSessionOptions,
 };
 use crate::paths::Paths;
@@ -640,6 +644,64 @@ pub fn read_session_since(
         return live.since(since_seq, None);
     }
     read_since_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id, since_seq)
+}
+
+/// Search a session's transcript (live or disk).
+pub fn search_session_transcript(
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+    req: &SearchRequest,
+) -> Result<SearchOutcome, SearchError> {
+    if let Some(live) = registry.get(&ctx.session.id) {
+        return live.search_transcript(req);
+    }
+    search_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id, req)
+}
+
+/// Bounded window around `around_seq` (live or disk).
+pub fn read_session_page_around(
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+    around_seq: i64,
+    n_turns: i64,
+    max_bytes: usize,
+) -> rusqlite::Result<AroundPage> {
+    if let Some(live) = registry.get(&ctx.session.id) {
+        return live.page_around(around_seq, n_turns, max_bytes);
+    }
+    read_page_around_from_data_dir(
+        &session_data_dir_for(ctx),
+        &ctx.session.id,
+        around_seq,
+        n_turns,
+        max_bytes,
+    )
+}
+
+/// The whole-chat outline summary: the live session's store, or the store on disk.
+/// `None` when the session's outline is unavailable.
+pub fn read_session_outline_summary(
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+) -> rusqlite::Result<Option<OutlineSummary>> {
+    if let Some(live) = registry.get(&ctx.session.id) {
+        return live.outline_summary();
+    }
+    outline_summary_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id)
+}
+
+/// One whole-chat outline window from turn index `from`: the live session's
+/// store, or the store on disk. `None` when the session's outline is unavailable.
+pub fn read_session_outline_window(
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+    from: i64,
+    limit: usize,
+) -> rusqlite::Result<Option<OutlineWindow>> {
+    if let Some(live) = registry.get(&ctx.session.id) {
+        return live.outline_window(from, limit);
+    }
+    outline_window_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id, from, limit)
 }
 
 /// Rebuild a session's meta with the store-backed scheduled-send fields filled

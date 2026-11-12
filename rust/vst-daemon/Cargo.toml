@@ -88,6 +88,7 @@ tempfile = "3"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
+rusqlite = { version = "0.41", features = ["bundled"] }
 tokio = { workspace = true, features = ["test-util"] }
 mockito = "0.31"
 # Self dev-dependency: turns the test seams on for tests/*.rs (integration tests link the

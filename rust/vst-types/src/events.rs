@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{LifecycleState, PrStatus};
 use crate::limits::LimitsSnapshot;
-use crate::rest::settings::MarkdownStyle;
+use crate::rest::settings::{FileScrollMap, MarkdownStyle};
 use crate::rest::update::UpdateStatus;
 
 /// A broadcastable daemon event. This is the *internal* event the daemon
@@ -198,6 +198,8 @@ pub enum ServerEvent {
         theme_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         markdown_style: Option<MarkdownStyle>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_scroll_map: Option<FileScrollMap>,
     },
     /// OOBE onboarding state changed.
     #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]

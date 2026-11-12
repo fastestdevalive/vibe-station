@@ -737,6 +737,69 @@ export interface TranscriptPage {
   events: NormalizedEvent[];
   oldestSeq?: number;
   hasMore: boolean;
+  turnsBefore?: number;
+}
+
+/** `GET /sessions/:id/transcript?since=` page: rows strictly newer than the
+ *  cursor, oldest first. `nextSeq` is the last row read; `hasMore` is true when
+ *  newer rows exist after it. */
+export interface TranscriptSincePage {
+  events: NormalizedEvent[];
+  nextSeq?: number;
+  hasMore: boolean;
+}
+
+export type TranscriptSearchScope = "messages" | "all";
+
+export interface SnippetSegment {
+  text: string;
+  hit?: boolean;
+}
+
+export interface TranscriptSearchMatch {
+  seq: number;
+  turnId?: string;
+  // 1-based turn number; 0 = before the first turn.
+  turnIndex: number;
+  kind: "user" | "text" | "thinking" | "tool_use" | "tool_result";
+  occurrence: number;
+  ts?: string;
+  snippet?: SnippetSegment[];
+}
+
+export interface TranscriptSearchPage {
+  query: string;
+  // Matches after the request cursor (all when none), capped; not just this page.
+  total: number;
+  totalCapped: boolean;
+  matches: TranscriptSearchMatch[];
+  nextCursor?: string;
+  indexedThroughSeq?: number;
+  backfilling: boolean;
+  turnCount: number;
+}
+
+export interface TranscriptAroundPage {
+  events: NormalizedEvent[];
+  oldestSeq?: number;
+  hasMore: boolean;
+  turnsBefore: number;
+}
+
+export interface TranscriptOutlineCounts { tools: number; edits: number; errors: number }
+/** One turn of an outline window (`GET /sessions/:id/transcript/outline/window`). */
+export interface TranscriptOutlineTurn {
+  seq: number; turnKey: string; label: string; ts?: string;
+  counts: TranscriptOutlineCounts;
+}
+/** `GET /sessions/:id/transcript/outline`: fixed-size bucketed counts, whatever the chat length. */
+export interface TranscriptOutlineSummary {
+  ready: boolean; totalTurns: number; revision: string; bucketSize: number;
+  tools: number[]; edits: number[]; errors: number[];
+}
+export interface TranscriptOutlineWindow {
+  ready: boolean; totalTurns: number; revision: string; from: number;
+  turns: TranscriptOutlineTurn[];
 }
 
 /** Cross-harness session meta feeding the status bar (mirror of daemon `SessionMeta`). */
@@ -1202,6 +1265,7 @@ export type WSEvent =
        *  event in `events`, set on a bounded `sinceSeq` delta replay. The client
        *  passes it back as the next `sinceSeq` while `hasMore` is true. */
       nextSeq?: number;
+      turnsBefore?: number;
     }
   | {
       /** JSON agent chat: one live normalized event. */
@@ -1334,6 +1398,7 @@ export type WSEvent =
       type: "settings:updated";
       themeId?: string;
       markdownStyle?: MarkdownStyle;
+      fileScrollMap?: FileScrollMap;
     }
   | {
       /** Broadcast after `POST /api/oobe/complete` succeeds. */
@@ -2018,6 +2083,8 @@ export interface MarkdownStyle {
   link?: { color?: string };
 }
 
+export type FileScrollMap = "marks" | "minimap";
+
 /** User-configurable settings from GET/PATCH /settings */
 export interface Settings {
   defaultProjectsDir: string;
@@ -2038,6 +2105,8 @@ export interface Settings {
   searchWholeWord?: boolean;
   /** Mode last used to start a draft agent; preselected on the next draft. */
   lastModeId?: string;
+  /** Absent -> `minimap` (see `effectiveScrollMapMode` for when marks are shown anyway). */
+  fileScrollMap?: FileScrollMap;
 }
 
 /** A directory-scanned skill catalog entry from GET /skills (Settings panel only). */

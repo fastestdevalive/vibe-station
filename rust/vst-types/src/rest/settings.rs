@@ -38,11 +38,12 @@ pub struct Settings {
     pub default_channel_by_cli: Option<BTreeMap<CliId, Channel>>,
     /// Mode last used to start a draft agent; preselected on the next draft.
     pub last_mode_id: Option<String>,
+    pub file_scroll_map: Option<FileScrollMap>,
 }
 
 /// `PATCH /settings` request body (all optional).
 #[skip_serializing_none]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchSettingsBody {
     pub default_projects_dir: Option<String>,
@@ -62,6 +63,17 @@ pub struct PatchSettingsBody {
     /// can't run Rich Chat is also rejected (Decision 7/8).
     pub default_channel_by_cli: Option<BTreeMap<CliId, Option<Channel>>>,
     pub last_mode_id: Option<String>,
+    pub file_scroll_map: Option<FileScrollMap>,
+}
+
+/// File preview scroll map preference. Default `minimap`; the web UI falls back
+/// to marks for short files, narrow panes, phones, diffs and files over the cap.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileScrollMap {
+    Marks,
+    #[default]
+    Minimap,
 }
 
 /// User-configurable Markdown overrides layered on top of the active theme's

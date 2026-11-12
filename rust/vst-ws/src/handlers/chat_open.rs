@@ -22,6 +22,7 @@ use vst_agents::json_agent_chat::{
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_store::transcript::{SincePage, TranscriptPage};
+use vst_store::transcript::{WINDOW_BYTE_BUDGET, WINDOW_TURNS};
 use vst_store::StoreHandle;
 use vst_types::domain::LifecycleState;
 use vst_types::events::Broadcaster;
@@ -30,13 +31,6 @@ use vst_types::ws::{ServerMessage, SessionErrorReason};
 use vst_types::{NormalizedEvent, SessionMeta};
 
 use crate::connection::{ChatStreamEntry, WsConnection};
-
-/// Default bounded replay window on open (turns).
-const TAIL_TURNS: i64 = 15;
-/// Default bounded replay window on open (bytes). `TranscriptStore::tail`
-/// ALWAYS includes the newest turn whole, so the worst-case frame is this plus
-/// one (unbounded) turn.
-const TAIL_BYTE_BUDGET: usize = 300 * 1024;
 
 /// Which source produced a replay frame — used for the one log line per
 /// `chat:open`.
@@ -81,6 +75,7 @@ impl Snapshot {
                 oldest_seq: page.oldest_seq,
                 has_more: Some(has_more),
                 next_seq: None,
+                turns_before: Some(page.turns_before),
             },
             mode: ReplayMode::Tail,
             events,
@@ -100,6 +95,7 @@ impl Snapshot {
                 oldest_seq: None,
                 has_more: None,
                 next_seq: page.next_seq,
+                turns_before: None,
             },
             mode: ReplayMode::Since,
             events,
@@ -132,12 +128,12 @@ fn send_snapshot(
     let snap = if let Some(since) = since_seq {
         let page = read_session_since(ctx, registry, since);
         since_or_tail_snapshot(session_id, page, || {
-            read_session_tail(ctx, registry, TAIL_TURNS, TAIL_BYTE_BUDGET)
+            read_session_tail(ctx, registry, WINDOW_TURNS, WINDOW_BYTE_BUDGET)
         })
     } else {
         Snapshot::from_tail(
             session_id,
-            read_session_tail(ctx, registry, TAIL_TURNS, TAIL_BYTE_BUDGET),
+            read_session_tail(ctx, registry, WINDOW_TURNS, WINDOW_BYTE_BUDGET),
         )
     };
     let read_ms = read_start.elapsed().as_millis() as u64;
@@ -169,7 +165,7 @@ fn since_or_tail_snapshot(
     page: SincePage,
     tail: impl FnOnce() -> TranscriptPage,
 ) -> Snapshot {
-    if page.has_more || page.payload_bytes > TAIL_BYTE_BUDGET {
+    if page.has_more || page.payload_bytes > WINDOW_BYTE_BUDGET {
         let mut snap = Snapshot::from_tail(session_id, tail());
         snap.mode = ReplayMode::SinceOverflow;
         snap
@@ -385,6 +381,7 @@ mod tests {
             events: vec![],
             oldest_seq: Some(50),
             has_more: true,
+            turns_before: 5,
             payload_bytes: 0,
         }
     }
@@ -399,12 +396,14 @@ mod tests {
                 has_more,
                 oldest_seq,
                 next_seq,
+                turns_before,
                 ..
             } => {
                 assert_eq!(session_id, "s1");
                 assert_eq!(has_more, Some(true));
                 assert_eq!(oldest_seq, Some(50));
                 assert_eq!(next_seq, None);
+                assert_eq!(turns_before, Some(5));
             }
             other => panic!("expected ChatReplay, got {other:?}"),
         }
@@ -422,12 +421,14 @@ mod tests {
                 has_more,
                 oldest_seq,
                 next_seq,
+                turns_before,
                 ..
             } => {
                 assert_eq!(session_id, "s1");
                 assert_eq!(has_more, None);
                 assert_eq!(oldest_seq, None);
                 assert_eq!(next_seq, Some(123));
+                assert_eq!(turns_before, None);
             }
             other => panic!("expected ChatReplay, got {other:?}"),
         }
@@ -438,15 +439,19 @@ mod tests {
     #[test]
     fn overweight_since_page_answers_with_tail_frame() {
         let mut page = since_page(false);
-        page.payload_bytes = TAIL_BYTE_BUDGET + 1;
+        page.payload_bytes = WINDOW_BYTE_BUDGET + 1;
         let snap = since_or_tail_snapshot("s1", page, tail_page);
         assert_eq!(snap.mode, ReplayMode::SinceOverflow);
         match snap.frame {
             ServerMessage::ChatReplay {
-                has_more, next_seq, ..
+                has_more,
+                next_seq,
+                turns_before,
+                ..
             } => {
                 assert_eq!(has_more, Some(true));
                 assert_eq!(next_seq, None);
+                assert_eq!(turns_before, Some(5));
             }
             other => panic!("expected ChatReplay, got {other:?}"),
         }
