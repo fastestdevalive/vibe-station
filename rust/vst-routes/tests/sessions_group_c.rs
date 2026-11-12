@@ -66,6 +66,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("my-mode".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -152,6 +153,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 
@@ -1130,6 +1132,7 @@ async fn spawn_session_flattens_wire_task_prompt_for_terminal_launch() {
         model: None,
         tmux: &tmux,
         direct_ptys: &ptys,
+        accounts: None,
     })
     .await;
     if let Some(h) = ptys.read().unwrap().get("s1") {
@@ -1204,6 +1207,7 @@ async fn spawn_session_replaces_a_lingering_dead_pane() {
         model: None,
         tmux: &tmux,
         direct_ptys: &ptys,
+        accounts: None,
     })
     .await
     .expect("fresh launch must clear the lingering dead session");

@@ -44,7 +44,7 @@ pub fn parse_session_clear_options(args: &[String]) -> Result<SessionStartFreshO
 }
 
 pub async fn run_session_start_fresh(opts: SessionStartFreshOptions) -> Result<(), (String, i32)> {
-    let carry = opts.carry.carry.unwrap_or(CarryOver::Nothing);
+    let carry = Some(opts.carry.carry.unwrap_or(CarryOver::Nothing));
     check_self_target(&opts.carry, carry)?;
     let handoff_text = resolve_summary_text(&opts.carry).map_err(|e| (e, 1))?;
 

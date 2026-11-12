@@ -146,6 +146,7 @@ async fn delete_orphan_worktree_with_running_session_succeeds() {
         r#type: SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "orph-s1-pane".into(),

@@ -417,6 +417,36 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
         ServerEvent::UpdateInstalled { status } => ServerMessage::UpdateInstalled { status },
         ServerEvent::UpdateChanged { status } => ServerMessage::UpdateChanged { status },
         ServerEvent::DaemonRestarting => ServerMessage::DaemonRestarting,
+        ServerEvent::AccountUpdated { account } => ServerMessage::AccountUpdated { account },
+        ServerEvent::AccountRemoved { cli, account_id } => {
+            ServerMessage::AccountRemoved { cli, account_id }
+        }
+        ServerEvent::AccountLimited {
+            cli,
+            account_id,
+            limited,
+        } => ServerMessage::AccountLimited {
+            cli,
+            account_id,
+            limited,
+        },
+        ServerEvent::AccountSignin {
+            attempt_id,
+            cli,
+            account_id,
+            state,
+            email,
+            plan,
+            message,
+        } => ServerMessage::AccountSignin {
+            attempt_id,
+            cli,
+            account_id,
+            state,
+            email,
+            plan,
+            message,
+        },
     }
 }
 
@@ -677,5 +707,93 @@ mod tests {
 
         let sent_msgs = sent.lock().unwrap();
         assert_eq!(sent_msgs.len(), 1);
+    }
+
+    #[test]
+    fn server_event_account_variants_map() {
+        use vst_types::accounts::{
+            AccountAuth, AccountLimited, AccountMethod, AccountSummary, LimitedSource, SignInState,
+        };
+
+        let account = AccountSummary {
+            id: "acc_1a2b3c4d".into(),
+            cli: "fakecli".into(),
+            label: Some("Work".into()),
+            display_name: "Work".into(),
+            email: None,
+            plan: None,
+            method: AccountMethod::SignIn,
+            auth: AccountAuth::SignedIn,
+            is_default: true,
+            limited: None,
+            created_at: None,
+            dir: None,
+            created_by_us: false,
+            pending: false,
+            sign_in: None,
+        };
+        match server_event_to_message(ServerEvent::AccountUpdated {
+            account: account.clone(),
+        }) {
+            vst_types::ws::ServerMessage::AccountUpdated { account: got } => {
+                assert_eq!(got, account, "payload must be preserved verbatim")
+            }
+            other => panic!("expected AccountUpdated, got {other:?}"),
+        }
+
+        match server_event_to_message(ServerEvent::AccountRemoved {
+            cli: "fakecli".into(),
+            account_id: "acc_1a2b3c4d".into(),
+        }) {
+            vst_types::ws::ServerMessage::AccountRemoved { cli, account_id } => {
+                assert_eq!(cli, "fakecli");
+                assert_eq!(account_id, "acc_1a2b3c4d");
+            }
+            other => panic!("expected AccountRemoved, got {other:?}"),
+        }
+
+        let limited = AccountLimited {
+            window_id: "five_hour".into(),
+            resets_at: Some("2026-01-01T00:00:00Z".into()),
+            source: LimitedSource::Poller,
+        };
+        match server_event_to_message(ServerEvent::AccountLimited {
+            cli: "fakecli".into(),
+            account_id: None,
+            limited: Some(limited.clone()),
+        }) {
+            vst_types::ws::ServerMessage::AccountLimited {
+                cli,
+                account_id,
+                limited: got,
+            } => {
+                assert_eq!(cli, "fakecli");
+                assert_eq!(account_id, None, "None = the System login");
+                assert_eq!(got, Some(limited));
+            }
+            other => panic!("expected AccountLimited, got {other:?}"),
+        }
+
+        match server_event_to_message(ServerEvent::AccountSignin {
+            attempt_id: "att_1".into(),
+            cli: "fakecli".into(),
+            account_id: "acc_1a2b3c4d".into(),
+            state: SignInState::Done,
+            email: Some("a@example.com".into()),
+            plan: Some("Max".into()),
+            message: None,
+        }) {
+            vst_types::ws::ServerMessage::AccountSignin {
+                attempt_id,
+                state,
+                email,
+                ..
+            } => {
+                assert_eq!(attempt_id, "att_1");
+                assert_eq!(state, SignInState::Done);
+                assert_eq!(email.as_deref(), Some("a@example.com"));
+            }
+            other => panic!("expected AccountSignin, got {other:?}"),
+        }
     }
 }

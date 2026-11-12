@@ -258,6 +258,8 @@ fn carry_copies_filtered_rows_and_appends_marker_last() {
             from_mode: Some("Claude Mode".into()),
             to_mode: Some("Opencode Mode".into()),
             ts: "2026-01-02T00:00:00Z".into(),
+            from_account: None,
+            to_account: None,
         },
         &["skip-turn".to_string()],
     );
@@ -333,6 +335,8 @@ fn carry_missing_old_dir_returns_zero_and_creates_nothing() {
             from_mode: None,
             to_mode: None,
             ts: "2026-01-02T00:00:00Z".into(),
+            from_account: None,
+            to_account: None,
         },
         &[],
     );
@@ -370,6 +374,8 @@ async fn live_session_over_carried_store_first_turn_pending() {
             from_mode: Some("Claude Mode".into()),
             to_mode: Some("Opencode Mode".into()),
             ts: "2026-01-02T00:00:00Z".into(),
+            from_account: None,
+            to_account: None,
         },
         &["skip-turn".to_string()],
     );

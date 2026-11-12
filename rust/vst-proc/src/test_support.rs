@@ -60,3 +60,28 @@ pub fn isolated_tmux() -> Tmux {
     });
     Tmux::with_socket(sock.clone())
 }
+
+/// Make every later pane of `tmux`'s server a NON-login `/bin/sh` whose `PATH`
+/// starts with `path_prefix`, so a test's stub binaries are found whatever the
+/// host's login-shell profile does to `PATH` (Debian's `/etc/profile`
+/// overwrites it). `default-command` is server-global: hold a lock for the
+/// whole test. The server is started with a keep-alive session when it is not
+/// running yet; it dies with the others at process exit (`kill_shared`).
+pub fn use_plain_shell(tmux: &Tmux, path_prefix: &std::path::Path) {
+    const KEEPALIVE: &str = "vst-test-keepalive";
+    if !tmux.has_session(KEEPALIVE) {
+        let _ = tmux.new_session(&crate::tmux::NewSessionOptions {
+            name: KEEPALIVE.to_string(),
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            command: Some(vec!["sleep".to_string(), "3600".to_string()]),
+            remain_on_exit: false,
+        });
+    }
+    let value = format!(
+        "PATH={}:\"$PATH\" exec /bin/sh",
+        crate::shell::sq(&path_prefix.to_string_lossy())
+    );
+    tmux.run(&["set-option", "-g", "default-command", &value])
+        .expect("set default-command on the isolated tmux server");
+}

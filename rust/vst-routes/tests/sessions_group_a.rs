@@ -48,6 +48,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("m".into()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),
@@ -140,6 +141,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 

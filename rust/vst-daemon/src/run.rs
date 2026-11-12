@@ -561,8 +561,11 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // `allowNetworkAccess`. `swap_rx` is consumed by the supervisor below.
     let (swap_tx, swap_rx) = tokio::sync::mpsc::channel(4);
     let network = crate::network::NetworkControl::new(initial, swap_tx, config_path.clone());
-    let limits = crate::limits_wiring::build_limits_handle(&store, &broadcaster).await;
-    let state = build_state(BuildServerOptions {
+    // The accounts registry is built before the limits scheduler (its probes
+    // are per account) and installed on the state BEFORE any request is served.
+    let accounts = crate::accounts_wiring::build_accounts_handle(&store, &broadcaster);
+    let limits = crate::limits_wiring::build_limits_handle(&store, &broadcaster, &accounts).await;
+    let mut state = build_state(BuildServerOptions {
         network,
         port,
         auth_state: Some(auth_state.clone()),
@@ -580,6 +583,24 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         limits: limits.clone(),
         update: update_service.clone(),
     });
+    state.install_accounts(accounts.clone());
+    // Drop half-made sign-ins a crash left behind (Risk 14), then start the
+    // identity/derivation task (Decision 12) before serving.
+    match accounts.sweep_pending_on_boot() {
+        Ok(removed) if !removed.is_empty() => {
+            tracing::info!(
+                "[vst] swept {} pending account sign-in(s) at boot",
+                removed.len()
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("[vst] could not sweep pending account sign-ins: {e}"),
+    }
+    let accounts_task = crate::accounts_wiring::spawn_derivation_task(
+        accounts.clone(),
+        broadcaster.clone(),
+        state.session_routes.clone(),
+    );
 
     // Settle `working(background|subagent-notice)` rows a previous daemon left
     // behind (their in-memory settle state died with it). Before the server
@@ -735,6 +756,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         terminal_delivery.shutdown();
         limits_handle.abort();
         terminal_reaper_handle.abort();
+        accounts_task.abort();
         background_boot_for_shutdown.abort_all().await;
 
         if is_restart {

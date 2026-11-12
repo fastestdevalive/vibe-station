@@ -251,6 +251,7 @@ mod tests {
             r#type: SessionType::Agent,
             mode_id: None,
             mode_icon: None,
+            account_id: None,
             name: name.map(|s| s.to_string()),
             name_source: None,
             tmux_name: format!("tmux-{id}"),

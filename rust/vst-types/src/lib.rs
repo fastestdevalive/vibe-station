@@ -12,6 +12,9 @@
 //! See `.vibekit/feature-plans/pending/daemon-rust-port/arch-daemon-rust-port.md`
 //! § vst-types owns the wire, all of it.
 
+pub mod account_folder;
+pub mod account_port;
+pub mod accounts;
 pub mod activity;
 pub mod artifacts;
 pub mod coalescer;
@@ -25,6 +28,9 @@ pub mod serde_ext;
 pub mod terminal_delivery;
 pub mod ws;
 
+pub use account_folder::*;
+pub use account_port::*;
+pub use accounts::*;
 pub use coalescer::{Coalescer, CoalescerConfig, MarkOpts};
 pub use domain::*;
 pub use events::{Broadcaster, ServerEvent};

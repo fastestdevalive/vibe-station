@@ -29,7 +29,9 @@ use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult,
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, ResolvedAccount,
+    Role, SharedEntries, ToolResult,
 };
 
 use crate::acp_connection::AcpLaunchSpec;
@@ -593,6 +595,52 @@ impl AgentPlugin for OpencodePlugin {
 
     fn supports_acp(&self) -> bool {
         true
+    }
+
+    // ---- accounts (facts live in `opencode_accounts.rs`, V7/V8) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::opencode_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::opencode_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::opencode_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::opencode_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::opencode_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::opencode_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::opencode_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::opencode_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::opencode_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Transcript
     }
 
     fn native_history_importer(

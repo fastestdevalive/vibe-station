@@ -341,12 +341,15 @@ fn apply_extra(ev: &mut NormalizedEvent, extra: &Map<String, Value>) {
     }
 }
 
-/// `~/.local/share/opencode/opencode.db`
-pub fn opencode_native_store_path() -> String {
-    crate::home::home_dir()
-        .join(".local")
-        .join("share")
-        .join("opencode")
+/// `~/.local/share/opencode/opencode.db`, or
+/// `<account dir>/opencode/opencode.db` for a named account (its
+/// `XDG_DATA_HOME`, Decision 6).
+pub fn opencode_native_store_path(account_dir: Option<&std::path::Path>) -> String {
+    let base = match account_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => crate::home::home_dir().join(".local").join("share"),
+    };
+    base.join("opencode")
         .join("opencode.db")
         .display()
         .to_string()
@@ -363,14 +366,19 @@ impl NativeHistoryImporter for OpencodeHistoryImporter {
     }
 
     fn import(&self, req: &NativeImportRequest) -> NativeImportResult {
-        if !std::path::Path::new(&self.db_path).exists() {
+        // The session's own account store wins over this importer's default.
+        let db_path = match req.account_dir.as_deref() {
+            Some(dir) => opencode_native_store_path(Some(dir)),
+            None => self.db_path.clone(),
+        };
+        if !std::path::Path::new(&db_path).exists() {
             return NativeImportResult {
                 events: Vec::new(),
                 next_watermark: req.watermark.clone().unwrap_or_default(),
             };
         }
         let conn = rusqlite::Connection::open_with_flags(
-            &self.db_path,
+            &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .ok();
@@ -404,7 +412,7 @@ impl NativeHistoryImporter for OpencodeHistoryImporter {
 /// Create an opencode importer (None → default `~/.local/share/opencode/opencode.db`).
 pub fn create_opencode_history_importer(db_path: Option<String>) -> OpencodeHistoryImporter {
     OpencodeHistoryImporter {
-        db_path: db_path.unwrap_or_else(opencode_native_store_path),
+        db_path: db_path.unwrap_or_else(|| opencode_native_store_path(None)),
     }
 }
 

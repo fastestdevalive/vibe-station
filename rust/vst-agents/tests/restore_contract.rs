@@ -33,6 +33,7 @@ async fn every_plugin_returns_none_for_a_fresh_session() {
                 project: &make_project("p1"),
                 cwd: cwd.path().to_str().unwrap(),
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(

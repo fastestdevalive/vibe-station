@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+pub mod account_errors;
+pub mod account_folder_routes;
+pub mod account_routes;
+pub mod account_signin;
+pub mod accounts_wiring;
 pub mod agy_stream_acp_cmd;
 pub mod artifact_boot;
 pub mod artifact_routes;

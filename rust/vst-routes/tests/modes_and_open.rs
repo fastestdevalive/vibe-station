@@ -117,12 +117,24 @@ async fn test_modes_supported_clis_and_models() {
     assert!(claude.supports_json);
     assert!(claude.imports_native_history);
     assert!(claude.supports_json_to_terminal_resume);
+    // Multi-account capability comes from the plugin, never from the CLI name.
+    assert!(claude.supports_accounts);
+    assert_eq!(
+        claude.account_switch,
+        vst_types::rest::modes::AccountSwitchSupport::Native
+    );
+    assert!(claude.accounts_note.is_none());
 
     let cursor = supported.iter().find(|s| s.id == CliId::Cursor).unwrap();
     assert!(!cursor.default_model.is_empty());
     assert!(!cursor.imports_native_history);
     // Cursor doesn't support json to terminal resume
     assert!(!cursor.supports_json_to_terminal_resume);
+    assert!(cursor.supports_accounts);
+    assert_eq!(
+        cursor.account_switch,
+        vst_types::rest::modes::AccountSwitchSupport::Transcript
+    );
 
     let opencode = supported.iter().find(|s| s.id == CliId::Opencode).unwrap();
     assert!(opencode.imports_native_history);
@@ -132,6 +144,14 @@ async fn test_modes_supported_clis_and_models() {
     // agy runs Rich Chat (stream-json ACP agent) but still defaults to Terminal.
     assert!(agy.supports_json);
     assert_eq!(agy.default_channel, vst_types::Channel::Tmux);
+    // A8: agy ships without accounts, and says why (a shadowed HOME would hide
+    // ssh/git from the agent).
+    assert!(!agy.supports_accounts);
+    assert_eq!(
+        agy.account_switch,
+        vst_types::rest::modes::AccountSwitchSupport::None
+    );
+    assert!(agy.accounts_note.is_some());
 
     let codex = supported.iter().find(|s| s.id == CliId::Codex).unwrap();
     // Empty by design: codex has no fixed default; the account's default applies.
@@ -315,6 +335,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "sess-1".to_string(),
@@ -352,6 +373,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "sess-2".to_string(),
@@ -389,6 +411,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "sess-dir".to_string(),
@@ -1256,6 +1279,7 @@ async fn test_backfill_session_mode_icons_stamps_live_modes_only() {
         r#type: SessionType::Agent,
         mode_id: Some(mode_id.to_string()),
         mode_icon: icon.map(str::to_string),
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: id.to_string(),
@@ -1327,4 +1351,37 @@ async fn test_backfill_session_mode_icons_stamps_live_modes_only() {
     assert_eq!(icon_of(&p, "needs-stamp").as_deref(), Some("claude"));
     assert_eq!(icon_of(&p, "already-stamped").as_deref(), Some("custom"));
     assert_eq!(icon_of(&p, "mode-gone"), None);
+}
+
+#[tokio::test]
+async fn supported_clis_account_link() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let routes = ModeRoutes::new(store, Broadcaster::new(16));
+    let supported = routes.list_supported_clis().await;
+    let link = |cli: CliId| {
+        supported
+            .iter()
+            .find(|s| s.id == cli)
+            .unwrap()
+            .account_link
+            .clone()
+    };
+
+    let claude = link(CliId::Claude).expect("claude has accounts");
+    assert!(claude.supports_api_key);
+    assert!(claude.verifies_identity);
+    assert_eq!(claude.field_label, "Claude config folder");
+    assert_eq!(claude.example_dir, "~/.claude-work");
+    assert_eq!(claude.system_dir.as_deref(), Some("~/.claude"));
+
+    let opencode = link(CliId::Opencode).expect("opencode has accounts");
+    assert!(!opencode.supports_api_key);
+    assert_eq!(opencode.field_label, "XDG root folder");
+    assert!(opencode.field_note.is_some());
+
+    let pi = link(CliId::Pi).expect("pi has accounts");
+    assert!(!pi.verifies_identity, "pi has no identity command");
+
+    assert_eq!(link(CliId::Agy), None, "agy ships without accounts");
 }

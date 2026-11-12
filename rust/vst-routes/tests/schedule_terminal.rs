@@ -95,6 +95,7 @@ fn session(id: &str, channel: Channel, mode: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some(mode.into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -213,6 +214,8 @@ async fn env(sessions: Vec<SessionRecord>) -> Env {
             pane.clone(),
             Some(obs),
         ),
+
+        accounts: None,
     };
     Env {
         _dir: dir,

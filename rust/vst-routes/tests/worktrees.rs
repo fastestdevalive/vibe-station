@@ -93,6 +93,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         r#type: SessionType::Agent,
         mode_id: Some("mode-1".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent 1".into()),
         name_source: None,
         tmux_name: "vst-sess-1".into(),
@@ -255,6 +256,7 @@ async fn test_create_worktree_validation_and_errors() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -273,6 +275,7 @@ async fn test_create_worktree_validation_and_errors() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -291,6 +294,7 @@ async fn test_create_worktree_validation_and_errors() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -313,6 +317,7 @@ async fn test_create_worktree_validation_and_errors() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -348,6 +353,7 @@ async fn test_create_worktree_validation_and_errors() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -401,6 +407,7 @@ async fn test_create_worktree_success_and_events() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -454,6 +461,7 @@ async fn test_create_worktree_success_and_events() {
             name: Some("Custom Worktree Name".into()),
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -513,6 +521,7 @@ async fn create_worktree_agy_mode_defaults_main_channel_to_tmux() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -553,6 +562,7 @@ async fn create_worktree_cursor_mode_defaults_main_channel_to_json() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -585,6 +595,7 @@ async fn create_worktree_invalid_mode_still_returns_validation() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: None,
+            account_id: None,
         })
         .await
         .unwrap_err();
@@ -626,6 +637,7 @@ async fn create_worktree_use_tmux_false_without_channel_yields_pty() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -682,6 +694,7 @@ async fn test_create_worktree_self_heals_is_git() {
             name: Some("Self Heal".into()),
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -756,6 +769,7 @@ async fn test_create_worktree_self_heal_refreshes_default_branch() {
             name: Some("Branch Refresh".into()),
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -1049,6 +1063,7 @@ async fn test_git_surface_routes_on_real_repo() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -1135,6 +1150,7 @@ async fn diff_refuses_traversal_and_hides_root() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -1237,6 +1253,7 @@ async fn test_submodule_commit_scope_routes_and_validation() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -1437,6 +1454,7 @@ async fn test_uninitialized_submodule_commits_422() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -2297,6 +2315,7 @@ fn order_draft(
         mode_id: None,
         channel: None,
         channel_explicit: None,
+        account_id: None,
         use_tmux: None,
         base_branch: None,
         branch: None,
@@ -2466,6 +2485,7 @@ async fn create_worktree_lands_on_top_of_the_list() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();
@@ -2700,6 +2720,7 @@ async fn commits_request_never_fetches_origin() {
             name: None,
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .unwrap();

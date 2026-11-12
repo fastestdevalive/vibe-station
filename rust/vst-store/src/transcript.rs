@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use rusqlite::{params, Connection};
-use vst_types::{NormalizedEvent, NormalizedEventKind};
+use vst_types::{CarryOver, NormalizedEvent, NormalizedEventKind};
 
 /// Default page size for the bounded forward `since()` replay.
 pub const SINCE_PAGE_SIZE: i64 = 200;
@@ -708,6 +708,27 @@ impl TranscriptStore {
             }
         })();
         res.unwrap_or(0)
+    }
+
+    /// The `carry_over` of the last live `session_break` row, or `None` when
+    /// there is no break row (or its payload cannot be read).
+    ///
+    /// Decision 8: a native hand-over leaves 0 live rows after the break (the
+    /// carried rows precede it), so `count_since_last_break() == 0` would make a
+    /// resumed session re-send the system prompt into a conversation the model
+    /// already has. This reads the marker's own `carry_over` (stored in the row's
+    /// `payload` JSON — the marker event's field, no separate column).
+    pub fn last_break_carry_over(&self) -> Option<CarryOver> {
+        let payload: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT payload FROM message WHERE session_id = ?1 AND kind = 'session_break' AND superseded = 0 ORDER BY seq DESC LIMIT 1",
+                [&self.session_id],
+                |r| r.get(0),
+            )
+            .ok();
+        let event: NormalizedEvent = serde_json::from_str(&payload?).ok()?;
+        event.carry_over
     }
 
     /// Mark every row at/after `seq` superseded; return the distinct `turnId`s

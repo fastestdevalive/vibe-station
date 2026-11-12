@@ -1331,3 +1331,101 @@ fn guard_single_insert_site() {
     // The one documented supersede update (turn_outline.rs, fork).
     assert_eq!(supersedes, 1, "exactly one supersede UPDATE (turn_outline)");
 }
+
+#[test]
+fn marker_account_fields_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
+    let mut marker: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": "break-account",
+        "sessionId": SESSION_ID,
+        "ts": "2026-01-02T00:00:00Z",
+        "provider": "claude",
+        "kind": "session_break",
+        "breakKind": "switch",
+        "carryOver": "native",
+        "fromAccount": "Work",
+        "toAccount": "System login",
+        "turnId": "break-account",
+    }))
+    .unwrap();
+    store.append(&mut marker);
+    let all = store.read_all();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].carry_over, Some(vst_types::CarryOver::Native));
+    assert_eq!(all[0].from_account.as_deref(), Some("Work"));
+    assert_eq!(all[0].to_account.as_deref(), Some("System login"));
+
+    // Re-open the session's own DB: the marker's payload JSON persisted.
+    drop(store);
+    let reopened = open_transcript_store(dir.path(), SESSION_ID).unwrap();
+    let again = reopened.read_all();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].carry_over, Some(vst_types::CarryOver::Native));
+    assert_eq!(again[0].from_account.as_deref(), Some("Work"));
+    assert_eq!(again[0].to_account.as_deref(), Some("System login"));
+}
+
+/// Decision 8: the marker's own `carry_over` decides whether a resumed session
+/// must re-send its system prompt — the carried rows sit BEFORE the break, so
+/// `count_since_last_break()` alone would say "nothing ran yet".
+#[test]
+fn last_break_carry_over_reads_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
+    assert_eq!(store.last_break_carry_over(), None, "no break row yet");
+
+    // A normal row never answers.
+    let mut text = ev(NormalizedEventKind::Text, serde_json::json!({"text": "hi"}));
+    store.append(&mut text);
+    assert_eq!(store.last_break_carry_over(), None);
+
+    let mut native_marker: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": "break-native",
+        "sessionId": SESSION_ID,
+        "ts": "2026-01-02T00:00:00Z",
+        "provider": "claude",
+        "kind": "session_break",
+        "breakKind": "switch",
+        "carryOver": "native",
+        "turnId": "break-native",
+    }))
+    .unwrap();
+    store.append(&mut native_marker);
+    assert_eq!(
+        store.last_break_carry_over(),
+        Some(vst_types::CarryOver::Native)
+    );
+
+    // The LAST live break wins.
+    let mut transcript_marker: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": "break-transcript",
+        "sessionId": SESSION_ID,
+        "ts": "2026-01-03T00:00:00Z",
+        "provider": "claude",
+        "kind": "session_break",
+        "breakKind": "switch",
+        "carryOver": "transcript",
+        "turnId": "break-transcript",
+    }))
+    .unwrap();
+    store.append(&mut transcript_marker);
+    assert_eq!(
+        store.last_break_carry_over(),
+        Some(vst_types::CarryOver::Transcript)
+    );
+
+    // A break with no carry-over answers `None` (fresh start).
+    let mut plain_marker: NormalizedEvent = serde_json::from_value(serde_json::json!({
+        "id": "break-plain",
+        "sessionId": SESSION_ID,
+        "ts": "2026-01-04T00:00:00Z",
+        "provider": "claude",
+        "kind": "session_break",
+        "breakKind": "reset",
+        "turnId": "break-plain",
+    }))
+    .unwrap();
+    store.append(&mut plain_marker);
+    assert_eq!(store.last_break_carry_over(), None);
+}

@@ -42,6 +42,7 @@ fn draft(id: &str, channel: Channel) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("my-mode".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Draft".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -224,6 +225,8 @@ async fn env() -> Env {
             Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+
+        accounts: None,
     };
     let (port, observer) = vst_review::hooks(&review);
     routes.json_registry.set_review_hooks(port, observer);
@@ -320,6 +323,7 @@ impl Env {
 fn config(channel: Channel, mode: &str, entry: DraftEntryPoint) -> DraftConfig {
     DraftConfig {
         entry_point: entry,
+        account_id: None,
         mode_id: Some(mode.into()),
         channel: Some(channel),
         channel_explicit: Some(true),

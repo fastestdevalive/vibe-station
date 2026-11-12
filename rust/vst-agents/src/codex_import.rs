@@ -388,6 +388,18 @@ pub(crate) fn codex_home() -> PathBuf {
     )
 }
 
+/// Codex's home for one session: the account folder when the session runs under
+/// a named account (Decision 6), else the daemon's own `$CODEX_HOME`/`~/.codex`.
+///
+/// A store reader must use this instead of [`codex_home`] whenever it looks up
+/// a session's rollout, or it reads the wrong account's history.
+pub fn codex_home_for(account_dir: Option<&Path>) -> PathBuf {
+    match account_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => codex_home(),
+    }
+}
+
 fn codex_home_from(codex_home_env: Option<std::ffi::OsString>, home: PathBuf) -> PathBuf {
     match codex_home_env.filter(|v| !v.is_empty()) {
         Some(h) => PathBuf::from(h),
@@ -397,7 +409,12 @@ fn codex_home_from(codex_home_env: Option<std::ffi::OsString>, home: PathBuf) ->
 
 /// `<codex home>/sessions`
 pub fn codex_native_store_path() -> PathBuf {
-    codex_home().join("sessions")
+    codex_native_store_path_for(None)
+}
+
+/// `<account dir>/sessions` for a named account, else [`codex_native_store_path`].
+pub fn codex_native_store_path_for(account_dir: Option<&Path>) -> PathBuf {
+    codex_home_for(account_dir).join("sessions")
 }
 
 /// Outcome of a bounded rollout search. `Unsure` = part of the tree could not be
@@ -494,7 +511,13 @@ impl NativeHistoryImporter for CodexHistoryImporter {
     }
 
     fn import(&self, req: &NativeImportRequest) -> NativeImportResult {
-        let Some(path) = find_thread_file(&self.store_root, &req.agent_chat_id) else {
+        // A session's own account folder wins over this importer's default
+        // root (Decision 6): the daemon env would read the wrong account.
+        let root = match req.account_dir.as_deref() {
+            Some(dir) => codex_native_store_path_for(Some(dir)),
+            None => self.store_root.clone(),
+        };
+        let Some(path) = find_thread_file(&root, &req.agent_chat_id) else {
             return NativeImportResult {
                 events: Vec::new(),
                 next_watermark: req.watermark.clone().unwrap_or_default(),

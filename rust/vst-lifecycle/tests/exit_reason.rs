@@ -25,6 +25,7 @@ fn session(id: &str, tmux_name: &str, ty: SessionType) -> SessionRecord {
         r#type: ty,
         mode_id: Some("m".into()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: tmux_name.into(),

@@ -319,8 +319,27 @@ case "$CMD" in
     # the reason shown — the sandbox still boots, that harness's Rich Chat is just
     # unavailable (doctor shows it). Mounts go in a generated overlay, only for
     # binaries that exist (a missing bind source would become an empty directory).
+    # VST_SANDBOX_EXTRA_MOUNTS="/host/dir:/container/dir[:ro] ..." bind-mounts extra
+    # host paths (e.g. a second CLI login folder to try the accounts UI with). Only
+    # paths that exist are mounted (a missing source would become an empty dir).
+    if [ -n "${VST_SANDBOX_EXTRA_MOUNTS:-}" ]; then
+      EXTRA_OVERLAY="$(mktemp "${TMPDIR:-/tmp}/vst-dev-extra.XXXXXX")"
+      trap 'rm -f "${HOSTBINS_OVERLAY:-}" "${RUSTACP_OVERLAY:-}" "$EXTRA_OVERLAY"' EXIT
+      { echo "services:"; echo "  vst-dev:"; echo "    volumes:"; } > "$EXTRA_OVERLAY"
+      for M in $VST_SANDBOX_EXTRA_MOUNTS; do
+        if [ -e "${M%%:*}" ]; then
+          M_Q="${M//\'/\'\'}"; M_Q="${M_Q//\$/\$\$}"   # YAML single-quote; `$` doubled for compose
+          echo "      - '${M_Q}'" >> "$EXTRA_OVERLAY"
+          echo "    extra mount: $M"
+        else
+          echo "    extra mount skipped (missing): ${M%%:*}" >&2
+        fi
+      done
+      if grep -q "^      - " "$EXTRA_OVERLAY"; then COMPOSE_ARGS+=(-f "$EXTRA_OVERLAY"); fi
+    fi
+
     RUSTACP_OVERLAY="$(mktemp "${TMPDIR:-/tmp}/vst-dev-rustacp.XXXXXX")"
-    trap 'rm -f "${HOSTBINS_OVERLAY:-}" "$RUSTACP_OVERLAY"' EXIT
+    trap 'rm -f "${HOSTBINS_OVERLAY:-}" "${EXTRA_OVERLAY:-}" "$RUSTACP_OVERLAY"' EXIT
     { echo "services:"; echo "  vst-dev:"; echo "    volumes:"; } > "$RUSTACP_OVERLAY"
     for ACP in claude codex; do
       ACP_ERR="$(mktemp "${TMPDIR:-/tmp}/vst-rustacp-err.XXXXXX")"

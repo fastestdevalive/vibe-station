@@ -30,6 +30,7 @@ fn session_record(id: &str, state: LifecycleState, mode: Option<&str>) -> Sessio
         r#type: SessionType::Agent,
         mode_id: mode.map(str::to_string),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),

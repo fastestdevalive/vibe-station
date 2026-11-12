@@ -159,6 +159,7 @@ pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (Str
         name: opts.name,
         source_agent_id,
         skip_auto_turn: None,
+        account_id: None,
     };
 
     let result = daemon_post::<Worktree, _>("/worktrees", Some(&body))

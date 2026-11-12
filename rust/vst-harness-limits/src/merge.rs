@@ -34,9 +34,11 @@ pub fn merge_result(prev: Option<&LimitsResult>, new: LimitsResult) -> LimitsRes
     }
 }
 
-/// Equal ignoring every `as_of` field (result + windows).
+/// Equal ignoring every `as_of` field (result + windows) and comparing the
+/// account, so two accounts of one harness never merge into one cache slot.
 pub fn results_equivalent(a: &LimitsResult, b: &LimitsResult) -> bool {
     if a.harness != b.harness
+        || a.account_id != b.account_id
         || a.status != b.status
         || a.message != b.message
         || a.windows.len() != b.windows.len()
@@ -45,6 +47,7 @@ pub fn results_equivalent(a: &LimitsResult, b: &LimitsResult) -> bool {
     }
     a.windows.iter().zip(b.windows.iter()).all(|(x, y)| {
         x.window_id == y.window_id
+            && x.account_id == y.account_id
             && x.cadence_minutes == y.cadence_minutes
             && x.used_pct == y.used_pct
             && x.resets_at == y.resets_at
@@ -67,6 +70,7 @@ mod tests {
         LimitWindow {
             harness: harness.into(),
             window_id: id.into(),
+            account_id: None,
             cadence_minutes: Some(300),
             used_pct,
             resets_at: Some("2026-10-11T02:10:00.386Z".into()),
@@ -78,6 +82,7 @@ mod tests {
     fn ok_result(harness: &str, as_of: &str) -> LimitsResult {
         LimitsResult {
             harness: harness.into(),
+            account_id: None,
             status: LimitStatus::Ok,
             message: None,
             as_of: as_of.into(),
@@ -96,6 +101,7 @@ mod tests {
         let prev = ok_result("claude", "2026-10-11T00:00:00.000Z");
         let new = LimitsResult {
             harness: "claude".into(),
+            account_id: None,
             status: LimitStatus::Error,
             message: Some("probe timed out".into()),
             as_of: "2026-10-11T00:05:00.000Z".into(),
@@ -115,6 +121,7 @@ mod tests {
     fn error_without_prev_returns_new() {
         let new = LimitsResult {
             harness: "codex".into(),
+            account_id: None,
             status: LimitStatus::Error,
             message: Some("probe timed out".into()),
             as_of: "2026-10-11T00:05:00.000Z".into(),
@@ -129,6 +136,7 @@ mod tests {
         let prev = ok_result("claude", "2026-10-11T00:00:00.000Z");
         let new = LimitsResult {
             harness: "claude".into(),
+            account_id: None,
             status: LimitStatus::SignedOut,
             message: Some("signed out".into()),
             as_of: "2026-10-11T00:05:00.000Z".into(),
@@ -158,6 +166,27 @@ mod tests {
         let mut b = ok_result("claude", "2026-10-11T00:30:00.000Z");
         b.windows[0].used_pct = Some(22.0);
         assert!(!results_equivalent(&a, &b));
+    }
+
+    #[test]
+    fn results_equivalent_compares_account() {
+        let a = ok_result("claude", "2026-10-11T00:00:00.000Z");
+        let mut b = ok_result("claude", "2026-10-11T00:00:00.000Z");
+        b.account_id = Some("acc_00000001".into());
+        b.windows[0].account_id = Some("acc_00000001".into());
+        assert!(
+            !results_equivalent(&a, &b),
+            "System and a named account never compare equal"
+        );
+        // Same account, same numbers (fresh `as_of`): equivalent.
+        let mut c = b.clone();
+        c.as_of = "2026-10-11T00:30:00.000Z".into();
+        c.windows[0].as_of = "2026-10-11T00:30:00.000Z".into();
+        assert!(results_equivalent(&b, &c));
+        // A window of a different account is a change too.
+        let mut d = c.clone();
+        d.windows[0].account_id = None;
+        assert!(!results_equivalent(&c, &d));
     }
 
     #[test]

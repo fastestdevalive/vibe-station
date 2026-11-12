@@ -29,6 +29,9 @@ pub struct CarryOptions {
     pub queued: QueuedPolicy,
     pub channel: Option<Channel>,
     pub prompt: Option<String>,
+    /// Account id, label or `"system"` (multi-account). `None` = the session's
+    /// current account (reset) / the CLI default (create).
+    pub account: Option<String>,
     pub json: bool,
 }
 
@@ -131,6 +134,16 @@ pub fn parse_carry_args(
                 }
                 mode = Some(s.trim_start_matches("--mode=").to_string());
             }
+            "--account" => {
+                opts.account = Some(
+                    iter.next()
+                        .cloned()
+                        .ok_or_else(|| "--account requires an argument".to_string())?,
+                );
+            }
+            s if s.starts_with("--account=") => {
+                opts.account = Some(s.trim_start_matches("--account=").to_string());
+            }
             "--json" => {
                 opts.json = true;
             }
@@ -206,14 +219,17 @@ pub fn resolve_summary_text(opts: &CarryOptions) -> Result<Option<String>, Strin
 /// session this command is running inside (the caller is blocked on the
 /// command, so the daemon can never ask it for a summary, and a `wait` would
 /// deadlock for up to ten minutes).
-pub fn check_self_target(opts: &CarryOptions, carry: CarryOver) -> Result<(), (String, i32)> {
+pub fn check_self_target(
+    opts: &CarryOptions,
+    carry: Option<CarryOver>,
+) -> Result<(), (String, i32)> {
     let Some(vst_session) = get_vst_session() else {
         return Ok(());
     };
     if vst_session != opts.id {
         return Ok(());
     }
-    if carry == CarryOver::Summary && opts.summary_file.is_none() {
+    if carry == Some(CarryOver::Summary) && opts.summary_file.is_none() {
         return Err((
             format!(
                 "Cannot use --carry=summary on the session you are running inside ({}). \
@@ -242,18 +258,21 @@ pub fn check_self_target(opts: &CarryOptions, carry: CarryOver) -> Result<(), (S
 /// Build the `POST /sessions/:id/reset` body for either command.
 pub fn reset_body(
     opts: &CarryOptions,
-    carry: CarryOver,
+    carry: Option<CarryOver>,
     mode_id: Option<String>,
     handoff_text: Option<String>,
 ) -> ResetBody {
     ResetBody {
-        carry_over: Some(carry),
+        // `None` = let the daemon derive the carry from the hand-over it picks
+        // (an account switch without `--carry`).
+        carry_over: carry,
         when_busy: Some(opts.when_busy),
         queued: Some(opts.queued),
         channel: opts.channel,
         prompt: opts.prompt.as_deref().map(to_wire_text),
         mode_id,
         handoff_text,
+        account_id: opts.account.clone(),
         ..Default::default()
     }
 }
@@ -263,6 +282,7 @@ pub fn carry_name(carry: CarryOver) -> &'static str {
         CarryOver::Nothing => "none",
         CarryOver::Summary => "summary",
         CarryOver::Transcript => "transcript",
+        CarryOver::Native => "native",
     }
 }
 
@@ -310,7 +330,7 @@ pub fn result_json(data: &ResetResult) -> Value {
 /// Preflight + POST the reset and print the result. Shared by both commands.
 pub async fn run_reset(
     opts: &CarryOptions,
-    carry: CarryOver,
+    carry: Option<CarryOver>,
     mode_id: Option<String>,
     handoff_text: Option<String>,
     verb: &str,
@@ -323,7 +343,7 @@ pub async fn run_reset(
 /// to be reachable (callers that make their own GETs first preflight once).
 pub async fn post_reset(
     opts: &CarryOptions,
-    carry: CarryOver,
+    carry: Option<CarryOver>,
     mode_id: Option<String>,
     handoff_text: Option<String>,
     verb: &str,
@@ -348,7 +368,7 @@ pub async fn post_reset(
         }
         DaemonResult::Err { status, error, .. } => {
             let code = if status == 404 { 2 } else { 1 };
-            let message = if status == 409 && carry == CarryOver::Summary {
+            let message = if status == 409 && carry == Some(CarryOver::Summary) {
                 SUMMARY_FAILED.to_string()
             } else {
                 error

@@ -176,6 +176,11 @@ pub struct AppState {
     /// Review-comments owner (`vst-review`); `run.rs` starts its lease sweeper.
     pub review: vst_review::ReviewHandle,
 
+    /// The accounts registry (`vst-accounts`). `run.rs` builds it and calls
+    /// [`AppState::install_accounts`] before serving; `None` means every
+    /// session is the System login (tests, single-account daemons).
+    pub accounts: Option<vst_accounts::AccountsHandle>,
+
     /// The PR-status poller (sole writer of `session.pr`). Built here so
     /// `run.rs` can start it off the state and the focus route can hint it.
     pub pr_poller: Arc<PrPollerHandle>,
@@ -610,6 +615,8 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         handoff_timeout: vst_routes::sessions::DEFAULT_HANDOFF_TIMEOUT,
         reset_cancels: Default::default(),
         terminal_delivery: terminal_delivery.clone(),
+
+        accounts: None,
     };
 
     let attachment_routes =
@@ -720,6 +727,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         code_store,
         artifacts,
         review,
+        accounts: None,
         pr_poller,
         diffstat_poller,
         focus_hints,
@@ -744,6 +752,24 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     };
 
     state
+}
+
+impl AppState {
+    /// Install the accounts registry on every owner that needs it (Decision 11):
+    /// `SessionRoutes`/`WorktreeRoutes`/`ProjectRoutes` resolve accounts and
+    /// `JsonAgentRegistry` hands the `AccountPort` to Rich Chat sessions.
+    ///
+    /// Called by `run.rs` after `build_state` and BEFORE `router_from_state`, so
+    /// no request is ever served without the registry. Kept off
+    /// `BuildServerOptions` so every test's struct literal stays valid.
+    pub fn install_accounts(&mut self, accounts: vst_accounts::AccountsHandle) {
+        self.json_registry
+            .set_account_port(std::sync::Arc::new(accounts.clone()));
+        self.session_routes.accounts = Some(accounts.clone());
+        self.worktree_routes.accounts = Some(accounts.clone());
+        self.project_routes.accounts = Some(accounts.clone());
+        self.accounts = Some(accounts);
+    }
 }
 
 /// Build the full Axum router.
@@ -1135,7 +1161,9 @@ pub fn router_from_state(state: AppState) -> Router {
         .merge(crate::review_routes::routes())
         // `/api/health` alias for the web UI's restart poll (auth-exempt).
         .route("/health", get(handle_health))
-        .merge(crate::update::routes::router());
+        .merge(crate::update::routes::router())
+        // Accounts (thin handlers in account_routes.rs)
+        .merge(crate::account_routes::routes());
 
     Router::new()
         // Utility & protocol routes stay at root (not under /api)
@@ -2421,6 +2449,7 @@ fn project_err_to_response(err: ProjectRouteError) -> (StatusCode, Json<serde_js
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "GIT_INIT_FAILED", "message": m })),
         ),
+        ProjectRouteError::Account(problem) => account_problem_response(&problem),
     }
 }
 
@@ -3278,6 +3307,20 @@ async fn handle_worktree_close_file_durable(
         .map_err(worktree_err_to_response)
 }
 
+/// Map a typed account refusal (multi-account A3) to its HTTP status and the
+/// `{error, code[, accountId]}` envelope.
+fn account_problem_response(
+    problem: &vst_routes::account_sessions::AccountProblem,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let status =
+        StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut body = serde_json::json!({ "error": problem.message(), "code": problem.code() });
+    if let (Some(obj), Some(id)) = (body.as_object_mut(), problem.account_id()) {
+        obj.insert("accountId".to_string(), serde_json::json!(id));
+    }
+    (status, Json(body))
+}
+
 fn worktree_err_to_response(err: WorktreeRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         WorktreeRouteError::Validation(m) => (
@@ -3312,6 +3355,7 @@ fn worktree_err_to_response(err: WorktreeRouteError) -> (StatusCode, Json<serde_
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": m })),
         ),
+        WorktreeRouteError::Account(problem) => account_problem_response(&problem),
         WorktreeRouteError::Internal(m) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
@@ -3402,6 +3446,7 @@ async fn handle_create_session(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": m })),
             ),
+            CreateError::Account(problem) => account_problem_response(&problem),
             CreateError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),
@@ -3504,6 +3549,7 @@ async fn handle_start_session(
                     Json(p.body()),
                 )
             }
+            StartError::Account(problem) => account_problem_response(&problem),
             StartError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),
@@ -3626,6 +3672,7 @@ async fn handle_resume_session(
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),
             ),
+            ResumeError::Account(problem) => account_problem_response(&problem),
             ResumeError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),
@@ -3701,6 +3748,19 @@ async fn handle_reset_session(
                 Json(p.body()),
             )
         }
+        ResetError::Account(problem) => account_problem_response(&problem),
+        ResetError::AlreadyOnAccount(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m, "code": "already_on_account" })),
+        ),
+        ResetError::AgentBusy(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "agent_busy" })),
+        ),
+        ResetError::HandoverFailed(m) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": m, "code": "handover_failed" })),
+        ),
         ResetError::Internal(m) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
@@ -3931,6 +3991,7 @@ async fn handle_patch_session_channel(
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": "NOT_IDLE" })),
             ),
+            ChannelError::Account(problem) => account_problem_response(&problem),
             ChannelError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": m })),

@@ -325,6 +325,7 @@ mod claude_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -343,6 +344,7 @@ mod claude_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(
@@ -582,6 +584,7 @@ mod cursor_plugin {
                 project: &make_project("p1"),
                 cwd: "/repos/p1",
                 model: None,
+                account_dir: None,
             })
             .await;
         let argv = result.expect("some argv");
@@ -603,6 +606,7 @@ mod cursor_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd-no-chats",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -720,6 +724,7 @@ mod opencode_plugin {
                 project: &make_project("p1"),
                 cwd: "/repos/p1",
                 model: None,
+                account_dir: None,
             })
             .await
             .expect("restore argv");
@@ -763,6 +768,7 @@ mod opencode_plugin {
                 project: &make_project("p1"),
                 cwd: "/repos/p1",
                 model: Some(model),
+                account_dir: None,
             })
             .await
             .expect("restore argv");
@@ -793,6 +799,7 @@ mod opencode_plugin {
                 project: &make_project("p1"),
                 cwd: "/repos/p1",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -1045,6 +1052,7 @@ mod codex_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 model: None,
+                account_dir: None,
             })
             .await;
         let argv = result.expect("restore command must be Some");
@@ -1083,6 +1091,7 @@ mod codex_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -1106,6 +1115,7 @@ mod codex_plugin {
                 project: &p1,
                 cwd,
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(id.as_deref(), Some("thread-for-s1"));
@@ -1119,6 +1129,7 @@ mod codex_plugin {
                 project: &p2,
                 cwd,
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(id2.as_deref(), Some("thread-for-s2"));
@@ -1130,7 +1141,8 @@ mod codex_plugin {
                     session: &s3,
                     project: &p3,
                     cwd,
-                    worktree: None
+                    worktree: None,
+                    account_dir: None,
                 })
                 .await,
             None
@@ -1154,6 +1166,7 @@ mod codex_plugin {
                 project: &make_project("p1"),
                 cwd: dir.path().to_str().unwrap(),
                 model: None,
+                account_dir: None,
             })
             .await
             .expect("resumes the recorded conversation");
@@ -1181,6 +1194,7 @@ mod codex_plugin {
                         project: &make_project("p1"),
                         cwd: &cwd,
                         worktree: None,
+                        account_dir: None,
                     })
                     .await
             }
@@ -1204,6 +1218,7 @@ mod codex_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -1232,6 +1247,7 @@ mod codex_plugin {
                         project: &make_project("p1"),
                         cwd,
                         model: None,
+                        account_dir: None,
                     })
                     .await
                     .map(|argv| argv[argv.iter().position(|a| a == "resume").unwrap() + 1].clone())
@@ -1301,6 +1317,7 @@ mod codex_plugin {
                 project: &project,
                 cwd: "/tmp/vst-test-cwd",
                 acp_session_id: "other-acp-id",
+                account_dir: None,
             })
             .await;
         assert_eq!(result, Some("known".to_string()));
@@ -1317,6 +1334,7 @@ mod codex_plugin {
                 project: &project,
                 cwd: "/tmp/vst-test-cwd",
                 acp_session_id: "acp-abc",
+                account_dir: None,
             })
             .await;
         assert_eq!(result, Some("acp-abc".to_string()));
@@ -1582,6 +1600,7 @@ mod pi_plugin {
                     project: &make_project("p1"),
                     cwd,
                     model: None,
+                    account_dir: None,
                 })
                 .await
                 .unwrap()
@@ -1656,6 +1675,7 @@ mod pi_plugin {
                 project: &make_project("p1"),
                 cwd: "/tmp/vst-test-cwd",
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(id.as_deref(), Some("s1"));
@@ -1675,6 +1695,7 @@ mod pi_plugin {
                         project: &make_project("p1"),
                         cwd: "/tmp/vst-test-cwd",
                         model,
+                        account_dir: None,
                     })
                     .await
                     .expect("restore command must be Some")
@@ -1801,6 +1822,7 @@ mod omp_plugin {
                 project: &make_project("p1"),
                 cwd: cwd.to_str().unwrap(),
                 model: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(result, None);
@@ -1820,6 +1842,7 @@ mod omp_plugin {
                 project: &make_project("p1"),
                 cwd: cwd.to_str().unwrap(),
                 model: Some("anthropic/claude"),
+                account_dir: None,
             })
             .await
             .expect("a user turn must yield a resume command");
@@ -1855,6 +1878,7 @@ mod omp_plugin {
                 project: &make_project("p1"),
                 cwd: cwd.to_str().unwrap(),
                 model: None,
+                account_dir: None,
             })
             .await
             .unwrap();
@@ -1881,6 +1905,7 @@ mod omp_plugin {
                 project: &make_project("p1"),
                 cwd: cwd.to_str().unwrap(),
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(refreshed.as_deref(), Some("new"));
@@ -1926,6 +1951,7 @@ mod chat_id_capture {
                 project: &make_project("p1"),
                 cwd: dir.path().to_str().unwrap(),
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(id.as_deref(), Some("captured-uuid"));
@@ -1943,6 +1969,7 @@ mod chat_id_capture {
                 project: &make_project("p1"),
                 cwd: dir.path().to_str().unwrap(),
                 worktree: None,
+                account_dir: None,
             })
             .await;
         assert_eq!(id, None);

@@ -17,6 +17,7 @@ pub fn make_session(id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),
@@ -113,6 +114,7 @@ pub fn wt_launch(project_id: &str, session: SessionRecord, cwd: &str) -> LaunchC
         session,
         daemon_port: 7421,
         model: None,
+        account_dir: None,
     }
 }
 
@@ -124,5 +126,6 @@ pub fn proj_launch(project_id: &str, session: SessionRecord, cwd: &str) -> Launc
         session,
         daemon_port: 7421,
         model: None,
+        account_dir: None,
     }
 }

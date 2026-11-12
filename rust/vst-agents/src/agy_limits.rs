@@ -13,6 +13,7 @@
 //! (`serde_json::Value` navigation only) and any unparseable output degrades to
 //! `NoData`/`Error` rather than hiding behind `Unsupported`.
 
+use std::collections::BTreeMap;
 use std::process::Stdio;
 
 use vst_types::{LimitStatus, LimitsResult};
@@ -113,6 +114,7 @@ pub fn interpret_agy_usage(msg: &serde_json::Value, as_of: &str) -> LimitsResult
                 windows.push(vst_types::LimitWindow {
                     harness: HARNESS.into(),
                     window_id,
+                    account_id: None,
                     cadence_minutes: cadence,
                     used_pct: Some(used_pct),
                     resets_at,
@@ -135,6 +137,7 @@ pub fn interpret_agy_usage(msg: &serde_json::Value, as_of: &str) -> LimitsResult
 
     LimitsResult {
         harness: HARNESS.into(),
+        account_id: None,
         status: LimitStatus::Ok,
         message: None,
         as_of: as_of.into(),
@@ -201,9 +204,12 @@ fn parse_cadence(w: &str) -> Option<u32> {
 /// is killed on drop and wall-clock bounded by [`PROBE_TIMEOUT`]. `agy` never
 /// produces streaming output for `/usage`, so we `wait_with_output()` and parse
 /// the captured stdout as ONE JSON object — no NDJSON loop (unlike codex).
-pub async fn probe_agy_limits() -> LimitsResult {
+/// `env` is the account's env (Decision 9). agy ships without accounts (V9),
+/// so production always passes an empty map; the parameter keeps every probe
+/// signature uniform.
+pub async fn probe_agy_limits(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
-    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_agy_limits_inner()).await;
+    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_agy_limits_inner(env)).await;
     match outcome {
         Ok(r) => r,
         Err(_) => LimitsResult::failure(
@@ -216,7 +222,7 @@ pub async fn probe_agy_limits() -> LimitsResult {
     }
 }
 
-async fn probe_agy_limits_inner() -> LimitsResult {
+async fn probe_agy_limits_inner(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
     let binary = crate::agy::resolve_agy_binary();
     let path = match crate::claude_limits::resolve_or_not_installed(
@@ -227,7 +233,7 @@ async fn probe_agy_limits_inner() -> LimitsResult {
         &as_of,
     ) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
 
     let probe_dir = crate::home::home_dir()
@@ -247,6 +253,7 @@ async fn probe_agy_limits_inner() -> LimitsResult {
         .args(["-p", "/usage", "--output-format", "json"])
         .current_dir(&probe_dir)
         .env("PATH", crate::context::effective_path())
+        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

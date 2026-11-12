@@ -383,6 +383,38 @@ pub enum ServerMessage {
     TerminalDeliveryUpdated {
         delivery: crate::review::TerminalDelivery,
     },
+    /// An account was added or changed (upsert: add, rename, default flip,
+    /// auth/limit change).
+    #[serde(rename = "account:updated", rename_all = "camelCase")]
+    AccountUpdated {
+        account: crate::accounts::AccountSummary,
+    },
+    /// An account was removed.
+    #[serde(rename = "account:removed", rename_all = "camelCase")]
+    AccountRemoved { cli: String, account_id: String },
+    /// An account's "limited" state changed; `limited: None` = cleared and
+    /// `account_id: None` = the CLI's System login.
+    #[serde(rename = "account:limited", rename_all = "camelCase")]
+    AccountLimited {
+        cli: String,
+        account_id: Option<String>,
+        limited: Option<crate::accounts::AccountLimited>,
+    },
+    /// A sign-in attempt changed state. `message` = the vendor's last line,
+    /// capped at 200 chars; never a credential.
+    #[serde(rename = "account:signin", rename_all = "camelCase")]
+    AccountSignin {
+        attempt_id: String,
+        cli: String,
+        account_id: String,
+        state: crate::accounts::SignInState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     /// The event fan-out dropped events (receiver lagged): every client must
     /// refetch whatever it has loaded.
     #[serde(rename = "ws:resync")]
@@ -503,6 +535,9 @@ pub struct SessionCreatedSnapshot {
     pub draft_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_config: Option<crate::domain::DraftConfig>,
+    /// The account the session runs under; absent = the CLI's System login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 /// `SessionCreatedSnapshot` lifecycle — accepts `needs_review` as input only.
@@ -566,6 +601,7 @@ impl From<&crate::rest::shared::Session> for SessionCreatedSnapshot {
             pr: s.pr.clone(),
             draft_prompt: s.draft_prompt.clone(),
             draft_config: s.draft_config.clone(),
+            account_id: s.account_id.clone(),
         }
     }
 }
@@ -602,6 +638,7 @@ impl From<&crate::rest::shared::GlobalDraft> for SessionCreatedSnapshot {
             pr: s.pr.clone(),
             draft_prompt: s.draft_prompt.clone(),
             draft_config: s.draft_config.clone(),
+            account_id: None,
         }
     }
 }

@@ -289,6 +289,38 @@ pub enum ServerEvent {
     /// The daemon is about to restart.
     #[serde(rename = "daemon:restarting")]
     DaemonRestarting,
+    /// An account was added or changed (upsert: add, rename, default flip,
+    /// auth/limit change).
+    #[serde(rename = "account:updated", rename_all = "camelCase")]
+    AccountUpdated {
+        account: crate::accounts::AccountSummary,
+    },
+    /// An account was removed.
+    #[serde(rename = "account:removed", rename_all = "camelCase")]
+    AccountRemoved { cli: String, account_id: String },
+    /// An account's "limited" state changed; `limited: None` = cleared and
+    /// `account_id: None` = the CLI's System login.
+    #[serde(rename = "account:limited", rename_all = "camelCase")]
+    AccountLimited {
+        cli: String,
+        account_id: Option<String>,
+        limited: Option<crate::accounts::AccountLimited>,
+    },
+    /// A sign-in attempt changed state. `message` = the vendor's last line,
+    /// capped at 200 chars; never a credential.
+    #[serde(rename = "account:signin", rename_all = "camelCase")]
+    AccountSignin {
+        attempt_id: String,
+        cli: String,
+        account_id: String,
+        state: crate::accounts::SignInState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

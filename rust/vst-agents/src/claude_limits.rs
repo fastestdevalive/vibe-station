@@ -16,11 +16,13 @@
 //! failure fallback returns a visible `Error` reason rather than hiding behind
 //! `Unsupported`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use vst_types::{LimitStatus, LimitsResult};
+use vst_types::{LimitSignal, LimitStatus, LimitsResult};
 
 /// This harness's plugin id / binary name.
 pub const HARNESS: &str = "claude";
@@ -82,6 +84,7 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
                 vst_types::LimitWindow {
                     harness: HARNESS.into(),
                     window_id: id.into(),
+                    account_id: None,
                     cadence_minutes: Some(cadence),
                     used_pct: Some(util),
                     resets_at: s
@@ -106,6 +109,7 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
     if any_data {
         LimitsResult {
             harness: HARNESS.into(),
+            account_id: None,
             status: LimitStatus::Ok,
             message: None,
             as_of: as_of.into(),
@@ -114,6 +118,7 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
     } else {
         LimitsResult {
             harness: HARNESS.into(),
+            account_id: None,
             status: LimitStatus::NoData,
             message: Some("Claude returned no 5-hour or weekly window".into()),
             as_of: as_of.into(),
@@ -137,16 +142,16 @@ pub(crate) fn resolve_or_not_installed(
     path: &str,
     windows: &[(&str, Option<u32>)],
     as_of: &str,
-) -> Result<PathBuf, LimitsResult> {
+) -> Result<PathBuf, Box<LimitsResult>> {
     match crate::registry::resolve_binary(binary, path) {
         Some(p) => Ok(p),
-        None => Err(LimitsResult::failure(
+        None => Err(Box::new(LimitsResult::failure(
             harness,
             LimitStatus::NotInstalled,
             format!("{binary} is not installed (not found on PATH)"),
             as_of,
             windows,
-        )),
+        ))),
     }
 }
 
@@ -160,16 +165,19 @@ pub(crate) fn normalize_iso(s: &str) -> String {
 }
 
 /// Spawns `claude`, bounded; never panics.
-pub async fn probe_claude_limits() -> LimitsResult {
+///
+/// `env` is the account's env (Decision 9): the probe must read THAT account's
+/// windows, so the vendor binary runs under its login directory.
+pub async fn probe_claude_limits(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
-    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_claude_limits_inner()).await;
+    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_claude_limits_inner(env)).await;
     match outcome {
         Ok(r) => r,
         Err(_) => placeholder_result(LimitStatus::Error, "timed out after 20s", &as_of),
     }
 }
 
-async fn probe_claude_limits_inner() -> LimitsResult {
+async fn probe_claude_limits_inner(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
     let path = match resolve_or_not_installed(
         HARNESS,
@@ -179,7 +187,7 @@ async fn probe_claude_limits_inner() -> LimitsResult {
         &as_of,
     ) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
 
     let probe_dir = crate::home::home_dir()
@@ -193,7 +201,12 @@ async fn probe_claude_limits_inner() -> LimitsResult {
         );
     }
 
-    let mut child = match tokio::process::Command::new(&path)
+    let mut cmd = tokio::process::Command::new(&path);
+    // Removals first: the account's own env (applied after) still wins.
+    for name in probe_env_removals(&env) {
+        cmd.env_remove(name);
+    }
+    let spawned = cmd
         .args([
             "-p",
             "--input-format",
@@ -209,12 +222,13 @@ async fn probe_claude_limits_inner() -> LimitsResult {
         .current_dir(&probe_dir)
         .env("PATH", crate::context::effective_path())
         .env("CLAUDE_CODE_AUTO_CONNECT_IDE", "false")
+        .envs(env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .spawn()
-    {
+        .spawn();
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             return placeholder_result(
@@ -284,6 +298,19 @@ async fn probe_claude_limits_inner() -> LimitsResult {
     }
 }
 
+/// The env var that marks a named Claude config folder (set by `account_env`).
+const CONFIG_DIR_ENV_VAR: &str = "CLAUDE_CONFIG_DIR";
+
+/// Inherited token vars the probe removes. Only a named folder (its env sets
+/// `CLAUDE_CONFIG_DIR`) loses them; the System login keeps its own environment.
+fn probe_env_removals(env: &BTreeMap<String, String>) -> Vec<&'static str> {
+    if env.contains_key(CONFIG_DIR_ENV_VAR) {
+        crate::claude_accounts::ENV_TOKENS_TO_UNSET.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 fn window_placeholders() -> Vec<(&'static str, Option<u32>)> {
     WINDOWS.iter().map(|(id, c)| (*id, Some(*c))).collect()
 }
@@ -299,6 +326,21 @@ mod tests {
         let mut perms = std::fs::metadata(&p).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&p, perms).unwrap();
+    }
+
+    #[test]
+    fn probe_removes_token_env_when_config_dir_set() {
+        let mut env = BTreeMap::new();
+        assert!(probe_env_removals(&env).is_empty(), "System login: none");
+        env.insert(CONFIG_DIR_ENV_VAR.to_string(), "/x".to_string());
+        assert_eq!(
+            probe_env_removals(&env),
+            vec![
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN"
+            ]
+        );
     }
 
     fn unique_tmp(name: &str) -> PathBuf {
@@ -371,4 +413,94 @@ mod tests {
         assert_eq!(path, dir.join("codex"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Structured chat limit signal (`_claude/sdkMessage` rate_limit_event)
+// ---------------------------------------------------------------------------
+
+/// `_claude/sdkMessage` carrying `{type: "rate_limit_event"}` (Decision 10).
+///
+/// Not reachable in production today (V11): the adapter's raw-SDK filter matches
+/// `{type, subtype}` pairs and the event has no subtype, so this only runs on
+/// the hand-written fixtures. Tolerant: any shape mismatch is `None`.
+#[must_use]
+pub fn rate_limit_signal(method: &str, params: &Value) -> Option<LimitSignal> {
+    if method != "_claude/sdkMessage" {
+        return None;
+    }
+    let message = params.get("message")?.as_object()?;
+    if message.get("type")?.as_str()? != "rate_limit_event" {
+        return None;
+    }
+    let info = message.get("rate_limit_info")?.as_object()?;
+    let (window_id, window) = pick_window(info.get("unifiedWindows")?)?;
+    let utilization = window.get("utilization")?.as_f64()?;
+    let rejected = window.get("status").and_then(Value::as_str) == Some("rejected");
+    Some(LimitSignal {
+        window_id,
+        used_pct: (utilization * 100.0).clamp(0.0, 100.0),
+        resets_at: window.get("resetsAt").and_then(resets_to_iso),
+        rejected,
+    })
+}
+
+/// The rejected window, else the full one, else the first (an object keyed by
+/// window id, or an array carrying `windowId`/`window_id`/`type`).
+fn pick_window(windows: &Value) -> Option<(String, &serde_json::Map<String, Value>)> {
+    let mut candidates: Vec<(String, &serde_json::Map<String, Value>)> = Vec::new();
+    match windows {
+        Value::Object(map) => {
+            for (id, value) in map {
+                if let Some(obj) = value.as_object() {
+                    if obj.contains_key("utilization") {
+                        candidates.push((id.clone(), obj));
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                let Some(obj) = item.as_object() else {
+                    continue;
+                };
+                if !obj.contains_key("utilization") {
+                    continue;
+                }
+                let id = ["windowId", "window_id", "type"]
+                    .iter()
+                    .find_map(|key| obj.get(*key).and_then(Value::as_str))
+                    .map(str::to_string)?;
+                candidates.push((id, obj));
+            }
+        }
+        _ => return None,
+    }
+    let is_rejected = |w: &&(String, &serde_json::Map<String, Value>)| {
+        w.1.get("status").and_then(Value::as_str) == Some("rejected")
+    };
+    let is_full = |w: &&(String, &serde_json::Map<String, Value>)| {
+        w.1.get("utilization")
+            .and_then(Value::as_f64)
+            .is_some_and(|u| u >= 1.0)
+    };
+    let picked = candidates
+        .iter()
+        .find(is_rejected)
+        .or_else(|| candidates.iter().find(is_full))
+        .or_else(|| candidates.first())?;
+    Some((picked.0.clone(), picked.1))
+}
+
+/// `resetsAt` as epoch seconds (number or numeric string) or an ISO8601 string.
+fn resets_to_iso(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        if chrono::DateTime::parse_from_rfc3339(text).is_ok() {
+            return Some(text.to_string());
+        }
+        let secs = text.parse::<i64>().ok()?;
+        return Some(crate::util::ms_to_iso_8601(secs.saturating_mul(1000)));
+    }
+    let secs = value.as_i64()?;
+    Some(crate::util::ms_to_iso_8601(secs.saturating_mul(1000)))
 }

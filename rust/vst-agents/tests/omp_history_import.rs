@@ -689,6 +689,7 @@ fn omp_importer_struct_and_singleton() {
             agent_chat_id: "chat".into(),
             cwd: "/nowhere".into(),
             watermark: None,
+            account_dir: None,
         }),
         None // no conversation_file for /nowhere
     );
@@ -715,6 +716,7 @@ fn omp_importer_import_resolves_conversation_file() {
         agent_chat_id: "chat".into(),
         cwd: dir.join("cwd").display().to_string(),
         watermark: None,
+        account_dir: None,
     });
     assert_eq!(
         r.events

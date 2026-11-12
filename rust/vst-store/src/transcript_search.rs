@@ -1046,6 +1046,8 @@ mod tests {
             from_provider: None,
             to_provider: None,
             carry_over: None,
+            from_account: None,
+            to_account: None,
             from_mode: None,
             to_mode: None,
             parent_tool_use_id: None,

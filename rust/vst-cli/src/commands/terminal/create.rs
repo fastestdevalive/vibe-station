@@ -67,6 +67,7 @@ pub async fn run_terminal_create(opts: TerminalCreateOptions) -> Result<(), (Str
         worktree_id: Some(opts.worktree_id),
         project_id: None,
         r#type: SessionType::Terminal,
+        account_id: None,
         mode_id: None,
         prompt: None,
         use_tmux: None,

@@ -280,6 +280,11 @@ pub enum CarryOver {
     Summary,
     /// Carry the rows and link a Markdown export of the old chat.
     Transcript,
+    /// Carry the rows and keep the model's own context: the CLI's native
+    /// session store was moved into the new account folder and the replacement
+    /// resumes the same native chat id (no summary text). Wire value `"native"`.
+    #[serde(rename = "native")]
+    Native,
 }
 
 /// Token / cost usage numbers, normalized across harnesses.
@@ -539,6 +544,12 @@ pub struct NormalizedEvent {
     pub from_mode: Option<String>,
     /// session_break only: display name of the replacement mode.
     pub to_mode: Option<String>,
+    /// session_break only: display name of the account being replaced.
+    #[serde(default)]
+    pub from_account: Option<String>,
+    /// session_break only: display name of the replacement's account.
+    #[serde(default)]
+    pub to_account: Option<String>,
     /// Tool events only: the originating tool call id of the subagent
     /// (`Task`/`Agent`) this nested event ran under. Harness-specific
     /// (Claude: `_meta.claudeCode.parentToolUseId`); absent for top-level calls.
@@ -595,6 +606,8 @@ impl Default for NormalizedEvent {
             carry_over: None,
             from_mode: None,
             to_mode: None,
+            from_account: None,
+            to_account: None,
             parent_tool_use_id: None,
             task_signal: None,
             review: None,
@@ -849,6 +862,10 @@ pub struct DraftConfig {
     pub branch: Option<String>,
     pub base_branch: Option<String>,
     pub use_tmux: Option<bool>,
+    /// Account picked in the composer (id, label or `"system"`); the daemon
+    /// resolves it at promotion and stamps `SessionRecord.account_id`.
+    #[serde(default)]
+    pub account_id: Option<String>,
     // global entry point
     pub use_worktree: Option<bool>,
 }
@@ -891,6 +908,10 @@ pub struct SessionRecord {
     /// Icon key of the mode, snapshotted when the session was created so it
     /// survives the mode being edited or deleted.
     pub mode_icon: Option<String>,
+    /// The account this session runs under; `None` = the CLI's System login.
+    /// Stamped at creation/promotion and persisted in `sessions.accountId`.
+    #[serde(default)]
+    pub account_id: Option<String>,
     /// User-facing display name.
     pub name: Option<String>,
     /// How `name` was set.
@@ -1064,4 +1085,72 @@ pub struct ProjectRecord {
     pub lsp_enabled: Option<bool>,
     /// Durable set of currently-open file paths, relative to the project root.
     pub open_files: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// A pre-existing `SessionRecord` JSON (copied from the shape
+    /// `vst-store/tests/project_store.rs` writes) without any account field.
+    const LEGACY_SESSION: &str = r#"{
+        "id": "vs-1-a-1",
+        "worktreeId": "vs-1",
+        "projectId": "vibe-station",
+        "isMain": true,
+        "sortOrder": 0,
+        "type": "agent",
+        "modeId": "m1",
+        "tmuxName": "vs-1-a-1-pane",
+        "useTmux": true,
+        "lifecycle": {
+            "state": "idle",
+            "lastTransitionAt": "2024-01-01T00:00:00.000Z"
+        },
+        "lastActivityAt": "2024-01-01T00:05:00.000Z"
+    }"#;
+
+    #[test]
+    fn session_record_without_account_id_deserializes() {
+        let record: SessionRecord = serde_json::from_str(LEGACY_SESSION).unwrap();
+        assert_eq!(record.account_id, None, "absent = System login");
+        let wire = serde_json::to_value(&record).unwrap();
+        assert!(
+            wire.get("accountId").is_none(),
+            "None must stay omitted (`skip_serializing_none`)"
+        );
+        let mut with_account = record.clone();
+        with_account.account_id = Some("acc_1a2b3c4d".into());
+        assert_eq!(
+            serde_json::to_value(&with_account).unwrap()["accountId"],
+            json!("acc_1a2b3c4d")
+        );
+    }
+
+    #[test]
+    fn carry_over_native_serde() {
+        assert_eq!(
+            serde_json::to_value(CarryOver::Native).unwrap(),
+            json!("native")
+        );
+        assert_eq!(
+            serde_json::from_value::<CarryOver>(json!("native")).unwrap(),
+            CarryOver::Native
+        );
+        assert_eq!(
+            serde_json::to_value(CarryOver::Nothing).unwrap(),
+            json!("none")
+        );
+        assert_eq!(
+            serde_json::to_value(CarryOver::Summary).unwrap(),
+            json!("summary")
+        );
+        assert_eq!(
+            serde_json::to_value(CarryOver::Transcript).unwrap(),
+            json!("transcript")
+        );
+        assert_eq!(CarryOver::default(), CarryOver::Nothing);
+    }
 }

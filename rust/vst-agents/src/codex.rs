@@ -13,7 +13,10 @@ use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_proc::sq;
-use vst_types::{Channel, NormalizedEvent, NormalizedEventProvider};
+use vst_types::{
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, NormalizedEvent, NormalizedEventProvider, ResolvedAccount, SharedEntries,
+};
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -143,8 +146,15 @@ fn rollout_exists(sessions_root: &std::path::Path, id: &str) -> bool {
 /// recorded, whichever still has a rollout. `None` ⇒ launch fresh. Re-checked on
 /// every call, so a stale stored id heals itself once the hook records the id of
 /// the replacement conversation.
-fn resumable_chat_id(known: Option<&str>, recorded: Option<&str>) -> Option<String> {
-    let root = crate::codex_import::codex_native_store_path();
+///
+/// `account_dir: Some(..)` = the session's account folder (Decision 6); its
+/// rollouts live under `<account>/sessions`, not the daemon's own store.
+fn resumable_chat_id(
+    known: Option<&str>,
+    recorded: Option<&str>,
+    account_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    let root = crate::codex_import::codex_native_store_path_for(account_dir);
     [known, recorded]
         .into_iter()
         .flatten()
@@ -239,7 +249,11 @@ impl AgentPlugin for CodexPlugin {
         }
         // Only resume a conversation that still exists; a stale id would make codex
         // exit at once, on every launch, forever.
-        if let Some(id) = resumable_chat_id(cfg.session.agent_chat_id.as_deref(), None) {
+        if let Some(id) = resumable_chat_id(
+            cfg.session.agent_chat_id.as_deref(),
+            None,
+            cfg.account_dir.as_deref(),
+        ) {
             argv.push("resume".to_string());
             argv.push(id);
         }
@@ -294,8 +308,11 @@ impl AgentPlugin for CodexPlugin {
                 ));
             }
         }
-        if let Some(id) = resumable_chat_id(input.launch_cfg.session.agent_chat_id.as_deref(), None)
-        {
+        if let Some(id) = resumable_chat_id(
+            input.launch_cfg.session.agent_chat_id.as_deref(),
+            None,
+            input.launch_cfg.account_dir.as_deref(),
+        ) {
             shell_line.push_str(&format!(" resume {}", sq(&id)));
         }
         if let Some(model) = &input.launch_cfg.model {
@@ -380,7 +397,61 @@ impl AgentPlugin for CodexPlugin {
     }
 
     fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
-        Box::pin(crate::codex_limits::probe_codex_limits())
+        // Same as before accounts: the probe under the daemon's own login.
+        self.get_limits_with_env(BTreeMap::new())
+    }
+
+    // ---- accounts (facts live in `codex_accounts.rs`, V4/V5) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::codex_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::codex_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::codex_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::codex_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::codex_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::codex_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::codex_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::codex_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::codex_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Native
+    }
+
+    fn get_limits_with_env(
+        &self,
+        env: BTreeMap<String, String>,
+    ) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::codex_limits::probe_codex_limits(env))
     }
 
     /// Reads the thread id the `SessionStart` hook recorded for THIS session, then
@@ -402,12 +473,17 @@ impl AgentPlugin for CodexPlugin {
         let token_file = chat_id_token_file(args.cwd, &args.session.id);
         let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             let recorded = read_recorded_chat_id(&token_file).await;
             // Whichever of the stored / hook-recorded ids still has a rollout (see
             // `resumable_chat_id`); neither ⇒ a fresh launch.
             let id = tokio::task::spawn_blocking(move || {
-                resumable_chat_id(known.as_deref(), recorded.as_deref())
+                resumable_chat_id(
+                    known.as_deref(),
+                    recorded.as_deref(),
+                    account_dir.as_deref(),
+                )
             })
             .await
             .ok()
@@ -443,9 +519,10 @@ impl AgentPlugin for CodexPlugin {
             .clone()
             .filter(|id| !id.is_empty());
         let token_file = chat_id_token_file(args.cwd, &args.session.id);
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             let recorded = read_recorded_chat_id(&token_file).await?;
-            let root = crate::codex_import::codex_native_store_path();
+            let root = crate::codex_import::codex_native_store_path_for(account_dir.as_deref());
             tokio::task::spawn_blocking(move || {
                 let stale = known.as_deref().is_some_and(|k| !rollout_exists(&root, k));
                 (stale
@@ -749,17 +826,17 @@ mod acp_bin_tests {
         use super::resumable_chat_id;
         // stored id is stale, hook-recorded id is live -> heals onto the recorded one
         assert_eq!(
-            resumable_chat_id(Some(ID), Some(OTHER)).as_deref(),
+            resumable_chat_id(Some(ID), Some(OTHER), None).as_deref(),
             Some(OTHER)
         );
         // stored id live -> kept even if a different one was recorded
         assert_eq!(
-            resumable_chat_id(Some(OTHER), Some(ID)).as_deref(),
+            resumable_chat_id(Some(OTHER), Some(ID), None).as_deref(),
             Some(OTHER)
         );
         // neither live -> fresh launch
-        assert_eq!(resumable_chat_id(Some(ID), None), None);
-        assert_eq!(resumable_chat_id(None, None), None);
+        assert_eq!(resumable_chat_id(Some(ID), None, None), None);
+        assert_eq!(resumable_chat_id(None, None, None), None);
     }
 
     #[cfg(unix)]

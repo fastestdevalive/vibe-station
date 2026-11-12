@@ -257,3 +257,34 @@ fn all_expected_tables_present() {
         assert!(tables(&conn).iter().any(|x| x == t), "missing table {t}");
     }
 }
+
+#[test]
+fn account_column_migration_is_idempotent() {
+    // A DB created before `sessions.accountId` existed.
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            worktreeId TEXT,
+            projectId TEXT NOT NULL,
+            isMain INTEGER NOT NULL DEFAULT 0,
+            sortOrder REAL NOT NULL,
+            type TEXT NOT NULL,
+            tmuxName TEXT NOT NULL,
+            useTmux INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            lastTransitionAt TEXT NOT NULL
+        );",
+    )
+    .unwrap();
+    assert!(!columns(&conn, "sessions").iter().any(|c| c == "accountId"));
+    ensure_schema(&conn).unwrap();
+    assert!(columns(&conn, "sessions").iter().any(|c| c == "accountId"));
+    // Running the migrations again is a no-op (the column is not duplicated).
+    ensure_schema(&conn).unwrap();
+    let occurrences = columns(&conn, "sessions")
+        .iter()
+        .filter(|c| *c == "accountId")
+        .count();
+    assert_eq!(occurrences, 1);
+}

@@ -9,6 +9,7 @@
 //! blocks in separate files (queue / drain / connection / pids / meta / events).
 //! The no-live-session meta assembly free functions live in [`meta`].
 
+mod account;
 mod activity;
 mod artifacts;
 mod backfill;
@@ -42,9 +43,9 @@ use vst_store::transcript::{
 };
 use vst_types::review::{RestoreReason, TurnObserver};
 use vst_types::{
-    Attachment, Broadcaster, CarryOver, Command, LifecycleState, Mention, NormalizedEvent,
-    NormalizedEventKind, NormalizedEventProvider, ProjectRecord, SessionBreakKind, SessionMeta,
-    SessionRecord, TurnState, UsageInfo, WorktreeRecord,
+    AccountPort, Attachment, Broadcaster, CarryOver, Command, LifecycleState, Mention,
+    NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, ProjectRecord, SessionBreakKind,
+    SessionMeta, SessionRecord, TurnState, UsageInfo, WorktreeRecord,
 };
 
 use crate::acp_connection::AcpConnection;
@@ -276,6 +277,10 @@ pub(super) struct State {
 pub(super) struct Inner {
     /// Daemon-wide activity sink; attached by `get_or_create_json_agent_session`.
     pub(super) activity: std::sync::OnceLock<Arc<dyn vst_types::activity::ActivitySink>>,
+    /// Accounts registry (`vst-types` `AccountPort` seam), attached at build time
+    /// by `get_or_create_json_agent_session`. The ACP connection and the chat
+    /// limit-signal path read it from here, never from the registry (Decision 3).
+    pub(super) account_port: std::sync::OnceLock<Arc<dyn AccountPort>>,
     /// Review-comments observer (plan 04); attached by `get_or_create_json_agent_session`.
     /// With none installed a review turn still runs, but nothing restores its hold.
     pub(super) review_observer: std::sync::OnceLock<Arc<dyn TurnObserver>>,
@@ -437,7 +442,12 @@ impl JsonAgentSession {
 
         // Seed display model from requested model, then from transcript tail.
         let meta_tail = store.last_meta();
-        let first_turn_done = store.count_since_last_break() > 0;
+        // Decision 8: a native hand-over copies the rows AND writes a
+        // `carry_over: native` marker, leaving 0 rows after the break — yet the
+        // model already has the conversation, so turn 1 must not re-send the
+        // system prompt.
+        let first_turn_done = store.count_since_last_break() > 0
+            || store.last_break_carry_over() == Some(CarryOver::Native);
 
         let mut model = opts.model.clone();
         if let Some(m) = &meta_tail.model {
@@ -508,6 +518,7 @@ impl JsonAgentSession {
         );
         let inner = Inner {
             activity: std::sync::OnceLock::new(),
+            account_port: std::sync::OnceLock::new(),
             review_observer: std::sync::OnceLock::new(),
             release_reason: Mutex::new(RestoreReason::SessionRemoved),
             artifacts: Default::default(),
@@ -772,6 +783,8 @@ impl JsonAgentSession {
             agent_chat_id,
             cwd: cwd.display().to_string(),
             watermark: watermark.as_ref().map(|w| w.cursor.clone()),
+            // The account's own store, never the daemon env (Decision 6).
+            account_dir: self.account_dir(),
         };
         let result = tokio::task::spawn_blocking(move || importer.import(&req))
             .await
@@ -827,6 +840,7 @@ impl JsonAgentSession {
             cwd: cwd.display().to_string(),
             // `current_cursor()` reads the settled leaf, not the prior watermark.
             watermark: None,
+            account_dir: self.account_dir(),
         };
 
         let cursor = match tokio::task::spawn_blocking(move || importer.current_cursor(&req)).await
@@ -1114,6 +1128,9 @@ pub fn get_or_create_json_agent_session(
         if let Some(obs) = registry.review_observer() {
             s.attach_review_observer(obs);
         }
+        if let Some(port) = registry.account_port() {
+            s.attach_account_port(port);
+        }
         Ok(s)
     })?;
     let session = (*session).clone();
@@ -1348,6 +1365,10 @@ pub struct SessionBreakMarker {
     pub from_mode: Option<String>,
     /// Display name of the replacement mode.
     pub to_mode: Option<String>,
+    /// Display name of the account being replaced (`None` = System login).
+    pub from_account: Option<String>,
+    /// Display name of the replacement account (`None` = System login).
+    pub to_account: Option<String>,
     /// ISO8601 timestamp.
     pub ts: String,
 }
@@ -1444,6 +1465,8 @@ pub fn carry_session_transcript(
         carry_over: marker.carry_over,
         from_mode: marker.from_mode,
         to_mode: marker.to_mode,
+        from_account: marker.from_account,
+        to_account: marker.to_account,
         ..Default::default()
     };
     carried.push(marker_ev);
@@ -1548,8 +1571,13 @@ mod tests {
 
     fn session() -> JsonAgentSession {
         let dir = tempfile::tempdir().unwrap();
-        let _home = crate::home::with_home(dir.path().to_path_buf());
-        let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+        session_in(dir.path())
+    }
+
+    /// A session rooted at `home` (so a test can seed the data dir first).
+    fn session_in(home: &std::path::Path) -> JsonAgentSession {
+        let _home = crate::home::with_home(home.to_path_buf());
+        let store_handle = vst_store::StoreHandle::open(home.join("test.db")).unwrap();
         let (tx, _rx) = tokio::sync::broadcast::channel(64);
 
         let session_rec = SessionRecord {
@@ -1561,6 +1589,7 @@ mod tests {
             r#type: vst_types::SessionType::Agent,
             mode_id: None,
             mode_icon: None,
+            account_id: None,
             name: None,
             name_source: None,
             tmux_name: "vst-s1".into(),
@@ -1956,4 +1985,8 @@ mod tests {
 
     // Review turns (plan 04): split out to keep this file under the line limit.
     mod review_turns;
+    // Accounts at the ACP spawn site (multi-account A2.T8).
+    mod account_env_acp;
+    // A native account hand-over keeps the first turn done (Decision 8).
+    mod native_break_marker;
 }

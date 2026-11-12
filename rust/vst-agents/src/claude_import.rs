@@ -3,7 +3,7 @@
 //! `NormalizedEvent`s. Pure, self-contained — no shared state.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 use vst_types::{
@@ -571,6 +571,30 @@ pub fn claude_native_store_path(projects_dir: &str, cwd: &str, agent_chat_id: &s
     format!("{projects_dir}/{slug}/{agent_chat_id}.jsonl")
 }
 
+/// Find `<chat_id>.jsonl` under `projects_dir`, one directory level deep.
+///
+/// The `<slug>` directory name is NOT re-derived from the cwd: claude
+/// canonicalises the cwd (symlinks such as `/var` -> `/private/var`) and
+/// replaces every non-alphanumeric character, so a re-derived slug misses
+/// real paths containing `_`, spaces or symlinks. Listing names is exact.
+/// A `chat_id` that is empty or path-like is refused.
+#[must_use]
+pub fn find_claude_conversation(projects_dir: &Path, chat_id: &str) -> Option<PathBuf> {
+    if chat_id.is_empty() || chat_id.contains(['/', '\\']) || chat_id.contains("..") {
+        return None;
+    }
+    let file_name = format!("{chat_id}.jsonl");
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(projects_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    dirs.sort();
+    dirs.into_iter()
+        .map(|d| d.join(&file_name))
+        .find(|candidate| candidate.is_file())
+}
+
 fn read_native_lines(file: &str) -> Vec<String> {
     let content = match std::fs::read_to_string(file) {
         Ok(c) => c,
@@ -594,7 +618,20 @@ impl NativeHistoryImporter for ClaudeHistoryImporter {
     }
 
     fn import(&self, req: &NativeImportRequest) -> NativeImportResult {
-        let file = claude_native_store_path(&self.projects_dir, &req.cwd, &req.agent_chat_id);
+        // A session's own account folder wins over this importer's default
+        // (Decision 6): claude writes `<CLAUDE_CONFIG_DIR>/projects`.
+        let projects_dir = match req.account_dir.as_deref() {
+            Some(dir) => dir.join("projects").display().to_string(),
+            None => self.projects_dir.clone(),
+        };
+        let mut file = claude_native_store_path(&projects_dir, &req.cwd, &req.agent_chat_id);
+        if !Path::new(&file).exists() {
+            if let Some(found) =
+                find_claude_conversation(Path::new(&projects_dir), &req.agent_chat_id)
+            {
+                file = found.display().to_string();
+            }
+        }
         let start_line = match &req.watermark {
             Some(w) => w.parse::<usize>().unwrap_or(0),
             None => 0,

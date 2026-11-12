@@ -33,7 +33,10 @@ use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
+use vst_types::{
+    rest::modes::AccountSwitchSupport, Channel, NormalizedEvent, NormalizedEventKind,
+    NormalizedEventProvider,
+};
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -348,7 +351,28 @@ impl AgentPlugin for AgyPlugin {
     }
 
     fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
-        Box::pin(crate::agy_limits::probe_agy_limits())
+        // Same as before accounts: the probe under the daemon's own login.
+        self.get_limits_with_env(BTreeMap::new())
+    }
+
+    fn get_limits_with_env(
+        &self,
+        env: BTreeMap<String, String>,
+    ) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::agy_limits::probe_agy_limits(env))
+    }
+
+    // ---- accounts: agy is the one harness that ships WITHOUT them (V9) ----
+    // `account_env` must never shadow `HOME`: that would hide `~/.ssh`,
+    // `~/.gitconfig` and the toolchains from the agent. The default (empty) is
+    // the whole answer, so `supports_accounts` stays false.
+
+    fn accounts_unsupported_reason(&self) -> Option<&'static str> {
+        crate::agy_accounts::accounts_unsupported_reason()
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::None
     }
 
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
@@ -356,10 +380,13 @@ impl AgentPlugin for AgyPlugin {
         let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
         let log_path = agy_log_path(&args.session.id);
+        // agy ships without accounts (V9), so this is always `None`; the
+        // parameter exists so the lookup signature is uniform across harnesses.
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             let id = match known {
                 Some(id) if !id.is_empty() => id,
-                _ => match read_latest_agy_conversation_id(&cwd).await {
+                _ => match read_latest_agy_conversation_id(&cwd, account_dir.as_deref()).await {
                     Some(id) => id,
                     None => return None,
                 },
