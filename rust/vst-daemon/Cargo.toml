@@ -64,6 +64,7 @@ embed-ui = ["dep:rust-embed"]
 insecure-no-auth = []
 
 [dev-dependencies]
+vst-testkit = { workspace = true }
 tempfile = "3"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

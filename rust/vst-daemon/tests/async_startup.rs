@@ -5,12 +5,18 @@
 //! `pgrep -x cloudflared`, so this stands in for a slow sweep. The daemon runs
 //! with an isolated `HOME` and a loopback bind (the default); `/health` is
 //! unauthenticated so auth state doesn't matter.
+//!
+//! Starts the real daemon binary, so it runs only with
+//! `VST_NATIVE_DAEMON_TESTS=1` (Docker/CI), and the child is held in a
+//! `ChildGuard` so a failed assert cannot orphan it.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+
+use vst_testkit::{native_daemon_tests_enabled, ChildGuard};
 
 const FAKE_PGREP_SLEEP_SECS: u64 = 6;
 
@@ -29,6 +35,9 @@ fn health_ok(port: u16) -> bool {
 
 #[test]
 fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
+    if !native_daemon_tests_enabled("async_startup") {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let bin_dir = home.path().join("fakebin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -65,20 +74,27 @@ fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
         bin_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_vst-daemon"))
-        .env("HOME", home.path())
-        .env("TMUX_TMPDIR", home.path())
-        .env("VST_PORT", port.to_string())
-        .env("PATH", path)
-        .env_remove("VST_NO_AUTH")
-        .env_remove("TMUX")
-        .env_remove("VST_TUNNEL_PORT")
-        .env_remove("VST_CLOUDFLARED_BIN")
-        .env_remove("VST_DIST_PATH")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn vst-daemon");
+    let mut child = ChildGuard::spawn(
+        Command::new(env!("CARGO_BIN_EXE_vst-daemon"))
+            .env("HOME", home.path())
+            .env("TMUX_TMPDIR", home.path())
+            .env("VST_PORT", port.to_string())
+            .env("PATH", path)
+            .env_remove("VST_NO_AUTH")
+            .env_remove("TMUX")
+            .env_remove("VST_TUNNEL_PORT")
+            .env_remove("VST_CLOUDFLARED_BIN")
+            .env_remove("VST_DIST_PATH")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .expect("spawn vst-daemon");
+
+    // Test hook for the leak guard itself: fail here, daemon running.
+    assert!(
+        std::env::var_os("VST_TEST_FORCE_PANIC").is_none(),
+        "forced panic (VST_TEST_FORCE_PANIC) with the daemon running"
+    );
 
     let start = Instant::now();
     while !health_ok(port) {
@@ -107,7 +123,6 @@ fn binds_before_slow_background_boot_and_shutdown_does_not_wait() {
             break;
         }
         if t.elapsed() > deadline {
-            let _ = child.kill();
             panic!("daemon did not exit within {deadline:?} of SIGTERM");
         }
         std::thread::sleep(Duration::from_millis(20));

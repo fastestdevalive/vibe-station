@@ -22,8 +22,22 @@ if want rust; then
   mkdir -p web-ui/dist
   [ -e web-ui/dist/index.html ] || touch web-ui/dist/index.html
 
+  # Tests that start a real daemon binary are opt-in (vst-testkit proc_guard) and
+  # run only in the CI container, never on a dev host (`ci-local.sh --native`).
+  if [ "${VST_CI_CONTAINER:-}" = 1 ] && [ -f /.dockerenv ]; then
+    export VST_NATIVE_DAEMON_TESTS=1
+  else
+    unset VST_NATIVE_DAEMON_TESTS
+    echo "note: not the CI container, so tests that start a real daemon binary are skipped"
+  fi
+
   step "rust-gate.sh --workspace (fmt, clippy, test)"
   rust/scripts/rust-gate.sh --workspace
+
+  if [ "${VST_NATIVE_DAEMON_TESTS:-}" = 1 ]; then
+    step "daemon-spawning tests really ran (not skipped)"
+    bash scripts/check-native-daemon-tests.sh
+  fi
 
   step "default build ignores VST_NO_AUTH"
   cargo test --manifest-path rust/Cargo.toml -p vst-daemon --test main_logic \

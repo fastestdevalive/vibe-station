@@ -508,6 +508,32 @@ trap 'kill "$DAEMON_PID" 2>/dev/null; rm -rf "$T"' EXIT   # exactly this PID, no
 - Before killing, confirm the PID is yours: `ps -p "$DAEMON_PID" -o pid,command` should show your temp `HOME`
   port/binary, not the developer's. After cleanup, check that only *your* port is gone.
 
+### Tests that start a real binary — Docker/CI only, always behind the guard
+
+**Files:** `rust/vst-testkit/src/proc_guard.rs` · `rust/vst-daemon/tests/{async_startup,agy_stream_acp_cmd}.rs` ·
+`rust/vst-cli/tests/self_heal.rs` · `scripts/ci-steps.sh` · `scripts/check-native-daemon-tests.sh`
+
+A test that spawned the daemon as a plain `std::process::Child` orphaned it whenever an assert failed first.
+Three such debug daemons ran for hours on a dev Mac (2026-11-12), each exec'ing children while Gatekeeper
+re-scanned the 147 MB binary: ~1300% CPU.
+
+- **Gate it.** A test that starts `vst-daemon` / `vst daemon run` begins with
+  `if !native_daemon_tests_enabled("<name>") { return; }`. `VST_NATIVE_DAEMON_TESTS=1` is set only by
+  `scripts/ci-steps.sh` inside the CI container and by `rust-ci.yml`, so `cargo test` and
+  `scripts/ci-local.sh --native` on a dev host start no daemon. Don't export it on a dev host; run
+  `scripts/ci-local.sh --only rust`.
+- **Guard it.** Spawn through `vst_testkit::ChildGuard::spawn` (own process group; `Drop`, also on panic, sends
+  the group `SIGTERM` then `SIGKILL` and reaps), never a bare `Command::spawn`. For a daemon the test starts
+  indirectly and detached (CLI self-heal), create a `vst_testkit::DaemonHomeGuard` for its temp `HOME` **before**
+  anything can spawn, declared after the tempdir. Cleanup at the end of the test body is not cleanup: a failed
+  assert skips it.
+- **Add it to `scripts/check-native-daemon-tests.sh`** (with its test count) so CI fails if the test silently
+  skips instead of running.
+- The guards signal the PID/PGID they captured, never a name or port. A process that leaves the group
+  (`setsid`, e.g. a tmux server) is out of reach: don't start one from such a test.
+- The guards run on unwind only. Killing the test binary itself (Ctrl-C, `timeout`) drops nothing, and a guarded
+  child is in its own group so it does not receive that Ctrl-C: the container being thrown away is the backstop.
+
 ---
 
 ## Docker dev sandboxes — two different tools, don't conflate them
