@@ -2272,6 +2272,11 @@ export function createMockApi(seed: MockSeed = {}) {
 
     // ── JSON agent chat (mock) ────────────────────────────────────────────────
 
+    /** Mock of the client's forced re-replay (Retry): replays the full tail. */
+    async reopenChat(sessionId: string): Promise<void> {
+      await api.openChat(sessionId);
+    },
+
     async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
       const events = chatTranscripts.get(sessionId) ?? [];
       // The daemon sends a `session:tasks` snapshot on every chat:open branch (empty here: the mock tracks no tasks).

@@ -131,6 +131,30 @@ describe("openChat / closeChat refcounting", () => {
     const closeMsgs = chatMsgsFor(sent, "chat:close", "sess-c");
     expect(closeMsgs).toHaveLength(1);
   });
+
+  it("reopenChat re-sends chat:open (no sinceSeq) while another subscriber holds the ref, without changing the refcount", async () => {
+    await api.openChat("sess-r", 7);
+    await api.openChat("sess-r"); // refs 2: a close+open would be a wire no-op
+    sent.splice(0);
+
+    await api.reopenChat("sess-r");
+    const opens = chatMsgsFor(sent, "chat:open", "sess-r");
+    expect(opens).toHaveLength(1);
+    expect(opens[0]).not.toHaveProperty("sinceSeq");
+
+    // Refcount unchanged: two closes are still needed before chat:close.
+    await api.closeChat("sess-r");
+    expect(chatMsgsFor(sent, "chat:close", "sess-r")).toHaveLength(0);
+    await api.closeChat("sess-r");
+    expect(chatMsgsFor(sent, "chat:close", "sess-r")).toHaveLength(1);
+  });
+
+  it("reopenChat with no subscriber falls back to a plain openChat", async () => {
+    await api.reopenChat("sess-z");
+    expect(chatMsgsFor(sent, "chat:open", "sess-z")).toHaveLength(1);
+    await api.closeChat("sess-z");
+    expect(chatMsgsFor(sent, "chat:close", "sess-z")).toHaveLength(1);
+  });
 });
 
 /**

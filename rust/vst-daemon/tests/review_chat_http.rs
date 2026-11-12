@@ -259,7 +259,7 @@ fn user_row(turn: &str, cancelled: bool, review: Option<ReviewRecord>) -> Normal
 async fn restore_review_reads_the_persisted_snapshot_and_is_idempotent() {
     let h = H::new().await;
     let dir = vst_agents::paths::Paths::default().direct_session_data_dir("p1", "sd1");
-    let mut store = open_transcript_store(&dir, "sd1");
+    let mut store = open_transcript_store(&dir, "sd1").unwrap();
     let record = ReviewRecord {
         name: "proj1".into(),
         comments: vec![snap(1, "a"), snap(2, "b")],

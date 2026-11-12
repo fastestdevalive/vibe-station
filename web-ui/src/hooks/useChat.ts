@@ -11,6 +11,13 @@ import * as chatSnapshotCache from "./chatSnapshotCache";
 const MAX_LIVE_EVENTS = 5000;
 /** Keep this many most-recent events after a live trim. */
 const TRIM_TO = 4000;
+/** Bound on a cold-start load (no cached snapshot): with no `chat:replay` by
+ *  then the pane shows an error + Retry instead of "Loading history…" forever.
+ *  A daemon that never answers `chat:open` (e.g. a handler that died) must not
+ *  leave the user staring at a spinner. Exported for tests. */
+export const COLD_START_TIMEOUT_MS = 15_000;
+/** Shown when the cold-start bound expires without a reply. */
+export const COLD_START_TIMEOUT_MESSAGE = "Couldn't load the chat history: no response yet.";
 
 /** An optimistic user turn rendered immediately after send, before the daemon's
  *  authoritative `user` event arrives. Deduped by `turnId` (Decision 12). */
@@ -49,6 +56,11 @@ export interface UseChatResult {
   pending: PendingTurn[];
   /** True while awaiting the initial `chat:replay`. */
   loading: boolean;
+  /** Set when a cold-start load failed (`session:error` before any replay, or
+   *  no reply within `COLD_START_TIMEOUT_MS`); `null` otherwise. */
+  loadError: string | null;
+  /** Re-request the full history after a failed load (clears `loadError`). */
+  retry: () => void;
   /** True when older pages exist before the loaded window (drives "load earlier"). */
   hasMore: boolean;
   /** True while a `loadEarlier`/`loadAll` fetch is in flight. */
@@ -129,6 +141,9 @@ export function useChat(
   const [meta, setMeta] = useState<SessionMeta | null>(null);
   const [pending, setPending] = useState<PendingTurn[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Set by the open effect: re-runs this mount's cold load (Retry). */
+  const retryRef = useRef<(() => void) | null>(null);
   const [isDeltaLoading, setIsDeltaLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -177,6 +192,7 @@ export function useChat(
   const active = enabled && !!sessionId;
 
   useEffect(() => {
+    setLoadError(null);
     if (!active || !sessionId) {
       setEvents([]);
       setMeta(null);
@@ -204,6 +220,31 @@ export function useChat(
     poisonedRef.current = false;
     let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
     let openChatSinceSeq: number | undefined = undefined;
+    // Cold-start bound: true from a cold open (or Retry) until the first
+    // `chat:replay`/`session:message` — only then may a `session:error` or the
+    // timer turn the spinner into an error.
+    let awaitingFirstReplay = false;
+    let coldTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearColdTimer = () => {
+      if (coldTimer !== null) {
+        clearTimeout(coldTimer);
+        coldTimer = null;
+      }
+    };
+    const armColdTimer = () => {
+      clearColdTimer();
+      coldTimer = setTimeout(() => {
+        coldTimer = null;
+        if (!awaitingFirstReplay) return;
+        setLoading(false);
+        setLoadError(COLD_START_TIMEOUT_MESSAGE);
+      }, COLD_START_TIMEOUT_MS);
+    };
+    const settleColdLoad = () => {
+      awaitingFirstReplay = false;
+      clearColdTimer();
+      setLoadError(null);
+    };
 
     const snapshot = cacheEnabled ? chatSnapshotCache.restore(sessionId) : null;
 
@@ -262,6 +303,8 @@ export function useChat(
       isDeltaLoadingRef.current = false;
       restoredLatestSeqRef.current = null;
       openChatSinceSeq = undefined;
+      awaitingFirstReplay = true;
+      armColdTimer();
     }
 
     // ── Event helpers ────────────────────────────────────────────────────────
@@ -333,6 +376,8 @@ export function useChat(
 
       setPending((prev) => prev.filter((p) => !userTurnIdsRef.current.has(p.turnId)));
       setLoading(false);
+      // A late replay still wins over a timed-out error.
+      settleColdLoad();
 
       // Delta hydration complete — clear the spinner and cancel the failsafe.
       if (failsafeTimer !== null) {
@@ -373,6 +418,7 @@ export function useChat(
       });
       // A live event proves the stream is up — clear any replay-loading state.
       setLoading(false);
+      settleColdLoad();
     });
 
     const offMeta = chatRepo.on("session:meta", (e) => {
@@ -433,6 +479,13 @@ export function useChat(
       isDeltaLoadingRef.current = false;
       setIsDeltaLoading(false);
       setLoading(false);
+      // Before the first replay this error IS the answer to our `chat:open`
+      // (e.g. the history can't be opened): surface it, never a blank chat.
+      // After a load it stays silent (transient TTY errors; history is valid).
+      if (awaitingFirstReplay) {
+        clearColdTimer();
+        setLoadError(e.message || "Couldn't load the chat history.");
+      }
     });
 
     // A fork truncated some turns (R3.6): drop the superseded bubbles + any
@@ -475,8 +528,28 @@ export function useChat(
       () => {
         const latest = computeLatestSeq(eventsRef.current);
         if (latest != null) restoredLatestSeqRef.current = latest;
+        // The client re-sends `chat:open` on reconnect: restart the cold bound
+        // from now, so time spent offline is not counted as "no reply".
+        if (awaitingFirstReplay) {
+          setLoadError(null);
+          setLoading(true);
+          armColdTimer();
+        }
       },
     );
+
+    retryRef.current = () => {
+      // The failed load's `session:error` poisoned the snapshot save; a retry
+      // that succeeds must be cacheable again (a new error re-poisons it).
+      poisonedRef.current = false;
+      awaitingFirstReplay = true;
+      setLoadError(null);
+      setLoading(true);
+      armColdTimer();
+      // Forced: a plain close+open is a wire no-op while another subscriber
+      // holds this session's refcount.
+      void chatRepo.reopenChat(sessionId);
+    };
 
     // ── Open the chat (AFTER listeners are registered) ───────────────────────
     ensureTaskSubscription(api);
@@ -486,6 +559,8 @@ export function useChat(
 
     return () => {
       if (failsafeTimer !== null) clearTimeout(failsafeTimer);
+      clearColdTimer();
+      retryRef.current = null;
       offReplay();
       offMsg();
       offMeta();
@@ -703,11 +778,17 @@ export function useChat(
     canTrimRef.current = v;
   }, []);
 
+  const retry = useCallback(() => {
+    retryRef.current?.();
+  }, []);
+
   return {
     events,
     meta,
     pending,
     loading,
+    loadError,
+    retry,
     hasMore,
     loadingEarlier,
     loadEarlier,

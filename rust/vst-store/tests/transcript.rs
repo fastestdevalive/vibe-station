@@ -90,7 +90,7 @@ fn append_turn(store: &mut vst_store::transcript::TranscriptStore, turn_id: &str
 #[test]
 fn assigns_gap_free_monotonic_log_seq() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let seqs = [
         store.append(&mut ev(
             NormalizedEventKind::User,
@@ -119,7 +119,7 @@ fn reseeds_next_from_max_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = transcript_db_path(dir.path());
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "a", "turnId": "t1"}),
@@ -130,7 +130,7 @@ fn reseeds_next_from_max_after_reopen() {
         ));
         let _ = path;
     }
-    let mut s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let mut s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let next = s2.append(&mut ev(
         NormalizedEventKind::User,
         serde_json::json!({"text": "b", "turnId": "t2"}),
@@ -145,7 +145,7 @@ fn reseeds_next_from_max_after_reopen() {
 #[test]
 fn last_meta_returns_last_model_and_last_real_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     store.append(&mut ev(
         NormalizedEventKind::SessionInit,
         serde_json::json!({"model": "claude-sonnet-4-5"}),
@@ -167,7 +167,7 @@ fn last_meta_returns_last_model_and_last_real_usage() {
 #[test]
 fn tail_returns_last_n_whole_turns() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut first_seqs = std::collections::HashMap::new();
     for i in 1..=25 {
         first_seqs.insert(format!("t{i}"), append_turn(&mut store, &format!("t{i}")));
@@ -191,7 +191,7 @@ fn tail_returns_last_n_whole_turns() {
 #[test]
 fn tail_with_fewer_than_n_turns_returns_everything() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
     let page = store.tail(20, usize::MAX);
@@ -203,7 +203,7 @@ fn tail_with_fewer_than_n_turns_returns_everything() {
 #[test]
 fn page_before_is_turn_aligned_with_has_more() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut first_seqs = std::collections::HashMap::new();
     for i in 1..=5 {
         first_seqs.insert(format!("t{i}"), append_turn(&mut store, &format!("t{i}")));
@@ -225,7 +225,7 @@ fn page_before_is_turn_aligned_with_has_more() {
 #[test]
 fn since_returns_only_events_newer_than_cursor() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     for i in 1..=3 {
         append_turn(&mut store, &format!("t{i}"));
     }
@@ -244,7 +244,7 @@ fn since_returns_only_events_newer_than_cursor() {
 #[test]
 fn since_is_bounded_by_limit_and_pages_forward() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     for i in 1..=5 {
         append_turn(&mut store, &format!("t{i}"));
     }
@@ -274,7 +274,7 @@ fn since_is_bounded_by_limit_and_pages_forward() {
 #[test]
 fn last_meta_finds_model_older_than_tail_window() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     store.append(&mut ev(
         NormalizedEventKind::SessionInit,
         serde_json::json!({"model": "claude-opus-4", "turnId": "t1"}),
@@ -314,7 +314,7 @@ fn last_meta_finds_model_older_than_tail_window() {
 #[test]
 fn mark_superseded_from_flags_and_hides_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let s1 = append_turn(&mut store, "t1");
     let s2 = append_turn(&mut store, "t2");
     append_turn(&mut store, "t3");
@@ -353,7 +353,7 @@ fn mark_superseded_from_flags_and_hides_rows() {
 #[test]
 fn mark_superseded_from_zero_empties_live_transcript() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
     store.mark_superseded_from(0);
@@ -373,7 +373,7 @@ fn oversized_tool_result_backfill_caps_live_and_superseded() {
     let big_a = "A".repeat(20_000 + 100);
     let big_b = "B".repeat(20_000 + 200);
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "q1", "turnId": "t1"}),
@@ -392,7 +392,7 @@ fn oversized_tool_result_backfill_caps_live_and_superseded() {
         ));
         s.mark_superseded_from(fork_seq);
     }
-    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let live = s2
         .read_all()
         .into_iter()
@@ -403,7 +403,7 @@ fn oversized_tool_result_backfill_caps_live_and_superseded() {
     assert!(content.contains("omitted"));
 
     // Reopen is idempotent.
-    let s3 = open_transcript_store(dir.path(), SESSION_ID);
+    let s3 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let live3 = s3
         .read_all()
         .into_iter()
@@ -422,7 +422,7 @@ fn leaves_normal_size_tool_result_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let normal = "short read result";
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "q1", "turnId": "t1"}),
@@ -432,7 +432,7 @@ fn leaves_normal_size_tool_result_unchanged() {
             serde_json::json!({"turnId": "t1", "toolId": "t1", "toolResult": {"content": normal}}),
         ));
     }
-    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let result = s2
         .read_all()
         .into_iter()
@@ -462,7 +462,7 @@ fn seed_legacy(data_dir: &std::path::Path) {
 fn imports_jsonl_losslessly_keeps_file() {
     let dir = tempfile::tempdir().unwrap();
     seed_legacy(dir.path());
-    let store = open_transcript_store(dir.path(), SESSION_ID);
+    let store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let all = store.read_all();
     assert_eq!(all.len(), 4);
     assert_eq!(store.count(), 4);
@@ -485,10 +485,10 @@ fn jsonl_migration_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     seed_legacy(dir.path());
     {
-        let s = open_transcript_store(dir.path(), SESSION_ID);
+        let s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         assert_eq!(s.count(), 4);
     }
-    let mut s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let mut s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     assert_eq!(s2.count(), 4);
     let seq = s2.append(&mut ev(
         NormalizedEventKind::User,
@@ -500,7 +500,7 @@ fn jsonl_migration_is_idempotent() {
 #[test]
 fn import_transaction_dedups_and_persists_watermark() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     // Seed one turn t1 so a re-import of t1 dedups.
     append_turn(&mut store, "t1");
     store.append(&mut ev(
@@ -577,7 +577,8 @@ fn concurrent_first_open_does_not_panic_on_superseded_column_race() {
                 barrier.wait();
                 // Must not panic — this is the exact call path that used to
                 // abort the process (`open_transcript_store`'s `.expect()`).
-                let _store = open_transcript_store(&data_dir, &format!("race-session-{i}"));
+                let _store =
+                    open_transcript_store(&data_dir, &format!("race-session-{i}")).unwrap();
             })
         })
         .collect();
@@ -595,7 +596,7 @@ fn concurrent_first_open_does_not_panic_on_superseded_column_race() {
 #[test]
 fn import_skips_group_with_existing_tool_id_only() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     // Live log has toolu_A under a DIFFERENT turn id.
     store.append(&mut ev(
         NormalizedEventKind::User,
@@ -645,7 +646,7 @@ fn import_skips_group_with_existing_tool_id_only() {
 #[test]
 fn reimport_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let events = vec![
         ev(
             NormalizedEventKind::User,
@@ -691,7 +692,7 @@ fn seed_live_notif(store: &mut vst_store::transcript::TranscriptStore) {
 #[test]
 fn text_only_autonomous_group_matching_live_notif_turn_is_skipped() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     seed_live_notif(&mut store);
     let out = store.import_transaction(
         vec![text_ev("Wake-up: build finished.", "native-uuid")],
@@ -703,7 +704,7 @@ fn text_only_autonomous_group_matching_live_notif_turn_is_skipped() {
 #[test]
 fn text_only_autonomous_group_with_new_text_is_imported_once() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     seed_live_notif(&mut store);
     let events = vec![text_ev("Something else happened.", "native-2")];
     let first = store.import_transaction(events.clone(), opts("c"));
@@ -715,7 +716,7 @@ fn text_only_autonomous_group_with_new_text_is_imported_once() {
 #[test]
 fn reimport_of_mixed_log_adds_no_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let log = |sfx: &str| {
         vec![
             ev(
@@ -745,7 +746,7 @@ fn reimport_of_mixed_log_adds_no_rows() {
 #[test]
 fn text_matching_group_with_new_tool_ids_is_imported() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     seed_live_notif(&mut store);
     let events = vec![
         text_ev("Wake-up: build finished.", "n1"),
@@ -763,7 +764,7 @@ fn identical_text_only_groups_in_one_import_dedupe() {
     // Content identity: two text-only autonomous groups with the same text are
     // the same turn as far as the log can tell, so only the first is imported.
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let events = vec![text_ev("tick", "n1"), text_ev("tick", "n2")];
     let out = store.import_transaction(events, opts("c"));
     assert_eq!((out.turns_imported, out.turns_skipped), (1, 1));
@@ -772,7 +773,7 @@ fn identical_text_only_groups_in_one_import_dedupe() {
 #[test]
 fn cancelled_live_user_row_does_not_suppress_terminal_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut queued = ev(
         NormalizedEventKind::User,
         serde_json::json!({"text": "retry me", "turnId": "q1"}),
@@ -795,7 +796,7 @@ fn cancelled_live_user_row_does_not_suppress_terminal_prompt() {
 #[test]
 fn human_prompt_matching_existing_user_text_is_skipped_new_one_imported() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     store.append(&mut ev(
         NormalizedEventKind::User,
         serde_json::json!({"text": "hello", "turnId": "t0"}),
@@ -841,7 +842,7 @@ fn append_turn_with_text(
 #[test]
 fn tail_under_budget_is_identical_to_old_behaviour() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut first_seqs = std::collections::HashMap::new();
     for i in 1..=5 {
         first_seqs.insert(
@@ -862,7 +863,7 @@ fn tail_under_budget_is_identical_to_old_behaviour() {
 #[test]
 fn tail_budget_fits_two_of_five_turns() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut first_seqs = std::collections::HashMap::new();
     for i in 1..=5 {
         first_seqs.insert(
@@ -894,7 +895,7 @@ fn tail_budget_fits_two_of_five_turns() {
 #[test]
 fn oversize_newest_turn_is_returned_whole_older_excluded() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut store, "t1", "small");
     append_turn_with_text(&mut store, "t2", "small");
     append_turn_with_text(&mut store, "t3", &"雪".repeat(1000)); // newest, huge
@@ -921,7 +922,7 @@ fn oversize_newest_turn_is_returned_whole_older_excluded() {
 #[test]
 fn tail_does_not_pull_older_turn_behind_oversize_middle() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut store, "t1", "small"); // oldest, small
     append_turn_with_text(&mut store, "t2", &"雪".repeat(1000)); // middle, huge
     append_turn_with_text(&mut store, "t3", "small"); // newest, small
@@ -944,7 +945,7 @@ fn tail_does_not_pull_older_turn_behind_oversize_middle() {
 #[test]
 fn page_before_budgeted_tail_returns_next_older_turn() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut first_seqs = std::collections::HashMap::new();
     for i in 1..=5 {
         first_seqs.insert(
@@ -971,7 +972,7 @@ fn page_before_budgeted_tail_returns_next_older_turn() {
 #[test]
 fn null_turn_rows_count_toward_their_seq_range_and_cannot_bypass_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut store, "t1", "a"); // seq 0, 1
                                                   // A NULL turn_id row sits between t1 and t2 (seq 2) — its own group.
     store.append(&mut ev(
@@ -1001,7 +1002,7 @@ fn tail_is_seq_aligned_and_counts_utf8_bytes_and_excludes_superseded() {
     // Interleaved turn ids: rows alternate, so the only reliable boundary is
     // the seq range; tail loads a contiguous seq window via `page_from`.
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     store.append(&mut ev(
         NormalizedEventKind::User,
         serde_json::json!({"role": "user", "text": "u1", "turnId": "t1"}),
@@ -1030,7 +1031,7 @@ fn tail_is_seq_aligned_and_counts_utf8_bytes_and_excludes_superseded() {
     // Multibyte counted in bytes: 100 CJK chars = 300 UTF-8 bytes; the page's
     // payload_bytes must reflect the byte count, not a char count.
     let dir2 = tempfile::tempdir().unwrap();
-    let mut s2 = open_transcript_store(dir2.path(), SESSION_ID);
+    let mut s2 = open_transcript_store(dir2.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut s2, "m", &"雪".repeat(100));
     let multibyte = s2.tail(1, usize::MAX);
     assert!(
@@ -1043,7 +1044,7 @@ fn tail_is_seq_aligned_and_counts_utf8_bytes_and_excludes_superseded() {
     // NEWER turn is superseded (rows `seq >= fork`), leaving the small live
     // turn; the big turn's bytes must not be counted.
     let dir3 = tempfile::tempdir().unwrap();
-    let mut s3 = open_transcript_store(dir3.path(), SESSION_ID);
+    let mut s3 = open_transcript_store(dir3.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut s3, "live", &"B".repeat(50)); // seq 0, 1
     let dead = append_turn_with_text(&mut s3, "dead", &"A".repeat(500)); // seq 2, 3
     s3.mark_superseded_from(dead);
@@ -1064,7 +1065,7 @@ fn tail_is_seq_aligned_and_counts_utf8_bytes_and_excludes_superseded() {
 #[test]
 fn tail_budget_attributes_interleaved_rows_by_seq_range() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     for (kind, turn) in [
         (NormalizedEventKind::User, "t1"),
         (NormalizedEventKind::Text, "t2"),
@@ -1089,7 +1090,7 @@ fn tail_budget_attributes_interleaved_rows_by_seq_range() {
 #[test]
 fn tail_budget_ignores_superseded_rows_when_sizing() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     append_turn_with_text(&mut store, "live", "b");
     let dead = append_turn_with_text(&mut store, "dead", &"A".repeat(5000));
     store.mark_superseded_from(dead);
@@ -1147,7 +1148,7 @@ fn tool_event(kind: NormalizedEventKind, tool_id: &str) -> NormalizedEvent {
 fn diff_trim_backfill_rewrites_whole_file_rows_on_both_row_kinds() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "q1", "turnId": "t1"}),
@@ -1159,7 +1160,7 @@ fn diff_trim_backfill_rewrites_whole_file_rows_on_both_row_kinds() {
     }
 
     simulate_db_written_before_the_trim_migration(dir.path());
-    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let rows: Vec<_> = s2
         .read_all()
         .into_iter()
@@ -1190,7 +1191,7 @@ fn diff_trim_backfill_rewrites_whole_file_rows_on_both_row_kinds() {
         .iter()
         .map(|e| serde_json::to_string(e).unwrap())
         .collect();
-    let s3 = open_transcript_store(dir.path(), SESSION_ID);
+    let s3 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let after: Vec<String> = s3
         .read_all()
         .iter()
@@ -1217,7 +1218,7 @@ fn diff_trim_backfill_leaves_small_and_write_diffs_alone() {
         new_start: None,
     };
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "q1", "turnId": "t1"}),
@@ -1230,7 +1231,7 @@ fn diff_trim_backfill_leaves_small_and_write_diffs_alone() {
         s.append(&mut e);
     }
     simulate_db_written_before_the_trim_migration(dir.path());
-    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let row = s2
         .read_all()
         .into_iter()
@@ -1262,7 +1263,7 @@ fn diff_trim_backfill_runs_before_the_oversized_cap() {
         "fixture must exceed the per-side cap"
     );
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         let mut e = ev(
             NormalizedEventKind::ToolResult,
             serde_json::json!({"turnId": "t1", "toolId": "tu-huge"}),
@@ -1278,7 +1279,7 @@ fn diff_trim_backfill_runs_before_the_oversized_cap() {
     }
 
     simulate_db_written_before_the_trim_migration(dir.path());
-    let s2 = open_transcript_store(dir.path(), SESSION_ID);
+    let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let row = s2
         .read_all()
         .into_iter()
@@ -1309,7 +1310,7 @@ fn diff_trim_backfill_runs_before_the_oversized_cap() {
 fn diff_trim_backfill_survives_a_malformed_payload_row() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let mut s = open_transcript_store(dir.path(), SESSION_ID);
+        let mut s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
         s.append(&mut ev(
             NormalizedEventKind::User,
             serde_json::json!({"text": "q1", "turnId": "t1"}),
@@ -1326,7 +1327,7 @@ fn diff_trim_backfill_survives_a_malformed_payload_row() {
     drop(conn);
 
     // Must not panic / abort.
-    let s = open_transcript_store(dir.path(), SESSION_ID);
+    let s = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     assert_eq!(
         s.read_all().len(),
         1,
@@ -1346,7 +1347,7 @@ fn diff_trim_backfill_survives_a_malformed_payload_row() {
 #[test]
 fn import_transaction_trims_a_whole_file_diff() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
 
     let old = big_file("before");
     let new = old.replace("before line 020 ", "after line 020  ");
@@ -1404,7 +1405,7 @@ fn break_ev(seq_turn: &str) -> NormalizedEvent {
 #[test]
 fn append_batch_assigns_monotonic_seq_and_persists() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut events = vec![
         ev(
             NormalizedEventKind::User,
@@ -1445,7 +1446,7 @@ fn append_batch_assigns_monotonic_seq_and_persists() {
 #[test]
 fn append_batch_is_gap_free_and_reopens_contiguously() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     // Pre-persist one row so next_seq = 1.
     store.append(&mut ev(
         NormalizedEventKind::User,
@@ -1478,7 +1479,7 @@ fn append_batch_is_gap_free_and_reopens_contiguously() {
 
     // Reopen: next_seq reseeds from MAX, so the monotonic cursor is durable.
     drop(store);
-    let reopened = open_transcript_store(dir.path(), SESSION_ID);
+    let reopened = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     assert_eq!(reopened.count(), 4);
     let seqs: Vec<i64> = reopened
         .read_all()
@@ -1491,7 +1492,7 @@ fn append_batch_is_gap_free_and_reopens_contiguously() {
 #[test]
 fn count_since_last_break_no_break_counts_all() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     assert_eq!(store.count_since_last_break(), 0);
     store.append(&mut ev(
         NormalizedEventKind::User,
@@ -1507,7 +1508,7 @@ fn count_since_last_break_no_break_counts_all() {
 #[test]
 fn count_since_last_break_with_middle_break() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     // two rows, break, two rows — only the after-break rows count.
     store.append(&mut ev(
         NormalizedEventKind::User,
@@ -1533,7 +1534,7 @@ fn count_since_last_break_with_middle_break() {
 #[test]
 fn count_since_last_break_with_break_last() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     store.append(&mut ev(
         NormalizedEventKind::User,
         serde_json::json!({"text": "q", "turnId": "t1"}),
@@ -1545,7 +1546,7 @@ fn count_since_last_break_with_break_last() {
 #[test]
 fn read_last_returns_the_newest_rows_oldest_first() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     for t in ["t1", "t2", "t3"] {
         append_turn(&mut store, t);
     }
@@ -1567,7 +1568,7 @@ fn read_last_returns_the_newest_rows_oldest_first() {
 #[test]
 fn task_signal_row_round_trips_through_the_store() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = open_transcript_store(dir.path(), SESSION_ID);
+    let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let mut e = ev(NormalizedEventKind::TaskSignal, serde_json::json!({}));
     e.task_signal =
         Some(serde_json::json!({"subtype": "task_notification", "status": "completed"}));
@@ -1579,4 +1580,13 @@ fn task_signal_row_round_trips_through_the_store() {
         last[0].task_signal,
         Some(serde_json::json!({"subtype": "task_notification", "status": "completed"}))
     );
+}
+
+/// An unopenable store is an `Err`, never a panic (it used to `.expect()`,
+/// which aborted the daemon or poisoned the chat registry).
+#[test]
+fn open_failure_is_an_error_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("messages.db")).unwrap();
+    assert!(open_transcript_store(dir.path(), SESSION_ID).is_err());
 }

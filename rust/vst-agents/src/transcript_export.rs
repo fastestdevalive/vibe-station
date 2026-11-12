@@ -49,7 +49,7 @@ pub fn export_transcript_markdown(
     old_id: &str,
     out: &Path,
 ) -> io::Result<ExportStats> {
-    let store = open_transcript_store(old_dir, old_id);
+    let store = open_transcript_store(old_dir, old_id).map_err(io::Error::other)?;
     let events = store.read_all();
     store.close();
 
@@ -251,7 +251,7 @@ mod tests {
     fn export_omits_thinking_and_trims_tool_results() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = dir.path().join("old");
-        let mut store = open_transcript_store(&old_dir, "s1");
+        let mut store = open_transcript_store(&old_dir, "s1").unwrap();
         for mut e in [
             ev(NormalizedEventKind::User, "t1", "please do the thing"),
             ev(NormalizedEventKind::Thinking, "t1", "SECRET THINKING"),
@@ -300,7 +300,7 @@ mod tests {
     fn index_line_numbers_match_the_rendered_body() {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = dir.path().join("old");
-        let mut store = open_transcript_store(&old_dir, "s1");
+        let mut store = open_transcript_store(&old_dir, "s1").unwrap();
         for mut e in [
             ev(NormalizedEventKind::User, "t1", "first question"),
             ev(NormalizedEventKind::Text, "t1", "first answer"),
@@ -342,7 +342,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let old_dir = dir.path().join("empty");
         // Create an empty store so `has_db` is true (dir exists).
-        let store = open_transcript_store(&old_dir, "s1");
+        let store = open_transcript_store(&old_dir, "s1").unwrap();
         store.close();
 
         let out = dir.path().join("previous-chat.md");

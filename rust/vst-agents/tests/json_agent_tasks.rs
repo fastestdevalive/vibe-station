@@ -306,7 +306,8 @@ async fn registry_is_rebuilt_from_the_transcript_and_running_goes_stale() {
     let second = get_or_create_json_agent_session(
         &registry,
         fx.opts(Arc::new(ScriptedClaudeLike { script: vec![] })),
-    );
+    )
+    .unwrap();
     let (_, tasks) = fx.tasks_event(|t| !t.is_empty()).await;
     assert_eq!(tasks[0].id, "rb1");
     assert_eq!(tasks[0].state, TaskState::Stale);

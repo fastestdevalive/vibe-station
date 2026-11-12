@@ -450,22 +450,44 @@ impl TranscriptStore {
 
     /// Append one event, returning the durable monotonic `log_seq` (also set on
     /// the passed event).
-    pub fn append(&mut self, ev: &mut NormalizedEvent) -> i64 {
+    ///
+    /// # Errors
+    /// The SQLite insert failed (disk full, I/O error); `next_seq` is not
+    /// advanced (the next append reuses the seq) and `ev.log_seq` is reset to
+    /// `None`, so the unpersisted event never carries a seq that a later row
+    /// will own (a client cursor at that seq would skip the real row).
+    pub fn try_append(&mut self, ev: &mut NormalizedEvent) -> rusqlite::Result<i64> {
         let seq = self.next_seq;
         ev.log_seq = Some(seq);
-        self.insert_row(seq, ev);
+        if let Err(e) = self.insert_row(seq, ev) {
+            ev.log_seq = None;
+            return Err(e);
+        }
         self.next_seq = seq + 1;
+        Ok(seq)
+    }
+
+    /// [`try_append`](Self::try_append) that logs a failure instead of
+    /// returning it (the row is lost, `ev.log_seq` stays `None`, and the
+    /// returned seq was NOT written — callers that care use `try_append`).
+    /// Never panics:
+    /// this once `.expect()`ed, and with `panic = "abort"` one failed write took
+    /// the whole daemon down.
+    pub fn append(&mut self, ev: &mut NormalizedEvent) -> i64 {
+        let seq = self.next_seq;
+        if let Err(e) = self.try_append(ev) {
+            tracing::warn!(session_id = %self.session_id, seq, error = %e, "[transcript] append failed; row dropped");
+        }
         seq
     }
 
-    fn insert_row(&self, seq: i64, ev: &NormalizedEvent) {
+    fn insert_row(&self, seq: i64, ev: &NormalizedEvent) -> rusqlite::Result<()> {
         let payload = serde_json::to_string(ev).unwrap_or_default();
-        self.conn
-            .execute(
-                "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![self.session_id, seq, ev.ts, Some(kind_str(ev.kind)), ev.turn_id, payload],
-            )
-            .expect("insert into message");
+        self.conn.execute(
+            "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![self.session_id, seq, ev.ts, Some(kind_str(ev.kind)), ev.turn_id, payload],
+        )?;
+        Ok(())
     }
 
     /// Full transcript in insertion (`logSeq`) order, live rows only.
@@ -1157,8 +1179,21 @@ pub fn transcript_db_path(data_dir: &Path) -> std::path::PathBuf {
 
 /// Open (create) the SQLite store for a session's data dir, migrating any
 /// legacy `messages.jsonl` on first open.
-pub fn open_transcript_store(data_dir: &Path, session_id: &str) -> TranscriptStore {
+///
+/// Fallible on purpose: an open can fail for reasons outside our control (a
+/// `disk I/O error` while the session's directory is being deleted, a full
+/// disk). This used to `.expect()`, and because it runs on the `chat:open`
+/// path that one panic poisoned the shared `JsonAgentRegistry` (debug) or
+/// aborted the daemon (`panic = "abort"`, release) — Rich Chat died for every
+/// session. Callers must surface or degrade, never unwrap in production.
+///
+/// # Errors
+/// Any SQLite error opening, migrating or backfilling the per-session DB.
+pub fn open_transcript_store(
+    data_dir: &Path,
+    session_id: &str,
+) -> rusqlite::Result<TranscriptStore> {
     let db_path = transcript_db_path(data_dir);
     let jsonl_path = data_dir.join("messages.jsonl");
-    TranscriptStore::new(&db_path, session_id, Some(&jsonl_path)).expect("open transcript store")
+    TranscriptStore::new(&db_path, session_id, Some(&jsonl_path))
 }

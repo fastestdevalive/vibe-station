@@ -15,6 +15,7 @@ import type { ApiInstance } from "@/api";
 export function createChatRepository(api: ApiInstance) {
   return {
     openChat: api.openChat,
+    reopenChat: api.reopenChat,
     closeChat: api.closeChat,
     sendChat: api.sendChat,
     stopChat: api.stopChat,

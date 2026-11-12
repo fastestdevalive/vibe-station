@@ -179,6 +179,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     meta,
     pending,
     loading,
+    loadError,
+    retry,
     hasMore,
     loadingEarlier,
     loadEarlier,
@@ -499,6 +501,18 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           {loading ? (
             <div className="chat-pane__state">
               <span className="chat-spinner" aria-hidden /> Loading history…
+            </div>
+          ) : loadError !== null && events.length === 0 ? (
+            <div className="chat-pane__state chat-pane__load-error" role="alert">
+              <div>{loadError}</div>
+              <button
+                type="button"
+                className="btn btn--subtle"
+                style={{ fontSize: "var(--font-size-xs)" }}
+                onClick={retry}
+              >
+                Retry
+              </button>
             </div>
           ) : isEmpty ? (
             <div className="chat-pane__state chat-pane__empty">

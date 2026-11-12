@@ -7687,6 +7687,9 @@ impl ChatRouteError {
                 ChatRouteError::NotJson(format!("Session '{session_id}' is not a JSON session"))
             }
             ResolveJsonAgentError::ModeError(m) => ChatRouteError::Internal(m),
+            ResolveJsonAgentError::StoreOpen(m) => {
+                ChatRouteError::Internal(format!("Couldn't open the chat history: {m}"))
+            }
         }
     }
 }

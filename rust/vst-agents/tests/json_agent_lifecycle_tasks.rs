@@ -239,7 +239,8 @@ async fn harness_with(
             store_handle: store,
             broadcaster: Broadcaster(tx),
         },
-    );
+    )
+    .unwrap();
     let probe_arc = Arc::new(FakeProbe(Mutex::new(probe)));
     s.set_task_probe_for_test(probe_arc.clone());
     let mut h = H {
