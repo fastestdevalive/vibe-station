@@ -1,4 +1,4 @@
-import type { LimitSlotRef, LimitStatus, LimitWindow } from "@/api/types";
+import type { LimitSlotRef, LimitStatus, LimitWindow, LimitsResult } from "@/api/types";
 
 export type SlotIndex = 0 | 1;
 
@@ -6,8 +6,58 @@ export type SlotIndex = 0 | 1;
  *  dimmed (with an as-of timestamp) even though the number still shows. */
 export const STALE_AFTER_MS = 30 * 60 * 1000;
 
+/** Two refs identify the same slot iff harness, window AND account match.
+ *  `accountId ?? null` so an absent accountId means the System login. */
 export function sameRef(a: LimitSlotRef, b: LimitSlotRef): boolean {
-  return a.harness === b.harness && a.windowId === b.windowId;
+  return (
+    a.harness === b.harness &&
+    a.windowId === b.windowId &&
+    (a.accountId ?? null) === (b.accountId ?? null)
+  );
+}
+
+/** The persisted slot key (mirror of `LimitSlotRef::to_key`):
+ *  `"<harness>/<windowId>"` for the System login, `"<harness>/<windowId>@<accountId>"`
+ *  for a named account. */
+export function slotKey(ref: LimitSlotRef): string {
+  return ref.accountId
+    ? `${ref.harness}/${ref.windowId}@${ref.accountId}`
+    : `${ref.harness}/${ref.windowId}`;
+}
+
+/** One harness's results, grouped per account (System first within a harness —
+ *  the server's own order). */
+export interface HarnessAccountGroup {
+  /** Account id; absent = the CLI's System login. */
+  accountId?: string;
+  results: LimitsResult[];
+}
+
+export interface HarnessGroup {
+  harness: string;
+  accounts: HarnessAccountGroup[];
+}
+
+/** Group the limits snapshot by harness, then by account (plan B3.9). The
+ *  popup renders "Claude · Work" headings from this; a harness with a single
+ *  account group renders its bare harness label. */
+export function groupByAccount(results: LimitsResult[]): HarnessGroup[] {
+  const harnesses = new Map<string, HarnessAccountGroup[]>();
+  for (const result of results) {
+    const groups = harnesses.get(result.harness) ?? [];
+    const key = result.accountId ?? null;
+    const existing = groups.find((g) => (g.accountId ?? null) === key);
+    if (existing) {
+      existing.results.push(result);
+    } else {
+      groups.push({
+        ...(result.accountId ? { accountId: result.accountId } : {}),
+        results: [result],
+      });
+    }
+    harnesses.set(result.harness, groups);
+  }
+  return [...harnesses.entries()].map(([harness, accounts]) => ({ harness, accounts }));
 }
 
 /** Compute the new two-slot layout after the user picks `picked` for
@@ -180,7 +230,7 @@ export function statusReason(status: LimitStatus, message: string | null): strin
     case "not_installed":
       return "Not installed";
     case "signed_out":
-      return "Signed out";
+      return "Signed out. Sign in from Settings.";
     case "no_plan_limits":
       return "No plan limits (API key or signed out)";
     case "no_data":

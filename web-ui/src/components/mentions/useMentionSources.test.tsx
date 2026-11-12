@@ -136,7 +136,7 @@ describe("useMentionSources (2.T2)", () => {
     expect(result.current.agent.items).toHaveLength(1);
     expect(result.current.agent.items[0]?.id).toBe("s-active");
     expect(result.current.agent.items[0]?.status).toBe("working");
-    expect(result.current.agent.items[0]?.secondary).toBe("claude · this worktree");
+    expect(result.current.agent.items[0]?.secondary).toBe("Claude · this worktree");
 
     // When projectId is null (global draft), agents from ALL projects are listed
     const globalCfg: MentionEditorConfig = {
@@ -231,8 +231,8 @@ describe("useMentionSources (2.T2)", () => {
     const picked = renderHook(() => useMentionSources(cfg, parseMentionQuery("agents:beta:", refs), true));
     const items = picked.result.current.agent.items;
     expect(items.map((a) => a.id).sort()).toEqual(["s-b1", "s-b2"]);
-    expect(items.find((a) => a.id === "s-b1")?.secondary).toBe("claude · plugin-sys");
-    expect(items.find((a) => a.id === "s-b2")?.secondary).toBe("claude · direct");
+    expect(items.find((a) => a.id === "s-b1")?.secondary).toBe("Claude · plugin-sys");
+    expect(items.find((a) => a.id === "s-b2")?.secondary).toBe("Claude · direct");
     // The worktree label is matchable via the secondary text.
     expect(rankItems(items, "plugin").map((a) => a.id)).toEqual(["s-b1"]);
 

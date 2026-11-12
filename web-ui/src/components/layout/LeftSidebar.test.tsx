@@ -778,7 +778,7 @@ describe("LeftSidebar", () => {
       await screen.findByRole("region", { name: /^pinned$/i });
       // The mock seeds "Proj A" as the name for proj-a (the project that owns wt-1)
       const subheads = document.querySelectorAll(".pinned-row__subhead");
-      expect(Array.from(subheads).some((s) => s.textContent === "Proj A")).toBe(true);
+      expect(Array.from(subheads).some((s) => s.firstChild?.textContent === "Proj A")).toBe(true);
     });
 
     it("⋯ menu on a pinned row reads 'Unpin' and calls api.unpinWorktree", async () => {
@@ -3683,5 +3683,123 @@ describe("LeftSidebar doctor button label (R2F-02)", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText('fix @agent:"Fix login" bug')).toBeInTheDocument();
+  });
+});
+
+// ── Session account badge (plan B3.3) ───────────────────────────────────────
+describe("LeftSidebar session account badge", () => {
+  const api = createMockApi();
+
+  beforeEach(() => {
+    localStorage.clear();
+    // The worktree's agent rows only render when its tree is open.
+    localStorage.setItem("sidebar:openWorktrees", JSON.stringify(["wt-1"]));
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeProjectId: "proj-a",
+      activeWorktreeId: "wt-1",
+      activeSessionId: "sess-main",
+      sessionStates: {},
+      lastSessionByWorktree: {},
+      diffScopeByWorktree: {},
+      hideInactiveWorktrees: false,
+    });
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false, accounts: [], accountsLoaded: false });
+  });
+
+  function renderSidebar() {
+    return render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+  }
+
+  function firstSessionRow(): HTMLElement | null {
+    return document.querySelector(".tree-row--worktree-session") as HTMLElement | null;
+  }
+
+  it("shows the account name for a CLI with several accounts", async () => {
+    renderSidebar();
+    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    // claude has 4 accounts in the mock fixture; the session starts on System.
+    expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toBe("Account: System login");
+
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
+    expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toContain("Account: Work");
+  });
+
+  it("is absent for a single-account CLI", async () => {
+    renderSidebar();
+    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+
+    act(() =>
+      useServerStore.setState({
+        accounts: [
+          {
+            id: "system",
+            cli: "claude",
+            label: null,
+            displayName: "System login",
+            email: null,
+            plan: null,
+            method: "system",
+            auth: "signed_in",
+            isDefault: true,
+            limited: null,
+            createdAt: null,
+          },
+        ],
+      }),
+    );
+    expect(firstSessionRow()!.querySelector(".account-chip")).toBeNull();
+  });
+
+  it("says 'Account removed' when the stored account id is unknown", async () => {
+    renderSidebar();
+    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_gone" }));
+    expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toBe("Account: Account removed");
+  });
+
+  it("a pinned direct-agent row shows the account on its project line", async () => {
+    const sess = await api.createDirectSession({
+      target: "direct",
+      projectId: "proj-a",
+      type: "agent",
+      name: "pinned-badge",
+      modeId: "mode-1",
+    });
+    await api.pinSession(sess.id, true);
+    renderSidebar();
+    const region = await screen.findByRole("region", { name: /^pinned$/i });
+    await waitFor(() =>
+      expect(region.querySelector(".pinned-row__subhead .account-chip")).not.toBeNull(),
+    );
+    expect(region.querySelector(".pinned-row__trail .account-chip")).toBeNull();
+  });
+
+  it("a worktree row shows the mark of its main session's account", async () => {
+    renderSidebar();
+    const wtMarks = () =>
+      Array.from(
+        document.querySelectorAll(
+          ".tree-row--worktree:not(.tree-row--worktree-session):not(.draft-row):not(.pinned-row) .wt-row__expand .account-chip",
+        ),
+      ).map((el) => el.getAttribute("aria-label") ?? "");
+    await waitFor(() => expect(wtMarks().length).toBeGreaterThan(0));
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
+    expect(wtMarks().some((label) => label.startsWith("Account: Work"))).toBe(true);
+  });
+
+  it("leaves the status dot class unchanged when the badge appears", async () => {
+    renderSidebar();
+    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    const dot = () => firstSessionRow()!.querySelector(".status-spinner, .status-dot")!.className;
+    const before = dot();
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
+    expect(dot()).toBe(before);
   });
 });

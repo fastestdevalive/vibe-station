@@ -1169,3 +1169,125 @@ describe("useServerSync — stateReason", () => {
     expect(reasonOf()).toBe("killed by signal 15 (TERM)");
   });
 });
+
+// --- Accounts: the store is the single source; WS events patch it, and the
+// bulk fetch rides the initial load + every reconnect (plan B1.4). ---
+describe("useServerSync — accounts", () => {
+  beforeEach(() => {
+    useServerStore.setState({
+      projects: [],
+      worktrees: [],
+      sessions: [],
+      loaded: false,
+      accounts: [],
+      accountsLoaded: false,
+    });
+  });
+
+  const accountsOf = () => useServerStore.getState().accounts;
+
+  async function mounted() {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => {
+      expect(useServerStore.getState().loaded).toBe(true);
+      expect(useServerStore.getState().accountsLoaded).toBe(true);
+    });
+    return api;
+  }
+
+  it("loads accounts with the initial fetch", async () => {
+    await mounted();
+    const claude = accountsOf().filter((a) => a.cli === "claude");
+    expect(claude.length).toBeGreaterThan(1);
+    expect(claude[0]?.id).toBe("system");
+  });
+
+  it("account:updated upserts the account by (cli,id)", async () => {
+    const api = await mounted();
+    const work = accountsOf().find((a) => a.cli === "claude" && a.id !== "system")!;
+    const before = accountsOf().length;
+
+    act(() => {
+      api.__test.emit({
+        type: "account:updated",
+        account: { ...work, displayName: "Work (renamed)", auth: "signed_out" },
+      });
+    });
+
+    await waitFor(() => {
+      const row = accountsOf().find((a) => a.cli === "claude" && a.id === work.id);
+      expect(row?.displayName).toBe("Work (renamed)");
+      expect(row?.auth).toBe("signed_out");
+    });
+    expect(accountsOf()).toHaveLength(before);
+  });
+
+  it("account:removed drops the account", async () => {
+    const api = await mounted();
+    const work = accountsOf().find((a) => a.cli === "claude" && a.id !== "system")!;
+
+    act(() => {
+      api.__test.emit({ type: "account:removed", cli: "claude", accountId: work.id });
+    });
+
+    await waitFor(() => {
+      expect(accountsOf().some((a) => a.cli === "claude" && a.id === work.id)).toBe(false);
+    });
+  });
+
+  it("account:limited patches the named account and the System row, and clears", async () => {
+    const api = await mounted();
+    const work = accountsOf().find((a) => a.cli === "claude" && a.id !== "system")!;
+    const limited = { windowId: "five_hour", resetsAt: "2026-01-01T02:00:00.000Z", source: "poller" as const };
+
+    act(() => {
+      api.__test.emit({ type: "account:limited", cli: "claude", accountId: work.id, limited });
+      api.__test.emit({ type: "account:limited", cli: "claude", accountId: null, limited });
+    });
+
+    await waitFor(() => {
+      expect(accountsOf().find((a) => a.id === work.id)?.limited).toEqual(limited);
+      expect(accountsOf().find((a) => a.cli === "claude" && a.id === "system")?.limited).toEqual(limited);
+    });
+
+    act(() => {
+      api.__test.emit({ type: "account:limited", cli: "claude", accountId: work.id, limited: null });
+    });
+    await waitFor(() => expect(accountsOf().find((a) => a.id === work.id)?.limited).toBeNull());
+  });
+
+  it("account:signin progress is not stored (the dialog consumes it)", async () => {
+    const api = await mounted();
+    const before = accountsOf();
+
+    act(() => {
+      api.__test.emit({
+        type: "account:signin",
+        attemptId: "att_1",
+        cli: "claude",
+        accountId: "acc_9f9f9f9f",
+        state: "done",
+        email: "new@example.dev",
+        plan: "Pro",
+      });
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(accountsOf()).toBe(before);
+  });
+
+  it("ws:open refetches accounts", async () => {
+    const api = createMockApi();
+    const getAccountsSpy = vi.spyOn(api, "getAccounts");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().accountsLoaded).toBe(true));
+    expect(getAccountsSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      api.__test.emit({ type: "ws:open" });
+    });
+
+    await waitFor(() => expect(getAccountsSpy).toHaveBeenCalledTimes(2));
+  });
+});

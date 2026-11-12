@@ -62,7 +62,7 @@ describe("NewModeDialog", () => {
   it("shows an icon on each CLI option and previews the derived icon", async () => {
     const user = userEvent.setup();
     render(<NewModeDialog open api={api} onClose={() => {}} existingNames={[]} />);
-    const claude = await screen.findByRole("radio", { name: "claude" });
+    const claude = await screen.findByRole("radio", { name: "Claude" });
     const label = claude.closest("label") as HTMLElement;
     expect(within(label).getByRole("img", { hidden: true })).toBeInTheDocument();
     await user.click(claude);

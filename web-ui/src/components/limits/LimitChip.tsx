@@ -1,6 +1,7 @@
 import type { Ref } from "react";
-import type { LimitWindow } from "@/api/types";
+import type { AccountSummary, LimitWindow } from "@/api/types";
 import { ModeIcon } from "@/components/agent/ModeIcon";
+import { AccountChip } from "@/components/accounts/AccountChip";
 import {
   ariaLabel,
   cadenceBadge,
@@ -20,6 +21,9 @@ interface LimitChipProps {
   variant: "bar" | "row";
   /** "Slot 1" for aria. */
   slotLabel?: string;
+  /** The account whose mark follows the percentage. Callers pass it ONLY for a
+   *  harness with several accounts (plan B3.9). */
+  account?: AccountSummary;
   expanded?: boolean;
   onClick?: () => void;
   /** Optional ref to the rendered button (bar variant) — lets the bar return
@@ -62,6 +66,7 @@ export function LimitChip({
   nowMs,
   variant,
   slotLabel,
+  account,
   expanded,
   onClick,
   buttonRef,
@@ -87,12 +92,18 @@ export function LimitChip({
   const isPercentView = view.kind === "ok" || view.kind === "warn" || view.kind === "limit";
   const pctDisplay = !isBar && isPercentView ? `${pctText} used` : pctText;
 
+  const accountName = account?.displayName;
   const label = ariaLabel(harness, window, view, nowMs);
+  const fullLabel = accountName ? `${label}, ${accountName}` : label;
   const tooltipWindowId = window?.windowId ?? fallbackWindowId;
 
   const ringText = cadenceBadge(cadence);
 
   const showImminentCountdown = isBar && isResetImminent(window?.resetsAt, nowMs);
+
+  const title = [accountName, tooltipText(harness, tooltipWindowId, window, view, nowMs)]
+    .filter(Boolean)
+    .join(" · ");
 
   const inner = (
     <>
@@ -136,6 +147,7 @@ export function LimitChip({
         )}
       </svg>
       <span className="limit-chip__pct">{pctDisplay}</span>
+      {account ? <AccountChip variant="mark" account={account} /> : null}
       {showImminentCountdown && (
         <span className="limit-chip__countdown">
           {compactResetCountdown(window?.resetsAt ?? null, nowMs)}
@@ -153,8 +165,8 @@ export function LimitChip({
         className={className}
         aria-haspopup="dialog"
         aria-expanded={expanded}
-        aria-label={slotLabel ? `${slotLabel}, ${label}` : label}
-        title={tooltipText(harness, tooltipWindowId, window, view, nowMs)}
+        aria-label={slotLabel ? `${slotLabel}, ${fullLabel}` : fullLabel}
+        title={title}
         onClick={onClick}
       >
         {inner}
@@ -163,7 +175,7 @@ export function LimitChip({
   }
 
   return (
-    <span className={className} title={tooltipText(harness, tooltipWindowId, window, view, nowMs)}>
+    <span className={className} title={title}>
       {inner}
     </span>
   );

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createClientApi } from "./client";
-import { ApiError } from "./errors";
+import { ApiError, isAccountError } from "./errors";
 /** Creates a fake WebSocket class that auto-opens and records sent messages. */
 function makeFakeWsFactory() {
   const sent: string[] = [];
@@ -1012,5 +1012,247 @@ describe("statPath", () => {
     const err = await api.statPath("wt1", "../secret").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(403);
+  });
+});
+
+/**
+ * Accounts (plan B1.T4) — every method hits the exact path + verb + body from
+ * the REST contract, with `encodeURIComponent` on each path segment.
+ * `baseUrl()` resolves to "/api" (the stubbed `window` has no `__VST_PORT__`).
+ */
+describe("Accounts client methods (B1.T4)", () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: String(status),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+
+  function fetchStub(body: unknown = { ok: true }) {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const lastCall = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.at(-1) as [string, RequestInit | undefined];
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const summary = {
+    id: "acc_1a2b3c4d",
+    cli: "claude",
+    label: "Work",
+    displayName: "Work",
+    email: "gaurav@acme.io",
+    plan: "Team",
+    method: "sign_in",
+    auth: "signed_in",
+    isDefault: false,
+    limited: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("getAccounts GETs /api/accounts and unwraps `accounts`", async () => {
+    const fetchMock = fetchStub({ accounts: [summary] });
+    const accounts = await createClientApi().getAccounts();
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts");
+    expect(init?.method).toBeUndefined();
+    expect(accounts).toEqual([summary]);
+  });
+
+  it("createApiKeyAccount POSTs /api/accounts with method api_key", async () => {
+    const fetchMock = fetchStub(summary);
+    const body = { cli: "claude", method: "api_key" as const, apiKey: "sk-test", label: "Work" };
+    const acct = await createClientApi().createApiKeyAccount(body);
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(body);
+    expect(acct).toEqual(summary);
+  });
+
+  it("startAccountSignIn POSTs /api/accounts/sign-in", async () => {
+    const response = { attemptId: "att_1", accountId: "acc_9f9f9f9f", sessionId: "sess-signin-1" };
+    const fetchMock = fetchStub(response);
+    const started = await createClientApi().startAccountSignIn({ cli: "claude", worktreeId: "wt-1" });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/sign-in");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ cli: "claude", worktreeId: "wt-1" });
+    expect(started).toEqual(response);
+  });
+
+  it("finishAccountSignIn POSTs /api/accounts/sign-in/<attemptId>/finish", async () => {
+    const fetchMock = fetchStub(summary);
+    await createClientApi().finishAccountSignIn("att_1", { label: "Work" });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/sign-in/att_1/finish");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ label: "Work" });
+  });
+
+  it("cancelAccountSignIn DELETEs /api/accounts/sign-in/<attemptId>", async () => {
+    const fetchMock = fetchStub({ ok: true });
+    const res = await createClientApi().cancelAccountSignIn("att_1");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/sign-in/att_1");
+    expect(init?.method).toBe("DELETE");
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("restartAccountSignIn POSTs /api/accounts/<cli>/<id>/sign-in with the worktree", async () => {
+    const response = { attemptId: "att_2", accountId: "acc_1a2b3c4d", sessionId: "sess-signin-2" };
+    const fetchMock = fetchStub(response);
+    await createClientApi().restartAccountSignIn("claude", "acc_1a2b3c4d", "wt-1");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/acc_1a2b3c4d/sign-in");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ worktreeId: "wt-1" });
+  });
+
+  it("renameAccount PATCHes /api/accounts/<cli>/<id> with the label", async () => {
+    const fetchMock = fetchStub(summary);
+    await createClientApi().renameAccount("claude", "acc_1a2b3c4d", "Work");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/acc_1a2b3c4d");
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual({ label: "Work" });
+
+    // null clears the label.
+    const fetchMock2 = fetchStub({ ...summary, label: null });
+    await createClientApi().renameAccount("claude", "acc_1a2b3c4d", null);
+    const [, init2] = lastCall(fetchMock2);
+    expect(JSON.parse(String(init2?.body))).toEqual({ label: null });
+  });
+
+  it("setDefaultAccount PUTs /api/accounts/<cli>/default and returns that CLI's rows", async () => {
+    const fetchMock = fetchStub({ accounts: [summary] });
+    const rows = await createClientApi().setDefaultAccount("claude", "system");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/default");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ accountId: "system" });
+    expect(rows).toEqual([summary]);
+  });
+
+  it("getAccountUsage GETs /api/accounts/<cli>/<id>/usage", async () => {
+    const usage = { running: [{ id: "sess-1", name: "Fix login" }], pastCount: 3 };
+    const fetchMock = fetchStub(usage);
+    const res = await createClientApi().getAccountUsage("claude", "acc_1a2b3c4d");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/acc_1a2b3c4d/usage");
+    expect(init?.method).toBeUndefined();
+    expect(res).toEqual(usage);
+  });
+
+  it("refreshAccount POSTs /api/accounts/<cli>/<id>/refresh", async () => {
+    const fetchMock = fetchStub(summary);
+    await createClientApi().refreshAccount("claude", "acc_1a2b3c4d");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/acc_1a2b3c4d/refresh");
+    expect(init?.method).toBe("POST");
+  });
+
+  it("removeAccount DELETEs /api/accounts/<cli>/<id>", async () => {
+    const fetchMock = fetchStub({ ok: true, stoppedSessionIds: ["sess-1"] });
+    const res = await createClientApi().removeAccount("claude", "acc_1a2b3c4d");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/claude/acc_1a2b3c4d");
+    expect(init?.method).toBe("DELETE");
+    expect(res).toEqual({ ok: true, stoppedSessionIds: ["sess-1"] });
+  });
+
+  it("validateAccountPath_posts_body_and_parses", async () => {
+    const check = { dir: "~/.claude-work", exists: true, isEmpty: false, looksValid: true };
+    const fetchMock = fetchStub(check);
+    const body = { cli: "claude", mode: "choose" as const, dir: "~/.claude-work" };
+    const res = await createClientApi().validateAccountPath(body);
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/validate-path");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(body);
+    expect(res).toEqual(check);
+  });
+
+  it("addFolderAccount_posts_and_maps_error_code", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ error: "Already added as gb@side.dev.", code: "folder_duplicate", accountId: "acc_2b3c4d5e" }, 409),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const body = { cli: "claude", mode: "choose" as const, dir: "~/.claude-side" };
+    await expect(createClientApi().addFolderAccount(body)).rejects.toMatchObject({
+      status: 409,
+      code: "folder_duplicate",
+      accountId: "acc_2b3c4d5e",
+    });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/folder");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(body);
+  });
+
+  it("switchSessionAccount POSTs the reset route with accountId + opts", async () => {
+    const reset = {
+      ok: true,
+      archivedSessionId: "sess-1",
+      newSessionId: "sess-2",
+      carryOver: "transcript",
+      breakKind: "switch",
+      accountSwitch: { fromAccountId: "acc_1a2b3c4d", toAccountId: null, handover: "transcript" },
+    };
+    const fetchMock = fetchStub(reset);
+    const res = await createClientApi().switchSessionAccount("sess-1", "system", { modeId: "mode-2" });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/sessions/sess-1/reset");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ modeId: "mode-2", accountId: "system" });
+    expect(res).toEqual(reset);
+  });
+
+  it("createWorktree POSTs /api/worktrees with the accountId it was given", async () => {
+    const fetchMock = fetchStub({ id: "wt-1", projectId: "proj-1", branch: "b", baseBranch: "main" });
+    await createClientApi().createWorktree({
+      projectId: "proj-1",
+      modeId: "mode-1",
+      accountId: "acc_1a2b3c4d",
+    });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/worktrees");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      projectId: "proj-1",
+      modeId: "mode-1",
+      accountId: "acc_1a2b3c4d",
+    });
+  });
+
+  it("encodes every path segment (ids and CLI ids with spaces)", async () => {
+    const fetchMock = fetchStub({ ...summary, label: null });
+    await createClientApi().renameAccount("cla ude", "acc id with space", null);
+    const [url] = lastCall(fetchMock);
+    expect(url).toBe("/api/accounts/cla%20ude/acc%20id%20with%20space");
+
+    const fetchMock2 = fetchStub({ ok: true, archivedSessionId: "s", newSessionId: "n", carryOver: "none" });
+    await createClientApi().switchSessionAccount("sess 1", "system");
+    const [url2] = lastCall(fetchMock2);
+    expect(url2).toBe("/api/sessions/sess%201/reset");
+  });
+
+  it("isAccountError matches the machine-readable code, never the message", () => {
+    const e = new ApiError(JSON.stringify({ error: "That name is taken", code: "label_taken" }), 409, "label_taken");
+    expect(isAccountError(e, "label_taken")).toBe(true);
+    expect(isAccountError(e, "account_not_found")).toBe(false);
+    // A bare message mentioning the code is not a code.
+    expect(isAccountError(new ApiError("label_taken", 409), "label_taken")).toBe(false);
+    expect(isAccountError(new Error("label_taken"), "label_taken")).toBe(false);
   });
 });

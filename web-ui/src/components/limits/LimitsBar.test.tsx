@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LimitSlotRef, LimitsResult, LimitsSnapshot, LimitWindow } from "@/api/types";
+import type { AccountSummary, LimitSlotRef, LimitsResult, LimitsSnapshot, LimitWindow } from "@/api/types";
+import { useServerStore } from "@/hooks/useServerStore";
 import { LimitsBar } from "./LimitsBar";
+
+const mobile = vi.hoisted(() => ({ value: false }));
+vi.mock("@/hooks/useIsMobile", () => ({
+  useIsMobile: () => mobile.value,
+  MOBILE_QUERY: "(max-width: 768px)",
+}));
 
 const mocks = vi.hoisted(() => ({
   snapshot: null as LimitsSnapshot | null,
@@ -95,7 +102,27 @@ function snapshot(over: Partial<LimitsSnapshot> = {}): LimitsSnapshot {
   return { host: "test-host", slots: SLOTS, harnesses: [claudeHarness(), codexHarness()], ...over };
 }
 
+function acct(over: Partial<AccountSummary> & Pick<AccountSummary, "id" | "cli">): AccountSummary {
+  return {
+    label: null,
+    displayName: over.id,
+    email: null,
+    plan: null,
+    method: "sign_in",
+    auth: "signed_in",
+    isDefault: false,
+    limited: null,
+    createdAt: null,
+    ...over,
+  };
+}
+
+const SYSTEM = acct({ id: "system", cli: "claude", displayName: "System login", method: "system", isDefault: true });
+const WORK = acct({ id: "acc_work", cli: "claude", displayName: "Work" });
+
 beforeEach(() => {
+  mobile.value = false;
+  useServerStore.setState({ accounts: [SYSTEM, WORK], accountsLoaded: true });
   mocks.snapshot = snapshot();
   mocks.error = null;
   mocks.refreshing = false;
@@ -203,7 +230,7 @@ describe("LimitsBar", () => {
     mocks.snapshot = snapshot({ harnesses: [claudeHarness(), codexHarness({ status: "signed_out", windows: [] })] });
     render(<LimitsBar />);
     fireEvent.click(chipButtons()[1]);
-    expect(screen.getByText("Signed out")).toBeInTheDocument();
+    expect(screen.getByText("Signed out. Sign in from Settings.")).toBeInTheDocument();
   });
 
   it("renders an agy harness group with a window label row", () => {
@@ -256,8 +283,8 @@ describe("LimitsBar", () => {
     render(<LimitsBar />);
     fireEvent.click(chipButtons()[1]);
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText("Gemini · 5h — Signed out")).toBeInTheDocument();
-    expect(within(dialog).getByText("Gemini · weekly — Signed out")).toBeInTheDocument();
+    expect(within(dialog).getByText("Gemini · 5h — Signed out. Sign in from Settings.")).toBeInTheDocument();
+    expect(within(dialog).getByText("Gemini · weekly — Signed out. Sign in from Settings.")).toBeInTheDocument();
   });
 
   it("picks an agy row via assignSlot with the agy ref", () => {
@@ -269,5 +296,74 @@ describe("LimitsBar", () => {
     fireEvent.click(row);
     expect(mocks.assignSlot).toHaveBeenCalledTimes(1);
     expect(mocks.assignSlot).toHaveBeenCalledWith(1, { harness: "agy", windowId: "gemini_5h" });
+  });
+
+  // ── Per-account footer chips (plan B3.9) ────────────────────────────────
+  it("shows an account mark on a slot only when the harness has several accounts", () => {
+    mocks.snapshot = snapshot({
+      slots: [
+        { harness: "claude", windowId: "five_hour", accountId: "acc_work" },
+        { harness: "claude", windowId: "seven_day" },
+      ],
+    });
+    render(<LimitsBar />);
+    const chips = chipButtons();
+    expect(chips[0].querySelector(".account-chip--mark")).toHaveAttribute("aria-label", "Account: Work");
+    // The System login is named like Settings names it, not "System".
+    expect(chips[1].querySelector(".account-chip--mark")).toHaveAttribute("aria-label", "Account: System login");
+  });
+
+  it("hides the account suffix for a single-account CLI", () => {
+    useServerStore.setState({ accounts: [SYSTEM] });
+    mocks.snapshot = snapshot({
+      slots: [
+        { harness: "claude", windowId: "five_hour", accountId: "acc_work" },
+        { harness: "claude", windowId: "seven_day" },
+      ],
+    });
+    render(<LimitsBar />);
+    for (const chip of chipButtons()) {
+      expect(chip.querySelector(".account-chip")).toBeNull();
+    }
+  });
+
+  it("keys chips by the full slot (account included)", () => {
+    mocks.snapshot = snapshot({
+      slots: [
+        { harness: "claude", windowId: "five_hour", accountId: "acc_work" },
+        { harness: "claude", windowId: "five_hour" },
+      ],
+    });
+    render(<LimitsBar />);
+    // Both slots survive as distinct chips (React would drop a duplicate key).
+    expect(chipButtons()).toHaveLength(2);
+  });
+
+  it("renders the popup as a bottom sheet with a backdrop on phones", () => {
+    mobile.value = true;
+    render(<LimitsBar />);
+    fireEvent.click(chipButtons()[1]);
+    expect(document.querySelector(".limits-popup-backdrop")).not.toBeNull();
+    expect(screen.getByRole("dialog")).toHaveClass("limits-popup");
+  });
+
+  it("renders the chips when the first snapshot arrives after an empty first render", () => {
+    mocks.snapshot = null;
+    mocks.error = null;
+    const { container, rerender } = render(<LimitsBar />);
+    expect(container.firstChild).toBeNull();
+    mocks.snapshot = snapshot();
+    expect(() => rerender(<LimitsBar />)).not.toThrow();
+    expect(chipButtons()).toHaveLength(2);
+  });
+
+  it("renders two identical slots as two chips without a duplicate-key warning", () => {
+    const same: LimitSlotRef = { harness: "claude", windowId: "five_hour" };
+    mocks.snapshot = snapshot({ slots: [same, { ...same }] });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<LimitsBar />);
+    expect(chipButtons()).toHaveLength(2);
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
   });
 });

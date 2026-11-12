@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useEventTargets } from "@/context/DemoEnv";
-import type { LimitSlotRef } from "@/api/types";
+import type { AccountSummary, LimitSlotRef } from "@/api/types";
 import { useLimits } from "@/hooks/useLimits";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useServerStore } from "@/hooks/useServerStore";
+import { accountOf, hasMultipleAccounts } from "@/lib/accounts";
 import { LimitChip } from "./LimitChip";
 import { LimitsPopup } from "./LimitsPopup";
-import type { SlotIndex } from "./limitsModel";
+import { slotKey, type SlotIndex } from "./limitsModel";
 import "@/styles/limits.css";
 
 const TICK_MS = 30_000;
@@ -16,6 +18,7 @@ export function LimitsBar() {
     useLimits();
   const isMobile = useIsMobile();
   const { doc } = useEventTargets();
+  const accounts = useServerStore((s) => s.accounts);
 
   const [openSlot, setOpenSlot] = useState<SlotIndex | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -65,16 +68,24 @@ export function LimitsBar() {
 
   const windowForSlot = (i: SlotIndex) => windowFor(slots[i]);
 
+  /** The account mark for a chip — only when that harness has 2+ accounts
+   *  (Requirement 14: a single-login CLI's footer is unchanged). */
+  const accountFor = (ref: LimitSlotRef): AccountSummary | undefined => {
+    if (!hasMultipleAccounts(accounts, ref.harness)) return undefined;
+    return accountOf(accounts, ref.harness, ref.accountId);
+  };
+
   return (
     <div className="limits-bar" ref={rootRef}>
       {(slots as [LimitSlotRef, LimitSlotRef]).map((slot, i) => {
         const idx = i as SlotIndex;
         return (
           <LimitChip
-            key={`${slot.harness}/${slot.windowId}`}
+            key={`${idx}:${slotKey(slot)}`}
             harness={slot.harness}
             window={windowForSlot(idx)}
             fallbackWindowId={slot.windowId}
+            {...(accountFor(slot) ? { account: accountFor(slot)! } : {})}
             nowMs={nowMs}
             variant="bar"
             slotLabel={`Slot ${idx + 1}`}

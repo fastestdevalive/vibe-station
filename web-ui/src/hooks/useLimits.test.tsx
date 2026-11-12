@@ -153,4 +153,57 @@ describe("useLimits", () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
   });
+
+  it("windowFor picks the per-account window; absent accountId matches System only", async () => {
+    const asOf = new Date().toISOString();
+    const perAccount: LimitsSnapshot = snapshot({
+      harnesses: [
+        {
+          harness: "claude",
+          status: "ok",
+          message: null,
+          asOf,
+          windows: [
+            { harness: "claude", windowId: "five_hour", cadenceMinutes: 300, usedPct: 42, resetsAt: null, asOf, status: "ok" },
+          ],
+        },
+        {
+          harness: "claude",
+          accountId: "acc_1a2b3c4d",
+          status: "ok",
+          message: null,
+          asOf,
+          windows: [
+            {
+              harness: "claude",
+              accountId: "acc_1a2b3c4d",
+              windowId: "five_hour",
+              cadenceMinutes: 300,
+              usedPct: 100,
+              resetsAt: null,
+              asOf,
+              status: "ok",
+            },
+          ],
+        },
+      ],
+    });
+    getLimits.mockResolvedValue(perAccount);
+    const { result } = renderHook(() => useLimits());
+    await flush();
+
+    expect(result.current.windowFor({ harness: "claude", windowId: "five_hour" })?.usedPct).toBe(42);
+    expect(
+      result.current.windowFor({ harness: "claude", windowId: "five_hour", accountId: "acc_1a2b3c4d" })?.usedPct,
+    ).toBe(100);
+    // No per-account window → never falls back to another account's window.
+    expect(
+      result.current.windowFor({ harness: "claude", windowId: "five_hour", accountId: "acc_other" }),
+    ).toBeUndefined();
+
+    expect(result.current.resultFor("claude")?.accountId).toBeUndefined();
+    expect(result.current.resultFor("claude", "system")?.accountId).toBeUndefined();
+    expect(result.current.resultFor("claude", "acc_1a2b3c4d")?.accountId).toBe("acc_1a2b3c4d");
+    expect(result.current.resultFor("claude", "acc_other")).toBeUndefined();
+  });
 });

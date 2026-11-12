@@ -25,6 +25,8 @@ import { usePaneDialogs } from "@/hooks/usePaneDialogs";
 import { useResetProgress } from "@/hooks/useResetProgress";
 import { useModesStore, iconForMode } from "@/store/modesStore";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
+import { AccountBanner } from "@/components/accounts/AccountBanner";
+import { accountOf, isAccountRemoved, sessionCli } from "@/lib/accounts";
 import { ResetPendingBar } from "./ResetPendingBar";
 import type { ModelAction } from "@/components/chat/ModelSwitch";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
@@ -113,6 +115,18 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // sidebar (which uses the resolution above) correctly showed a starting dot.
   const liveState =
     useWorkspaceStore((s) => (sessionId ? s.sessionStates[sessionId] : undefined)) ?? session?.state;
+  // The session's account (server data, R3). A signed-out account stops the
+  // agent and blocks sending — the banner explains, no silent fallback
+  // (Decision 12 / plan B3.7).
+  const accounts = useServerStore((s) => s.accounts);
+  const modesMap = useModesStore((s) => s.modes);
+  const sessionCliName = session ? sessionCli(session, modesMap) : null;
+  const sessionAccount = sessionCliName ? accountOf(accounts, sessionCliName, session?.accountId) : undefined;
+  const accountsLoaded = useServerStore((s) => s.accountsLoaded);
+  const accountUnusable =
+    session?.type === "agent" &&
+    (sessionAccount?.auth === "signed_out" ||
+      (!!sessionCliName && isAccountRemoved(accounts, accountsLoaded, sessionCliName, session.accountId)));
   // Never steal focus on a touch-primary device (the soft keyboard / IME would
   // pop up over the pane for no reason). Reactive to the device's pointer
   // capability; see `useIsTouch`.
@@ -944,6 +958,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               </button>
             ) : null
           }
+          accountId={session?.accountId}
           fontControls={
             <div className="chat-font-overlay__btns">
               <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease chat font" onClick={() => bumpTerminalFont(-0.05)}>
@@ -995,6 +1010,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           </div>
         ) : sessionId ? (
           <div className="chat-pane__composer">
+            {session ? <AccountBanner api={api} session={session} /> : null}
             {steerNotice ? (
               <div className="chat-steer-notice" role="status">
                 <span>{steerNotice}</span>
@@ -1024,7 +1040,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               usePaneDialogs.getState().open(sessionId, name === "switch" ? "switch" : "fresh")
             }
             {...(startedAsMode ? { startedAsMode } : {})}
-            {...(resetPending ? { disabled: true } : {})}
+            {...(resetPending || accountUnusable ? { disabled: true } : {})}
             usage={meta?.usage}
             onScheduleSend={async (message, ids, fireAt, reviewIds) => {
               if (reviewIds?.length) await api.scheduleMessage(sessionId, toPlainText(message), fireAt, ids, reviewIds);

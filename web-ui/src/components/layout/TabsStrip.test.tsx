@@ -1564,7 +1564,8 @@ describe("TabsStrip", () => {
     const agentTab = screen.getByRole("tab", { name: /agent-2/i });
     const label = agentTab.querySelector(".tab__label");
     expect(label).not.toBeNull();
-    expect(label?.getAttribute("title")).toBe("agent-2");
+    // The title is the full label on line 1, then the account tooltip line.
+    expect(label?.getAttribute("title")).toMatch(/^agent-2\nCursor · Terminal/);
     useModesStore.getState()._reset();
   });
 
@@ -1991,5 +1992,111 @@ describe("TabsStrip", () => {
       await screen.findByRole("tab", { name: /agent-2/i });
       expect(container.querySelector(".actions-host")).toBeNull();
     });
+  });
+});
+
+// ── Account surfaces in the strip (plan B3.4) ───────────────────────────────
+describe("TabsStrip account tooltip + Terminal notice", () => {
+  let api = createMockApi();
+
+  beforeEach(() => {
+    api = createMockApi();
+    capturedOnDragEnd = null;
+    capturedOnDragStart = null;
+    __resetForDemo();
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false, accounts: [], accountsLoaded: false });
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeSessionId: "sess-main",
+      activeTerminalSessionId: null,
+      sessionStates: {},
+      layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, terminalDockVisible: true } },
+    });
+  });
+
+  async function renderAgentStrip() {
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+  }
+
+  function activeLabelTitle(): string | null {
+    const el = document.querySelector('.tab[data-active="true"] .tab__label');
+    return el?.getAttribute("title") ?? null;
+  }
+
+  it("puts '<cli> · <channel> · <account>' on the tab tooltip's second line", async () => {
+    await renderAgentStrip();
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", {
+        channel: "json",
+        accountId: "acc_1a2b3c4d",
+      });
+    });
+    await waitFor(() => {
+      expect(activeLabelTitle()).toBe("main\nClaude · Rich Chat · Work");
+    });
+  });
+
+  it("omits the account part for a CLI with a single account", async () => {
+    await renderAgentStrip();
+    act(() => {
+      useServerStore.getState().replaceAccounts([
+        {
+          id: "system",
+          cli: "claude",
+          label: null,
+          displayName: "System login",
+          email: null,
+          plan: null,
+          method: "system",
+          auth: "signed_in",
+          isDefault: true,
+          limited: null,
+          createdAt: null,
+        },
+      ]);
+    });
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", { channel: "json" });
+    });
+    await waitFor(() => expect(activeLabelTitle()).toBe("main\nClaude · Rich Chat"));
+  });
+
+  it("shows the one-line notice under the strip for a Terminal session whose account is signed out", async () => {
+    await renderAgentStrip();
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_3c4d5e6f" });
+    });
+    expect(await screen.findByTestId("account-banner")).toHaveTextContent("Client B is signed out");
+
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_2b3c4d5e" });
+    });
+    expect(screen.queryByText(/is signed out/i)).toBeNull();
+    expect(screen.queryByTestId("account-banner")).toBeNull();
+  });
+
+  it("shows the one-line notice for a limited Terminal session", async () => {
+    await renderAgentStrip();
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" });
+    });
+    expect(await screen.findByText(/Work reached its five hour limit\./)).toBeInTheDocument();
+  });
+
+  it("shows no notice for a Rich Chat session (its banner lives above the composer)", async () => {
+    await renderAgentStrip();
+    act(() => {
+      useServerStore.getState().applySessionUpdated("sess-main", {
+        channel: "json",
+        accountId: "acc_3c4d5e6f",
+      });
+    });
+    await waitFor(() => expect(activeLabelTitle()).toContain("Rich Chat"));
+    expect(screen.queryByTestId("account-banner")).toBeNull();
   });
 });

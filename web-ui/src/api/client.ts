@@ -1,15 +1,21 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  AccountSummary,
+  AccountUsage,
   AuthSession,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
-  CarryOver,
   CancelResetResult,
   CliId,
   CommitLogEntry,
   FileStat,
+  AccountFolderBody,
+  AddFolderAccountResponse,
+  CreateApiKeyAccountBody,
+  StartDraftResult,
+  FinishSignInBody,
   GutterResult,
   LocalQrResponse,
   LspLanguageSurveyResponse,
@@ -44,16 +50,20 @@ import type {
   NetworkAccess,
   Project,
   ProjectBranchesResponse,
-  QueuedPolicy,
+  RemoveAccountResponse,
+  ValidateAccountPathResponse,
+  ResetBody,
+  ResetResult,
   SendChatResponse,
   SearchResult,
   Session,
-  SessionBreakKind,
   ScheduleSnapshot,
   SessionMeta,
   Settings,
   SkillsResponse,
   StarterBundleResult,
+  StartSignInBody,
+  StartSignInResponse,
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
@@ -70,7 +80,6 @@ import type {
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
-  WhenBusy,
   WSEvent,
   Worktree,
   WorktreeOrderResult,
@@ -135,13 +144,15 @@ export async function parseJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
     let code: string | undefined;
+    let accountId: string | undefined;
     try {
-      const body = JSON.parse(text) as { code?: unknown };
+      const body = JSON.parse(text) as { code?: unknown; accountId?: unknown };
       if (typeof body.code === "string") code = body.code;
+      if (typeof body.accountId === "string") accountId = body.accountId;
     } catch {
       /* non-JSON body — keep the raw text as the message */
     }
-    throw new ApiError(text || res.statusText, res.status, code);
+    throw new ApiError(text || res.statusText, res.status, code, accountId);
   }
   return res.json() as Promise<T>;
 }
@@ -164,6 +175,19 @@ export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
     // A cross-site page can't add a custom header without a CORS preflight.
     headers: { "X-VST-CSRF": "1", ...authHeaders, ...init?.headers },
   });
+}
+
+/** The one reset/switch request. `resetSession` and `switchSessionAccount`
+ *  both go through it — an account switch IS a reset carrying `accountId`
+ *  (plan Decision 7: one code path, replacement session id). */
+async function postReset(id: string, body: ResetBody): Promise<ResetResult> {
+  const root = baseUrl();
+  const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJson<ResetResult>(res);
 }
 
 export type ConnectionState = "online" | "connecting" | "offline" | "disconnected";
@@ -658,6 +682,8 @@ export function createClientApi() {
       const res = await apiFetch(`${root}/worktrees`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // Forwarded verbatim (camelCase, matching the daemon's
+        // `CreateWorktreeBody`), including the optional `accountId`.
         body: JSON.stringify(body),
       });
       return parseJson<Worktree>(res);
@@ -895,7 +921,7 @@ export function createClientApi() {
     async startDraft(
       id: string,
       body: { draftPrompt: string; draftConfig: DraftConfig; skipAutoTurn?: boolean; reviewCommentIds?: string[] },
-    ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
+    ): Promise<StartDraftResult> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/start`, {
         method: "POST",
@@ -903,7 +929,7 @@ export function createClientApi() {
         body: JSON.stringify(body),
       });
       // A comments hold can refuse the start (`comments_changed`...): every review-capable route parses failures as ReviewApiError.
-      return parseReviewJson<{ ok: true; worktreeId?: string; worktree?: Worktree }>(res);
+      return parseReviewJson<StartDraftResult>(res);
     },
 
     /** Default name the next terminal in this worktree would get ("Terminal N"). */
@@ -948,38 +974,21 @@ export function createClientApi() {
     },
 
     /** Archive the current session and spawn a fresh one in its place. */
-    async resetSession(
-      id: string,
-      body?: {
-        handoff?: boolean;
-        prompt?: string;
-        handoffText?: string;
-        modeId?: string;
-        channel?: "json" | "tmux";
-        carryOver?: CarryOver;
-        whenBusy?: WhenBusy;
-        queued?: QueuedPolicy;
-      },
-    ): Promise<{
-      ok: true;
-      archivedSessionId: string;
-      newSessionId: string;
-      carryOver: CarryOver;
-      breakKind?: SessionBreakKind;
-    }> {
-      const root = baseUrl();
-      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body ?? {}),
-      });
-      return parseJson<{
-        ok: true;
-        archivedSessionId: string;
-        newSessionId: string;
-        carryOver: CarryOver;
-        breakKind?: SessionBreakKind;
-      }>(res);
+    async resetSession(id: string, body?: ResetBody): Promise<ResetResult> {
+      return postReset(id, body ?? {});
+    },
+
+    /**
+     * Switch a running session to another account. This is exactly the reset
+     * path with an `accountId` (plan Decision 7) — the replacement session id,
+     * pin, schedule rows and parent link are handled by the daemon.
+     */
+    async switchSessionAccount(
+      sessionId: string,
+      accountId: string,
+      opts?: Omit<ResetBody, "accountId">,
+    ): Promise<ResetResult> {
+      return postReset(sessionId, { ...opts, accountId });
     },
 
     /**
@@ -1462,6 +1471,157 @@ export function createClientApi() {
         body: JSON.stringify({ slots }),
       });
       return parseJson<LimitsSnapshot>(res);
+    },
+
+    // ── Accounts ────────────────────────────────────────────────────────────────
+
+    /** Every account of every CLI that supports accounts, incl. each CLI's
+     *  virtual System row; pending sign-ins excluded. */
+    async getAccounts(): Promise<AccountSummary[]> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts`);
+      const { accounts } = await parseJson<{ accounts: AccountSummary[] }>(res);
+      return accounts;
+    },
+
+    /** Create an API-key account. The key is write-only — never echoed back. */
+    async createApiKeyAccount(body: CreateApiKeyAccountBody): Promise<AccountSummary> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<AccountSummary>(res);
+    },
+
+    /** Check a chosen account folder without writing anything (read-only). */
+    async validateAccountPath(body: AccountFolderBody): Promise<ValidateAccountPathResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts/validate-path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<ValidateAccountPathResponse>(res);
+    },
+
+    /** Add an account whose folder is chosen (or created) by the user. */
+    async addFolderAccount(body: AccountFolderBody): Promise<AddFolderAccountResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts/folder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<AddFolderAccountResponse>(res);
+    },
+
+    /** Start a vendor sign-in; the daemon opens a Terminal session for it. */
+    async startAccountSignIn(body: StartSignInBody): Promise<StartSignInResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts/sign-in`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<StartSignInResponse>(res);
+    },
+
+    /** Name the account a finished sign-in produced. */
+    async finishAccountSignIn(attemptId: string, body: FinishSignInBody): Promise<AccountSummary> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/sign-in/${encodeURIComponent(attemptId)}/finish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      return parseJson<AccountSummary>(res);
+    },
+
+    /** Cancel a sign-in attempt (deletes the half-made folder; idempotent). */
+    async cancelAccountSignIn(attemptId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts/sign-in/${encodeURIComponent(attemptId)}`, {
+        method: "DELETE",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Re-sign-in of an existing signed-out account (no label). */
+    async restartAccountSignIn(
+      cli: string,
+      id: string,
+      worktreeId: string,
+    ): Promise<StartSignInResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/${encodeURIComponent(cli)}/${encodeURIComponent(id)}/sign-in`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ worktreeId }),
+        },
+      );
+      return parseJson<StartSignInResponse>(res);
+    },
+
+    /** Rename an account; `null` clears the label back to the computed name. */
+    async renameAccount(cli: string, id: string, label: string | null): Promise<AccountSummary> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/${encodeURIComponent(cli)}/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label }),
+        },
+      );
+      return parseJson<AccountSummary>(res);
+    },
+
+    /** Set the CLI's default account (`"system"` allowed); returns that CLI's rows. */
+    async setDefaultAccount(cli: string, accountId: string): Promise<AccountSummary[]> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/accounts/${encodeURIComponent(cli)}/default`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId }),
+      });
+      const { accounts } = await parseJson<{ accounts: AccountSummary[] }>(res);
+      return accounts;
+    },
+
+    /** How many sessions this account is (or was) used by. */
+    async getAccountUsage(cli: string, id: string): Promise<AccountUsage> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/${encodeURIComponent(cli)}/${encodeURIComponent(id)}/usage`,
+      );
+      return parseJson<AccountUsage>(res);
+    },
+
+    /** Re-read the account's identity via the vendor's own command. */
+    async refreshAccount(cli: string, id: string): Promise<AccountSummary> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/${encodeURIComponent(cli)}/${encodeURIComponent(id)}/refresh`,
+        { method: "POST" },
+      );
+      return parseJson<AccountSummary>(res);
+    },
+
+    /** Remove an account; the daemon stops its running sessions first. */
+    async removeAccount(cli: string, id: string): Promise<RemoveAccountResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/accounts/${encodeURIComponent(cli)}/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+      return parseJson<RemoveAccountResponse>(res);
     },
 
     // ── Skills ──────────────────────────────────────────────────────────────────

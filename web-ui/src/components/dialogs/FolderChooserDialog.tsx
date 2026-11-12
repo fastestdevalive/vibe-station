@@ -1,8 +1,21 @@
-import { useEffect, useState, useRef } from "react";
+import { PathGhost } from "./PathGhost";
+import { useEffect, useId, useRef, useState } from "react";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import type { ApiInstance } from "@/api";
+import { useCompletionKeys } from "./useCompletionKeys";
 import { useDirSuggestions } from "@/hooks/useDirSuggestions";
+import {
+  acceptedPath,
+  ghostFor,
+  isRoot,
+  parentPath,
+  sameFolder,
+  stripSlash,
+  visibleEntries,
+  withSlash,
+  type FolderEntry,
+} from "./folderChooserModel";
 
 interface FolderChooserDialogProps {
   open: boolean;
@@ -12,6 +25,11 @@ interface FolderChooserDialogProps {
   initialPath: string;
 }
 
+/**
+ * Combobox-style chooser: focus stays in the path field, arrows move a
+ * highlight (`aria-activedescendant`), and the typed text is sent verbatim.
+ * Navigated paths carry their own trailing `/` (see folderChooserModel).
+ */
 export function FolderChooserDialog({
   open,
   onClose,
@@ -21,27 +39,37 @@ export function FolderChooserDialog({
 }: FolderChooserDialogProps) {
   const [currentPath, setCurrentPath] = useState("");
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(-1);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const inputWrapRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   const {
     suggestions: rawSuggestions,
+    listedFor,
     truncated,
     loading,
     error,
+    settled,
     scheduleFetch,
     reset,
   } = useDirSuggestions(api);
 
-  // Filter out hidden (dot) folders by default, unless the user explicitly types a dot prefix
-  const suggestions = rawSuggestions.filter((entry) => {
-    if (entry.name.startsWith(".")) {
-      // If path query ends with dot, show hidden folders starting with dot
-      const lastPart = currentPath.split("/").pop() || "";
-      return lastPart.startsWith(".");
-    }
-    return true;
+  const suggestions = visibleEntries(rawSuggestions, currentPath);
+  const ghost =
+    listedFor !== null && sameFolder(listedFor, currentPath) ? ghostFor(currentPath, rawSuggestions) : null;
+  const [ghostIsClipped, setGhostIsClipped] = useState(false);
+  const keys = useCompletionKeys({
+    entries: suggestions,
+    ghostEntry: ghost && !ghostIsClipped ? ghost.entry : null,
+    disabled: loading,
+    onAccept: (entry) => setCurrentPath(acceptedPath(currentPath, entry)),
+    onEnter: (active, e) => {
+      e.preventDefault();
+      if (active) descend(active);
+      else handleSelect();
+    },
+    onHighlight: (entry) => setSelectedFolder(acceptedPath(currentPath, entry)),
   });
+  const { activeIndex, setActiveIndex } = keys;
 
   // Seed from `initialPath` on the open transition ONLY. Keeping initialPath in
   // the deps would reset the user's navigation mid-browse if the prop changed
@@ -50,7 +78,7 @@ export function FolderChooserDialog({
   const wasOpenRef = useRef(false);
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      setCurrentPath(initialPath.trim() || "/");
+      setCurrentPath(withSlash(initialPath.trim() || "/"));
       setSelectedFolder(null);
       setActiveIndex(-1);
       reset();
@@ -58,119 +86,64 @@ export function FolderChooserDialog({
     wasOpenRef.current = open;
   }, [open, initialPath, reset]);
 
-  // Load directories. Debounced via scheduleFetch: `currentPath` changes on
-  // every keystroke in the path field, and an un-debounced fetch here meant one
-  // HTTP request (and one `git` spawn on the /fs/check side) per character.
+  // Load the typed path's children. Debounced via scheduleFetch: the path field
+  // changes on every keystroke, and an un-debounced fetch meant one request per
+  // character. The path is sent verbatim (no forced trailing slash).
   useEffect(() => {
     if (!open || !currentPath) return;
-
-    // fsComplete lists children only when the path ends with a separator.
-    // Collapse repeated slashes so "/" + "/" can't produce "//".
-    const pathForList = `${currentPath}/`.replace(/\/+/g, "/");
-
-    scheduleFetch(pathForList);
+    scheduleFetch(currentPath);
     setSelectedFolder(null);
     setActiveIndex(-1);
   }, [open, currentPath, scheduleFetch]);
 
-  function handleFolderClick(index: number, path: string) {
-    setSelectedFolder(path);
-    setActiveIndex(index);
+  function resetHighlight() {
+    setSelectedFolder(null);
+    keys.resetHighlight();
   }
 
-  function handleFolderDoubleClick(path: string) {
-    setCurrentPath(path);
-    setSelectedFolder(null);
-    setActiveIndex(-1);
+  function descend(entry: FolderEntry) {
+    setCurrentPath(acceptedPath(currentPath, entry));
+    resetHighlight();
   }
 
   function navigateUp() {
-    if (!currentPath || currentPath === "/") return;
-    const parts = currentPath.split("/").filter(Boolean);
-    parts.pop();
-    const parent = "/" + parts.join("/");
-    setCurrentPath(parent);
-    setSelectedFolder(null);
-    setActiveIndex(-1);
+    if (isRoot(currentPath) || loading) return;
+    setCurrentPath(parentPath(currentPath));
+    resetHighlight();
   }
 
   function handleSelect() {
-    const finalPath = selectedFolder || currentPath;
-    onSelect(finalPath);
+    onSelect(stripSlash(selectedFolder || currentPath));
     onClose();
   }
 
-  /**
-   * Hand off from the path field into the list on a vertical arrow. Replaces an
-   * effect that used to focus the list whenever results arrived — because that
-   * effect re-ran after every fetch, and the fetch is triggered by typing in
-   * this very field, it stole focus mid-word: typing a path only ever recorded
-   * its first character. Left/Right/Backspace deliberately stay as ordinary
-   * text editing here (the list binds them to navigate/descend).
-   */
-  function handlePathInputKeyDown(e: React.KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    if (loading || suggestions.length === 0) return;
-    e.preventDefault();
-    const next = e.key === "ArrowDown" ? 0 : suggestions.length - 1;
-    setActiveIndex(next);
-    const entry = suggestions[next];
-    if (entry) setSelectedFolder(entry.path);
-    containerRef.current?.focus();
+  function focusInput() {
+    inputWrapRef.current?.querySelector<HTMLInputElement>("input")?.focus();
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (loading || suggestions.length === 0) return;
-
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setActiveIndex((prev) => {
-          const next = prev + 1 >= suggestions.length ? 0 : prev + 1;
-          const entry = suggestions[next];
-          if (entry) setSelectedFolder(entry.path);
-          return next;
-        });
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setActiveIndex((prev) => {
-          const next = prev - 1 < 0 ? suggestions.length - 1 : prev - 1;
-          const entry = suggestions[next];
-          if (entry) setSelectedFolder(entry.path);
-          return next;
-        });
-        break;
-      case "Enter":
-      case "ArrowRight":
-        e.preventDefault();
-        if (activeIndex >= 0 && suggestions[activeIndex]) {
-          handleFolderDoubleClick(suggestions[activeIndex]!.path);
-        } else {
-          handleSelect();
-        }
-        break;
-      case "Backspace":
-      case "ArrowLeft":
-        e.preventDefault();
-        navigateUp();
-        break;
-      default:
-        break;
-    }
+  function handleOptionClick(index: number, entry: FolderEntry) {
+    setActiveIndex(index);
+    setSelectedFolder(acceptedPath(currentPath, entry));
+    focusInput();
   }
 
   // Scroll active item into view
   useEffect(() => {
-    if (activeIndex >= 0 && containerRef.current) {
-      const activeEl = containerRef.current.querySelector(
-        `[data-index="${activeIndex}"]`
-      ) as HTMLElement | null;
-      if (activeEl) {
-        activeEl.scrollIntoView({ block: "nearest" });
-      }
-    }
-  }, [activeIndex]);
+    if (activeIndex < 0) return;
+    const activeEl = document.getElementById(`${listId}-opt-${activeIndex}`);
+    activeEl?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, listId]);
+
+  const optionId = (idx: number) => `${listId}-opt-${idx}`;
+
+  // One status line under the list (also the polite live region): a count when
+  // there are rows, otherwise why there are none. A previous list stays visible
+  // while a new request is in flight (no "Loading" replacement).
+  let statusText = "";
+  if (suggestions.length > 0) statusText = `${suggestions.length} ${suggestions.length === 1 ? "folder" : "folders"}`;
+  else if (loading && !settled) statusText = "Loading directories...";
+  else if (rawSuggestions.length > 0) statusText = "Only hidden folders here — type a dot to show them.";
+  else if (settled) statusText = "No matching folders";
 
   return (
     <Dialog
@@ -201,54 +174,55 @@ export function FolderChooserDialog({
             type="button"
             className="btn btn--secondary btn--sm"
             onClick={navigateUp}
-            disabled={currentPath === "/" || loading}
+            disabled={isRoot(currentPath) || loading}
             title="Go to parent directory"
           >
             ↱ Up
           </button>
-          <Input
-            type="text"
-            className="folder-chooser__path-input"
-            value={currentPath}
-            onChange={(e) => {
-              setCurrentPath(e.target.value);
-              setSelectedFolder(null);
-              setActiveIndex(-1);
-            }}
-            onKeyDown={handlePathInputKeyDown}
-            placeholder="Type path..."
-          />
+          <div className="folder-chooser__input-wrap path-ghost-field" ref={inputWrapRef}>
+            <Input
+              type="text"
+              role="combobox"
+              aria-expanded={suggestions.length > 0}
+              aria-controls={listId}
+              aria-autocomplete="both"
+              aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
+              className="folder-chooser__path-input"
+              value={currentPath}
+              onChange={(e) => {
+                setCurrentPath(e.target.value);
+                resetHighlight();
+              }}
+              onKeyDown={keys.onKeyDown}
+              placeholder="Type path..."
+            />
+            {ghost ? (
+              <PathGhost
+                getInput={() => inputWrapRef.current?.querySelector("input") ?? null}
+                typed={currentPath}
+                remainder={ghost.remainder}
+                onClippedChange={setGhostIsClipped}
+              />
+            ) : null}
+          </div>
         </div>
 
         {error && <div className="field-error">{error}</div>}
 
         <div
-          ref={containerRef}
-          tabIndex={0}
-          className="folder-chooser__list-container"
-          onKeyDown={handleKeyDown}
-          aria-label="Folder list"
+          id={listId}
           role="listbox"
-          aria-activedescendant={
-            activeIndex >= 0 ? `folder-opt-${activeIndex}` : undefined
-          }
+          aria-label="Folder list"
+          className="folder-chooser__list-container"
         >
-          {loading ? (
-            <div className="folder-chooser__status">Loading directories...</div>
-          ) : suggestions.length === 0 ? (
-            <div className="folder-chooser__status">
-              {rawSuggestions.length > 0
-                ? "Only hidden folders here — type a dot to show them."
-                : "No sub-directories here."}
-            </div>
-          ) : (
+          {suggestions.length > 0 ? (
             <div className="folder-chooser__list">
               {suggestions.map((entry, idx) => {
-                const isSelected = selectedFolder === entry.path || activeIndex === idx;
+                const isSelected = activeIndex === idx;
                 return (
                   <button
                     key={entry.path}
-                    id={`folder-opt-${idx}`}
+                    id={optionId(idx)}
                     data-index={idx}
                     type="button"
                     role="option"
@@ -257,27 +231,27 @@ export function FolderChooserDialog({
                     className={`folder-chooser__item${
                       isSelected ? " folder-chooser__item--selected" : ""
                     }`}
-                    onClick={() => handleFolderClick(idx, entry.path)}
-                    onDoubleClick={() => handleFolderDoubleClick(entry.path)}
+                    onClick={() => handleOptionClick(idx, entry)}
+                    onDoubleClick={() => descend(entry)}
                   >
                     <span className="folder-chooser__item-icon" aria-hidden>📁</span>
                     <span className="folder-chooser__item-name">{entry.name}</span>
                   </button>
                 );
               })}
+              {truncated ? (
+                <div className="folder-chooser__more" role="presentation">
+                  more… keep typing to narrow the list
+                </div>
+              ) : null}
             </div>
-          )}
+          ) : null}
         </div>
-        {/* Gate on the visible count too: hiding dot-folders can leave a short
-            list, and a "showing the first 50" note over three rows reads as a
-            bug rather than a cap. */}
-        {truncated && suggestions.length > 0 ? (
-          <div className="folder-chooser__truncated-hint">
-            Showing the first 50 folders — type more of the name to narrow the list.
-          </div>
-        ) : null}
+        <div className="folder-chooser__selection-hint" aria-live="polite">
+          {statusText}
+        </div>
         <div className="folder-chooser__selection-hint">
-          Selected: <code>{selectedFolder || currentPath}</code>
+          Selected: <code>{stripSlash(selectedFolder || currentPath)}</code>
         </div>
       </div>
     </Dialog>

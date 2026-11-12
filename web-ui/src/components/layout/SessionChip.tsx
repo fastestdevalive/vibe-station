@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Channel, PrStatus, ToolActivity } from "@/api/types";
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
@@ -54,6 +55,8 @@ export interface SessionChipProps {
   groupLabel?: string;           // Fallback when no worktree/project pair
   isDirect?: boolean;            // Direct agent (no worktree)
   modeIconKey?: string;
+  /** The session's account mark (`AccountBadge`); renders nothing for a one-account CLI. */
+  accountMark?: ReactNode;
   channel?: Channel;
   /** ISO time of the session's last activity (`sessionActivityAt`). */
   activityAt?: string | null;
@@ -77,6 +80,7 @@ export function SessionChip({
   groupLabel,
   isDirect,
   modeIconKey,
+  accountMark,
   channel,
   activityAt,
   lastTool,
@@ -106,6 +110,7 @@ export function SessionChip({
       <span className="dtag" title="Direct agent: runs in the project's own checkout, no worktree">
         direct
       </span>
+      {accountMark}
     </div>
   ) : worktreeLabel && projectLabel ? (
     <div className="acard__path" title={pathTitle}>
@@ -115,10 +120,12 @@ export function SessionChip({
         <WorktreeGlyph />
         <span className="acard__branch">{worktreeLabel}</span>
       </span>
+      {accountMark}
     </div>
   ) : (
     <div className="acard__path acard__path--plain" title={pathTitle}>
       <span className="acard__project">{pathTitle}</span>
+      {accountMark}
     </div>
   );
 

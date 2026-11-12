@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "./mock";
+import { MOCK_ACCOUNT_IDS } from "./mockAccounts";
 import type { NormalizedEvent, Project, Session } from "./types";
 
 describe("mock api contract", () => {
@@ -793,5 +794,160 @@ describe("mock api scheduled sends", () => {
     const after = await api.getScheduledMessages("sess-main");
     expect(after.scheduledFailed).toEqual([]);
     expect(after.scheduledSends).toEqual([expect.objectContaining({ id: "f1", channel: "tmux", phase: "scheduled" })]);
+  });
+});
+
+/**
+ * Accounts fixtures (plan B1.T5) — the mock owns an in-memory account list and
+ * pushes the same `account:*` events the daemon broadcasts.
+ */
+describe("mock accounts", () => {
+  it("createApiKeyAccount emits account:updated and lists the new row", async () => {
+    const api = createMockApi();
+    const updated = vi.fn();
+    const off = api.on("account:updated", updated);
+
+    const acct = await api.createApiKeyAccount({
+      cli: "cursor",
+      method: "api_key",
+      apiKey: "sk-mock-key",
+      label: "Second key",
+    });
+
+    expect(acct.cli).toBe("cursor");
+    expect(acct.method).toBe("api_key");
+    expect(acct.displayName).toBe("Second key");
+    expect(acct.auth).toBe("signed_in");
+    expect(updated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "account:updated",
+        account: expect.objectContaining({ id: acct.id, cli: "cursor", label: "Second key" }),
+      }),
+    );
+    const rows = await api.getAccounts();
+    expect(rows.some((a) => a.cli === "cursor" && a.id === acct.id)).toBe(true);
+    off();
+  });
+
+  it("removeAccount emits account:removed and stops listing the account", async () => {
+    const api = createMockApi();
+    const removed = vi.fn();
+    const off = api.on("account:removed", removed);
+
+    const res = await api.removeAccount("claude", MOCK_ACCOUNT_IDS.claudeWork);
+
+    expect(res.ok).toBe(true);
+    expect(res.stoppedSessionIds).toEqual(["sess-work-1"]);
+    expect(removed).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "account:removed", cli: "claude", accountId: MOCK_ACCOUNT_IDS.claudeWork }),
+    );
+    const rows = await api.getAccounts();
+    expect(rows.some((a) => a.id === MOCK_ACCOUNT_IDS.claudeWork)).toBe(false);
+    off();
+  });
+
+  it("renameAccount to an existing name rejects label_taken (case-insensitive)", async () => {
+    const api = createMockApi();
+    await expect(
+      api.renameAccount("claude", MOCK_ACCOUNT_IDS.claudeSide, "Work"),
+    ).rejects.toMatchObject({ code: "label_taken" });
+    await expect(
+      api.renameAccount("claude", MOCK_ACCOUNT_IDS.claudeSide, "work"),
+    ).rejects.toMatchObject({ code: "label_taken" });
+  });
+
+  it("mock_validate_path_five_codes", async () => {
+    const api = createMockApi();
+    const check = (dir: string) => api.validateAccountPath({ cli: "claude", mode: "choose", dir });
+    await expect(check("relative/path")).rejects.toMatchObject({ code: "path_invalid" });
+    await expect(check("~/a/../b")).rejects.toMatchObject({ code: "path_invalid" });
+    await expect(check("~/.claude")).rejects.toMatchObject({ code: "folder_is_system" });
+    await expect(check("~/.claude-side")).rejects.toMatchObject({
+      code: "folder_duplicate",
+      accountId: MOCK_ACCOUNT_IDS.claudeSide,
+    });
+    await expect(check("~/.vibe-station/accounts/claude/other")).rejects.toMatchObject({
+      code: "folder_in_accounts_root",
+    });
+    await expect(check("~/code/nope")).rejects.toMatchObject({ code: "folder_not_found" });
+    await expect(check("~/code/fine")).resolves.toMatchObject({ dir: "~/code/fine", looksValid: true });
+  });
+
+  it("mock_add_folder_signed_in_vs_pending", async () => {
+    const api = createMockApi();
+    const signedIn = await api.addFolderAccount({ cli: "claude", mode: "choose", dir: "~/code/work-folder" });
+    expect(signedIn.signedIn).toBe(true);
+    expect(signedIn.account.pending).toBe(false);
+    expect(signedIn.account.createdByUs).toBe(false);
+
+    const pending = await api.addFolderAccount({ cli: "claude", mode: "choose", dir: "~/code/side-two" });
+    expect(pending.signedIn).toBe(false);
+    expect(pending.account.pending).toBe(true);
+    expect(pending.account.signIn?.command).toBe("CLAUDE_CONFIG_DIR=~/code/side-two claude auth login");
+    expect((await api.getAccounts()).some((a) => a.id === pending.account.id && a.pending)).toBe(true);
+  });
+
+  it("mock_refresh_completes_pending_on_second_call", async () => {
+    const api = createMockApi();
+    const { account } = await api.addFolderAccount({ cli: "claude", mode: "choose", dir: "~/code/side-three" });
+    const updated = vi.fn();
+    const off = api.on("account:updated", updated);
+    const first = await api.refreshAccount("claude", account.id);
+    expect(first.pending).toBe(true);
+    const second = await api.refreshAccount("claude", account.id);
+    expect(second.pending).toBe(false);
+    expect(second.signIn ?? null).toBeNull();
+    expect(updated).toHaveBeenCalledWith(expect.objectContaining({ type: "account:updated" }));
+    off();
+  });
+
+  it("mock_refresh_completes_unverifiable_pending_at_once", async () => {
+    const api = createMockApi();
+    const { account } = await api.addFolderAccount({ cli: "pi", mode: "choose", dir: "~/code/pi-one" });
+    expect(account.signIn?.hint).toBe("Run the command, then use /login inside.");
+    const done = await api.refreshAccount("pi", account.id);
+    expect(done.pending).toBe(false);
+  });
+
+  it("mock_remove_reports_folder_deleted", async () => {
+    const api = createMockApi();
+    expect((await api.removeAccount("claude", MOCK_ACCOUNT_IDS.claudeWork)).folderDeleted).toBe(true);
+    expect((await api.removeAccount("claude", MOCK_ACCOUNT_IDS.claudeSide)).folderDeleted).toBe(false);
+  });
+
+  it("mock_fs_complete_dot_last_and_case_insensitive", async () => {
+    const api = createMockApi();
+    const names = async (path: string) => (await api.fsComplete(path)).entries.map((e) => e.name);
+    expect(await names("/home/user/code/")).toEqual(["Fast-notes", "fastestdevalive", "other", ".cache"]);
+    expect(await names("/home/user/code/.")).toEqual([".cache"]);
+    expect(await names("/home/user/code/FAST")).toEqual(["Fast-notes", "fastestdevalive"]);
+    expect(await names("~")).toEqual(["code", "projects", "work"]);
+  });
+
+  it("createWorktree puts an explicit accountId on the worktree's main session", async () => {
+    const api = createMockApi();
+    const wt = await api.createWorktree({
+      projectId: "proj-a",
+      modeId: "mode-1",
+      accountId: MOCK_ACCOUNT_IDS.claudeWork,
+    });
+    expect(wt.mainSessionId).toBeTruthy();
+    const main = (await api.listSessions(wt.id)).find((s) => s.isMain);
+    expect(main?.id).toBe(wt.mainSessionId);
+    expect(main?.accountId).toBe(MOCK_ACCOUNT_IDS.claudeWork);
+  });
+
+  it("createWorktree leaves the main session's account unset when no accountId is sent", async () => {
+    const api = createMockApi();
+    const wt = await api.createWorktree({ projectId: "proj-a", modeId: "mode-1" });
+    const main = (await api.listSessions(wt.id)).find((s) => s.isMain);
+    expect(main?.accountId).toBeUndefined();
+  });
+
+  it("createWorktree treats an explicit \"system\" pick as no accountId", async () => {
+    const api = createMockApi();
+    const wt = await api.createWorktree({ projectId: "proj-a", modeId: "mode-1", accountId: "system" });
+    const main = (await api.listSessions(wt.id)).find((s) => s.isMain);
+    expect(main?.accountId).toBeUndefined();
   });
 });

@@ -133,6 +133,34 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(container.querySelector('[data-testid="attachment-upload"]')).not.toBeNull();
   });
 
+  it("shows the account control for a terminal agent on a two-account CLI (R1F-12)", async () => {
+    const { useServerStore } = await import("@/hooks/useServerStore");
+    const base = {
+      cli: "claude",
+      label: null,
+      email: null,
+      plan: null,
+      method: "sign_in" as const,
+      auth: "signed_in" as const,
+      limited: null,
+      createdAt: null,
+    };
+    useServerStore.setState({
+      accounts: [
+        { ...base, id: "system", displayName: "System login", isDefault: true, method: "system" as const },
+        { ...base, id: "acc_work", displayName: "Work", isDefault: false },
+      ],
+      accountsLoaded: true,
+    });
+    useModesStore.setState({ modes: new Map([["mode-1", { id: "mode-1", cli: "claude" } as never]]) });
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={{ ...session("tty1", "tmux"), accountId: "acc_work" }} />,
+    );
+    expect(container.querySelector('[aria-label="Account: Work"]')).not.toBeNull();
+    useServerStore.setState({ accounts: [], accountsLoaded: false });
+    useModesStore.setState({ modes: new Map() });
+  });
+
   it("renders the SubagentRow header for a terminal agent session", () => {
     const { container } = render(
       <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />,

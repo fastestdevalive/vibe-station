@@ -140,6 +140,25 @@ describe("DashboardPanel", () => {
     }
   });
 
+  it("R1F-08 — a session card shows its account mark for a CLI with several accounts", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+    // claude has several accounts in the mock fixture; its cards carry the mark.
+    await waitFor(() => {
+      expect(document.querySelector(".acard__path .account-chip[role='img']")).not.toBeNull();
+    });
+    expect(document.querySelector(".acard__path .account-chip")!.getAttribute("aria-label")).toMatch(/^Account: /);
+  });
+
   it("renders working and idle sections (6.6 split), with finished hidden until toggled", async () => {
     const api = createMockApi();
     render(

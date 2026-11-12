@@ -5,6 +5,8 @@ import type { ApiInstance } from "@/api";
 import type { Project, Settings } from "@/api/types";
 import { Input } from "../ui/Input";
 import { FolderChooserDialog } from "../dialogs/FolderChooserDialog";
+import { PathGhost } from "../dialogs/PathGhost";
+import { usePathGhost } from "../dialogs/usePathGhost";
 import { useDirSuggestions } from "@/hooks/useDirSuggestions";
 import { DraftFieldRow } from "./DraftFieldRow";
 import {
@@ -58,6 +60,16 @@ export function ProjectCombobox({
   const [defaultProjectsDir, setDefaultProjectsDir] = useState("");
   const [homeDir, setHomeDir] = useState("");
   const parentDirSuggs = useDirSuggestions(api);
+  const dirGhost = usePathGhost({
+    suggestions: parentDirSuggs,
+    value: parentDir,
+    onAccept: (next) => handleParentDirChange(next),
+  });
+  const projectGhost = usePathGhost({
+    suggestions: pathSuggs,
+    value: query,
+    onAccept: (next) => handleQueryChange(next),
+  });
   const [dirPopupOpen, setDirPopupOpen] = useState(false);
   const [dirActiveIndex, setDirActiveIndex] = useState(0);
   const dirWrapperRef = useRef<HTMLDivElement>(null);
@@ -503,22 +515,46 @@ export function ProjectCombobox({
               </button>
               <div className="draft-popover__search">
                 <Search size={13} aria-hidden />
-                <Input
-                  id={projectFieldId}
-                  type="text"
-                  role="combobox"
-                  aria-expanded={popupOpen}
-                  aria-controls={projectListboxId}
-                  aria-activedescendant={activeDescendant}
-                  autoComplete="off"
-                  placeholder="Search projects or type a new name…"
-                  value={query}
-                  onChange={(e) => handleQueryChange(e.target.value)}
-                  onKeyDown={handleProjectKeyDown}
-                  autoFocus
-                  style={{ width: "100%", height: 26, padding: "0 4px", border: "none", background: "transparent", fontSize: "var(--font-size-sm)" }}
-                />
+                <span
+                  className="path-ghost-field path-ghost-field--field"
+                  style={{ "--path-ghost-left": "4px" } as React.CSSProperties}
+                >
+                  <Input
+                    ref={projectGhost.inputRef}
+                    id={projectFieldId}
+                    type="text"
+                    role="combobox"
+                    aria-expanded={popupOpen}
+                    aria-controls={projectListboxId}
+                    aria-activedescendant={activeDescendant}
+                    autoComplete="off"
+                    placeholder="Search projects or type a new name…"
+                    value={query}
+                    onChange={(e) => handleQueryChange(e.target.value)}
+                    onFocus={projectGhost.onFocus}
+                    onBlur={projectGhost.onBlur}
+                    onKeyDown={(e) => {
+                      projectGhost.onKeyDown(e);
+                      if (!e.defaultPrevented) handleProjectKeyDown(e);
+                    }}
+                    autoFocus
+                    style={{ width: "100%", height: "var(--path-ghost-h)", padding: "0 4px", border: "none", background: "transparent" }}
+                  />
+                  {projectGhost.ghost ? (
+                    <PathGhost
+                      getInput={() => projectGhost.inputRef.current}
+                      typed={query}
+                      remainder={projectGhost.ghost.remainder}
+                      onClippedChange={projectGhost.onGhostClipped}
+                    />
+                  ) : null}
+                </span>
               </div>
+              {projectGhost.error ? (
+                <p className="path-ghost-note" role="status" style={{ padding: "0 var(--space-3)" }}>
+                  {projectGhost.error}
+                </p>
+              ) : null}
               <div className="draft-popover__list" role="listbox" id={projectListboxId}>
                 {rows.map((row, idx) => {
                   const prevRow = rows[idx - 1];
@@ -725,23 +761,48 @@ export function ProjectCombobox({
               <DraftFieldRow label="Parent folder">
                 <div className="draft-popover-anchor" style={{ width: "100%" }}>
                   <div className="combobox-wrapper" ref={dirWrapperRef} style={{ width: "100%" }}>
-                    <Input
-                      id={dirFieldId}
-                      type="text"
-                      role="combobox"
-                      aria-expanded={dirPopupOpen}
-                      aria-controls={dirListboxId}
-                      aria-activedescendant={dirActiveDescendant}
-                      autoComplete="off"
-                      placeholder={defaultProjectsDir || "~/projects"}
-                      value={parentDir}
-                      onChange={(e) => handleParentDirChange(e.target.value)}
-                      onFocus={() => {
-                        if (parentDirSuggs.suggestions.length > 0) setDirPopupOpen(true);
-                      }}
-                      onKeyDown={handleDirKeyDown}
-                      style={{ width: 260, maxWidth: "100%", height: 26, padding: "0 8px", fontSize: "var(--font-size-sm)" }}
-                    />
+                    <span
+                      className="path-ghost-field path-ghost-field--field"
+                      style={{ width: 260, maxWidth: "100%", flex: "none", "--path-ghost-left": "calc(var(--border-width) + 8px)" } as React.CSSProperties}
+                    >
+                      <Input
+                        ref={dirGhost.inputRef}
+                        id={dirFieldId}
+                        type="text"
+                        role="combobox"
+                        aria-expanded={dirPopupOpen}
+                        aria-controls={dirListboxId}
+                        aria-activedescendant={dirActiveDescendant}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder={defaultProjectsDir || "~/projects"}
+                        value={parentDir}
+                        onChange={(e) => handleParentDirChange(e.target.value)}
+                        onFocus={() => {
+                          dirGhost.onFocus();
+                          if (parentDirSuggs.suggestions.length > 0) setDirPopupOpen(true);
+                        }}
+                        onBlur={dirGhost.onBlur}
+                        onKeyDown={(e) => {
+                          dirGhost.onKeyDown(e);
+                          if (!e.defaultPrevented) handleDirKeyDown(e);
+                        }}
+                        style={{ width: "100%", height: "var(--path-ghost-h)", padding: "0 8px" }}
+                      />
+                      {dirGhost.ghost ? (
+                        <PathGhost
+                          getInput={() => dirGhost.inputRef.current}
+                          typed={parentDir}
+                          remainder={dirGhost.ghost.remainder}
+                          onClippedChange={dirGhost.onGhostClipped}
+                        />
+                      ) : null}
+                    </span>
+                    {dirGhost.error ? (
+                      <p className="path-ghost-note" role="status">
+                        {dirGhost.error}
+                      </p>
+                    ) : null}
                     {dirPopupOpen && parentDirSuggs.suggestions.length > 0 ? (
                       <div className="draft-popover draft-popover--down" role="listbox" id={dirListboxId}>
                         {parentDirSuggs.suggestions.map((entry, i) => (

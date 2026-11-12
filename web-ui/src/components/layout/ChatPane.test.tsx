@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, screen, within, act, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { createMockApi } from "@/api/mock";
-import type { NormalizedEvent, Session, SessionMeta } from "@/api/types";
+import type { AccountSummary, NormalizedEvent, Session, SessionMeta } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useResetProgress } from "@/hooks/useResetProgress";
@@ -1189,5 +1189,87 @@ describe("ChatPane — focusable message viewport drives the pane-scoped keys", 
 
     const props = vi.mocked(MessageList).mock.calls.at(-1)?.[0];
     expect(props?.currentTurn).toBe("u:turn-9");
+  });
+});
+
+// ── Account label + send gating (plan B3.7) ─────────────────────────────────
+describe("ChatPane account surfaces", () => {
+  function account(over: Partial<AccountSummary> & Pick<AccountSummary, "id" | "cli">): AccountSummary {
+    return {
+      label: null,
+      displayName: over.id,
+      email: null,
+      plan: null,
+      method: "sign_in",
+      auth: "signed_in",
+      isDefault: false,
+      limited: null,
+      createdAt: null,
+      ...over,
+    };
+  }
+
+  const SYSTEM = account({ id: "system", cli: "claude", displayName: "System login", method: "system", isDefault: true });
+  const WORK = account({ id: "acc_work", cli: "claude", displayName: "Work" });
+
+  beforeEach(() => {
+    useModesStore.setState({
+      modes: new Map([["mode-1", { id: "mode-1", name: "Bugfix", cli: "claude", context: "" }]]),
+      loaded: true,
+    });
+  });
+
+  afterEach(() => {
+    useModesStore.getState()._reset();
+    useServerStore.setState({ accounts: [], accountsLoaded: false });
+  });
+
+  it("hides the account label for a single-account CLI and shows it for several", async () => {
+    const api = createMockApi();
+    useServerStore.setState({ accounts: [SYSTEM], accountsLoaded: true });
+    render(<ChatPane api={api} session={jsonSession("js1")} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js1", meta: meta("js1") });
+    });
+    await screen.findByRole("button", { name: "Attach files" });
+    expect(screen.queryByRole("button", { name: /^Account: / })).toBeNull();
+
+    act(() => useServerStore.setState({ accounts: [SYSTEM, WORK], accountsLoaded: true }));
+    expect(await screen.findByRole("button", { name: "Account: System login" })).toBeInTheDocument();
+  });
+
+  it("disables sending while the session's account is signed out, with the banner explaining", async () => {
+    const api = createMockApi();
+    useServerStore.setState({
+      accounts: [account({ ...SYSTEM, auth: "signed_out" })],
+      accountsLoaded: true,
+    });
+    render(<ChatPane api={api} session={jsonSession("js1")} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js1", meta: meta("js1") });
+    });
+
+    const banner = await screen.findByTestId("account-banner");
+    expect(banner).toHaveAttribute("role", "alert");
+    expect(screen.getByTestId("account-banner")).toHaveTextContent("System login is signed out");
+    expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
+    expect(document.querySelector("[contenteditable]")).toHaveAttribute("contenteditable", "false");
+
+    act(() => useServerStore.setState({ accounts: [SYSTEM], accountsLoaded: true }));
+    await waitFor(() =>
+      expect(document.querySelector("[contenteditable]")).toHaveAttribute("contenteditable", "true"),
+    );
+    expect(screen.queryByTestId("account-banner")).toBeNull();
+  });
+
+  it("disables sending when the session's account was removed", async () => {
+    const api = createMockApi();
+    useServerStore.setState({ accounts: [SYSTEM, WORK], accountsLoaded: true });
+    render(<ChatPane api={api} session={{ ...jsonSession("js1"), accountId: "acc_gone" }} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js1", meta: meta("js1") });
+    });
+    expect(await screen.findByTestId("account-banner")).toHaveTextContent("Account removed");
+    expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
   });
 });

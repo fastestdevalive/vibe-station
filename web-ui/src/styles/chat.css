@@ -1244,6 +1244,9 @@
 .chat-session-break__providers {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  min-width: 0;
   gap: var(--space-1);
 }
 .chat-session-break__chip {
@@ -1261,6 +1264,8 @@
 }
 /* Mode pills in a `carryOver` switch card (`<fromMode> → <toMode>`). */
 .chat-session-break__pill {
+  min-width: 0;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;

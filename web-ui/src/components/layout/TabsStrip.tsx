@@ -24,8 +24,11 @@ import type { Channel, Session } from "@/api/types";
 import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
 import { compareTabOrder, isProjectTabAgent, listPredecessors, pickWorktreeAgent, resolveSupersededChain } from "@/lib/sessionVisibility";
 import { ModeIcon } from "@/components/agent/ModeIcon";
-import { useModeIcon } from "@/store/modesStore";
+import { useModeIcon, useModesStore } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
+import { ACCOUNT_WORDS, accountOf, accountState, sessionAccountName, showsAccount } from "@/lib/accounts";
+import { cliDisplayName } from "@/lib/cliNames";
+import { AccountBanner } from "@/components/accounts/AccountBanner";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { usePaneDialogs } from "@/hooks/usePaneDialogs";
@@ -309,6 +312,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   // sidebar — so the two can never drift. Worktree scope: the worktree's
   // sessions of this kind. Project scope: direct (worktree-less) sessions.
   const serverSessions = useServerStore((s) => s.sessions);
+  // Accounts + the mode cache: the tab tooltip names the session's CLI and
+  // account, resolved from server data (R3 — no harness-name checks).
+  const serverAccounts = useServerStore((s) => s.accounts);
+  const accountsLoaded = useServerStore((s) => s.accountsLoaded);
+  const modesMap = useModesStore((s) => s.modes);
   const sessions = useMemo(() => {
     if (!worktreeId) return [];
     if (!isProject) {
@@ -649,7 +657,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       </button>
     ) : null;
 
+  const activeAgentSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+
   return (
+    <>
     <div className="tabs-strip" data-tauri-drag-region="deep">
       {/* The tablist is the scroll region only, so the actions host (sibling below) sits
           outside it: a `role=tablist` must not contain the Search / "…" buttons. */}
@@ -686,6 +697,25 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
               const label = isDraft ? (s.name?.trim() || draftLabel(s.draftPrompt)) : sessionLabel(s);
               const isRenaming = renamingId === s.id;
               const archived = s.archivedAt != null;
+              // Tooltip: the tab label, then a second line naming the CLI, the
+              // channel ("Rich Chat" / "Terminal") and — only for a CLI with
+              // several accounts — the account.
+              const cli = modesMap.get(sessionModeId(s) ?? "")?.cli;
+              const accountName =
+                cli && showsAccount(serverAccounts, accountsLoaded, cli, s.accountId)
+                  ? sessionAccountName(serverAccounts, cli, s.accountId)
+                  : undefined;
+              const tabAccount = cli ? accountOf(serverAccounts, cli, s.accountId) : undefined;
+              const signedOutSuffix =
+                tabAccount && accountState(tabAccount) === "signed_out"
+                  ? `, ${ACCOUNT_WORDS.signedOut.toLowerCase()}`
+                  : "";
+              const tooltip =
+                isAgent && cli
+                  ? `${label}\n${cliDisplayName(cli)} · ${s.channel === "json" ? "Rich Chat" : "Terminal"}${
+                      accountName ? ` · ${accountName}${signedOutSuffix}` : ""
+                    }`
+                  : label;
               return (
                 <SortableTab key={s.id} id={s.id}>
                   {({ setNodeRef, style, attributes, listeners }) => (
@@ -829,7 +859,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                                 api={api}
                               />
                             ) : null}
-                            <span className="tab__label" title={label}>
+                            <span className="tab__label" title={tooltip}>
                               {label}
                             </span>
                           </>
@@ -1110,5 +1140,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           )
         : null}
     </div>
+    {/* A Terminal (tmux) agent gets no break card and no ChatPane banner, so
+        its account state is announced as one line under the strip instead. */}
+    {isAgent && activeAgentSession && activeAgentSession.channel !== "json" ? (
+      <AccountBanner api={api} session={activeAgentSession} compact />
+    ) : null}
+    </>
   );
 }
