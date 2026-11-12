@@ -1,0 +1,672 @@
+/* Chat outline: the turn chain (one SVG of lines, never one node per turn) and the
+   turns panel it opens on press (Option A, Rail). */
+
+.ol {
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 16px;
+  z-index: 4;
+}
+
+/* While the list is open the chain stays on top of it (and of its shadow): nothing paints over the chain. */
+.ol--open {
+  z-index: 31;
+}
+
+.chat-pane[data-find-open] .ol {
+  top: calc(var(--find-bar-h, 44px) + 12px);
+}
+
+/* The lines sit above the hit strip, so no button state can ever cover them. */
+.ol__marks {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  display: block;
+  pointer-events: none;
+}
+
+.ol__m {
+  fill: none;
+  stroke-linecap: butt;
+  transition: stroke 120ms ease;
+}
+
+.ol__m--spine { stroke: var(--border-default); stroke-width: 1; }
+.ol__m--turn { stroke: var(--map-node); stroke-width: 2; }
+.ol__m--turnIn { stroke: var(--map-node-in); stroke-width: 2; }
+.ol__m--turnReview { stroke: var(--map-review); stroke-width: 2; }
+.ol__m--turnErr { stroke: var(--map-error); stroke-width: 2; }
+.ol__m--turnLive { stroke: var(--map-live); stroke-width: 2; }
+.ol__m--step { stroke: var(--beat); stroke-width: 1; }
+.ol__m--stepErr { stroke: var(--map-error); stroke-width: 2; }
+.ol__m--stepAsk { stroke: var(--map-ask); stroke-width: 2; }
+.ol__m--brk { stroke: var(--map-break); stroke-width: 1; stroke-dasharray: 2 2; }
+.ol__m--hit { stroke: var(--find-hit); stroke-width: 2; }
+.ol__m--hitCur { stroke: var(--find-ring); stroke-width: 3; }
+.ol__m--hitPeek { stroke: var(--find-ring); stroke-width: 1; stroke-dasharray: 1 1; }
+
+/* Hover only brightens the chain; it never opens anything. (A wheel over the hit
+   strip does open the list — that is a scroll, not a hover; see useRailWheel.) */
+.ol:hover .ol__m--spine,
+.ol--open .ol__m--spine { stroke: var(--border-strong); }
+.ol:hover .ol__m--turn,
+.ol--open .ol__m--turn { stroke: var(--map-node-in); }
+.ol:hover .ol__m--step,
+.ol--open .ol__m--step { stroke: var(--beat-hot); }
+
+.ol__inview {
+  position: absolute;
+  left: 0;
+  width: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--band-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--band-border);
+  pointer-events: none;
+}
+
+/* Turns older than the loaded window. */
+.ol__cap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12px;
+  border-radius: var(--radius-xs);
+  background: var(--hatch);
+  box-shadow: inset 0 0 0 1px var(--border-default);
+  pointer-events: none;
+}
+
+/* The row a press points at (or the keyboard focus) while the list is open. */
+.ol__scrub {
+  position: absolute;
+  z-index: 1;
+  left: -2px;
+  width: 16px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* The button is the 24px hit strip around the 10px rail; one pointer-events path
+   for mouse, touch and pen, so the browser must not pan on it. */
+.chainbtn {
+  position: absolute;
+  left: -4px;
+  top: -8px;
+  bottom: -8px;
+  width: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: ns-resize;
+  border-radius: var(--radius-sm);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The global `button:hover` fill (sticky after a tap on touch) must never paint over the lines. */
+.chainbtn:hover,
+.chainbtn:active,
+.chainbtn:focus {
+  background: transparent;
+}
+
+.chainbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Panel: beside the chain, below the pane's floating controls, as tall as its content. */
+.olp {
+  position: absolute;
+  left: 24px;
+  top: 40px;
+  bottom: auto;
+  width: min(344px, calc(100% - 40px));
+  max-height: calc(100% - 48px);
+  /* Turn-number column width; the panel overrides it inline from its widest number. */
+  --olp-n-w: 20px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  animation: olp-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes olp-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* A short chat viewport (chain under OLP_COMPACT_MAX_H): hug the viewport instead of
+   sitting 40px down, so at least one full row fits. Declared before the find-open rule
+   below so the find bar's offset still wins when the bar is open. */
+.olp--compact {
+  top: 4px;
+  max-height: calc(100% - 8px);
+}
+
+/* The compact panel reaches the pane's floating controls, which paint above the viewport's
+   stacking context (isolation: isolate), so no z-index here can lift the panel over them.
+   Hide them while it is open; with the find bar open they are already hidden or moved. */
+.chat-pane:not([data-find-open]):has(.olp--compact) .chat-font-overlay {
+  visibility: hidden;
+}
+
+.chat-pane[data-find-open] .olp {
+  top: calc(var(--find-bar-h, 44px) + 12px);
+  max-height: calc(100% - var(--find-bar-h, 44px) - 20px);
+}
+
+/* The row a wheel scrub rests on, spoken through the panel's live region. */
+.olp__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.olp__head {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.olp__title {
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.olp__count {
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.olp__spacer {
+  flex: 1;
+}
+
+.olp__ib {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.olp__ib:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.olp__filter {
+  height: 28px;
+  flex: none;
+  margin: var(--space-2) var(--space-2) var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+
+.olp__filter-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  outline: none;
+}
+
+.olp__filter-chip {
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.olp__filter-chip.active {
+  border-color: var(--map-error);
+  background: color-mix(in srgb, var(--map-error) 15%, transparent);
+  color: var(--fg-primary);
+}
+
+.olp__scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: var(--space-1);
+}
+
+.olp__load {
+  width: 100%;
+  height: 28px;
+  margin-bottom: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.olp__load:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.olp__load:disabled {
+  cursor: default;
+}
+
+.olp__load:disabled:hover {
+  background: transparent;
+  color: var(--fg-secondary);
+}
+
+.olp__load-spin {
+  animation: olp-load-spin 900ms linear infinite;
+}
+
+@keyframes olp-load-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.olp__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.olp__empty {
+  padding: var(--space-4);
+  text-align: center;
+  font-size: var(--fs-meta);
+  color: var(--fg-secondary);
+}
+
+.olp__item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Turn and step rows share one right padding, so their times form one column at the right edge. */
+.olp__row {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.olp__row > .olp__label {
+  font-weight: 500;
+}
+
+/* Number pill; the steps' glyph column below it is the same width, so the rail runs under it. */
+.olp__n {
+  width: var(--olp-n-w, 20px);
+  height: 18px;
+  flex: none;
+  border-radius: var(--radius-full);
+  text-align: center;
+  line-height: 18px;
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Labels take all the room up to the chips and the time; they ellipsize only there. */
+.olp__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.olp__chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Red only on the error glyph and the error count. */
+.olp__chip--err {
+  color: var(--fg-danger);
+}
+
+.olp__chip--live {
+  gap: 6px;
+  color: var(--fg-secondary);
+}
+
+.olp__chip--live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--map-live);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--map-live) 22%, transparent);
+}
+
+.olp__chip--loading {
+  gap: 4px;
+}
+
+/* Row time: last in every turn and step row, right-aligned at the row's right edge. */
+.olp__time {
+  flex: none;
+  min-width: 32px;
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.olp__beats {
+  min-width: 0;
+}
+
+/* Steps hang on a 1px rail under the turn number. */
+.olp__beat {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: var(--fs-meta);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background-color 300ms ease;
+}
+
+.olp__gl {
+  position: relative;
+  width: var(--olp-n-w, 20px);
+  height: 100%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--fg-muted);
+}
+
+.olp__gl::before,
+.olp__gl::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  height: calc(50% - 10px);
+  background: var(--border-default);
+}
+
+.olp__gl::before { top: 0; }
+.olp__gl::after { bottom: 0; }
+.olp__beat.last .olp__gl::after { display: none; }
+
+.k-error .olp__gl { color: var(--map-error); }
+.k-ask .olp__gl { color: var(--map-ask); }
+.k-todo .olp__gl { color: var(--fg-success); }
+.k-live .olp__gl { color: var(--map-live); }
+.k-live .olp__label { color: var(--fg-primary); }
+
+.olp__plus {
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* States: hover tints; the turn in view keeps a quiet band and a filled number; focus is a ring. */
+.olp__row:hover,
+.olp__beat:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.olp__row.cur {
+  background: var(--band-bg);
+}
+
+.olp__row.cur .olp__n {
+  background: var(--fg-primary);
+  color: var(--bg-elevated);
+  font-weight: 600;
+}
+
+.olp__row.kfocus,
+.olp__beat.kfocus {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--fg-primary);
+}
+
+/* The row a drag, a wheel or a tap on the chain points at. */
+.olp__row.scrub,
+.olp__beat.scrub {
+  background: var(--bg-active);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--fg-primary);
+}
+
+.olp__row.cancelled > .olp__label {
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+
+/* A turn whose messages are not in the chat window yet. */
+.olp__row.unloaded > .olp__label {
+  color: var(--fg-secondary);
+  font-weight: 400;
+}
+
+/* A turn whose window has not landed yet: a hatched placeholder. */
+.olp__row.skeleton > .olp__label {
+  color: var(--fg-muted);
+  background: var(--hatch);
+  border-radius: var(--radius-xs);
+}
+
+.olp__beat.new {
+  background: color-mix(in srgb, var(--map-live) 10%, transparent);
+  transition: background-color 600ms ease;
+}
+
+.olp__beat.find-cur {
+  box-shadow: inset 0 0 0 2px var(--find-ring);
+}
+
+/* Key hints: only after a keyboard open. */
+.olp__foot {
+  height: 32px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-micro);
+  color: var(--fg-muted);
+}
+
+.olp__foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.olp__foot > .olp__foot-end {
+  margin-left: auto;
+}
+
+.olp__kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--fg-secondary);
+}
+
+/* Opened by touch: 44px rows and targets (the virtualized list mirrors these heights). */
+.olp--touch .olp__row,
+.olp--touch .olp__beat {
+  height: 44px;
+}
+
+.olp--touch .olp__ib {
+  width: 44px;
+  min-height: 44px;
+}
+
+/* Phone sizes */
+@media (max-width: 640px) {
+  .olp__row {
+    height: 44px;
+    font-size: 15px;
+  }
+  .olp__beat {
+    height: 44px;
+    font-size: var(--fs-ui);
+  }
+  .olp__ib {
+    width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* After a jump from the chain or the panel, the target row is tinted, then fades. */
+[data-jump-flash] {
+  border-radius: var(--radius-md);
+  transition: background-color 600ms ease;
+}
+
+[data-jump-flash="on"] {
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .olp {
+    animation: none !important;
+    transition: none !important;
+  }
+  .olp__scroll {
+    scroll-behavior: auto !important;
+  }
+  .olp__beat,
+  .olp__load-spin,
+  .ol__m,
+  [data-jump-flash] {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* A jump to an unloaded turn that failed to load. */
+.olp__jump-failed {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 5;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  font-size: 12px;
+  pointer-events: none;
+}

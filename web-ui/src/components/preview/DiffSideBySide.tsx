@@ -15,6 +15,11 @@ interface DiffSideBySideProps {
   hunks: DiffHunk[];
   collapsedHunks: Set<number>;
   lineKeyMap: Map<DiffLine, string>;
+  /** 1-based flattened row index of every hunk line (the scroll-map scale —
+   *  see `DiffView`'s `lineRowIndex`). A pair's cells both carry the pair's
+   *  representative index (its first line's), so the DOM order stays
+   *  monotonically increasing for `visibleLineRange`'s binary search. */
+  lineRowIndex: Map<DiffLine, number>;
   highlightedByKey: Record<string, string> | null;
   onToggleHunk: (index: number) => void;
   onHunkMouseEnter: (index: number) => void;
@@ -38,6 +43,7 @@ function renderCell(
   highlightedByKey: Record<string, string> | null,
   isNewSide: boolean,
   dc: DiffComments | null | undefined,
+  diffRow: number | undefined,
 ) {
   if (!line) {
     return <div className="diff-line diff-line--empty" />;
@@ -62,6 +68,9 @@ function renderCell(
       // `data-line`, matching the inline layout's convention, so the existing
       // scroll-to-line query in FilePreviewPane keeps working unchanged.
       data-line={isNewSide ? (line.newLineNumber ?? undefined) : undefined}
+      // Scroll-map scale (see `DiffView`'s `lineRowIndex`): the pair's
+      // representative row index, so a jump lands on the pair.
+      data-diff-row={diffRow}
       // Comment anchoring (spike D1): every cell says which side it is and its old line.
       data-old-line={line.oldLineNumber ?? undefined}
       data-side={side}
@@ -104,6 +113,7 @@ export function DiffSideBySide({
   hunks,
   collapsedHunks,
   lineKeyMap,
+  lineRowIndex,
   highlightedByKey,
   onToggleHunk,
   onHunkMouseEnter,
@@ -202,18 +212,26 @@ export function DiffSideBySide({
                   <HunkCommentChip dc={dc} hunk={hunk} onExpand={() => onToggleHunk(i)} />
                 </div>
               ) : (
-                rows.map((row) => (
-                  <Fragment key={row.key}>
-                    {renderCell(row.left, lineKeyMap, highlightedByKey, false, dc)}
-                    {renderCell(row.right, lineKeyMap, highlightedByKey, true, dc)}
-                    {dc && row.left?.oldLineNumber != null ? (
-                      <CommentRowStack surface={dc.surface} view={dc.view} side="old" n={row.left.oldLineNumber} />
-                    ) : null}
-                    {dc && row.right?.newLineNumber != null ? (
-                      <CommentRowStack surface={dc.surface} view={dc.view} side="new" n={row.right.newLineNumber} />
-                    ) : null}
-                  </Fragment>
-                ))
+                rows.map((row) => {
+                  // The pair's representative row index: its first line's
+                  // (left <= right whenever both exist, since a removed run is
+                  // emitted before its added run).
+                  const diffRow =
+                    (row.left ? lineRowIndex.get(row.left) : undefined) ??
+                    (row.right ? lineRowIndex.get(row.right) : undefined);
+                  return (
+                    <Fragment key={row.key}>
+                      {renderCell(row.left, lineKeyMap, highlightedByKey, false, dc, diffRow)}
+                      {renderCell(row.right, lineKeyMap, highlightedByKey, true, dc, diffRow)}
+                      {dc && row.left?.oldLineNumber != null ? (
+                        <CommentRowStack surface={dc.surface} view={dc.view} side="old" n={row.left.oldLineNumber} />
+                      ) : null}
+                      {dc && row.right?.newLineNumber != null ? (
+                        <CommentRowStack surface={dc.surface} view={dc.view} side="new" n={row.right.newLineNumber} />
+                      ) : null}
+                    </Fragment>
+                  );
+                })
               )}
             </div>
           </Fragment>

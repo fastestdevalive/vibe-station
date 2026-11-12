@@ -372,6 +372,144 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingLineTarget, from search cli
     expect(target?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
   });
 
+  describe("diff scroll map — row-index scale", () => {
+    // A hunk starting at line 800 in a 4-row diff: `data-line` (800..802) and
+    // the diff row index (1..4) are different scales.
+    const farDiff = [
+      "diff --git a/src/App.tsx b/src/App.tsx",
+      "--- a/src/App.tsx",
+      "+++ b/src/App.tsx",
+      "@@ -800,2 +800,3 @@",
+      " context 800",
+      "-old 801",
+      "+new 801",
+      "+new 802",
+    ].join("\n");
+
+    function openFarDiff(layoutMode: "inline" | "side-by-side") {
+      const api = createMockApi();
+      vi.spyOn(api, "getDiff").mockResolvedValue(farDiff);
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        diffScopeByWorktree: { "wt-1": "local" },
+        diffLayoutMode: layoutMode,
+        pendingLineTarget: null,
+      });
+      return api;
+    }
+
+    /** jsdom reports 0 for every scroll box: give the preview body a viewport
+     *  so the scroll map activates, and the track a height so a click lands. */
+    async function withScrollMetrics<T>(fn: () => Promise<T>): Promise<T> {
+      const scrollHeightSpy = vi
+        .spyOn(Element.prototype, "scrollHeight", "get")
+        .mockImplementation(function (this: Element) {
+          return this.classList?.contains("preview-body") ? 2000 : 0;
+        });
+      const clientHeightSpy = vi
+        .spyOn(Element.prototype, "clientHeight", "get")
+        .mockImplementation(function (this: Element) {
+          if (this.classList?.contains("preview-body")) return 500;
+          if (this.classList?.contains("scrollmap-track-container")) return 500;
+          return 0;
+        });
+      try {
+        return await fn();
+      } finally {
+        scrollHeightSpy.mockRestore();
+        clientHeightSpy.mockRestore();
+        useWorkspaceStore.setState({ diffLayoutMode: "inline" });
+      }
+    }
+
+    function spyOnRows(container: HTMLElement) {
+      const rows = Array.from(container.querySelectorAll<HTMLElement>(".diff-line[data-diff-row]"));
+      const rowSpies = new Map<HTMLElement, ReturnType<typeof vi.fn>>();
+      for (const row of rows) {
+        const spy = vi.fn();
+        row.scrollIntoView = spy;
+        rowSpies.set(row, spy);
+      }
+      return { rows, rowSpies };
+    }
+
+    it("inline: a mark click jumps to that diff ROW, whose new-file line is 801", async () => {
+      const api = openFarDiff("inline");
+      await withScrollMetrics(async () => {
+        const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+        await waitFor(() => expect(container.querySelectorAll(".diff-line[data-diff-row]")).toHaveLength(4));
+        const { rows, rowSpies } = spyOnRows(container);
+
+        await waitFor(() => expect(container.querySelector(".scrollmap-track-container")).toBeTruthy());
+        const track = container.querySelector<HTMLElement>(".scrollmap-track-container");
+        // y=300 of a 500px track: inside the "added" mark, whose first row is 3.
+        fireEvent.pointerDown(track!, { clientY: 300, button: 0, pointerId: 1 });
+
+        const target = container.querySelector<HTMLElement>('.diff-line[data-diff-row="3"]');
+        expect(target).toBeTruthy();
+        await waitFor(() => expect(rowSpies.get(target!)).toHaveBeenCalledWith({ block: "start" }));
+        // Row 3 of the diff carries new-file line 801 — the two scales differ,
+        // and the jump must use the row one.
+        expect(target!.getAttribute("data-line")).toBe("801");
+        for (const row of rows) {
+          if (row === target) continue;
+          expect(rowSpies.get(row)).not.toHaveBeenCalled();
+        }
+      });
+    });
+
+    it("untracked file (no diff text): the scroll map uses the same all-added hunk the diff view shows", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "getDiff").mockResolvedValue("");
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        diffScopeByWorktree: { "wt-1": "local" },
+        diffLayoutMode: "inline",
+        pendingLineTarget: null,
+      });
+      await withScrollMetrics(async () => {
+        const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+        await waitFor(() => expect(container.querySelectorAll(".diff-line[data-diff-row]").length).toBeGreaterThan(0));
+        const rowCount = container.querySelectorAll(".diff-line[data-diff-row]").length;
+
+        await waitFor(() => expect(container.querySelector(".scrollmap-track-container")).toBeTruthy());
+        const marks = container.querySelectorAll<HTMLElement>(".scrollmap-pixel-mark");
+        expect(marks).toHaveLength(1);
+        expect(marks[0]!.dataset.kind).toBe("added");
+        // One mark over every diff row: it spans the whole 500px track.
+        expect(marks[0]!.style.top).toBe("0px");
+        expect(marks[0]!.style.height).toBe("500px");
+        expect(rowCount).toBeGreaterThan(0);
+      });
+    });
+
+    it("side-by-side: a mark click jumps to the pair row carrying that row index", async () => {
+      const api = openFarDiff("side-by-side");
+      await withScrollMetrics(async () => {
+        const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+        await waitFor(() => expect(container.querySelector(".preview-diff-side-by-side")).toBeTruthy());
+        await waitFor(() => expect(container.querySelectorAll(".diff-line[data-diff-row]").length).toBeGreaterThan(0));
+        const { rows, rowSpies } = spyOnRows(container);
+
+        const track = container.querySelector<HTMLElement>(".scrollmap-track-container");
+        expect(track).toBeTruthy();
+        // y=126 of a 500px track: inside the "deleted" mark, whose row is 2.
+        fireEvent.pointerDown(track!, { clientY: 126, button: 0, pointerId: 1 });
+
+        const target = container.querySelector<HTMLElement>('.diff-line[data-diff-row="2"]');
+        expect(target).toBeTruthy();
+        await waitFor(() => expect(rowSpies.get(target!)).toHaveBeenCalledWith({ block: "start" }));
+        expect(target!.getAttribute("data-side")).toBe("old");
+        for (const row of rows) {
+          if (row === target) continue;
+          expect(rowSpies.get(row)).not.toHaveBeenCalled();
+        }
+      });
+    });
+  });
+
   it("renders the line-highlight AND matched-text mark end-to-end when pendingLineTarget carries matchText", async () => {
     const api = createMockApi();
     // "src/App.tsx" line 2 is `  return <div>hello</div>;` (mock.ts fileContents).
@@ -1258,5 +1396,64 @@ describe("FilePreviewPane — HTML rendering (Rendered / Source toggle)", () => 
     expect(renderedBtn).toBeDisabled();
     expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute("aria-pressed", "true");
     getFileSpy.mockRestore();
+  });
+
+  describe("R2F-18 — Marks / minimap icon toggle in the preview strip", () => {
+    it("the toggle appears for a scrollable code file and not for a diff scope", async () => {
+      const scrollHeightSpy = vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+        return this.classList?.contains("preview-body") ? 2000 : 0;
+      });
+      const clientHeightSpy = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+        return this.classList?.contains("preview-body") ? 500 : 0;
+      });
+      // The scroll map sizes itself by the scroller's border-box width.
+      const realRect = Element.prototype.getBoundingClientRect;
+      const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        if (!this.classList?.contains("preview-body")) return realRect.call(this);
+        return { x: 0, y: 0, top: 0, left: 0, bottom: 500, right: 600, width: 600, height: 500, toJSON: () => ({}) } as DOMRect;
+      });
+
+      class FakeWorker {
+        onmessage: ((e: MessageEvent) => void) | null = null;
+        onerror: ((e: unknown) => void) | null = null;
+        postMessage() {}
+        terminate() {}
+      }
+      vi.stubGlobal("Worker", FakeWorker);
+
+      try {
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          activeFilePath: "src/App.tsx",
+          diffScopeByWorktree: {},
+        });
+        const { unmount } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+
+        // For a scrollable code file: toggle appears
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: "File minimap" })).toBeInTheDocument();
+        });
+
+        unmount();
+
+        // For diff scope: toggle does not appear
+        useWorkspaceStore.setState({
+          activeWorktreeId: "wt-1",
+          activeFilePath: "src/App.tsx",
+          diffScopeByWorktree: { "wt-1": "branch" },
+        });
+        render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+
+        await waitFor(() => {
+          expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
+        });
+        expect(screen.queryByRole("button", { name: "File minimap" })).not.toBeInTheDocument();
+      } finally {
+        scrollHeightSpy.mockRestore();
+        clientHeightSpy.mockRestore();
+        rectSpy.mockRestore();
+        vi.stubGlobal("Worker", undefined);
+      }
+    });
   });
 });

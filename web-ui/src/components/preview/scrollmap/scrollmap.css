@@ -1,0 +1,233 @@
+/* File scroll map styles: TrackMarks & Minimap */
+
+.preview-body-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-body--tracked {
+  scrollbar-width: none;
+}
+
+.preview-body--tracked::-webkit-scrollbar {
+  width: 0;
+}
+
+.preview-body--minimap {
+  padding-right: 56px !important;
+}
+
+.scrollmap-track-container {
+  position: absolute;
+  top: 0;
+  bottom: 8px;
+  right: 1px;
+  width: 12px;
+  z-index: 5;
+  user-select: none;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.scrollmap-track-container[data-readonly="true"] {
+  pointer-events: none;
+}
+
+.scrollmap-track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  background: transparent;
+  transition: width 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scrollmap-track-container[data-readonly="true"] .scrollmap-track {
+  width: 4px;
+}
+
+.scrollmap-track-container:not([data-readonly="true"]):hover .scrollmap-track {
+  width: 10px;
+}
+
+.scrollmap-pixel-mark {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.scrollmap-track-container[data-readonly="true"] .scrollmap-pixel-mark {
+  left: 0;
+  right: 0;
+}
+
+.scrollmap-thumb {
+  position: absolute;
+  right: 0;
+  left: 0;
+  min-height: 16px;
+  background: none;
+  border-radius: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.scrollmap-thumb::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  border-radius: 999px;
+  background: var(--thumb);
+  transition: width 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.scrollmap-track-container:not([data-readonly="true"]):hover .scrollmap-thumb::after {
+  width: 10px;
+  background: var(--band-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--band-border);
+}
+
+.scrollmap-hover-card {
+  position: absolute;
+  right: 20px;
+  z-index: 30;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  padding: 6px 10px;
+  box-shadow: var(--shadow-md);
+  font-size: var(--font-size-xs, 12px);
+  color: var(--fg-primary);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scrollmap-hover-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scrollmap-hover-card__kind {
+  font-weight: var(--font-weight-medium, 500);
+}
+
+.scrollmap-hover-card__meta {
+  color: var(--fg-muted);
+}
+
+.scrollmap-hover-card__code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  padding: 2px 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.scrollmap-hover-card__foot {
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
+/* Minimap container */
+.scrollmap-minimap-container {
+  position: absolute;
+  top: 0;
+  bottom: 8px;
+  right: 0;
+  width: 56px;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  z-index: 5;
+  user-select: none;
+  cursor: pointer;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.scrollmap-minimap-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 100%;
+  pointer-events: none;
+}
+
+.scrollmap-minimap-hatch {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--hatch);
+  pointer-events: none;
+}
+
+.scrollmap-minimap-frame {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 6px;
+  background: var(--band-bg);
+  border-top: 1px solid var(--band-border);
+  border-bottom: 1px solid var(--band-border);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.scrollmap-minimap-container:hover .scrollmap-minimap-frame {
+  background: var(--band-bg-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrollmap-track,
+  .scrollmap-thumb::after {
+    transition: none;
+  }
+}
+
+/* Marks / minimap icon toggle in the preview strip */
+.scrollmap-toggle-btn {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.scrollmap-toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.scrollmap-toggle-btn[aria-pressed="true"] {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.scrollmap-toggle-btn:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+  outline: none;
+}

@@ -1,47 +1,11 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
-import type { BeginEditResponse, NormalizedEvent, SendChatResponse, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
+import type { NormalizedEvent, SessionMeta, TranscriptAroundPage, TranscriptPage, WSEvent } from "@/api/types";
 import { COLD_START_TIMEOUT_MESSAGE, COLD_START_TIMEOUT_MS, useChat } from "./useChat";
 import * as chatSnapshotCache from "./chatSnapshotCache";
-
-/** Minimal fake api with controllable WS emission for deterministic ordering. */
-function makeApi(sendChatResult: SendChatResponse = { turnId: "t1", queuePosition: 0 }) {
-  const listeners = new Map<string, Set<(e: WSEvent) => void>>();
-  const emit = (ev: WSEvent) => {
-    for (const h of listeners.get("*") ?? []) h(ev);
-    for (const h of listeners.get(ev.type) ?? []) h(ev);
-  };
-  const fake = {
-    emit,
-    on(type: string, h: (e: WSEvent) => void) {
-      if (!listeners.has(type)) listeners.set(type, new Set());
-      listeners.get(type)!.add(h);
-      return () => listeners.get(type)!.delete(h);
-    },
-    openChat: vi.fn(async () => {}),
-    reopenChat: vi.fn(async () => {}),
-    closeChat: vi.fn(async () => {}),
-    sendChat: vi.fn(async () => sendChatResult),
-    stopChat: vi.fn(async () => ({ ok: true as const })),
-    cancelQueuedTurn: vi.fn(async () => ({ ok: true as const })),
-    beginEditQueuedTurn: vi.fn(async (_s: string, turnId: string): Promise<BeginEditResponse> => ({
-      turnId,
-      message: "prefill",
-      attachments: [],
-      queueIndex: 0,
-    })),
-    resubmitQueuedTurn: vi.fn(async (_s: string, turnId: string) => ({ ok: true as const, turnId })),
-    promoteQueuedTurn: vi.fn(async (_s: string, turnId: string) => ({ ok: true as const, turnId })),
-    getTranscriptPage: vi.fn(async (): Promise<TranscriptPage> => ({ events: [], hasMore: false })),
-    getTranscriptAll: vi.fn(async () => ({ events: [] as NormalizedEvent[] })),
-  };
-  return fake;
-}
-
-function ev(id: string, extra: Partial<NormalizedEvent>): NormalizedEvent {
-  return { id, sessionId: "s1", ts: "", provider: "claude", kind: "text", ...extra };
-}
+import { ev, makeApi } from "./useChat.testApi";
 
 /** Build `count` live events with ascending ids/logSeqs; every `userEvery`-th
  *  is a `user` turn so trims have a stable turn boundary to cut at. */
@@ -136,7 +100,7 @@ describe("useChat (4.T1)", () => {
     await act(async () => {
       await result.current.loadEarlier();
     });
-    expect(api.getTranscriptPage).toHaveBeenCalledWith("s1", 10);
+    expect(api.getTranscriptPage).toHaveBeenCalledWith("s1", 10, undefined);
     expect(result.current.events.map((e) => e.id)).toEqual(["e5", "e10"]);
     expect(result.current.hasMore).toBe(false);
 
@@ -146,6 +110,236 @@ describe("useChat (4.T1)", () => {
       await result.current.loadEarlier();
     });
     expect(api.getTranscriptPage).not.toHaveBeenCalled();
+  });
+
+  it("loadEarlier(limit) asks for a page of `limit` events; without it the client's default", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e300", { kind: "user", role: "user", text: "recent", turnId: "t300", logSeq: 300 })],
+        oldestSeq: 300,
+        hasMore: true,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    api.getTranscriptPage.mockResolvedValueOnce({
+      events: [ev("e250", { kind: "user", role: "user", text: "older", turnId: "t250", logSeq: 250 })],
+      oldestSeq: 250,
+      hasMore: true,
+    });
+    await act(async () => {
+      await result.current.loadEarlier(200);
+    });
+    expect(api.getTranscriptPage).toHaveBeenLastCalledWith("s1", 300, 200);
+    expect(result.current.events.map((e) => e.id)).toEqual(["e250", "e300"]);
+
+    api.getTranscriptPage.mockResolvedValueOnce({ events: [], oldestSeq: 250, hasMore: true });
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+    expect(api.getTranscriptPage).toHaveBeenLastCalledWith("s1", 250, undefined);
+  });
+
+  it("loadEarlierTo(seq) fetches one page down to `seq` and prepends its rows", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e500", { kind: "user", role: "user", text: "recent", turnId: "t500", logSeq: 500 })],
+        oldestSeq: 500,
+        hasMore: true,
+        turnsBefore: 12,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.turnsBefore).toBe(12);
+
+    // A find hit 100 rows above the window: one keyset page with limit = 500 - 400.
+    api.getTranscriptPage.mockResolvedValueOnce({
+      events: [ev("e400", { kind: "user", role: "user", text: "target", turnId: "t400", logSeq: 400 })],
+      oldestSeq: 400,
+      hasMore: true,
+      turnsBefore: 10,
+    });
+    await act(async () => {
+      await result.current.loadEarlierTo(400);
+    });
+
+    expect(api.getTranscriptPage).toHaveBeenCalledWith("s1", 500, 100);
+    expect(result.current.events.map((e) => e.id)).toEqual(["e400", "e500"]);
+    expect(result.current.turnsBefore).toBe(10);
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("a loadEarlier started while a viewAround fetch is pending does not merge into the new window", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e500", { kind: "user", role: "user", text: "r", turnId: "t500", logSeq: 500 })],
+        oldestSeq: 500,
+        hasMore: true,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let resolveAround!: (v: TranscriptAroundPage) => void;
+    api.getTranscriptAround.mockReturnValueOnce(new Promise<TranscriptAroundPage>((r) => (resolveAround = r)));
+    let around!: Promise<void>;
+    act(() => {
+      around = result.current.viewAround(50);
+    });
+    let resolvePage!: (v: TranscriptPage) => void;
+    api.getTranscriptPage.mockReturnValueOnce(new Promise<TranscriptPage>((r) => (resolvePage = r)));
+    let earlier!: Promise<void>;
+    act(() => {
+      earlier = result.current.loadEarlier();
+    });
+    await act(async () => {
+      resolveAround({
+        events: [ev("a50", { kind: "user", turnId: "t50", logSeq: 50 })],
+        oldestSeq: 50,
+        hasMore: false,
+        turnsBefore: 0,
+      });
+      await around;
+    });
+    await act(async () => {
+      resolvePage({ events: [ev("old", { kind: "user", turnId: "t1", logSeq: 1 })], oldestSeq: 1, hasMore: false });
+      await earlier;
+    });
+    expect(result.current.events.map((e) => e.id)).toEqual(["a50"]);
+  });
+
+  it("a loadEarlier in flight from a detached window is dropped by a reconnect replay", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e500", { kind: "user", turnId: "t500", logSeq: 500 })],
+        oldestSeq: 500,
+        hasMore: true,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    api.getTranscriptAround.mockResolvedValueOnce({
+      events: [ev("a50", { kind: "user", turnId: "t50", logSeq: 50 })],
+      oldestSeq: 50,
+      hasMore: true,
+      turnsBefore: 3,
+    });
+    await act(async () => {
+      await result.current.viewAround(50);
+    });
+    let resolvePage!: (v: TranscriptPage) => void;
+    api.getTranscriptPage.mockReturnValueOnce(new Promise<TranscriptPage>((r) => (resolvePage = r)));
+    let earlier!: Promise<void>;
+    act(() => {
+      earlier = result.current.loadEarlier();
+    });
+    await act(async () => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("fresh", { kind: "user", turnId: "tf", logSeq: 600 })],
+        oldestSeq: 600,
+        hasMore: true,
+      });
+    });
+    await act(async () => {
+      resolvePage({ events: [ev("old", { kind: "user", turnId: "t1", logSeq: 1 })], oldestSeq: 1, hasMore: false });
+      await earlier;
+    });
+    expect(result.current.events.map((e) => e.id)).toEqual(["fresh"]);
+  });
+
+  it("a loadEarlier in flight from a detached window is dropped by a delta reconnect replay", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e500", { kind: "user", turnId: "t500", logSeq: 500 })],
+        oldestSeq: 500,
+        hasMore: true,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    api.getTranscriptAround.mockResolvedValueOnce({
+      events: [ev("a50", { kind: "user", turnId: "t50", logSeq: 50 })],
+      oldestSeq: 50,
+      hasMore: true,
+      turnsBefore: 3,
+    });
+    await act(async () => {
+      await result.current.viewAround(50);
+    });
+    let resolvePage!: (v: TranscriptPage) => void;
+    api.getTranscriptPage.mockReturnValueOnce(new Promise<TranscriptPage>((r) => (resolvePage = r)));
+    let earlier!: Promise<void>;
+    act(() => {
+      earlier = result.current.loadEarlier();
+    });
+    await act(async () => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("fresh", { kind: "user", turnId: "tf", logSeq: 600 })],
+      });
+    });
+    await act(async () => {
+      resolvePage({ events: [ev("old", { kind: "user", turnId: "t1", logSeq: 1 })], oldestSeq: 1, hasMore: false });
+      await earlier;
+    });
+    expect(result.current.events.map((e) => e.id)).toEqual(["e500", "fresh"]);
+    // The stale page must not overwrite the restored tail's paging state either.
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("a loadEarlier superseded by loadEarlierTo leaves the spinner to loadEarlierTo", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e500", { kind: "user", turnId: "t500", logSeq: 500 })],
+        oldestSeq: 500,
+        hasMore: true,
+      });
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let resolveFirst!: (v: TranscriptPage) => void;
+    let resolveSecond!: (v: TranscriptPage) => void;
+    api.getTranscriptPage
+      .mockReturnValueOnce(new Promise<TranscriptPage>((r) => (resolveFirst = r)))
+      .mockReturnValueOnce(new Promise<TranscriptPage>((r) => (resolveSecond = r)));
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.loadEarlier();
+      second = result.current.loadEarlierTo(400);
+    });
+    await act(async () => {
+      resolveFirst({ events: [], oldestSeq: 500, hasMore: true });
+      await first;
+    });
+    expect(result.current.loadingEarlier).toBe(true);
+    await act(async () => {
+      resolveSecond({ events: [ev("e400", { kind: "user", turnId: "t400", logSeq: 400 })], oldestSeq: 400, hasMore: true });
+      await second;
+    });
+    expect(result.current.loadingEarlier).toBe(false);
   });
 
   it("P1 — a sinceSeq delta replay merges (appends) without resetting the window cursor", async () => {
@@ -322,105 +516,6 @@ describe("useChat queue controls (2.T2/2.T4)", () => {
     });
     expect(result.current.queuedTurnIds).toEqual(["t1", "t2"]);
     expect(result.current.editingTurnIds).toEqual(["t3"]);
-  });
-});
-
-describe("useChat snapshot cache", () => {
-  it("(a) restores from cache immediately — no spinner, events visible, openChat uses sinceSeq", async () => {
-    // Pre-seed the cache with a fresh snapshot.
-    const cachedEvent = ev("e10", { kind: "text", role: "assistant", text: "cached", logSeq: 10 });
-    chatSnapshotCache.save("s1", {
-      events: [cachedEvent],
-      hasMore: false,
-      userTurnIds: new Set(),
-      latestSeq: 10,
-      savedAt: Date.now(), // fresh — within 60 s
-    });
-
-    const api = makeApi();
-    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
-
-    // Events and loading state are set synchronously from the snapshot.
-    expect(result.current.loading).toBe(false);
-    expect(result.current.events.map((e) => e.id)).toEqual(["e10"]);
-
-    // openChat should have been called with sinceSeq=10 (the snapshot's latestSeq).
-    expect(api.openChat).toHaveBeenCalledWith("s1", 10);
-  });
-
-  it("(b) gap-drop path — stale snapshot replaced by fresh tail when oldestSeq > restoredLatestSeq", async () => {
-    // Snapshot has latestSeq=5 but the fresh tail starts at oldestSeq=10 → gap.
-    const cachedEvent = ev("e5", { kind: "text", role: "assistant", text: "old", logSeq: 5 });
-    chatSnapshotCache.save("s1", {
-      events: [cachedEvent],
-      hasMore: false,
-      userTurnIds: new Set(),
-      latestSeq: 5,
-      savedAt: Date.now() - 90_000, // stale → sinceSeq omitted → plain tail
-    });
-
-    const api = makeApi();
-    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
-
-    // Snapshot was restored (no spinner).
-    expect(result.current.loading).toBe(false);
-    expect(result.current.events.map((e) => e.id)).toEqual(["e5"]);
-
-    // Plain tail replay arrives with a gap: oldestSeq=10 > restoredLatestSeq=5.
-    act(() => {
-      api.emit({
-        type: "chat:replay",
-        sessionId: "s1",
-        events: [ev("e10", { kind: "text", role: "assistant", text: "fresh", logSeq: 10 })],
-        oldestSeq: 10,
-        hasMore: false,
-      });
-    });
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    // Stale cached event should be gone; only the fresh tail event remains.
-    expect(result.current.events.map((e) => e.id)).toEqual(["e10"]);
-  });
-
-  it("(c) stale (>60 s) snapshot without a gap — fresh tail merges normally, no content hole", async () => {
-    // Snapshot has latestSeq=5; tail reply has oldestSeq=3 ≤ 5 → no gap → merge.
-    const cachedEvent = ev("e5", { kind: "text", role: "assistant", text: "old", logSeq: 5 });
-    chatSnapshotCache.save("s1", {
-      events: [cachedEvent],
-      hasMore: false,
-      userTurnIds: new Set(),
-      latestSeq: 5,
-      savedAt: Date.now() - 90_000, // stale
-    });
-
-    const api = makeApi();
-    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
-
-    expect(result.current.loading).toBe(false);
-
-    // Fresh tail: oldestSeq=3, so e5 is within the covered window → merge.
-    act(() => {
-      api.emit({
-        type: "chat:replay",
-        sessionId: "s1",
-        events: [
-          ev("e3", { kind: "user", role: "user", text: "q", logSeq: 3 }),
-          ev("e6", { kind: "text", role: "assistant", text: "a", logSeq: 6 }),
-        ],
-        oldestSeq: 3,
-        hasMore: false,
-      });
-    });
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    // Both the cached event and new events are present, ordered by logSeq.
-    const ids = result.current.events.map((e) => e.id);
-    expect(ids).toContain("e3");
-    expect(ids).toContain("e5");
-    expect(ids).toContain("e6");
-    // Correct order: e3 < e5 < e6
-    expect(ids.indexOf("e3")).toBeLessThan(ids.indexOf("e5"));
-    expect(ids.indexOf("e5")).toBeLessThan(ids.indexOf("e6"));
   });
 });
 
@@ -1047,6 +1142,344 @@ describe("useChat review comments (6.4 / 6.5)", () => {
       await result.current.saveEdit("t1", "m2", []);
     });
     expect((api.resubmitQueuedTurn.mock.calls.at(-1) as unknown as unknown[])[2]).not.toHaveProperty("keepReview");
+  });
+
+  describe("turnsBefore, countUserTurns, and detached mode", () => {
+    it("turnsBefore reflects replay, updates on loadEarlier/loadAll, and live trim increments it", async () => {
+      const api = makeApi();
+      const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+      // 1. Initial replay with turnsBefore = 5
+      await act(async () => {
+        api.emit({
+          type: "chat:replay",
+          sessionId: "s1",
+          events: [
+            ev("u1", { kind: "user", turnId: "t1", logSeq: 10 }),
+            ev("a1", { kind: "text", turnId: "t1", logSeq: 11 }),
+          ],
+          hasMore: true,
+          oldestSeq: 10,
+          turnsBefore: 5,
+        });
+      });
+      expect(result.current.turnsBefore).toBe(5);
+
+      // 2. loadEarlier updates turnsBefore
+      api.getTranscriptPage.mockResolvedValueOnce({
+        events: [
+          ev("u0", { kind: "user", turnId: "t0" }),
+          ev("a0", { kind: "text", turnId: "t0" }),
+        ],
+        hasMore: true,
+        turnsBefore: 4,
+      });
+
+      await act(async () => {
+        await result.current.loadEarlier();
+      });
+      expect(result.current.turnsBefore).toBe(4);
+
+      // 3. loadAll resets turnsBefore to 0
+      api.getTranscriptAll.mockResolvedValueOnce({
+        events: [
+          ev("uOld", { kind: "user", turnId: "tOld" }),
+          ev("u0", { kind: "user", turnId: "t0" }),
+          ev("u1", { kind: "user", turnId: "t1" }),
+        ],
+      });
+
+      await act(async () => {
+        await result.current.loadAll();
+      });
+      expect(result.current.turnsBefore).toBe(0);
+    });
+
+    it("viewAround detaches window, stashes incoming messages, returnToLatest restores live tail", async () => {
+      const api = makeApi();
+      const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+      // Initial live events
+      await act(async () => {
+        api.emit({
+          type: "chat:replay",
+          sessionId: "s1",
+          events: [
+            ev("u1", { kind: "user", turnId: "t1" }),
+            ev("a1", { kind: "text", turnId: "t1" }),
+          ],
+          hasMore: false,
+          turnsBefore: 0,
+        });
+      });
+      expect(result.current.detached).toBe(false);
+      expect(result.current.events).toHaveLength(2);
+
+      // viewAround
+      api.getTranscriptAround.mockResolvedValueOnce({
+        events: [
+          ev("uOld", { kind: "user", turnId: "tOld", logSeq: 42 }),
+          ev("aOld", { kind: "text", turnId: "tOld", logSeq: 43 }),
+        ],
+        hasMore: true,
+        turnsBefore: 20,
+      });
+
+      await act(async () => {
+        await result.current.viewAround(42);
+      });
+
+      expect(result.current.detached).toBe(true);
+      expect(result.current.events).toHaveLength(2);
+      expect(result.current.events[0]!.id).toBe("uOld");
+
+      // While detached, incoming live message does NOT appear in displayed events
+      await act(async () => {
+        api.emit({
+          type: "session:message",
+          sessionId: "s1",
+          event: ev("uLive", { kind: "user", turnId: "tLive" }),
+        });
+      });
+      expect(result.current.events).toHaveLength(2); // still detached window!
+
+      // returnToLatest restores the live tail with the newly arrived message
+      act(() => {
+        result.current.returnToLatest();
+      });
+
+      expect(result.current.detached).toBe(false);
+      expect(result.current.events.map((e) => e.id)).toEqual(["u1", "a1", "uLive"]);
+    });
+
+    it("chat:replay clears detached mode, failed viewAround leaves state untouched", async () => {
+      const api = makeApi();
+      const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+      // Failed viewAround rejects
+      api.getTranscriptAround.mockRejectedValueOnce(new Error("Network fail"));
+      await act(async () => {
+        await expect(result.current.viewAround(100)).rejects.toThrow("Network fail");
+      });
+      expect(result.current.detached).toBe(false);
+
+      // Now attach viewAround
+      api.getTranscriptAround.mockResolvedValueOnce({
+        events: [ev("uPast", { kind: "user" })],
+        hasMore: false,
+        turnsBefore: 0,
+      });
+      await act(async () => {
+        await result.current.viewAround(50);
+      });
+      expect(result.current.detached).toBe(true);
+
+      // chat:replay clears detached
+      await act(async () => {
+        api.emit({
+          type: "chat:replay",
+          sessionId: "s1",
+          events: [ev("uFresh", { kind: "user" })],
+          hasMore: false,
+        });
+      });
+      expect(result.current.detached).toBe(false);
+      expect(result.current.events[0]!.id).toBe("uFresh");
+    });
+
+    it("a since-delta replay while detached merges onto the stashed live tail, not the around window", async () => {
+      const api = makeApi();
+      const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+      // Live tail (older rows exist, 3 turns before it).
+      await act(async () => {
+        api.emit({
+          type: "chat:replay",
+          sessionId: "s1",
+          events: [
+            ev("u1", { kind: "user", turnId: "t1", logSeq: 10 }),
+            ev("a1", { kind: "text", turnId: "t1", logSeq: 11 }),
+          ],
+          oldestSeq: 10,
+          hasMore: true,
+          turnsBefore: 3,
+        });
+      });
+      expect(result.current.hasMore).toBe(true);
+      expect(result.current.turnsBefore).toBe(3);
+
+      // Detach into an around window.
+      api.getTranscriptAround.mockResolvedValueOnce({
+        events: [
+          ev("uOld", { kind: "user", turnId: "tOld", logSeq: 42 }),
+          ev("aOld", { kind: "text", turnId: "tOld", logSeq: 43 }),
+        ],
+        oldestSeq: 42,
+        hasMore: true,
+        turnsBefore: 20,
+      });
+      await act(async () => {
+        await result.current.viewAround(42);
+      });
+      expect(result.current.detached).toBe(true);
+      expect(result.current.events.map((e) => e.id)).toEqual(["uOld", "aOld"]);
+
+      // Reconnect delta (no cursor fields) while detached: must return to the
+      // live tail + delta, never merge the delta onto the around window (hole).
+      await act(async () => {
+        api.emit({
+          type: "chat:replay",
+          sessionId: "s1",
+          events: [ev("uNew", { kind: "user", turnId: "tNew", logSeq: 12 })],
+        });
+      });
+      expect(result.current.detached).toBe(false);
+      expect(result.current.events.map((e) => e.id)).toEqual(["u1", "a1", "uNew"]);
+      expect(result.current.hasMore).toBe(true);
+      expect(result.current.turnsBefore).toBe(3);
+    });
+  });
+});
+
+describe("useChat window loads are latest-wins", () => {
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function aroundPage(id: string, seq: number): TranscriptAroundPage {
+    return {
+      events: [ev(id, { kind: "user", role: "user", text: id, turnId: `t-${id}`, logSeq: seq })],
+      hasMore: true,
+      turnsBefore: seq,
+    };
+  }
+
+  async function mountWithTail(api: ReturnType<typeof makeApi>, sessionId = "s1") {
+    const hook = renderHook(({ sid }) => useChat(api as unknown as ApiInstance, sid, true), {
+      initialProps: { sid: sessionId },
+    });
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId,
+        events: [ev("tail", { kind: "user", role: "user", text: "tail", turnId: "t-tail", logSeq: 1000 })],
+        oldestSeq: 1000,
+        hasMore: true,
+        turnsBefore: 50,
+      });
+    });
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    return hook;
+  }
+
+  it("a quick second viewAround wins over a slower first one", async () => {
+    const api = makeApi();
+    const hook = await mountWithTail(api);
+    const first = deferred<TranscriptAroundPage>();
+    const second = deferred<TranscriptAroundPage>();
+    api.getTranscriptAround.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    let p1!: Promise<void>;
+    let p2!: Promise<void>;
+    act(() => {
+      p1 = hook.result.current.viewAround(100);
+      p2 = hook.result.current.viewAround(200);
+    });
+    await act(async () => {
+      second.resolve(aroundPage("b", 200));
+      await p2;
+    });
+    expect(hook.result.current.events.map((e) => e.id)).toEqual(["b"]);
+
+    await act(async () => {
+      first.resolve(aroundPage("a", 100));
+      await p1;
+    });
+    expect(hook.result.current.events.map((e) => e.id)).toEqual(["b"]);
+    expect(hook.result.current.turnsBefore).toBe(200);
+
+    // Returning to the latest restores the live tail stashed by the first swap.
+    act(() => hook.result.current.returnToLatest());
+    expect(hook.result.current.events.map((e) => e.id)).toEqual(["tail"]);
+  });
+
+  it("a viewAround that resolves after a session switch commits nothing", async () => {
+    const api = makeApi();
+    const hook = await mountWithTail(api);
+    const pending = deferred<TranscriptAroundPage>();
+    api.getTranscriptAround.mockReturnValueOnce(pending.promise);
+
+    let p!: Promise<void>;
+    act(() => {
+      p = hook.result.current.viewAround(100);
+    });
+    hook.rerender({ sid: "s2" });
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s2",
+        events: [ev("s2-tail", { kind: "user", role: "user", text: "other", turnId: "t-s2", logSeq: 7 })],
+        oldestSeq: 7,
+        hasMore: false,
+      });
+    });
+    await act(async () => {
+      pending.resolve(aroundPage("stale", 100));
+      await p;
+    });
+
+    expect(hook.result.current.events.map((e) => e.id)).toEqual(["s2-tail"]);
+    expect(hook.result.current.detached).toBe(false);
+  });
+
+  it("a loadEarlierTo superseded by a viewAround does not prepend into the new window", async () => {
+    const api = makeApi();
+    const hook = await mountWithTail(api);
+    const page = deferred<TranscriptPage>();
+    api.getTranscriptPage.mockReturnValueOnce(page.promise);
+    api.getTranscriptAround.mockResolvedValueOnce(aroundPage("far", 5));
+
+    let early!: Promise<void>;
+    act(() => {
+      early = hook.result.current.loadEarlierTo(900);
+    });
+    expect(hook.result.current.loadingEarlier).toBe(true);
+    await act(async () => {
+      await hook.result.current.viewAround(5);
+    });
+    await act(async () => {
+      page.resolve({ events: [ev("e900", { kind: "user", role: "user", text: "x", turnId: "t900", logSeq: 900 })], oldestSeq: 900, hasMore: true });
+      await early;
+    });
+
+    expect(hook.result.current.events.map((e) => e.id)).toEqual(["far"]);
+    expect(hook.result.current.loadingEarlier).toBe(false);
+  });
+});
+
+describe("useChat live trim under StrictMode", () => {
+  it("counts the trimmed turns once even though StrictMode runs the events updater twice", async () => {
+    const api = makeApi();
+    const hook = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true), { wrapper: StrictMode });
+    act(() => {
+      api.emit({ type: "chat:replay", sessionId: "s1", events: [], oldestSeq: 0, hasMore: false, turnsBefore: 5 });
+    });
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    // The 5,001st event trims 1,002 rows (cut at the first user row at or after
+    // index 1,001), which hold 334 user turns; the remaining 99 never re-trim.
+    act(() => {
+      for (const e of makeLiveEvents(5100)) {
+        api.emit({ type: "session:message", sessionId: "s1", event: e });
+      }
+    });
+
+    expect(hook.result.current.events.length).toBe(5100 - 1002);
+    expect(hook.result.current.turnsBefore).toBe(5 + 334);
   });
 });
 

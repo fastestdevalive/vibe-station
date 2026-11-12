@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { DiffHunk, DiffLine } from "@/preview/diffParser";
-import { parseUnifiedDiff, syntheticUntrackedHunks } from "@/preview/diffParser";
+import { previewDiffHunks, type parseUnifiedDiff } from "@/preview/diffParser";
 import { diffLinesToHunks } from "@/preview/diffFromTexts";
 import { computeGaps, type DiffGap } from "@/preview/diffGaps";
 import { segmentMarkdownWithLines } from "@/preview/mdSegments";
@@ -131,10 +131,7 @@ export function DiffView({
     if (oldText !== undefined || newText !== undefined) {
       return diffLinesToHunks(oldText ?? "", newText ?? "", oldStart ?? 1, newStart ?? 1);
     }
-    const trimmed = (diffText ?? "").trim();
-    if (trimmed.length > 0) return parseUnifiedDiff(diffText ?? "");
-    if (fileContentFallback) return syntheticUntrackedHunks(fileContentFallback);
-    return [];
+    return previewDiffHunks(diffText, fileContentFallback);
   }, [diffText, fileContentFallback, oldText, newText, oldStart, newStart]);
 
   const flatRows = useMemo(() => flattenHunks(hunks), [hunks]);
@@ -164,6 +161,19 @@ export function DiffView({
   const lineKeyMap = useMemo(() => {
     const map = new Map<DiffLine, string>();
     for (const row of flatRows) map.set(row.line, row.key);
+    return map;
+  }, [flatRows]);
+
+  // 1-based index of every diff row in the flattened hunk order. This is the
+  // scale the file scroll map draws its marks, thumb and jumps on
+  // (`scrollmap/buildMarks.ts` `buildDiffMarks`, `scrollmap/codeLines.ts`):
+  // `data-line` is the NEW-file line number, which is a different scale
+  // entirely (a hunk at line 800 in a 40-row diff), so rows carry
+  // `data-diff-row` as well. Collapsed hunks render no rows, but their rows
+  // still occupy their indices — the attribute survives the collapse.
+  const lineRowIndex = useMemo(() => {
+    const map = new Map<DiffLine, number>();
+    flatRows.forEach((row, i) => map.set(row.line, i + 1));
     return map;
   }, [flatRows]);
 
@@ -485,6 +495,7 @@ export function DiffView({
           hunks={hunks}
           collapsedHunks={collapsedHunks}
           lineKeyMap={lineKeyMap}
+          lineRowIndex={lineRowIndex}
           highlightedByKey={highlightedByKey}
           onToggleHunk={toggleHunk}
           onHunkMouseEnter={onHunkMouseEnter}
@@ -558,6 +569,7 @@ export function DiffView({
                             className={`diff-line diff-line--${line.type}${covers?.length || inline?.length ? " diff-line--commented" : ""}`}
                             data-line={line.newLineNumber ?? undefined}
                             data-old-line={line.oldLineNumber ?? undefined}
+                            data-diff-row={lineRowIndex.get(line)}
                             data-side={line.type === "removed" ? "old" : "new"}
                             rowText={line.content}
                             pins={pins}

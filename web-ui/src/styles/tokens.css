@@ -83,6 +83,7 @@
   --space-16: 64px;
 
   --radius-none: 0px;
+  --radius-xs: 3px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -161,6 +162,37 @@
   /* Portaled popovers (send picker, selection popover) sit above `.pane-viewport-fullscreen` (200) so a fullscreen
      tools pane cannot hide them; BottomSheet (300/301) is a separate, deliberately higher layer. */
   --z-popover: 320;
+
+  /* Chat outline: node chain + panel */
+  --map-node: var(--fg-faint);
+  --map-node-in: var(--fg-secondary);
+  --map-error: var(--fg-danger);
+  --map-review: var(--comment);
+  --map-live: var(--status-working);
+  --map-break: var(--border-strong);
+  --map-ask: var(--status-waiting);
+  --beat: var(--fg-muted);
+  --beat-hot: var(--fg-secondary);
+  --band-bg: color-mix(in srgb, var(--fg-primary) 7%, transparent);
+  --band-bg-hover: color-mix(in srgb, var(--fg-primary) 12%, transparent);
+  --band-border: color-mix(in srgb, var(--fg-primary) 16%, transparent);
+  --hatch: repeating-linear-gradient(135deg, color-mix(in srgb, var(--fg-primary) 9%, transparent) 0 2px, transparent 2px 5px);
+
+  /* File scroll map: ruler marks & thumb */
+  --ruler-added: var(--git-added);
+  --ruler-modified: var(--accent);
+  --ruler-deleted: var(--fg-danger);
+  --ruler-comment: var(--comment);
+  --ruler-search: var(--fg-warning);
+  --thumb: color-mix(in srgb, var(--border-strong) 60%, transparent);
+
+  /* Find in chat */
+  --find-bar-h: 44px;
+  --find-match: var(--ref-match-bg);
+  --find-current: color-mix(in srgb, var(--fg-warning) 55%, transparent);
+  --find-ring: var(--fg-warning);
+  --find-hit: var(--fg-warning);
+  --find-focus: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 /* Ink for text on solid --success/--warning fills (update chip). Dark ink passes
    4.5:1 on every theme's fills except the one dark-green/brown set overridden below;

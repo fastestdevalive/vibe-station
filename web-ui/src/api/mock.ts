@@ -35,6 +35,7 @@ import type {
   DraftConfig,
   EnableTailscaleResponse,
   FileScope,
+  FileScrollMap,
   FsCheckResponse,
   FsCompleteResponse,
   GutterResult,
@@ -61,7 +62,13 @@ import type {
   SupportedCli,
   TranscriptResponse,
   TaskOutput,
+  TranscriptAroundPage,
+  TranscriptOutlineSummary,
+  TranscriptOutlineWindow,
   TranscriptPage,
+  TranscriptSincePage,
+  TranscriptSearchPage,
+  TranscriptSearchScope,
   TreeEntry,
   TailscaleQrResponse,
   TailscaleStatus,
@@ -78,6 +85,8 @@ import { ApiError, ReviewApiError } from "./errors";
 import { createMockArtifacts } from "./mockArtifacts";
 import { createMockComments } from "./mockComments";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
+import { mockSearchTranscript, mockGetTranscriptAround, mockGetTranscriptSince } from "./mockTranscriptSearch";
+import { mockTranscriptOutline, mockTranscriptOutlineWindow } from "./mockTranscriptOutline";
 import type { ConnectionState } from "./client";
 
 function nowIso() {
@@ -222,7 +231,7 @@ export interface MockSeed {
   chat?: Record<string, NormalizedEvent[]>;
   tree?: Record<string, Record<string, TreeEntry[]>>;
   tunnel?: TunnelState;
-  settings?: { themeId?: string };
+  settings?: { themeId?: string; fileScrollMap?: FileScrollMap };
 }
 
 // Mirrors the daemon's per-CLI `supports_json()` capability for the mock's
@@ -248,11 +257,15 @@ export function createMockApi(seed: MockSeed = {}) {
     themeId?: string;
     markdownStyle?: MarkdownStyle;
     defaultChannelByCli?: Record<string, "tmux" | "json">;
+    fileScrollMap?: FileScrollMap;
   } = {};
   let connState: ConnectionState = "online";
   const connListeners = new Set<(s: ConnectionState) => void>();
   if (seed.settings?.themeId !== undefined) {
     mockSettings.themeId = seed.settings.themeId;
+  }
+  if (seed.settings?.fileScrollMap !== undefined) {
+    mockSettings.fileScrollMap = seed.settings.fileScrollMap;
   }
   /** In-memory tunnel status (seedable; default disabled, mirroring the daemon stub). */
   const tunnelState: TunnelState = seed.tunnel ?? { enabled: false, tunnelUrl: null };
@@ -584,6 +597,7 @@ export function createMockApi(seed: MockSeed = {}) {
       setSettings(patch: Partial<Settings>) {
         if (patch.themeId !== undefined) mockSettings.themeId = patch.themeId;
         if (patch.markdownStyle !== undefined) mockSettings.markdownStyle = patch.markdownStyle;
+        if (patch.fileScrollMap !== undefined) mockSettings.fileScrollMap = patch.fileScrollMap;
       },
       /** Push an event into a mock transcript (for chat:replay in tests). */
       pushChatEvent(sessionId: string, event: NormalizedEvent) {
@@ -1297,7 +1311,7 @@ export function createMockApi(seed: MockSeed = {}) {
           const oldMode = modes.find((m) => m.id === s.modeId);
           const newMode = modes.find((m) => m.id === newSession.modeId);
           const carried = oldEvents.map((e) => {
-            const { usage, model, agentChatId, ...rest } = e;
+            const { usage: _usage, model: _model, agentChatId: _agentChatId, ...rest } = e;
             return { ...rest, sessionId: newId };
           });
           const breakText =
@@ -2037,6 +2051,7 @@ export function createMockApi(seed: MockSeed = {}) {
         skillPaths: ["/home/user/.claude/skills"],
         themeId: mockSettings.themeId,
         ...(mockSettings.markdownStyle ? { markdownStyle: mockSettings.markdownStyle } : {}),
+        fileScrollMap: mockSettings.fileScrollMap ?? "minimap",
       };
     },
 
@@ -2047,9 +2062,10 @@ export function createMockApi(seed: MockSeed = {}) {
       },
     ): Promise<{ ok: true }> {
       // Persist the fields the mock cares about and broadcast a settings:updated
-      // event mirroring the real daemon's narrow payload (themeId/markdownStyle).
+      // event mirroring the real daemon's narrow payload (themeId/markdownStyle/fileScrollMap).
       if (body.themeId !== undefined) mockSettings.themeId = body.themeId;
       if (body.markdownStyle !== undefined) mockSettings.markdownStyle = body.markdownStyle;
+      if (body.fileScrollMap !== undefined) mockSettings.fileScrollMap = body.fileScrollMap;
       // Per-key merge for defaultChannelByCli (mirrors the Rust route): set or
       // clear one CLI's override at a time, never a whole-map replace.
       if (body.defaultChannelByCli !== undefined) {
@@ -2071,16 +2087,12 @@ export function createMockApi(seed: MockSeed = {}) {
           markdownStyle: undefined,
         });
       }
-      if (body.markdownStyle !== undefined) {
+      if (body.themeId !== undefined || body.markdownStyle !== undefined || body.fileScrollMap !== undefined) {
         emit({
           type: "settings:updated",
           ...(body.themeId !== undefined ? { themeId: body.themeId } : {}),
           ...(body.markdownStyle !== undefined ? { markdownStyle: body.markdownStyle } : {}),
-        });
-      } else if (body.themeId !== undefined) {
-        emit({
-          type: "settings:updated",
-          themeId: body.themeId,
+          ...(body.fileScrollMap !== undefined ? { fileScrollMap: body.fileScrollMap } : {}),
         });
       }
       return { ok: true };
@@ -2578,8 +2590,45 @@ export function createMockApi(seed: MockSeed = {}) {
       };
     },
 
+    async getTranscriptSince(sessionId: string, sinceSeq: number): Promise<TranscriptSincePage> {
+      return mockGetTranscriptSince(chatTranscripts.get(sessionId) ?? [], sinceSeq);
+    },
+
     async getTranscriptAll(sessionId: string): Promise<TranscriptResponse> {
       return { events: structuredClone(chatTranscripts.get(sessionId) ?? []) };
+    },
+
+    async searchTranscript(
+      sessionId: string,
+      params: {
+        q: string;
+        scope?: TranscriptSearchScope;
+        after?: string;
+        limit?: number;
+        snippets?: "0" | "1" | boolean;
+      },
+    ): Promise<TranscriptSearchPage> {
+      const allEvents = chatTranscripts.get(sessionId) ?? [];
+      return mockSearchTranscript(allEvents, params);
+    },
+
+    async getTranscriptAround(
+      sessionId: string,
+      aroundSeq: number,
+    ): Promise<TranscriptAroundPage> {
+      const allEvents = chatTranscripts.get(sessionId) ?? [];
+      return mockGetTranscriptAround(allEvents, aroundSeq);
+    },
+
+    async getTranscriptOutline(sessionId: string): Promise<TranscriptOutlineSummary> {
+      return mockTranscriptOutline(chatTranscripts.get(sessionId) ?? []);
+    },
+
+    async getTranscriptOutlineWindow(
+      sessionId: string,
+      params: { from: number; limit?: number },
+    ): Promise<TranscriptOutlineWindow> {
+      return mockTranscriptOutlineWindow(chatTranscripts.get(sessionId) ?? [], params);
     },
 
     async getMeta(sessionId: string): Promise<SessionMeta> {

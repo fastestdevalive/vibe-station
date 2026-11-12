@@ -1570,4 +1570,124 @@ describe("groupEvents + render — session_break card (Phase 3)", () => {
     expect(el!.textContent).toContain("claude");
     expect(el!.textContent).toContain("opencode");
   });
+
+  it("groupEvents maps user, text deltas, thinking deltas, and tool calls to correct anchor keys", () => {
+    const seqIndex = new Map<number, string>();
+    const events: NormalizedEvent[] = [
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "u1",
+        kind: "user",
+        text: "hello",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:00Z",
+        logSeq: 10,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "th1",
+        kind: "thinking",
+        text: "let me think",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:01Z",
+        logSeq: 11,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "th2",
+        kind: "thinking",
+        text: " more thought",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:02Z",
+        logSeq: 12,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "tool1",
+        toolId: "call_1",
+        kind: "tool_use",
+        toolName: "Bash",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:03Z",
+        logSeq: 13,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "res1",
+        toolId: "call_1",
+        kind: "tool_result",
+        toolName: "Bash",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:04Z",
+        logSeq: 14,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "a1",
+        kind: "text",
+        text: "Hello",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:05Z",
+        logSeq: 15,
+      },
+      {
+        sessionId: "s1",
+        provider: "claude",
+        id: "a2",
+        kind: "text",
+        text: " world!",
+        turnId: "t1",
+        ts: "2026-01-01T00:00:06Z",
+        logSeq: 16,
+      },
+    ];
+
+    const items = groupEvents(events, seqIndex);
+    expect(items.length).toBeGreaterThan(0);
+
+    // User anchored by u:<turnId ?? id>
+    expect(seqIndex.get(10)).toBe("u:t1");
+    // Thinking deltas mapped to same first thinking id th:th1
+    expect(seqIndex.get(11)).toBe("th:th1");
+    expect(seqIndex.get(12)).toBe("th:th1");
+    // Tool use and tool result mapped to t:tool1
+    expect(seqIndex.get(13)).toBe("t:tool1");
+    expect(seqIndex.get(14)).toBe("t:tool1");
+    // Text streaming deltas merged to same assistant id a:a1
+    expect(seqIndex.get(15)).toBe("a:a1");
+    expect(seqIndex.get(16)).toBe("a:a1");
+  });
+
+  it("navRef jumpTo / revealAnchor opens a collapsed tool run", async () => {
+    const events = [
+      userEvent("t1", "run command"),
+      toolUseEvent("tool1", "t1", "2024-01-01T00:00:01.000Z", "Bash"),
+    ];
+    const navRef = { current: null as import("./messageNav").MessageNav | null };
+    const { container } = render(<MessageList events={events} pending={[]} navRef={navRef} />);
+
+    expect(navRef.current).toBeTruthy();
+
+    const summaryBtn = container.querySelector<HTMLButtonElement>("button.chat-tool-run__summary");
+    expect(summaryBtn).toBeTruthy();
+    expect(container.querySelector(".chat-tool-run__body")).toBeTruthy();
+
+    // Collapse the tool run
+    fireEvent.click(summaryBtn!);
+    expect(container.querySelector(".chat-tool-run__body")).toBeNull();
+
+    // Jump to the tool anchor
+    await act(async () => {
+      await navRef.current!.scrollToAnchor("t:tool1");
+    });
+
+    // Tool run body should be open again
+    expect(container.querySelector(".chat-tool-run__body")).toBeTruthy();
+  });
 });

@@ -13,6 +13,8 @@ interface StatusBarProps {
   sessionId?: string;
   /** Font -/+ controls rendered to the left of the channel toggle overlay. */
   fontControls?: ReactNode;
+  /** Trailing controls (e.g. Find in chat icon) rendered after the channel toggle. */
+  trailingControls?: ReactNode;
 }
 
 /** Shared with `MessageList`'s `WorkingIndicator` (Decision 8) — one source of
@@ -43,7 +45,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * Footer row: font controls + the Rich Chat → Terminal channel toggle. Token /
  * context-window usage lives in the composer's status row (`ContextMeter`).
  */
-export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls, trailingControls }: StatusBarProps) {
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
 
@@ -74,7 +76,7 @@ export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls }
     <div className="chat-statusbar" data-turn-state={state ?? "idle"}>
       {/* Spacer: keeps the controls overlay right-aligned (space-between). */}
       <div className="chat-statusbar__info" />
-      {canToggle || fontControls ? (
+      {canToggle || fontControls || trailingControls ? (
         <div className="chat-font-overlay">
           {fontControls}
           {canToggle ? (
@@ -99,6 +101,7 @@ export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls }
               })()}
             />
           ) : null}
+          {trailingControls}
         </div>
       ) : null}
     </div>

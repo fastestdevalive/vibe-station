@@ -153,3 +153,17 @@ describe("AppearanceSetting agent status borders", () => {
     useWorkspaceStore.setState({ showAgentStatusBorders: false });
   });
 });
+
+describe("AppearanceSetting file scroll bar", () => {
+  it("the 'File scroll bar' radiogroup switches the value", async () => {
+    render(<AppearanceSetting />);
+    let group: HTMLElement = screen.getByText("File scroll bar");
+    while (!group.querySelector('[role="radio"]')) group = group.parentElement!;
+    const minimap = Array.from(group.querySelectorAll('[role="radio"]')).find((r) => r.textContent === "Minimap")!;
+    expect(minimap.getAttribute("aria-checked")).toBe("true");
+
+    const marks = Array.from(group.querySelectorAll('[role="radio"]')).find((r) => r.textContent === "Marks")!;
+    fireEvent.click(marks);
+    expect(marks.getAttribute("aria-checked")).toBe("true");
+  });
+});

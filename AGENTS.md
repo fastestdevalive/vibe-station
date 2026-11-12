@@ -597,7 +597,7 @@ There are three different "skill" concepts in this repo, two of which share a fi
 
 ### What to watch for
 
-- **A second path from HTML text to a rendered view.** Every new render site for untrusted HTML must go through `buildHtmlSrcdoc` — never `dangerouslySetInnerHTML`, never injecting into app DOM (a sanitizer bypass then becomes app XSS), never adding `allow-same-origin` to measure iframe height (Decision 2's rejected option D).
+- **A second path from HTML text to a rendered view.** Every new render site for untrusted HTML must go through `buildHtmlSrcdoc` — never `dangerouslySetInnerHTML`, never injecting into app DOM (a sanitizer bypass then becomes app XSS), never adding `allow-same-origin` to measure iframe height (it would give the frame the app's origin).
 - **Editing the prompt section without the sanitizer/caps, or vice versa.** The UI lets an agent render exactly what the prompt promises (inline CSS, `data:` images, ≤256 KiB, http(s)/mailto links); they must not drift apart.
 - **Size caps have one owner:** `HtmlView.isOverHtmlCap` — callers (`FilePreviewPane`, `HtmlBlock`) only call it to pick Source vs Rendered, never re-implement thresholds.
 
@@ -649,7 +649,7 @@ Mentions inside the editor, drafts, and all UI components below `useChat` use **
 - **Plain text consumers use `renderDraftText`** (`lib/mentions.ts`, unescaped, files stay `@path`): stored comment text, the Terminal message, Copy message and a Terminal schedule's `text`. `toPlainText` is still `escapeSkillText`-escaped and would corrupt code in comments.
 - **Never resolve a mention by name.** Mention identity is `{kind, id}`; labels are untrusted hints.
 - **Key handlers register once and read refs.** `mentionStateRef` (`{ open, hasSelectable }`) is the single source of popover-open truth passed between plugins and handlers.
-- **Adding a new mention kind (Decision 8) touches exactly these places:**
+- **Adding a new mention kind touches exactly these places (and no hard-coded kind lists elsewhere):**
   1. `MentionKind` in `vst-types` (Rust) and `web-ui/src/api/types.ts`, same commit.
   2. One entry in `MENTION_KINDS` (`components/mentions/kinds.ts`): `kind`, `section`, `singular`, `title`, `Icon`, `caption`, `plainPrefix`, `plainValue`. This single entry already drives the `@section:` scope regex/lookup (`mentionQuery.ts`), the draft-token `isKnownMentionKind` check and `mentionPlainText` (`lib/mentions.ts`), the popover groups and `mentionRows.ts`. Do not add hard-coded copies of the kind list.
   3. One source hook in `useMentionSources.ts` (take `open`, return a stable empty result while closed) and its entry in the returned `Record<MentionKind, SourceResult>`.
@@ -661,7 +661,7 @@ Mentions inside the editor, drafts, and all UI components below `useChat` use **
 
 ## Transcript search — one insert path, one index owner
 
-**Files:** `rust/vst-store/src/transcript_search.rs` · `rust/vst-store/src/transcript.rs` · `rust/vst-agents/src/json_agent_session/transcript_search.rs`
+**Files:** `rust/vst-store/src/transcript_search.rs` · `rust/vst-store/src/transcript.rs` · `rust/vst-agents/src/json_agent_session/transcript_search.rs` · `rust/vst-store/src/transcript_outline.rs`
 
 - **The index unit is the contiguous text run**, not single delta rows, so words split across streaming chunks match.
 - **Single writer path:** all message rows insert via `insert_message` (sole exception: `migrate_jsonl_into_db`), which also indexes in the same txn; a new `INSERT INTO message` fails `guard_single_insert_site`.
@@ -671,4 +671,29 @@ Mentions inside the editor, drafts, and all UI components below `useChat` use **
 - **Measured baseline (62 MB session):** 59 → 127 MB, append 0.03 → 0.21 ms, backfill ≈2 s.
 
 ---
+
+## File scroll map — one owner, line-index mapping
+
+**Files:** `web-ui/src/components/preview/scrollmap/` · `web-ui/src/hooks/useFileScrollMap.ts`
+
+- **Line-index mapping, not `scrollTop / scrollHeight`:** line positions scale from line numbers, never raw scroll ratio.
+- **Never DOM-per-line:** minimap uses chunked summary + canvas; files over `MINIMAP_MAX_LINES` (1,000,000) or `MINIMAP_MAX_BYTES` (25 MB) cap to marks.
+- **Single writer & single toggle surface:** `useFileScrollMap` is the only writer of the setting; the preview-strip `ScrollMapToggle` (+ Settings) is the single toggle surface (there is no overflow menu item in `WorkspaceActions`); status feeds consumers via the single `onDisplayChange` path.
+- **Default is the minimap (desktop default); `effectiveScrollMapMode` is the one resolver:** nothing is shown for files that fit; marks are shown for phones (`MOBILE_QUERY`), diffs, files over the cap, panes under `MINIMAP_MIN_PANE_WIDTH` (480px, border-box width) and when the worker is unavailable. Never add a second fallback condition in a component.
+- **Scroll map jump contract:** `onJump(line)` puts that line at the top of the view (code line or diff row). Centring is the caller's job (`centeredTopLine`).
+- **DOM boundary:** the scroll map reads another component's DOM in exactly two places — `scrollmap/codeLines.ts` (`CodeView` / `CodeLine` rows for the range, plus the diff rows for the thumb range) and `FilePreviewPane.handleDiffJump`. Both diff-side reads use `.diff-line[data-diff-row]` only, never `data-line`: the diff scale is the 1-based flattened hunk-row index (`DiffView`'s `lineRowIndex`, mirrored by `buildDiffMarks`), while `data-line` is the new-file line number — a hunk at line 800 in a 40-row diff would put the thumb off the track. Collapsed hunks render no rows but their indices still count, so never derive a diff row index from the DOM list position. `scrollmap/codeLines.contract.test.tsx` pins both DOMs (incl. a real `DiffView` starting past line 1) and must stay green when those selectors change. The scroll map re-measures on `scroll`, on resize and when the scroller's rows change (a `MutationObserver` in `ScrollMap`), because the code virtualiser mounts rows after the scroll event.
+
+---
+
+## Find in chat + turn chain — overlays in the chat viewport
+
+**Files:** `web-ui/src/components/chat/find/` · `web-ui/src/components/chat/outline/`
+
+- **Single nav channel:** `MessageNav` (`messageNav.ts`) is the only API find and outline use to move the list; `useChat` is the only owner of the event window. An outline jump to an unloaded turn goes through `useChat.viewAround` (a detached window: `useLoadLater` pages newer rows in near its bottom via `useChat.loadLater`, which rejoins the live tail once reached), never a fetch of its own. `hooks/useTranscriptOutline.ts` is the single owner of the whole-chat summary (`GET /sessions/:id/transcript/outline`: fixed-size bucketed counts, cached per session, refetched on `ws:open` / `session:fork` / a revision mismatch / a live user turn (debounced); bounded retry only while the index builds) and `hooks/useOutlineWindows.ts` of per-turn rows by index (`.../outline/window`); `mergeTurnOutline` overlays the loaded nodes on them (wire types: the outline types in `rust/vst-types` mirrored in `web-ui/src/api/types.ts`; rows are addressed by turn index and a stale `revision` refetches the summary), and without the endpoint (404, 503 or a non-JSON reply) the rail keeps the loaded window, its cap and the top-of-rail auto-load.
+- **Hover never scrolls or fetches:** resting on find results only adds dashed rings or opens the preview; hovering the turn chain only brightens it. The chain's list opens only on press (one pointer-events path with pointer capture: drag scrubs the list, release jumps, a tap leaves a sticky list), a rail wheel, or Enter/Space. A wheel scrub moves the ring and auto-jumps the chat and closes the list once the wheel rests `WHEEL_JUMP_IDLE_MS` (never a rebuilt list); leaving rail + list commits a pending jump only if the session is `WHEEL_ARM_MS` old, a press/arrow/blur/Esc cancels it, and Enter/a click jumps at once. A wheel or drag scrub resting `SCRUB_TOP_LOAD_DWELL_MS` on the top row (or the cap) auto-loads earlier turns through `MessageList.startLoadEarlier` (one in flight and at most `SCRUB_TOP_LOADS_PER_REST` per rest, the auto-jump held until it settles, live trimming held while the list is open). A marked row resting on an unloaded turn fetches its outline window, then its around-window for steps only (`outline/useBeatWindows.ts`, LRU `BEAT_WINDOW_LRU`, stale requests aborted) and shows "Loading steps…" on that row; the scrub never waits for it.
+- **Pure marks:** marks are a pure function of `(source, terms)` via `findTerms.ts`; parity is pinned by `rust/vst-store/tests/fixtures/transcript_search_cases.json`. One deliberate exception: the results-list hover ring sets `data-find-peek` on the matching marks imperatively and clears it on leave/unmount.
+- **Focusable message viewport:** `.chat-pane__body` carries `tabIndex={-1}`, so a click into the transcript focuses it; the pane-scoped keys (Ctrl/Cmd+F seed-from-selection, F3/Shift+F3, Alt+↑/↓ turn jump, Alt+Enter, the Esc ladder) only arrive while focus is inside the pane; Ctrl/Cmd+F and F3 also fire from the footer/composer, which stays exempt from Alt+↑/↓, Alt+Enter and Esc.
+- **Overlay hierarchy:** find bar/results and turn chain mount inside `.chat-pane__viewport`; the find trigger button lives in `.chat-font-overlay`, never in the workspace actions chip.
+- **Beats / chain:** beats are a pure client-only second level (`outline/buildTurnBeats.ts`, cap 12 via `mergeBeats`); the chain is one SVG exactly as tall as the viewport, each turn and step at its flat-list position (`chainGeometry.ts`: y↔row, density rule), never one DOM node per turn; every turn's steps are always listed (nothing folds: no chevrons, ←→ or Collapse all) and every row shows its time at the right edge; the open list sits right of the chain, which stays on top, visible and pressable; jumps go through `MessageNav.scrollToAnchor` + `flashAnchor` (`jumpFlash.ts`, the one flash owner); no server or wire change.
+
 

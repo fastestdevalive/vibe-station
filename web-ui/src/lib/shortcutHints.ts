@@ -6,6 +6,7 @@ export function shortcutHints() {
       toolPane: "⌘\\",
       fileTreeToggle: "⌘E",
       splitToggle: "⌘/",
+      find: "⌘F",
     };
   }
   const mac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform ?? navigator.userAgent);
@@ -16,6 +17,7 @@ export function shortcutHints() {
       toolPane: "⌘\\",
       fileTreeToggle: "⌘E",
       splitToggle: "⌘/",
+      find: "⌘F",
     };
   }
   return {
@@ -24,5 +26,6 @@ export function shortcutHints() {
     toolPane: "Ctrl+\\",
     fileTreeToggle: "Ctrl+E",
     splitToggle: "Ctrl+/",
+    find: "Ctrl+F",
   };
 }

@@ -27,8 +27,8 @@ function isMac(): boolean {
 function KeyCombo({ combo }: { combo: string }) {
   const mac = isMac();
   const modMap: Record<string, string> = mac
-    ? { Ctrl: "⌘", Shift: "⇧", Alt: "⌥" }
-    : { Cmd: "Ctrl" };
+    ? { Ctrl: "⌘", Shift: "⇧", Alt: "⌥", ArrowUp: "↑", ArrowDown: "↓" }
+    : { Cmd: "Ctrl", ArrowUp: "↑", ArrowDown: "↓" };
   const parts = combo.split("+").map((part) => modMap[part] ?? part);
   return (
     <span className="shortcut-dialog__combo-parts">
@@ -69,6 +69,17 @@ const GROUPS: ShortcutGroup[] = [
       { keys: ["Alt+Shift+N"], action: "New worktree" },
       { keys: ["Ctrl+Shift+G"], action: "New agent" },
       { keys: ["Ctrl+Shift+M"], action: "New worktree" },
+    ],
+  },
+  {
+    title: "Rich Chat",
+    shortcuts: [
+      { keys: ["Alt+ArrowUp"], action: "Previous turn" },
+      { keys: ["Alt+ArrowDown"], action: "Next turn" },
+      { keys: ["Ctrl+F"], action: "Find in chat" },
+      { keys: ["Enter", "Shift+Enter"], action: "Next / previous match" },
+      { keys: ["Alt+Enter"], action: "List matches" },
+      { keys: ["F3", "Shift+F3"], action: "Next / previous match (Windows, Linux)" },
     ],
   },
   {

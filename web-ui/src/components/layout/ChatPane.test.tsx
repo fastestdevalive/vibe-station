@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render, screen, within, act, waitFor } from "@testing-library/react";
+import { render, screen, within, act, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -11,6 +11,15 @@ import { useResetProgress } from "@/hooks/useResetProgress";
 import { useModesStore } from "@/store/modesStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { ChatPane } from "./ChatPane";
+
+if (typeof Range !== "undefined" && !Range.prototype.getBoundingClientRect) {
+  Range.prototype.getBoundingClientRect = () =>
+    ({ x: 0, y: 0, bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, toJSON: () => {} }) as DOMRect;
+}
+if (typeof Text !== "undefined" && !(Text.prototype as unknown as { getBoundingClientRect?: () => DOMRect }).getBoundingClientRect) {
+  (Text.prototype as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () =>
+    ({ x: 0, y: 0, bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, toJSON: () => {} }) as DOMRect;
+}
 
 // Wraps the REAL MessageList (delegates every call to it, via importOriginal)
 // so the rest of this file's tests keep exercising real rendering — the mock
@@ -24,12 +33,14 @@ vi.mock("@/components/chat/MessageList", async (importOriginal) => {
 });
 
 let latestComposerScheduleSend: ((message: string, ids: string[], fireAt: string) => Promise<void>) | null = null;
+let latestComposerRef: { current: { focus: () => void } | null } | null = null;
 vi.mock("@/components/chat/Composer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/chat/Composer")>();
   return {
     ...actual,
     Composer: (props: Parameters<typeof actual.Composer>[0]) => {
       latestComposerScheduleSend = props.onScheduleSend ?? null;
+      latestComposerRef = props.textareaRef as never;
       return <actual.Composer {...props} />;
     },
   };
@@ -859,5 +870,324 @@ describe("ChatPane 'started as' mode chip (2.T3)", () => {
     render(<ChatPane api={createMockApi()} session={current} visible />);
     await screen.findByRole("button", { name: "Attach files" });
     expect(screen.queryByText(/started as/)).toBeNull();
+  });
+});
+
+describe("ChatPane find-in-chat integration", () => {
+  it("Ctrl+F inside the pane opens the bar and prevents default; outside does nothing; Esc focuses composer; Enter in field does not send; footer stays in DOM", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js1", ev("u1", { kind: "user", role: "user", text: "testing find", turnId: "turn-1", logSeq: 10 }));
+    const sendSpy = vi.spyOn(api, "sendChat");
+    const { container } = render(
+      <div>
+        <button type="button" data-testid="outside-btn">Outside</button>
+        <ChatPane api={api} session={jsonSession("js1")} visible />
+      </div>
+    );
+    await screen.findByRole("button", { name: "Attach files" });
+    await screen.findByText("testing find");
+
+    // Ctrl+F on outside button does nothing
+    const outsideBtn = screen.getByTestId("outside-btn");
+    act(() => {
+      const outsideEvt = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      outsideBtn.dispatchEvent(outsideEvt);
+    });
+    expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull();
+
+    // Ctrl+F inside the pane opens find bar and prevents default
+    const chatPane = container.querySelector(".chat-pane") as HTMLElement;
+    expect(chatPane).not.toBeNull();
+    let paneEvtDefaultPrevented = false;
+    act(() => {
+      const paneEvt = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      chatPane.dispatchEvent(paneEvt);
+      paneEvtDefaultPrevented = paneEvt.defaultPrevented;
+    });
+    expect(paneEvtDefaultPrevented).toBe(true);
+
+    const searchBar = await screen.findByRole("search", { name: "Find in chat" });
+    expect(searchBar).toBeInTheDocument();
+    expect(chatPane).toHaveAttribute("data-find-open", "");
+
+    // The footer (QueuedTray / StatusBar / Composer) stays in the DOM and enabled while find is open
+    const footer = container.querySelector(".chat-pane__footer");
+    expect(footer).not.toBeNull();
+    expect(footer?.getAttribute("inert")).toBeNull();
+    const statusBar = container.querySelector(".chat-statusbar");
+    expect(statusBar).not.toBeNull();
+    const editor = container.querySelector(".chat-skill-editor__content") as HTMLElement;
+    expect(editor).not.toBeNull();
+    expect(editor?.getAttribute("contenteditable")).toBe("true");
+
+    // Enter in the find input field does not send a message
+    const findInput = container.querySelector(".fbar__input") as HTMLInputElement;
+    expect(findInput).not.toBeNull();
+    act(() => {
+      fireEvent.change(findInput, { target: { value: "test" } });
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "List matches (Alt+Enter)" })).toBeEnabled();
+    });
+
+    act(() => {
+      const enterEvt = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      findInput.dispatchEvent(enterEvt);
+    });
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    // Esc ladder with focus in the field: the field no longer swallows Esc,
+    // so it bubbles to the pane handler — results list first, then the bar, then
+    // the composer gets focus.
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "List matches (Alt+Enter)" }));
+    });
+    expect(screen.getByRole("listbox", { name: "Matches by turn" })).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.keyDown(findInput, { key: "Escape" });
+    });
+    expect(screen.queryByRole("listbox", { name: "Matches by turn" })).toBeNull();
+    expect(screen.getByRole("search", { name: "Find in chat" })).toBeInTheDocument();
+
+    const focusSpy = latestComposerRef?.current ? vi.spyOn(latestComposerRef.current, "focus") : null;
+    act(() => {
+      fireEvent.keyDown(findInput, { key: "Escape" });
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull(),
+    );
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it("Esc from the results listbox returns focus to the find bar, and a second Esc closes find and focuses composer", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-esc-list", ev("u1", { kind: "user", role: "user", text: "testing find", turnId: "turn-1", logSeq: 10 }));
+    const { container } = render(
+      <ChatPane api={api} session={jsonSession("js-esc-list")} visible />
+    );
+    await screen.findByRole("button", { name: "Attach files" });
+    await screen.findByText("testing find");
+
+    const chatPane = container.querySelector(".chat-pane") as HTMLElement;
+    act(() => {
+      chatPane.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }));
+    });
+    await screen.findByRole("search", { name: "Find in chat" });
+
+    const findInput = container.querySelector(".fbar__input") as HTMLInputElement;
+    act(() => {
+      fireEvent.change(findInput, { target: { value: "test" } });
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "List matches (Alt+Enter)" })).toBeEnabled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "List matches (Alt+Enter)" }));
+    });
+    const listbox = screen.getByRole("listbox", { name: "Matches by turn" });
+    expect(listbox).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.keyDown(listbox, { key: "Escape" });
+    });
+    expect(screen.queryByRole("listbox", { name: "Matches by turn" })).toBeNull();
+
+    const fbar = container.querySelector(".fbar") as HTMLElement;
+    expect(fbar).not.toBeNull();
+    expect(fbar.contains(document.activeElement)).toBe(true);
+
+    const focusSpy = latestComposerRef?.current ? vi.spyOn(latestComposerRef.current, "focus") : null;
+    act(() => {
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("search", { name: "Find in chat" })).toBeNull(),
+    );
+    expect(focusSpy).toHaveBeenCalled();
+  });
+});
+
+describe("ChatPane find keys from the footer", () => {
+  it("Ctrl+F opens find from the composer; Esc inside the footer (composer, menus, queued tray) leaves find alone", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-footer", ev("u1", { kind: "user", role: "user", text: "testing find", turnId: "turn-1", logSeq: 10 }));
+    const { container } = render(<ChatPane api={api} session={jsonSession("js-footer")} visible />);
+    await screen.findByText("testing find");
+
+    // From the composer (the default focus), Ctrl+F opens find.
+    const editor = container.querySelector(".chat-pane__footer .chat-skill-editor__content") as HTMLElement;
+    expect(editor).not.toBeNull();
+    let footerCtrlFPrevented = false;
+    act(() => {
+      const e = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true });
+      editor.dispatchEvent(e);
+      footerCtrlFPrevented = e.defaultPrevented;
+    });
+    expect(footerCtrlFPrevented).toBe(true);
+    await screen.findByRole("search", { name: "Find in chat" });
+
+    // Esc from any footer element (a menu, the queued tray, the composer) is the footer's own.
+    const footerTargets = [editor, container.querySelector(".chat-statusbar") as HTMLElement];
+    for (const target of footerTargets) {
+      expect(target).not.toBeNull();
+      act(() => {
+        fireEvent.keyDown(target, { key: "Escape" });
+      });
+      expect(screen.getByRole("search", { name: "Find in chat" })).toBeInTheDocument();
+    }
+  });
+});
+
+describe("ChatPane — focusable message viewport drives the pane-scoped keys", () => {
+  it("the message body is focusable; Alt+ArrowUp/Down from it jump turns and the composer stays exempt", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-keys", ev("u1", { kind: "user", role: "user", text: "first", turnId: "turn-1", logSeq: 10 }));
+    api.__test.pushChatEvent("js-keys", ev("a1", { kind: "text", role: "assistant", text: "reply one", turnId: "turn-1", logSeq: 11 }));
+    api.__test.pushChatEvent("js-keys", ev("u2", { kind: "user", role: "user", text: "second", turnId: "turn-2", logSeq: 12 }));
+    api.__test.pushChatEvent("js-keys", ev("a2", { kind: "text", role: "assistant", text: "reply two", turnId: "turn-2", logSeq: 13 }));
+    api.__test.pushChatEvent("js-keys", ev("u3", { kind: "user", role: "user", text: "third", turnId: "turn-3", logSeq: 14 }));
+
+    const { container } = render(<ChatPane api={api} session={jsonSession("js-keys")} visible />);
+    await screen.findByText("third");
+
+    const body = container.querySelector(".chat-pane__body") as HTMLElement;
+    expect(body).not.toBeNull();
+    expect(body.tabIndex).toBe(-1);
+
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    body.focus();
+    expect(document.activeElement).toBe(body);
+
+    let prevented = false;
+    act(() => {
+      const e = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      body.dispatchEvent(e);
+      prevented = e.defaultPrevented;
+    });
+    expect(prevented).toBe(true);
+    await waitFor(() =>
+      expect(
+        scrollSpy.mock.instances.some((el) =>
+          (el as HTMLElement).getAttribute?.("data-find-anchor")?.startsWith("u:"),
+        ),
+      ).toBe(true),
+    );
+
+    // Alt+ArrowUp jumps to the previous turn (first user turn from the top).
+    scrollSpy.mockClear();
+    let upPrevented = false;
+    act(() => {
+      const e = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      body.dispatchEvent(e);
+      upPrevented = e.defaultPrevented;
+    });
+    expect(upPrevented).toBe(true);
+    await waitFor(() =>
+      expect(
+        scrollSpy.mock.instances.some(
+          (el) => (el as HTMLElement).getAttribute?.("data-find-anchor") === "u:turn-1",
+        ),
+      ).toBe(true),
+    );
+
+    // From the composer the same chord must not be intercepted.
+    const editor = container.querySelector(".chat-skill-editor__content") as HTMLElement;
+    expect(editor).not.toBeNull();
+    scrollSpy.mockClear();
+    let composerPrevented = false;
+    act(() => {
+      const e = new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      editor.dispatchEvent(e);
+      composerPrevented = e.defaultPrevented;
+    });
+    expect(composerPrevented).toBe(false);
+    expect(scrollSpy).not.toHaveBeenCalled();
+    scrollSpy.mockRestore();
+  });
+
+  it("Ctrl+F after selecting message text opens find seeded from the selection", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-sel", ev("u1", { kind: "user", role: "user", text: "alpha beta gamma", turnId: "turn-1", logSeq: 10 }));
+    render(<ChatPane api={api} session={jsonSession("js-sel")} visible />);
+    await screen.findByText("alpha beta gamma");
+
+    const bubbleText = document.querySelector(".chat-bubble__text") as HTMLElement;
+    expect(bubbleText).not.toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(bubbleText);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(sel.toString()).toBe("alpha beta gamma");
+
+    const body = document.querySelector(".chat-pane__body") as HTMLElement;
+    expect(body.tabIndex).toBe(-1);
+    let prevented = false;
+    act(() => {
+      const e = new KeyboardEvent("keydown", {
+        key: "f",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      bubbleText.dispatchEvent(e);
+      prevented = e.defaultPrevented;
+    });
+    expect(prevented).toBe(true);
+
+    const input = (await screen.findByPlaceholderText("Find in chat")) as HTMLInputElement;
+    expect(input.value).toBe("alpha beta gamma");
+  });
+
+  it("derives u:<turnId> hit and current anchors from find matches", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-m8", ev("u1", { kind: "user", role: "user", text: "legacy login flow", turnId: "turn-9", logSeq: 10 }));
+    api.__test.pushChatEvent("js-m8", ev("a1", { kind: "text", role: "assistant", text: "done", turnId: "turn-9", logSeq: 11 }));
+    render(<ChatPane api={api} session={jsonSession("js-m8")} visible />);
+    await screen.findByText("legacy login flow");
+
+    const body = document.querySelector(".chat-pane__body") as HTMLElement;
+    body.focus();
+    act(() => {
+      const e = new KeyboardEvent("keydown", {
+        key: "f",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      body.dispatchEvent(e);
+    });
+    const input = await screen.findByPlaceholderText("Find in chat");
+    act(() => {
+      fireEvent.change(input, { target: { value: "legacy" } });
+    });
+
+    await waitFor(
+      () => {
+        const props = vi.mocked(MessageList).mock.calls.at(-1)?.[0];
+        expect(props?.hitTurns?.has("u:turn-9")).toBe(true);
+      },
+      { timeout: 2000 },
+    );
+
+    const props = vi.mocked(MessageList).mock.calls.at(-1)?.[0];
+    expect(props?.currentTurn).toBe("u:turn-9");
   });
 });

@@ -6,6 +6,7 @@
  */
 
 import type { NormalizedEvent } from "@/api/types";
+import { countUserTurns, isUserTurnEvent } from "@/lib/chatTurns";
 
 const MAX_SNAPSHOT_EVENTS = 200;
 const MAX_CACHE_SIZE = 20;
@@ -18,6 +19,8 @@ export interface ChatSnapshot {
   hasMore: boolean;
   /** Union of all `turnId`s seen in the retained window. */
   userTurnIds: Set<string>;
+  /** User turns before the retained window (the saved count plus any cut here); `null` if unknown. */
+  turnsBefore: number | null;
   /** Max `logSeq` across all retained events; `null`/0 → skip `sinceSeq`. */
   latestSeq: number | null;
   /** `Date.now()` at save-time — used for the 60-second freshness check. */
@@ -28,9 +31,23 @@ export interface ChatSnapshot {
 const cache = new Map<string, ChatSnapshot>();
 
 /**
- * Persist a snapshot.  No-ops when `events` is empty.  Truncates to the newest
- * MAX_SNAPSHOT_EVENTS events, recomputes `oldestSeq`, and forces `hasMore =
- * true` when truncation occurred.
+ * Index the retained window starts at: the user turn at or before the newest
+ * MAX_SNAPSHOT_EVENTS events, so a restored window never opens mid-turn (the
+ * outline needs the turn's user row). 0 (keep all) when no such turn exists.
+ */
+function turnBoundaryCut(events: NormalizedEvent[]): number {
+  if (events.length <= MAX_SNAPSHOT_EVENTS) return 0;
+  for (let i = events.length - MAX_SNAPSHOT_EVENTS; i > 0; i--) {
+    if (isUserTurnEvent(events[i]!)) return i;
+  }
+  return 0;
+}
+
+/**
+ * Persist a snapshot.  No-ops when `events` is empty.  Keeps about the newest
+ * MAX_SNAPSHOT_EVENTS events, cut on a user-turn boundary; recomputes
+ * `oldestSeq` and `turnsBefore`, and sets `hasMore = true` only when events
+ * were actually dropped.
  */
 export function save(
   sessionId: string,
@@ -38,6 +55,8 @@ export function save(
     events: NormalizedEvent[];
     hasMore: boolean;
     userTurnIds: Set<string>;
+    /** User turns before `events[0]`; omitted / `null` when unknown. */
+    turnsBefore?: number | null;
     latestSeq: number | null;
     savedAt: number;
   },
@@ -46,10 +65,12 @@ export function save(
 
   let { events } = snapshot;
   let { hasMore } = snapshot;
+  let turnsBefore = snapshot.turnsBefore ?? null;
 
-  const truncated = events.length > MAX_SNAPSHOT_EVENTS;
-  if (truncated) {
-    events = events.slice(events.length - MAX_SNAPSHOT_EVENTS);
+  const cut = turnBoundaryCut(events);
+  if (cut > 0) {
+    if (turnsBefore != null) turnsBefore += countUserTurns(events.slice(0, cut));
+    events = events.slice(cut);
     hasMore = true;
   }
 
@@ -71,6 +92,7 @@ export function save(
     // Minor Fix B: copy the Set to avoid storing the caller's live reference
     // (defensive — the ref is reassigned not mutated, but this is fragile).
     userTurnIds: new Set(snapshot.userTurnIds),
+    turnsBefore,
     latestSeq: snapshot.latestSeq,
     savedAt: snapshot.savedAt,
   });

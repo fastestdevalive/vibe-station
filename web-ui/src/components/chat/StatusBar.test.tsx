@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -100,5 +102,20 @@ describe("StatusBar (5.T2)", () => {
       await userEvent.click(screen.getByRole("button", { name: /Switch to terminal/i }));
       await waitFor(() => expect(spy).toHaveBeenCalledWith("s1", "tmux", undefined));
     });
+  });
+
+  // ── phone-width chat controls ─────────────────────────────────────
+  it("sizes chat overlay buttons to 40x40 on phone viewports via CSS", () => {
+    const cssPath = resolve(__dirname, "../../styles/chat.css");
+    const cssContent = readFileSync(cssPath, "utf-8");
+    const mediaMatch = cssContent.match(/@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/);
+    expect(mediaMatch).not.toBeNull();
+    const mediaBlock = mediaMatch![1]!;
+    expect(mediaBlock).toMatch(
+      /\.chat-font-overlay\s+\.terminal-font-overlay__btn\s*\{\s*width:\s*40px;\s*height:\s*40px;?\s*\}/,
+    );
+    expect(mediaBlock).toMatch(
+      /\.chat-font-overlay\s+\.channel-toggle-button\s*\{[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px;?/,
+    );
   });
 });

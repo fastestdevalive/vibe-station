@@ -30,7 +30,10 @@ export function createChatRepository(api: ApiInstance) {
     deleteAttachment: api.deleteAttachment,
     getTranscript: api.getTranscript,
     getTranscriptPage: api.getTranscriptPage,
+    getTranscriptSince: api.getTranscriptSince,
     getTranscriptAll: api.getTranscriptAll,
+    searchTranscript: api.searchTranscript,
+    getTranscriptAround: api.getTranscriptAround,
     on: api.on,
   };
 }

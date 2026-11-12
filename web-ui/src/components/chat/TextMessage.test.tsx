@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { TextMessage } from "./TextMessage";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { FindMarksProvider } from "./find/FindMarksContext";
 
 /** 7B.10 — a sent user message carries the internal `{/name args}` encoding.
  *  It must never surface a brace, and the skill name must read differently
@@ -119,5 +120,18 @@ describe("TextMessage — sent mention tokens (1.T9)", () => {
     expect(chips[1]?.getAttribute("data-kind")).toBe("agent");
     expect(chips[1]?.querySelector(".chat-mention-chip__label")?.textContent).toBe("Agent Smith");
     expect(container.textContent).not.toContain("{@");
+  });
+});
+
+describe("TextMessage — find highlights", () => {
+  it("with a find context a user bubble marks hits", () => {
+    const { container } = render(
+      <FindMarksProvider terms={["hello"]} scope="messages">
+        <TextMessage role="user" text="hello world" />
+      </FindMarksProvider>,
+    );
+    const marks = container.querySelectorAll("mark.find-hit");
+    expect(marks.length).toBe(1);
+    expect(marks[0]?.textContent).toBe("hello");
   });
 });
