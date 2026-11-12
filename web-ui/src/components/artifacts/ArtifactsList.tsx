@@ -1,12 +1,10 @@
 import { ChevronDown, ChevronRight, PackageOpen, Pin } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiInstance } from "@/api";
 import type { ArtifactRow as Row, ArtifactScopeKind } from "@/api/types";
 import { Chip } from "@/components/ui/Chip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
-import { SegmentedControl } from "@/components/ui/SegmentedControl";
-import { Select } from "@/components/ui/Select";
 import { Toast } from "@/components/ui/Toast";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -15,8 +13,9 @@ import { useRovingListNav } from "@/hooks/useRovingListNav";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { copyText } from "@/lib/copyText";
-import { sessionLabel } from "@/lib/sessionLabel";
+import { useModesSync, type ModesApi } from "@/store/modesStore";
 import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
+import { AgentFilterPicker } from "./AgentFilterPicker";
 import { ArtifactMenu, type MenuAnchor } from "./ArtifactMenu";
 import { ArtifactRow } from "./ArtifactRow";
 import {
@@ -24,8 +23,11 @@ import {
   filterSessions,
   groupOf,
   matchesSession,
+  otherWriterCount,
+  otherWriterNames,
   scopeSessions,
   writerLabel,
+  writerOf,
   type ArtifactGroupId,
 } from "./artifactSessions";
 import { removeArtifactRow, toggleArtifactPin } from "./artifactActions";
@@ -33,11 +35,11 @@ import { ARTIFACT_CAP_DEFAULT, NO_ROWS, rowMatchesPath, useArtifactsStore } from
 import { fetchArtifactScope, useArtifactScope } from "./useArtifactsSync";
 import "./artifacts.css";
 
-type ListApi = Pick<ApiInstance, "listArtifacts" | "pinArtifact" | "removeArtifact">;
+type ListApi = Pick<ApiInstance, "listArtifacts" | "pinArtifact" | "removeArtifact"> & ModesApi;
 
 export interface ArtifactsListProps {
   api: ListApi;
-  /** Resolved context id: worktree id, or the project id for a direct session. */
+  /** Resolved context id: worktree id, or the project id for a direct agent. */
   worktreeId: string;
   scope: ArtifactScopeKind;
   /** Path of the active file tab; the matching row renders selected. */
@@ -48,7 +50,6 @@ export interface ArtifactsListProps {
   enabled?: boolean;
 }
 
-const SEG_MAX = 3;
 const SKELETON_WIDTHS = [35, 85, 60, 90, 50];
 const GROUP_LABEL: Record<ArtifactGroupId, string> = { pinned: "Pinned", run: "This run", earlier: "Earlier" };
 
@@ -57,6 +58,8 @@ type LocalNotice = { seq: number; text: string };
 /** The Artifacts list-panel body (`Main.dc.html` board 1, `ArtifactStates.dc.html`, `Mobile.dc.html`). */
 export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = null, onOpen, enabled = true }: ArtifactsListProps) {
   useArtifactScope(api, scope, enabled ? scopeId : null);
+  // Rows, picker options and their chips render mode icons without an api: the modes load once here, on first need.
+  useModesSync(enabled ? api : undefined);
   const entry = useArtifactsStore((s) => s.byScope[scopeId]);
   const sessions = useServerStore((s) => s.sessions);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
@@ -71,6 +74,15 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
 
   const [filter, setFilter] = useState<string>("all");
   const activeFilter = filter !== "all" && options.some((s) => s.id === filter) ? filter : "all";
+  // A vanished agent must not silently re-apply if it returns: drop the stored id once it leaves the options.
+  useEffect(() => {
+    if (filter !== "all" && activeFilter === "all") setFilter("all");
+  }, [filter, activeFilter]);
+
+  const filterOptions = useMemo(
+    () => options.map((session) => ({ session, count: rows.filter((r) => matchesSession(r, session.id, byId)).length })),
+    [options, rows, byId],
+  );
 
   const visible = useMemo(
     () => (activeFilter === "all" ? rows : rows.filter((r) => matchesSession(r, activeFilter, byId))),
@@ -101,20 +113,6 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
   const noticeSeq = useRef(0);
   const closeMenu = useCallback(() => setMenu(null), []);
   const paneRef = useRef<HTMLDivElement>(null);
-
-  // The portaled menu must never outlive a hidden list (pane display:none,
-  // collapsed, or mode switched).
-  const menuOpen = menu != null;
-  useEffect(() => {
-    const el = paneRef.current;
-    if (!menuOpen || !el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver((entries) => {
-      const last = entries[entries.length - 1];
-      if (last && !last.isIntersecting) closeMenu();
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [menuOpen, closeMenu]);
   const notify = (text: string) => setLocal({ seq: ++noticeSeq.current, text });
 
   const onOpenRef = useRef(onOpen);
@@ -201,66 +199,16 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
     }
   };
 
-  const filterLabel = (id: string) => sessionLabel(byId.get(id)!);
-
-  // Segmented only while it fits: when it overflows the row, fall back to the dropdown until the row is wide enough again.
-  const toolsRef = useRef<HTMLDivElement>(null);
-  const segRef = useRef<HTMLDivElement>(null);
-  const metaRef = useRef<HTMLSpanElement>(null);
-  const optionKey = options.map((s) => s.id).join("|");
-  // The needed width is tied to the option set it was measured for; a different set starts over.
-  const [seg, setSeg] = useState<{ key: string; needed: number } | null>(null);
-  const segNeeded = seg && seg.key === optionKey ? seg.needed : null;
-  const setSegNeeded = useCallback((needed: number | null) => setSeg(needed == null ? null : { key: optionKey, needed }), [optionKey]);
-  const showSeg = options.length > 0 && options.length <= SEG_MAX && segNeeded == null;
-  const toolsShown = status === "ready" && rows.length > 0;
-  useLayoutEffect(() => {
-    const row = toolsRef.current;
-    if (!toolsShown || !row || options.length === 0 || options.length > SEG_MAX) return;
-    const measure = () => {
-      const seg = segRef.current;
-      if (seg) {
-        if (seg.scrollWidth > seg.clientWidth) setSegNeeded(seg.scrollWidth);
-        return;
-      }
-      if (segNeeded == null) return;
-      const cs = getComputedStyle(row);
-      const gap = parseFloat(cs.columnGap) || 0;
-      const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-      const free = row.clientWidth - (metaRef.current?.offsetWidth ?? 0) - gap - pad;
-      if (free >= segNeeded) setSegNeeded(null);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(row);
-    return () => ro.disconnect();
-  }, [toolsShown, options.length, segNeeded, setSegNeeded]);
-
   const filterUi =
-    options.length === 0 ? null : showSeg ? (
-      <div ref={segRef} className="artifacts-tools__seg">
-        <SegmentedControl
-          value={activeFilter}
-          onChange={setFilter}
-          options={[{ value: "all", label: "All sessions" }, ...options.map((s) => ({ value: s.id, label: filterLabel(s.id) }))]}
-        />
-      </div>
-    ) : (
-      <Select
-        aria-label="Filter by session"
-        className="artifacts-tools__select"
-        style={{ width: "auto", maxWidth: "100%", padding: "0 8px", fontSize: "var(--fs-meta)" }}
+    options.length === 0 ? null : (
+      <AgentFilterPicker
         value={activeFilter}
-        onChange={(e) => setFilter(e.target.value)}
-      >
-        <option value="all">Session: All ({options.length})</option>
-        {options.map((s) => (
-          <option key={s.id} value={s.id}>
-            Session: {filterLabel(s.id)}
-          </option>
-        ))}
-      </Select>
+        options={filterOptions}
+        total={rows.length}
+        sessionStates={sessionStates}
+        mobile={mobile}
+        onChange={setFilter}
+      />
     );
 
   const capNotice = entry?.capNotice;
@@ -335,8 +283,9 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
       </EmptyState>
     );
   } else if (visible.length === 0) {
-    body = <div className="artifacts-nomatch">No artifacts from this session.</div>;
+    body = <div className="artifacts-nomatch">No artifacts from this agent.</div>;
   } else {
+    const selectedId = activeFilter === "all" ? undefined : activeFilter;
     body = (
       <div ref={listRef} role="listbox" aria-label="Artifacts" className={`artifacts-listbox${mobile ? " artifacts-listbox--mobile" : ""}`} onKeyDown={onKeyDown} {...longPress}>
         {(["pinned", "run", "earlier"] as const).map((g) => {
@@ -366,21 +315,27 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
                 </button>
               )}
               {expanded &&
-                list.map((r) => (
-                  <ArtifactRow
-                    key={r.id}
-                    row={r}
-                    writer={writerLabel(r, byId)}
-                    selected={rowMatchesPath(r, selectedPath)}
-                    tabbable={isTabbable(r.id)}
-                    mobile={mobile}
-                    menuOpen={menu?.row.id === r.id}
-                    onOpen={openRow}
-                    onFocusRow={focusRow}
-                    onMenu={openMenu}
-                    setRef={setRef}
-                  />
-                ))}
+                list.map((r) => {
+                  const writer = writerOf(r, byId, selectedId);
+                  const moreWriters = otherWriterCount(r);
+                  return (
+                    <ArtifactRow
+                      key={r.id}
+                      row={r}
+                      writer={writer}
+                      moreWriters={moreWriters}
+                      otherWriters={moreWriters > 0 ? otherWriterNames(r, byId, writer) : undefined}
+                      selected={rowMatchesPath(r, selectedPath)}
+                      tabbable={isTabbable(r.id)}
+                      mobile={mobile}
+                      menuOpen={menu?.row.id === r.id}
+                      onOpen={openRow}
+                      onFocusRow={focusRow}
+                      onMenu={openMenu}
+                      setRef={setRef}
+                    />
+                  );
+                })}
             </div>
           );
         })}
@@ -402,9 +357,9 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
       </div>
       <div className="artifacts-col">
         {status === "ready" && rows.length > 0 && (
-          <div ref={toolsRef} className="artifacts-tools">
+          <div className="artifacts-tools">
             {filterUi}
-            <span ref={metaRef} className="artifacts-tools__meta">
+            <span className="artifacts-tools__meta">
               {entry?.total ?? rows.length} of {entry?.cap ?? ARTIFACT_CAP_DEFAULT}
             </span>
           </div>
@@ -417,6 +372,7 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
           row={menu.row}
           anchor={menu.anchor}
           mobile={mobile}
+          paneRef={paneRef}
           onClose={closeMenu}
           onTogglePin={(r) => void togglePin(r)}
           onCopyPath={copyPath}

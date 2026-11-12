@@ -3,6 +3,9 @@ import { useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode } from "@/api/types";
 
+/** The slice of the api the modes cache needs: one fetch plus the `mode:*` / `ws:open` events. */
+export type ModesApi = Pick<ApiInstance, "listModes" | "on">;
+
 /**
  * Client-side cache mapping `modeId` → `Mode`, so surfaces (tabs, chips,
  * dashboard cards) can resolve a session's `modeId` to its icon without a
@@ -57,7 +60,7 @@ let pendingLoad: Promise<void> | null = null;
 
 /** Fetch the modes and replace the cache. Failures keep the previous cache so
  *  callers keep rendering the last-known icons (or the fallback glyph). */
-export async function reloadModes(api: ApiInstance): Promise<void> {
+export async function reloadModes(api: ModesApi): Promise<void> {
   try {
     useModesStore.getState().setModes(await api.listModes());
   } catch {
@@ -70,7 +73,7 @@ export async function reloadModes(api: ApiInstance): Promise<void> {
  * rendered icon: a second call is a no-op once `loaded`, and concurrent calls
  * share one in-flight request.
  */
-export function ensureLoaded(api: ApiInstance): Promise<void> {
+export function ensureLoaded(api: ModesApi): Promise<void> {
   if (useModesStore.getState().loaded) return Promise.resolve();
   pendingLoad ??= reloadModes(api).finally(() => {
     pendingLoad = null;
@@ -83,7 +86,7 @@ export function ensureLoaded(api: ApiInstance): Promise<void> {
  * also re-seeds the whole map on every `ws:open` so events missed while
  * disconnected can't leave icons stale. Returns an unsubscribe function.
  */
-export function subscribeModes(api: ApiInstance): () => void {
+export function subscribeModes(api: ModesApi): () => void {
   const offCreated = api.on("mode:created", (ev) => {
     if (ev.type === "mode:created") useModesStore.getState().applyCreated(ev.mode);
   });
@@ -106,7 +109,7 @@ export function subscribeModes(api: ApiInstance): () => void {
 
 // Every rendered icon calls `useModeIcon`; they share ONE subscription per api,
 // held while at least one icon is mounted.
-let sharedApi: ApiInstance | null = null;
+let sharedApi: ModesApi | null = null;
 let sharedRefs = 0;
 let sharedOff: (() => void) | null = null;
 
@@ -119,7 +122,7 @@ export function __resetForDemo(): void {
   sharedOff = null;
 }
 
-export function retainSubscription(api: ApiInstance): () => void {
+export function retainSubscription(api: ModesApi): () => void {
   if (sharedApi !== api) {
     sharedOff?.();
     sharedApi = api;
@@ -163,16 +166,23 @@ function resolveIcon(modes: Map<string, Mode>, modeId: string | null | undefined
  */
 export function useModeIcon(
   modeId: string | null | undefined,
-  api?: ApiInstance,
+  api?: ModesApi,
   snapshot?: string | null,
 ): string | null {
   const live = useModesStore((s) => resolveIcon(s.modes, modeId));
-  const icon = snapshot ?? live;
+  useModesSync(api);
+  return snapshot ?? live;
+}
+
+/**
+ * Load the modes once and hold the shared live subscription while mounted. A surface that renders many icons
+ * (a list) calls this once and renders its icons without an `api`.
+ */
+export function useModesSync(api?: ModesApi): void {
   useEffect(() => {
     if (!api) return;
     void ensureLoaded(api);
     return retainSubscription(api);
   }, [api]);
-  return icon;
 }
 

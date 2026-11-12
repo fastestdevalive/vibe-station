@@ -27,6 +27,12 @@ describe("artifacts.css narrow list", () => {
     expect(title).toContain("text-overflow: ellipsis");
   });
 
+  it("the agent picker never grows past the tools row", () => {
+    const picker = rule(".artifacts-agent-picker");
+    expect(picker).toContain("max-width: 100%");
+    expect(picker).toContain("min-width: 0");
+  });
+
   it("the row sub line wraps its path and chips", () => {
     expect(rule(".artifacts-row__sub")).toContain("flex-wrap: wrap");
   });
