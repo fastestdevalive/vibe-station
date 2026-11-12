@@ -328,6 +328,7 @@ async fn test_daemon_restart_route_flows() {
         r#type: vst_types::domain::SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: Some("agent-1".to_string()),
         name_source: None,
         tmux_name: "tmux-s1".to_string(),

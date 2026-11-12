@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "vst-types",
+    "vst-accounts",
     "vst-diff",
     "vst-testkit",
     "vst-store",
@@ -49,6 +50,7 @@ similar = "2"
 
 # workspace internal crates
 vst-types = { path = "vst-types" }
+vst-accounts = { path = "vst-accounts" }
 vst-diff = { path = "vst-diff" }
 vst-testkit = { path = "vst-testkit", default-features = false }
 vst-store = { path = "vst-store" }

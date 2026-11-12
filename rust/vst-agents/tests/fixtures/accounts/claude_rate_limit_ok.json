@@ -1,0 +1,16 @@
+{
+  "sessionId": "sess-1",
+  "message": {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+      "unifiedWindows": [
+        {
+          "windowId": "seven_day",
+          "utilization": 0.42,
+          "resetsAt": "2026-11-12T10:00:00.000Z",
+          "status": "allowed"
+        }
+      ]
+    }
+  }
+}

@@ -50,6 +50,7 @@ fn project_with_session(project_id: &str, wt_id: &str, sess_id: &str) -> Project
             r#type: SessionType::Agent,
             mode_id: Some("m".into()),
             mode_icon: None,
+            account_id: None,
             name: None,
             name_source: None,
             tmux_name: format!("{sess_id}-pane"),
@@ -652,4 +653,55 @@ async fn snapshot_to_produces_identical_database() {
     // Overwrite snapshot test (snapshot_to must remove existing dest file first)
     store.snapshot_to(&snap_path).await.unwrap();
     assert!(snap_path.exists());
+}
+
+#[tokio::test]
+async fn session_account_id_roundtrips_sqlite() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("vibe-station.db");
+    let store = StoreHandle::open(db_path.clone()).unwrap();
+
+    let mut project = project_with_session("acct-proj", "acct-wt", "acct-sess-system");
+    let mut named = project.worktrees[0].sessions[0].clone();
+    named.id = "acct-sess-named".into();
+    named.is_main = false;
+    named.tmux_name = "acct-sess-named-pane".into();
+    named.account_id = Some("acc_1a2b3c4d".into());
+    project.worktrees[0].sessions.push(named);
+    store.add_project(project).await.unwrap();
+
+    let loaded = store.get_project("acct-proj").await.unwrap();
+    let sessions = &loaded.worktrees[0].sessions;
+    let system = sessions
+        .iter()
+        .find(|s| s.id == "acct-sess-system")
+        .expect("system session");
+    let named = sessions
+        .iter()
+        .find(|s| s.id == "acct-sess-named")
+        .expect("named session");
+    assert_eq!(system.account_id, None, "NULL = the System login");
+    assert_eq!(named.account_id.as_deref(), Some("acc_1a2b3c4d"));
+
+    // Re-open the DB file: the column is durable, not just in memory.
+    drop(store);
+    let reopened = StoreHandle::open(db_path).unwrap();
+    let again = reopened.get_project("acct-proj").await.unwrap();
+    let sessions = &again.worktrees[0].sessions;
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|s| s.id == "acct-sess-named")
+            .and_then(|s| s.account_id.clone())
+            .as_deref(),
+        Some("acc_1a2b3c4d")
+    );
+    assert_eq!(
+        sessions
+            .iter()
+            .find(|s| s.id == "acct-sess-system")
+            .expect("system session")
+            .account_id,
+        None
+    );
 }

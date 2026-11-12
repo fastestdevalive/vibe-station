@@ -47,6 +47,7 @@ async fn get_launch_command_wires_per_session_log_file_and_creates_dir() {
         session: session("sess-launch"),
         daemon_port: 7421,
         model: None,
+        account_dir: None,
     };
     let argv = plugin.get_launch_command(&cfg);
     let idx = argv
@@ -73,6 +74,7 @@ async fn capture_chat_id_resolves_created_line() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(id.as_deref(), Some("abcdef01-2345-6789-abcd-ef0123456789"));
@@ -98,6 +100,7 @@ async fn capture_chat_id_prefers_last_streaming_line() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(id.as_deref(), Some("22222222-2222-2222-2222-222222222222"));
@@ -130,6 +133,7 @@ async fn capture_chat_id_resolves_once_line_appended_mid_poll() {
         project: &make_project("p1"),
         cwd: "/repos/p1",
         worktree: None,
+        account_dir: None,
     });
     std::thread::sleep(std::time::Duration::from_millis(50));
     std::fs::write(
@@ -160,6 +164,7 @@ async fn refresh_chat_id_on_toggle_immediate_read() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(id.as_deref(), Some("33333333-3333-3333-3333-333333333333"));
@@ -183,6 +188,7 @@ async fn refresh_chat_id_on_toggle_returns_null_when_no_conversation_line() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(id, None);
@@ -213,6 +219,7 @@ async fn two_sessions_independent_log_files() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     let id_b = plugin
@@ -221,6 +228,7 @@ async fn two_sessions_independent_log_files() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(
@@ -252,6 +260,7 @@ async fn parse_last_conversation_id_tolerates_trailing_garbage() {
             project: &make_project("p1"),
             cwd: "/repos/p1",
             worktree: None,
+            account_dir: None,
         })
         .await;
     assert_eq!(id.as_deref(), Some("cccccccc-cccc-cccc-cccc-cccccccccccc"));
@@ -341,6 +350,7 @@ async fn compose_launch_prompt_writes_combined_prompt_file() {
         session: s.clone(),
         daemon_port: 1234,
         model: Some("Gemini 3.5 Flash (Medium)".to_string()),
+        account_dir: None,
     };
     let result = plugin.compose_launch_prompt(ComposePromptInput {
         system_prompt: "System Rules".into(),
@@ -368,6 +378,7 @@ fn restore_args<'a>(
         project,
         cwd: "/repos/p1",
         model,
+        account_dir: None,
     }
 }
 

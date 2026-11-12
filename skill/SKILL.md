@@ -139,6 +139,8 @@ vst terminal create "$VST_WORKTREE"
 
 Output is always plain text — two lines: a label then the session id. Capture it with `tail -1`. Do not use this after `vst worktree create` for the same worktree — the main session already exists.
 
+**Accounts.** A CLI can have several named logins (Settings → Accounts). `vst agent create ... --account=<id|name|system>` runs the new session under that account; without it the session inherits its parent's account (a subagent, or a new tab in the worktree) or else the CLI's default account. A signed-out account is refused (409 `account_signed_out`) — never silently replaced by another login. `vst agent ls --json` carries each session's `accountId`.
+
 **Subagent channel inheritance.** When you omit `--mode` on `vst agent create`, the subagent inherits your mode — and with it your channel (same CLI). If you pass an explicit `--mode` naming a mode on a *different* CLI, the subagent gets that CLI's own default channel instead (e.g. an `agy` subagent spawned from a Rich Chat `claude` parent gets Terminal, never the parent's Rich Chat). `claude`/`cursor`/`opencode`/`omp` subagents default to Rich Chat; `agy`/`pi` to Terminal. Omitting `--channel` lets the daemon resolve the effective default (see §5); pass `--channel=json`/`--channel=tmux` to force a specific channel.
 
 ### Subagent Wake-up Lifecycle (What to do when woken up)
@@ -489,12 +491,21 @@ vst agent start-fresh <id> --carry=transcript       # instant; the new agent rea
 vst agent switch <id> --mode=<mode> --carry=summary
 vst agent switch <id> --mode=<mode> --carry=transcript --channel=tmux
 
+# Switch account only (keep the model's context where the CLI allows it)
+vst agent switch <id> --account=<id|name|system>
+vst agent switch <id> --account=<ref> --carry=transcript   # force a transcript hand-over
+vst agent switch <id> --mode=<mode> --account=<ref>       # both at once
+
 # Earlier sessions of this chat (mode, how it ended, time, what was carried, summary)
 vst agent previous <id>
 ```
 
-`<mode>` is a mode id or name from `vst mode ls`. A switch always carries
-something; for a clean agent on another mode use `vst agent create`.
+`<mode>` is a mode id or name from `vst mode ls`. `--account` is an account id, name or `system` as listed
+in the Settings → Accounts panel (`GET /api/accounts`). A MODE switch always carries something; for a clean agent on another
+mode use `vst agent create`. With `--account` and no `--carry`, the daemon picks the hand-over itself: the
+conversation is handed over natively where the CLI supports it (the model keeps its context), otherwise the new
+run starts with a link to a Markdown export of the old chat. Pass `--carry=none` to start the new account fresh.
+`--account` alone is enough — `--mode` is optional.
 
 ### Rules
 - The command returns the NEW session id. Use it from then on; the old id is archived.

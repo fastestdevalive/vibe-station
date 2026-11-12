@@ -70,7 +70,8 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
       pinnedAt TEXT,
       initialPrompt TEXT,
       archivedAt TEXT,
-      handoffSummary TEXT
+      handoffSummary TEXT,
+      accountId TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_worktreeId ON sessions(worktreeId);
     CREATE INDEX IF NOT EXISTS idx_sessions_projectId ON sessions(projectId);
@@ -279,6 +280,7 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(db, "sessions", "lastToolName", "TEXT")?;
     add_column_if_missing(db, "sessions", "lastToolDetail", "TEXT")?;
     add_column_if_missing(db, "sessions", "handoffCarryOver", "TEXT")?;
+    add_column_if_missing(db, "sessions", "accountId", "TEXT")?;
 
     Ok(())
 }

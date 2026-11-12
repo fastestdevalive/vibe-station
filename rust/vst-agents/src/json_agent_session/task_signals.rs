@@ -14,7 +14,7 @@ use vst_types::{NormalizedEvent, NormalizedEventKind};
 
 use crate::acp_connection::{AcpConnection, AcpExtNotification};
 
-use super::JsonAgentSession;
+use super::{provider_str, JsonAgentSession};
 
 impl JsonAgentSession {
     /// Ingest one ext notification (released sessions and notifications the
@@ -22,6 +22,20 @@ impl JsonAgentSession {
     pub fn ingest_ext_notification(&self, n: &AcpExtNotification) {
         if self.is_released() {
             return;
+        }
+        // A structured "this account is limited" signal (Decision 10) is checked
+        // HERE, before the task-signal early return: `claude_task_signal_event`
+        // returns `None` for a `rate_limit_event`, so a call placed after that
+        // `else return` would never run. It is never persisted as a row — the
+        // only writer of "limited" is the accounts registry.
+        if let Some(signal) = self.0.plugin.account_limit_signal(&n.method, &n.params) {
+            if let Some(port) = self.account_port() {
+                let (cli, account_id) = {
+                    let s = self.0.state.lock().unwrap();
+                    (provider_str(self.0.cli), s.session.account_id.clone())
+                };
+                port.report_limit(&cli, account_id.as_deref(), signal);
+            }
         }
         let Some(mut ev) = self
             .0

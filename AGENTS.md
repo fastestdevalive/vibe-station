@@ -33,7 +33,9 @@ to refactor it in an unrelated PR.
   `vst-review`; `vst-diffstat` (deps: `vst-git`, `vst-store`, `vst-types` only) sits beside
   `vst-lifecycle`/`vst-ws` and is depended on only by `vst-daemon`;
   `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by
-  `vst-daemon` (hidden `agy-stream-acp` subcommand); no library crate depends on `vst-routes`/`vst-daemon`.
+  `vst-daemon` (hidden `agy-stream-acp` subcommand); `vst-accounts` (deps: `vst-types` only) sits beside
+  `vst-store` and is depended on by `vst-routes`/`vst-daemon` — `vst-agents` reaches it ONLY through the
+  `AccountPort` trait from `vst-types`; no library crate depends on `vst-routes`/`vst-daemon`.
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
 - **New feature crates stay CLI-agnostic (target):** take per-CLI behaviour by injection (closure/trait
@@ -60,6 +62,9 @@ to refactor it in an unrelated PR.
   repurpose a persisted value (cf. `channel: "json"`).
 - **Vendors:** use their own binary/documented API; never read credential files/keychains, reuse tokens, or
   edit users' CLI config. Unstable surfaces live behind one file each, parse tolerantly, have a fixture test.
+  Documented exception — **API keys typed by the user** for an API-key account are stored in a `0600` file beside
+  that account's managed folder (`<accounts root>/<cli>/<id>.key`) and injected as an env var at spawn only: never
+  returned by an API, never logged, never in argv, never in `Debug`. Credential files and keychains are still never read.
 
 ### Web UI
 
@@ -305,6 +310,22 @@ else if (mode.cli === "opencode") { ... }
 | `task_observations(ev)` | optional (default empty) | Background-task tray (`vst-tasks`): pure, tolerant `Vec<TaskObservation>` from ONE persisted `NormalizedEvent`'s stored fields only (so a transcript rebuild equals live observation). Unstable vendor parsing lives in one file per harness (claude: `claude_tasks.rs`); default empty hides the tray. Claude also supplies an enrich hook copying `_meta.claudeCode.parentToolUseId` onto `parent_tool_use_id`, returns `TurnSettled` from a `Result` row (its adapter holds a turn open until background subagents settle), and maps `task_signal` rows (see `acp_ext_notification_event`) to `Confirmed`/`Ended` — structured state that beats the OS liveness probe |
 | `terminal_delivery()` | optional (default `None`) | `Some(TerminalDeliveryCaps)` once this CLI's terminal readiness probe is proven: enables Terminal scheduling / sends to a tmux agent (`settle_ms`, `multiline_ok`, `raw_lf`). `None` ⇒ "Scheduling isn't supported for this agent yet" (`rust/vst-agents/src/plugin.rs`) |
 | `terminal_readiness(pane)` | optional (default `Unknown`) | Classify a captured `PaneSnapshot` as `Ready` / `AwaitingApproval` / `Unknown`; the delivery job pastes only after two consecutive `Ready` reads and never answers an approval dialog |
+| `supports_accounts()` | optional (default `false`) | Whether this CLI can run under named accounts. `false` for agy (A8: a shadowed `HOME` would hide ssh/git from the agent), with `accounts_unsupported_reason()` explaining it to the UI |
+| `account_env(acct)` | optional (default empty) | The dir env vars pointing this CLI at `acct`'s own login folder; empty for the System login (`acct.dir == None`) |
+| `account_api_key_env()` | optional (default `None`) | The env var an API-key account's key is delivered through (env only — never argv, logged or serialized) |
+| `account_login_command(acct)` | optional (default `None`) | argv of the vendor's own sign-in command, pasted into the login Terminal by `account_cmd::login_shell_line` |
+| `account_identity_command(acct)` | optional (default `None`) | argv of the vendor's read-only "who is signed in" command (`account_cmd::run_identity`, bounded 10 s) |
+| `parse_account_identity(stdout, exit_ok)` | optional (default unknown) | Pure, tolerant parse of that command's output; `signed_in: None` changes nothing (Decision 12) |
+| `account_shared_entries()` | optional (default `None`) | The CLI's own dir + the entries symlinked into a new account folder (identity-bearing files are never shared) |
+| `accounts_unsupported_reason()` | optional (default `None`) | Why this CLI ships without accounts, for the Settings row |
+| `account_session_handover(args)` | optional (default `Unsupported`) | Native hand-over files (or `InPlace` / `Unsupported`) for an account switch; the planner downgrades it |
+| `account_switch_support()` | optional (default `None`) | `native` / `transcript` / `none`, advertised by `GET /api/supported-clis` (UI learns it from data) |
+| `get_limits_with_env(env)` | optional (default `get_limits()`) | The limits probe with the account's env applied |
+| `account_limit_signal(method, params)` | optional (default `None`) | One structured chat limit signal, fed to `AccountPort::report_limit` |
+| `account_link_meta()` | optional (default `""`/`"Folder"`/`None`/`false`) | Folder-field facts for the Add-account dialog: label, helper note, example, the harness's own folder (`system_dir`), `supports_api_key`, `first_run_note` (shown in the Add-account dialog once a new folder is added). `verifies_identity` is set by the daemon, not the plugin |
+| `account_folder_looks_valid(names)` | optional (default `true`) | Whether a chosen folder's entry NAMES look like this harness's login folder; names only, never contents |
+| `account_sign_in_hint()` | optional (default `None`) | The step-2 sentence shown in the sign-in steps (e.g. "Run the command, then use /login inside.") |
+| `account_env_unset(acct)` | optional (default empty) | Env vars removed from the child (`/usr/bin/env -u`) so the account's own login wins over inherited tokens; applied on every launch path |
 | `extract_file_effects(call)` | optional (default `default_acp_effects`) | Path-bearing file effects (`Write`/`Delete`/`Move`) of a finished tool call, for artifact capture; pure, no I/O, `[]` for anything else; the default also parses a finished (completed or failed) shell (`execute`) call's `command` via `vst-agents/src/shell_effects.rs` (redirects, `tee`, `cp`/`mv`/`install`, `touch`, `dd of=`, `curl -o`, `wget -O`, literal-variable paths only, never guessed; bounded: values >4096 B unresolved; stderr/`.log` ignored; `mv` -> `Move`); override only where a fixture proves the ACP-generic default wrong, and fall back to the default for non-edit calls |
 
 ### The two session identities (ACP)
@@ -330,6 +351,52 @@ in full in [`docs/RICH-CHAT-ACP.md`](docs/RICH-CHAT-ACP.md) (§ Two session iden
 - **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `daemon/src/agent-plugins/registry.ts`. Routes are allowed to import it. Services (`daemon/src/services/spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
 - **`CliId` type:** defined in `daemon/src/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.
 - **Importing history is preferred for every harness:** a new plugin either implements `native_history_importer?()` once its store is readable or adds a comment on the plugin explaining why not; defaulting to `None` silently keeps terminal turns invisible after a toggle.
+
+---
+
+## Accounts — `vst-accounts` is the single writer; spawn env goes through `merge_account_env`
+
+**Files:** `rust/vst-accounts/src/*` · `rust/vst-routes/src/account_sessions.rs` (+ `account_sessions/{handover,switch}.rs`) · `rust/vst-agents/src/account_env.rs` · `rust/vst-daemon/src/{accounts_wiring,account_routes,account_signin,account_errors}.rs`
+
+- **One owner per fact (R4):** the registry file, folders, shared-entry symlinks, API-key files, labels, sign-in
+  attempts and the "limited" state live only in `vst-accounts::AccountsHandle`; limits state only in
+  `vst-harness-limits`. Per-CLI account facts are `AgentPlugin` methods (table above) — nothing outside a plugin
+  file names a harness.
+- **One env application:** `merge_account_env` is the only function that turns an account into process env. It runs
+  at the three terminal spawn sites (resume, restore/toggle, fresh) and the ACP connection, and a typed `Err`
+  means "do NOT spawn" (no silent fallback, R7). The limits probe applies `plugin.account_env` through
+  `AccountsHandle::locate` (a signed-out account must stay probe-able).
+- **One vocabulary, one drawing component:** the UI draws an account only through `AccountChip`, and account words
+  come only from `ACCOUNT_WORDS` ("Signed out", "Sign in", "Waiting for sign-in", "Not verified"); daemon messages use
+  the same words. Do not reintroduce the old wording (see docs/MULTI-ACCOUNT.md).
+- **Sign-in steps come from `account.signIn`, System login included;** a terminal opens only on request.
+- **Claude's conversation file is located by chat id** (`find_claude_conversation`), never by a re-derived slug.
+- **tmux launches never carry the API key in the env map** (tmux would put it in argv):
+  `account_sessions::tmux_key_safe_launch` makes the pane read it from the account's 0600 key file.
+- **Account switch = `reset_session` + `accountId`**, ONE path (Decision 7): the replacement gets a new session id,
+  the hand-over is native where the plugin supports it, a transcript otherwise, and a Rich Chat switch always
+  writes a break marker.
+- **Sign-out is decided ONLY by the identity command** (`signed_in == Some(false)`), never by a limits read. A
+  non-System account's sessions have their runtime released by `halt_sessions_for_account` — **no lifecycle write**
+  (the 1 s poller owns that axis), so `docs/STATUS-INDICATORS.md` needs NO change: the signed-out banner derives
+  from `account.auth` + `session.accountId`. The System login is never auto-halted.
+- **Sign-in** runs in a normal Terminal session (login line pasted, exit == done); completion runs the identity
+  command, never scrapes the pane. Re-sign-in of an existing signed-out account keeps the same account id.
+- **The spawn-time lookup (`AccountPort::resolve`) is for spawn only;** sign-in, identity, `/refresh` and limits
+  probes use `AccountsHandle::locate`, which ignores `auth`/`pending`.
+- **An account is a directory.** Created folders (`createdByUs`) live at `<accounts root>/<cli>/<id>`; a chosen folder
+  is referenced, never created or linked into. Remove deletes a created folder (guarded by `folders::is_managed_dir`,
+  symlinks unlinked, never followed) and its key file; for a chosen folder it only forgets the record (`folderDeleted:false`).
+- **Unset on every launch path:** `account_unset_argv` wraps the argv in `/usr/bin/env -u …` at every terminal spawn
+  (tmux and direct PTY, restore and fresh), the ACP connection wraps its command, and the identity run / limits probe
+  remove the same vars with `env_remove`. A tmux or PTY child inherits the daemon/server env, so a map entry alone cannot unset.
+- **Background identity never un-pends an unverifiable row** (pi/omp): only `POST /accounts/:cli/:id/refresh`
+  (`confirm_pending`) finishes it. Limits, boot and restart triggers un-pend only on `signed_in == Some(true)`, and
+  `probe_targets` / `on_limits_updated` skip pending rows.
+- **Hand-over never clobbers:** `vst_accounts::handover::apply` replaces an existing target only when it is a byte prefix
+  of the source (an earlier copy of the same append-only chat); never loosen this to a length or mtime check.
+- **One display-name rule in the UI:** `accountName()` is the only one; `SwitchAccountMenu` places itself (portal,
+  fixed); do not add per-mount CSS positioning.
 
 ---
 
@@ -559,6 +626,7 @@ There are two separate docker setups in this repo. They look similar (both boot 
 - **`scripts/dev-sandbox.sh up` with no flags seeds the full demo dataset by default** — worktrees/agents are there out of the box. Pass `--seed=file-search` if you specifically want a fast, empty single-project tree instead.
 - **Switching `--seed` mode on an already-seeded volume does NOT cleanly swap datasets — it merges/corrupts them.** The two seed scripts guard themselves independently and asymmetrically, not via a shared "already seeded in mode X" marker: `demo-seed.sh` checks its own `$VST/.seeded` file; `seed-file-search-demo.sh` checks whether `file-search-demo`'s repo dir exists and whether that project is already registered with the daemon. Neither guard knows about the other, so going `file-search` → `demo` on the same worktree-name runs `demo-seed.sh` in full on a volume the daemon already has state for (it `rm -rf`s its own project dirs and overwrites `modes.json`, but doesn't touch the pre-existing `file-search-demo` data or the daemon's already-booted SQLite state — the result is an inconsistent mix, not a clean demo dataset), and going `demo` → `file-search` just registers a 4th project alongside the demo data rather than being a no-op. Use a fresh worktree-name (or `docker volume rm vst-dev-data-<worktree> vst-dev-projects-<worktree>`) whenever you want to actually change an existing sandbox's seed mode.
 - **One `dev.Dockerfile` for every host; host binaries only on Linux, only if present.** Every harness (`claude`, `codex`, `opencode`, `cursor-agent`, `agy`, `omp`, `pi`) is installed in `dev.Dockerfile` as a pinned, `TARGETARCH`-aware Linux build (a Mac's binaries are Mach-O → `ENOEXEC ... posix_spawn`, so macOS mounts none). On a Linux host `dev-sandbox.sh` (OS from `uname -s`, `VST_SANDBOX_OS` overrides) generates a compose overlay mounting the host's own `opencode`/`agy`/`codex`/`cursor-agent` under `/opt/host-bins` — only paths that exist, since a missing bind source becomes an empty dir that would shadow the image copy — and `dev-entrypoint.sh` links each into `/usr/local/bin` only if the expected file is there, else the image copy stays. Don't put host-binary mounts in `docker-compose.dev.yml` itself. `claude-acp` / `codex-acp` are the pinned Rust ports (`vendor/rust-acp/pins.toml`, `scripts/build-rust-acp.sh`): `dev-sandbox.sh` fetches the Linux binaries with `--docker` and bind-mounts those that built at `/opt/rust-acp/*` through a generated overlay (a port that cannot be built is skipped with the reason, never mounted as an empty dir). Bump versions/checksums deliberately. Only credentials come from the host (read-only `/seed/*` → `dev-entrypoint.sh`); the sandbox never reads the macOS Keychain. Keychain-held logins therefore need a vendor mechanism instead: **claude** — the long-lived `claude setup-token` token (`~/.config/vibe-station/claude-oauth-token`) is REQUIRED on macOS (`dev-sandbox.sh up` offers, on a TTY, to run `claude setup-token` in the sandbox image and save the pasted token 0600; otherwise it warns and still starts signed out); **cursor-agent** — `CURSOR_API_KEY` (passed through) or a one-time `cursor-agent login` inside; **agy** — a one-time in-sandbox sign-in (it prints a URL, you paste the code back; also needed on Linux, whose login is in Secret Service); **codex** with a keyring store — `codex login --device-auth` inside. codex `auth.json`, opencode `auth.json`, omp and pi are plain files on macOS too and are seeded. In-sandbox logins for codex/opencode/cursor-agent/agy persist in the data volume (`seed_persistent_home` → `~/.vibe-station/cli-home/`), so they survive `up`'s `--force-recreate`; a host credential file, when present, is re-copied on top at each start.
+- **Extra host mounts:** `VST_SANDBOX_EXTRA_MOUNTS="/host/dir:/container/dir[:ro] ..." scripts/dev-sandbox.sh up ...` bind-mounts extra host paths through a generated overlay (existing paths only), e.g. a second CLI login folder to try the accounts UI (`$HOME/.claude-work:/home/vst/.claude-work`); the daemon runs as user `vst` (HOME `/home/vst`). Never put such personal mounts in `docker-compose.dev.yml`.
 - **Don't add demo-dataset seeding to `docker-compose.screenshots.yml`'s job description** or vice versa — `screenshots` intentionally has no hot reload and real auth so it matches what `take-screenshots.ts` expects; don't "fix" that to make it more dev-friendly.
 
 ---

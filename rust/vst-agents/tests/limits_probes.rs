@@ -302,20 +302,21 @@ async fn limit_plugins_override_get_limits() {
 #[tokio::test]
 #[ignore]
 async fn live_claude() {
-    let res = vst_agents::claude_limits::probe_claude_limits().await;
+    let res =
+        vst_agents::claude_limits::probe_claude_limits(std::collections::BTreeMap::new()).await;
     println!("claude: {}", serde_json::to_string_pretty(&res).unwrap());
 }
 
 #[tokio::test]
 #[ignore]
 async fn live_codex() {
-    let res = vst_agents::codex_limits::probe_codex_limits().await;
+    let res = vst_agents::codex_limits::probe_codex_limits(std::collections::BTreeMap::new()).await;
     println!("codex: {}", serde_json::to_string_pretty(&res).unwrap());
 }
 
 #[tokio::test]
 #[ignore]
 async fn live_agy() {
-    let res = vst_agents::agy_limits::probe_agy_limits().await;
+    let res = vst_agents::agy_limits::probe_agy_limits(std::collections::BTreeMap::new()).await;
     println!("agy: {}", serde_json::to_string_pretty(&res).unwrap());
 }

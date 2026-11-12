@@ -11,7 +11,7 @@
 //! on-disk transcript stores; every failure mode returns `None` rather than
 //! throwing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::fs;
 
@@ -26,9 +26,20 @@ fn claude_slug(worktree_path: &str) -> String {
 /// Find the latest Claude chat UUID for a worktree path (filename without
 /// `.jsonl`), or `None` if no chats exist. Mirrors
 /// `native-chat-id/claude.ts`'s `findLatestChatUuid`.
-pub async fn find_latest_claude_chat_uuid(worktree_path: &str) -> Option<String> {
+///
+/// `account_dir: Some(..)` is the session's account folder
+/// (`CLAUDE_CONFIG_DIR`), so the projects dir is `<account>/projects`
+/// (Decision 6); `None` = the System login's `~/.claude/projects`.
+pub async fn find_latest_claude_chat_uuid(
+    worktree_path: &str,
+    account_dir: Option<&Path>,
+) -> Option<String> {
     let slug = claude_slug(worktree_path);
-    let projects_dir = home_dir().join(".claude").join("projects").join(slug);
+    let base = match account_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => home_dir().join(".claude"),
+    };
+    let projects_dir = base.join("projects").join(slug);
     list_latest_jsonl_uuid(&projects_dir).await
 }
 
@@ -65,7 +76,15 @@ fn flatten_workspace_path(worktree_path: &str) -> String {
 /// Find the latest cursor chatId for a worktree path (newest chatId-named
 /// subdirectory under `agent-transcripts`), or `None`. Mirrors
 /// `native-chat-id/cursor.ts`'s `findLatestCursorChatId`.
-pub async fn find_latest_cursor_chat_id(worktree_path: &str) -> Option<String> {
+///
+/// `account_dir` is accepted for API parity with the other resolvers but does
+/// NOT move this lookup: cursor's per-project transcripts live under
+/// `~/.cursor`, which its account env (`XDG_CONFIG_HOME`) does not redirect
+/// (V6, unverified — binary absent).
+pub async fn find_latest_cursor_chat_id(
+    worktree_path: &str,
+    _account_dir: Option<&Path>,
+) -> Option<String> {
     let slug = flatten_workspace_path(worktree_path);
     let transcripts_dir = home_dir()
         .join(".cursor")
@@ -104,7 +123,13 @@ fn agy_last_conversations_path() -> PathBuf {
 
 /// Read the latest agy conversation id for a workspace cwd (last-resort
 /// fallback only). Mirrors `native-chat-id/agy.ts`'s `readLatestAgyConversationId`.
-pub async fn read_latest_agy_conversation_id(cwd: &str) -> Option<String> {
+///
+/// `account_dir` is accepted for API parity only: agy ships without accounts
+/// (V9), so it is always `None` and the cache path stays under `~/.gemini`.
+pub async fn read_latest_agy_conversation_id(
+    cwd: &str,
+    _account_dir: Option<&Path>,
+) -> Option<String> {
     let raw = fs::read_to_string(agy_last_conversations_path())
         .await
         .ok()?;

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use vst_types::activity::ActivitySink;
 use vst_types::artifacts::ArtifactSink;
 use vst_types::review::{ReviewPort, TurnObserver};
+use vst_types::AccountPort;
 
 /// The review-comments seams installed together (one setter).
 struct ReviewHooks {
@@ -57,6 +58,11 @@ pub struct JsonAgentRegistry<T> {
     /// routes and the scheduled-fire path, `TurnObserver` for sessions), set once
     /// from `run.rs`. With none installed review turns are never created.
     review: OnceLock<ReviewHooks>,
+    /// The accounts registry, as the `vst-types` `AccountPort` seam, set once
+    /// from `run.rs`. Sessions capture it when they are BUILT (the ACP connection
+    /// has no registry access); with none installed every session is the System
+    /// login.
+    account: OnceLock<Arc<dyn AccountPort>>,
 }
 
 impl<T> Default for JsonAgentRegistry<T> {
@@ -67,6 +73,7 @@ impl<T> Default for JsonAgentRegistry<T> {
             activity: OnceLock::new(),
             artifact: OnceLock::new(),
             review: OnceLock::new(),
+            account: OnceLock::new(),
         }
     }
 }
@@ -110,6 +117,17 @@ impl<T> JsonAgentRegistry<T> {
     /// The turn observer sessions report to, if installed.
     pub fn review_observer(&self) -> Option<Arc<dyn TurnObserver>> {
         self.review.get().map(|h| h.observer.clone())
+    }
+
+    /// Install the accounts registry (first call wins; later calls are ignored).
+    pub fn set_account_port(&self, port: Arc<dyn AccountPort>) {
+        let _ = self.account.set(port);
+    }
+
+    /// The accounts registry, if installed. Captured by a session at build time
+    /// and never read from the registry afterwards (Decision 3).
+    pub fn account_port(&self) -> Option<Arc<dyn AccountPort>> {
+        self.account.get().cloned()
     }
 
     /// The live session registered for `session_id`, if any.

@@ -39,6 +39,7 @@ fn session(id: &str, project_id: &str, ty: SessionType, state: LifecycleState) -
             None
         },
         mode_icon: None,
+        account_id: None,
         name: Some(id.into()),
         name_source: None,
         tmux_name: format!("vst-{id}"),
@@ -129,6 +130,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 

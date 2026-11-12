@@ -54,6 +54,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("m".into()),
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),
@@ -146,6 +147,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 
@@ -166,6 +168,7 @@ fn drafting_session(id: &str, project_id: &str, worktree_id: Option<&str>) -> Se
 fn draft_config(entry: DraftEntryPoint, mode_id: &str) -> DraftConfig {
     DraftConfig {
         entry_point: entry,
+        account_id: None,
         mode_id: Some(mode_id.to_string()),
         channel: Some(Channel::Json),
         channel_explicit: None,
@@ -603,6 +606,7 @@ async fn start_direct_entry_promotes_to_direct() {
             ok: true,
             worktree_id: None,
             worktree: None,
+            account_id: None,
         }
     );
 

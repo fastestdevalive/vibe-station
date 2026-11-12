@@ -53,6 +53,7 @@ fn json_session(id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("my-mode".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -267,6 +268,8 @@ impl Env {
                 Arc::new(vst_proc::test_support::isolated_tmux()),
                 None,
             ),
+
+            accounts: None,
         };
         // The daemon's wiring (`build_state`): the owner behind both seams.
         let (port, observer) = vst_review::hooks(&review);

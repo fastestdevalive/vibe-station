@@ -43,10 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use vst_agents::context::{
-    build_vst_env, resolved_context_of, session_data_dir_for, system_prompt_path_for,
-    BuildVstEnvOptions,
-};
+use vst_agents::context::{resolved_context_of, session_data_dir_for, system_prompt_path_for};
 use vst_agents::json_agent_chat::{
     cli_id_to_provider, enqueue_chat_turn, find_json_session_context, read_session_page_before,
     read_session_since, read_session_tail, read_session_transcript, resolve_json_agent,
@@ -107,6 +104,7 @@ use vst_ws::handlers::session_open::DirectStreamRegistry;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 use vst_ws::streams::pty_stream::PtySessionStream;
 
+use crate::account_sessions;
 use crate::modes::{
     find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
 };
@@ -366,6 +364,7 @@ pub fn serialize_session(
         last_activity_at: s.last_activity_at.clone(),
         last_line: None, // reserved: legacy stored lines are never served
         last_tool: s.last_tool.clone(),
+        account_id: s.account_id.clone(),
     }
 }
 
@@ -625,6 +624,10 @@ pub struct SessionRoutes {
     /// and session-delete hooks go through it so its outcome observer hears
     /// every transition of a tmux row exactly once.
     pub terminal_delivery: vst_review::TerminalDeliveryHandle,
+    /// The accounts registry (multi-account, Decision 11). `None` in tests and
+    /// for a daemon with no registry wired: every session is the System login.
+    /// Set by [`SessionRoutes::with_accounts`] from `server.rs`.
+    pub accounts: Option<vst_accounts::AccountsHandle>,
 }
 
 impl std::fmt::Debug for SessionRoutes {
@@ -666,6 +669,7 @@ impl Clone for SessionRoutes {
             // see the flag registered by the request's own clone.
             reset_cancels: self.reset_cancels.clone(),
             terminal_delivery: self.terminal_delivery.clone(),
+            accounts: self.accounts.clone(),
         }
     }
 }
@@ -675,6 +679,38 @@ impl SessionRoutes {
     pub fn with_handoff_timeout(mut self, timeout: Duration) -> Self {
         self.handoff_timeout = timeout;
         self
+    }
+
+    /// Install the accounts registry (Decision 11). `None` = every session is
+    /// the System login (tests, single-account daemons).
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: Option<vst_accounts::AccountsHandle>) -> Self {
+        self.accounts = accounts;
+        self
+    }
+
+    /// The registry as the spawn path's [`vst_types::AccountPort`].
+    fn accounts_port(&self) -> Option<&dyn vst_types::AccountPort> {
+        self.accounts
+            .as_ref()
+            .map(|a| a as &dyn vst_types::AccountPort)
+    }
+
+    /// Fail fast when the session's STORED account can no longer spawn (R7).
+    /// The spawn paths still re-validate through `merge_account_env`; this only
+    /// turns the refusal into a typed route error instead of a generic spawn
+    /// failure.
+    fn check_session_account(
+        &self,
+        cli: &str,
+        account_id: Option<&str>,
+    ) -> Result<(), crate::account_sessions::AccountProblem> {
+        let Some(port) = self.accounts_port() else {
+            return Ok(());
+        };
+        port.resolve(cli, account_id)
+            .map(|_| ())
+            .map_err(|e| account_sessions::stored_account_problem(e, account_id))
     }
 
     /// `GET /sessions` — filter by worktree, project, or all (worktree +
@@ -1113,6 +1149,31 @@ impl SessionRoutes {
         }
     }
 
+    /// Resolve + validate the account a session being created runs under
+    /// (A3.7a). A non-agent session has no CLI, so it is always the System
+    /// login.
+    fn new_session_account(
+        &self,
+        r#type: SessionType,
+        mode_id: Option<&str>,
+        explicit: Option<&str>,
+        parent: Option<&SessionRecord>,
+    ) -> Result<Option<String>, CreateError> {
+        if r#type != SessionType::Agent {
+            return Ok(None);
+        }
+        let Some(mode) = mode_id.and_then(resolve_mode) else {
+            return Ok(None);
+        };
+        account_sessions::new_session_account(
+            self.accounts.as_ref(),
+            mode.cli.as_str(),
+            explicit,
+            parent,
+        )
+        .map_err(CreateError::Account)
+    }
+
     /// The 8 parameters mirror the TS `POST /sessions` direct arm's destructured
     /// create inputs; a params struct is deferred (07a continuation scope).
     #[allow(clippy::too_many_arguments)]
@@ -1160,6 +1221,9 @@ impl SessionRoutes {
             &prompt,
             NameFallback::Direct(next_direct_seq),
         );
+        // A direct session has no parent: explicit pick, else the CLI default.
+        let account_id =
+            self.new_session_account(r#type, mode_id.as_deref(), data.account_id.as_deref(), None)?;
 
         let mut record = SessionRecord {
             id: session_id.clone(),
@@ -1178,6 +1242,7 @@ impl SessionRoutes {
             } else {
                 None
             },
+            account_id,
             name: Some(session_name),
             name_source,
             tmux_name,
@@ -1308,6 +1373,19 @@ impl SessionRoutes {
             format!("__direct__-{session_id}")
         };
 
+        // Explicit pick, else the subagent's parent (source agent), else the
+        // worktree's main session (new tab), else the CLI default (Decision 11).
+        let parent = match &data.source_agent_id {
+            Some(id) => session_record_by_id(&self.store, id).await,
+            None => worktree.sessions.iter().find(|s| s.is_main).cloned(),
+        };
+        let account_id = self.new_session_account(
+            r#type,
+            mode_id.as_deref(),
+            data.account_id.as_deref(),
+            parent.as_ref(),
+        )?;
+
         let mut next_terminal_seq: Option<i64> = None;
         let mut next_agent_seq: Option<i64> = None;
         let (session_name, name_source) = {
@@ -1355,6 +1433,7 @@ impl SessionRoutes {
             } else {
                 None
             },
+            account_id,
             name: Some(session_name),
             name_source,
             tmux_name,
@@ -1643,6 +1722,7 @@ impl SessionRoutes {
             model: mode.model,
             tmux: &self.tmux,
             direct_ptys: &self.direct_ptys,
+            accounts: self.accounts_port(),
         })
         .await?;
         if let Some(id) = captured_chat_id {
@@ -1672,6 +1752,7 @@ impl SessionRoutes {
             model: mode.model,
             tmux: &self.tmux,
             direct_ptys: &self.direct_ptys,
+            accounts: self.accounts_port(),
         })
         .await?;
         if let Some(id) = captured_chat_id {
@@ -1744,7 +1825,7 @@ impl SessionRoutes {
     /// through `spawn_session`). Only ever writes when the field is still
     /// unset; never overwrites. See
     /// .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B6/A2).
-    async fn persist_agent_chat_id(&self, session_id: &str, agent_chat_id: String) {
+    pub(crate) async fn persist_agent_chat_id(&self, session_id: &str, agent_chat_id: String) {
         let Some(ctx) = find_session_context(&self.store, session_id).await else {
             return;
         };
@@ -2412,6 +2493,8 @@ impl SessionRoutes {
             format!("__direct__-{}", session.id)
         };
 
+        let account_id =
+            self.promoted_account(mode_id, draft_config.account_id.as_deref(), None)?;
         let updated_session = self.build_promoted_session(
             session,
             Some(&wt_id),
@@ -2423,6 +2506,7 @@ impl SessionRoutes {
             mode_id,
             is_json,
             &project.id,
+            account_id.clone(),
         );
 
         let sid = session.id.clone();
@@ -2504,6 +2588,7 @@ impl SessionRoutes {
             ok: true,
             worktree_id: Some(wt_id),
             worktree: Some(serialized_wt),
+            account_id,
         })
     }
 
@@ -2583,6 +2668,11 @@ impl SessionRoutes {
                 trimmed_prompt,
             )
             .await?;
+        let parent = existing_worktree
+            .as_ref()
+            .and_then(|w| w.sessions.iter().find(|s| s.is_main).cloned());
+        let account_id =
+            self.promoted_account(mode_id, draft_config.account_id.as_deref(), parent.as_ref())?;
         let updated_session = self.build_promoted_session(
             session,
             worktree_id.as_deref(),
@@ -2594,6 +2684,7 @@ impl SessionRoutes {
             mode_id,
             is_json,
             &project.id,
+            account_id.clone(),
         );
 
         let sid = session.id.clone();
@@ -2709,7 +2800,29 @@ impl SessionRoutes {
             ok: true,
             worktree_id: target_wt_id,
             worktree: None,
+            account_id,
         })
+    }
+
+    /// Resolve + validate the account a promoted draft runs under (A3.7a):
+    /// `DraftConfig.accountId`, else the parent (existing worktree's main
+    /// session), else the CLI default.
+    fn promoted_account(
+        &self,
+        mode_id: &str,
+        explicit: Option<&str>,
+        parent: Option<&SessionRecord>,
+    ) -> Result<Option<String>, StartError> {
+        let Some(mode) = resolve_mode(mode_id) else {
+            return Ok(None);
+        };
+        account_sessions::new_session_account(
+            self.accounts.as_ref(),
+            mode.cli.as_str(),
+            explicit,
+            parent,
+        )
+        .map_err(StartError::Account)
     }
 
     /// Build the promoted `SessionRecord` shared by the `start` arms.
@@ -2726,6 +2839,7 @@ impl SessionRoutes {
         mode_id: &str,
         is_json: bool,
         project_id: &str,
+        account_id: Option<String>,
     ) -> SessionRecord {
         let transcript_ref = if is_json {
             let path = match worktree_id {
@@ -2758,6 +2872,7 @@ impl SessionRoutes {
             r#type: session.r#type,
             mode_id: Some(mode_id.to_string()),
             mode_icon: mode_icon_for(mode_id).or_else(|| session.mode_icon.clone()),
+            account_id,
             name: session.name.clone(),
             name_source: session.name_source,
             tmux_name: new_tmux_name.to_string(),
@@ -3155,8 +3270,7 @@ impl SessionRoutes {
 
         let (restored_from_history, newly_captured_chat_id) = self
             .resume_spawn(&project, &worktree, &session, &cwd)
-            .await
-            .map_err(ResumeError::Internal)?;
+            .await?;
 
         let mut updated = session.clone();
         // Self-heal only — never overwrite an already-known id (matches the
@@ -3246,45 +3360,70 @@ impl SessionRoutes {
         worktree: &Option<WorktreeRecord>,
         session: &SessionRecord,
         cwd: &str,
-    ) -> Result<(bool, Option<String>), String> {
+    ) -> Result<(bool, Option<String>), ResumeError> {
         if session.r#type == SessionType::Agent && session.mode_id.is_some() {
             let mode = self.resolve_resume_mode(session);
             let plugin = resolve_plugin(mode.cli);
             let model = resume_model(session, &mode);
             let model = model.as_deref();
+            let mut launch_cfg = LaunchConfig {
+                project: project.clone(),
+                ctx: PluginContext {
+                    cwd: PathBuf::from(cwd),
+                    project_id: project.id.clone(),
+                    worktree: worktree.clone(),
+                },
+                session: session.clone(),
+                daemon_port: self.daemon_port,
+                model: model.map(str::to_string),
+                account_dir: None,
+            };
+            // The account is applied BEFORE the restore command is built: the
+            // CLI-store readers need the account folder, and a broken account
+            // must refuse the spawn (R7, Decision 3/6).
+            let (mut env, resolved) = account_sessions::account_launch_env(
+                plugin.as_ref(),
+                self.accounts_port(),
+                mode.cli.as_str(),
+                &launch_cfg,
+            )
+            .map_err(|e| {
+                ResumeError::Account(account_sessions::stored_account_problem(
+                    e,
+                    session.account_id.as_deref(),
+                ))
+            })?;
+            let account_dir = resolved.dir.clone();
+            launch_cfg.account_dir = account_dir.clone();
             let restore_argv = plugin
                 .get_restore_command(RestoreArgs {
                     session,
                     project,
                     cwd,
                     model,
+                    account_dir: account_dir.clone(),
                 })
                 .await;
 
-            if let Some(argv) = restore_argv {
+            if let Some(mut argv) = restore_argv {
                 // Resume path: spawn from explicit restore argv.
                 plugin.setup_workspace_hooks(cwd).await;
-                let launch_cfg = LaunchConfig {
-                    project: project.clone(),
-                    ctx: PluginContext {
-                        cwd: PathBuf::from(cwd),
-                        project_id: project.id.clone(),
-                        worktree: worktree.clone(),
-                    },
-                    session: session.clone(),
-                    daemon_port: self.daemon_port,
-                    model: model.map(str::to_string),
-                };
-                let mut env = build_vst_env(&BuildVstEnvOptions {
-                    project: project.clone(),
-                    worktree: worktree.clone(),
-                    session: session.clone(),
-                    daemon_port: self.daemon_port,
-                });
-                for (k, v) in plugin.get_environment(&launch_cfg) {
-                    env.insert(k, v);
+                ensure_binary_on_path(plugin.as_ref(), &env).map_err(ResumeError::Internal)?;
+                // Unset first (inner wrapper), then the tmux key wrapper (outer).
+                argv = account_sessions::account_unset_argv(
+                    plugin.as_ref(),
+                    &resolved,
+                    &mut env,
+                    argv,
+                );
+                if session.use_tmux {
+                    argv = account_sessions::tmux_key_safe_launch(
+                        plugin.as_ref(),
+                        &resolved,
+                        &mut env,
+                        argv,
+                    );
                 }
-                ensure_binary_on_path(plugin.as_ref(), &env)?;
                 let ready = plugin.get_ready_signal();
                 self.spawn_session_from_argv(
                     session,
@@ -3294,7 +3433,8 @@ impl SessionRoutes {
                     env,
                     &ready,
                 )
-                .await?;
+                .await
+                .map_err(ResumeError::Internal)?;
 
                 // Self-heal a missing chat id (fills a GAP — never overwrites).
                 let mut captured = None;
@@ -3305,6 +3445,7 @@ impl SessionRoutes {
                             project,
                             cwd,
                             worktree: worktree.as_ref(),
+                            account_dir: account_dir.clone(),
                         })
                         .await
                     {
@@ -3325,6 +3466,7 @@ impl SessionRoutes {
                         project,
                         cwd,
                         model,
+                        account_dir: account_dir.clone(),
                     })
                     .await;
             }
@@ -3356,8 +3498,10 @@ impl SessionRoutes {
                         model: model.map(str::to_string),
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
+                        accounts: self.accounts_port(),
                     })
-                    .await?
+                    .await
+                    .map_err(ResumeError::Internal)?
                 }
                 None => {
                     let built = build_direct_prompt(&BuildDirectPromptInput {
@@ -3377,8 +3521,10 @@ impl SessionRoutes {
                         model: model.map(str::to_string),
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
+                        accounts: self.accounts_port(),
                     })
-                    .await?
+                    .await
+                    .map_err(ResumeError::Internal)?
                 }
             };
             return Ok((false, captured));
@@ -3387,7 +3533,8 @@ impl SessionRoutes {
         // Terminal session — spawn a new shell session (best-effort).
         let wt_path = worktree.as_ref().map(|_| cwd);
         self.spawn_terminal(project, session, wt_path, session.use_tmux)
-            .await?;
+            .await
+            .map_err(ResumeError::Internal)?;
         Ok((false, None))
     }
 
@@ -3528,9 +3675,14 @@ impl SessionRoutes {
         }
 
         // --- Step 1: validate everything before any teardown -----------------
+        // The account planner runs first: it decides the replacement's account,
+        // the hand-over, and (for an explicit switch) the carry + break kind
+        // (Decision 7). Everything else stays this function's existing logic.
+        let plan = self.plan_account_switch(&session, body).await?;
         // Carry precedence: `carryOver` wins; else `handoffText` ⇒ summary; else
-        // `handoff: true` ⇒ summary; else nothing.
-        let carry_over = match body.carry_over {
+        // `handoff: true` ⇒ summary; else nothing. An explicit account switch
+        // overrides it with the carry its hand-over implies.
+        let carry_over = plan.carry_over().unwrap_or(match body.carry_over {
             Some(c) => c,
             None => {
                 if body.handoff_text.is_some() || body.handoff.unwrap_or(false) {
@@ -3539,7 +3691,7 @@ impl SessionRoutes {
                     CarryOver::Nothing
                 }
             }
-        };
+        });
         let when_busy = body.when_busy.unwrap_or(WhenBusy::Stop);
         let queued = body.queued.unwrap_or(QueuedPolicy::Carry);
         if carry_over == CarryOver::Nothing && body.handoff_text.is_some() {
@@ -3618,11 +3770,12 @@ impl SessionRoutes {
         }
 
         // Break kind (plan Decision 2): `switch` iff the requested mode resolves
-        // to a DIFFERENT mode id than the current one, else `reset`.
-        let break_kind = match &requested_mode_id {
+        // to a DIFFERENT mode id than the current one, else `reset`. An explicit
+        // account switch is always `switch`.
+        let break_kind = plan.break_kind().unwrap_or(match &requested_mode_id {
             Some(m) if session.mode_id.as_deref() != Some(m.as_str()) => SessionBreakKind::Switch,
             _ => SessionBreakKind::Reset,
-        };
+        });
         let effective_cli = find_mode(&effective_mode_id).map(|m| m.cli);
         let old_cli = session
             .mode_id
@@ -3736,6 +3889,9 @@ impl SessionRoutes {
                 .transcript_path
                 .as_ref()
                 .map(|p| transcript_instruction(p)),
+            // The model already has its own context: rows are carried and the
+            // replacement resumes the copied native chat id, so no text.
+            CarryOver::Native => None,
         };
 
         let mut prompt_parts: Vec<String> = Vec::new();
@@ -3766,6 +3922,16 @@ impl SessionRoutes {
                     .await;
                 return Err(ResetError::Review(too_large));
             }
+        }
+
+        // The native hand-over copies this session's history into the target
+        // account BEFORE the point of no return: a failure aborts with the old
+        // session intact (Decision 7).
+        if let Err(e) = plan.apply_transfers() {
+            tracing::warn!(session_id = %session.id, error = ?e, "account hand-over refused; session left unchanged");
+            self.cleanup_failed_reset(&session.id, &withdrawn, &new_dir)
+                .await;
+            return Err(e);
         }
 
         // --- Step 4: point of no return -------------------------------------
@@ -3850,6 +4016,7 @@ impl SessionRoutes {
             r#type: SessionType::Agent,
             mode_id: Some(effective_mode_id.clone()),
             mode_icon: mode_icon_for(&effective_mode_id).or_else(|| session.mode_icon.clone()),
+            account_id: plan.target_account(),
             name: Some(new_name),
             name_source: if body.prompt.is_some() {
                 Some(SessionNameSource::Auto)
@@ -3891,12 +4058,18 @@ impl SessionRoutes {
             last_line: None,
             last_tool: None,
         };
+        plan.finish_record(&mut new_session);
 
+        let marker_accounts = plan.marker_accounts();
         // Carry the old transcript into the replacement (plan Decision 1): only
         // for `summary`/`transcript`, and only when BOTH the old and final
         // channels are Rich Chat (json). Runs BEFORE `mutate_project` so the new
         // store is fully filled before the replacement record is announced.
-        if carry_over != CarryOver::Nothing && old_channel == Channel::Json && is_json_channel {
+        // A Rich Chat account switch always writes the marker, any carry (A9).
+        if (carry_over != CarryOver::Nothing || plan.is_account_switch())
+            && old_channel == Channel::Json
+            && is_json_channel
+        {
             match effective_cli {
                 Some(cli) => {
                     let old_id = session.id.clone();
@@ -3911,6 +4084,8 @@ impl SessionRoutes {
                         from_mode: from_mode.clone(),
                         to_mode: to_mode.clone(),
                         ts: now_iso(),
+                        from_account: marker_accounts.0.clone(),
+                        to_account: marker_accounts.1.clone(),
                     };
                     let mut skip_turn_ids: Vec<String> =
                         withdrawn.iter().map(|t| t.turn_id.clone()).collect();
@@ -4160,15 +4335,17 @@ impl SessionRoutes {
         // behind the break card's toggle, so it goes out as a silent first turn
         // (the agent still receives it). Only when the card actually exists:
         // the rows were carried (old and new channel both Rich Chat).
-        let silent_marker =
-            (carry_over != CarryOver::Nothing && old_channel == Channel::Json && is_json_channel)
-                .then(|| {
-                    marker_text
-                        .as_deref()
-                        .map(vst_agents::skill_tokens::escape_skill_text)
-                })
-                .flatten();
+        let silent_marker = ((carry_over != CarryOver::Nothing || plan.is_account_switch())
+            && old_channel == Channel::Json
+            && is_json_channel)
+            .then(|| {
+                marker_text
+                    .as_deref()
+                    .map(vst_agents::skill_tokens::escape_skill_text)
+            })
+            .flatten();
         let user_prompt = body.prompt.clone();
+        let terminal_native = plan.is_account_switch() && !json_target && plan.handover_is_native();
         tokio::spawn(async move {
             if json_target {
                 // Step 9: for a json target call `start_json_create_turn`
@@ -4180,7 +4357,12 @@ impl SessionRoutes {
                     None => (opts.prompt.clone(), false),
                 };
                 let prompt = first_prompt.filter(|p| !p.trim().is_empty());
-                if prompt.is_some() || carried_messages.is_empty() {
+                // A native hand-over opens the session on the copied native
+                // chat id and sends nothing (touch 8).
+                if prompt.is_some()
+                    || carried_messages.is_empty()
+                    || carry_over == CarryOver::Native
+                {
                     start_json_create_turn(
                         StartJsonCreateTurnOpts {
                             review: None,
@@ -4221,7 +4403,24 @@ impl SessionRoutes {
                 // the spawn succeeded, restored if it failed.
                 let holds = crate::reset_carry::terminal_holds(&carried_messages);
                 crate::reset_carry::rehome_terminal_holds(&routes, &holds, &opts.session.id).await;
-                let spawned = routes.spawn_new_session_for_channel_checked(opts).await;
+                // A Terminal native switch resumes the copied chat id instead
+                // of launching fresh (touch 9; Decision 7 channel table).
+                let spawned = if terminal_native {
+                    let id = opts.session.id.clone();
+                    routes
+                        .resume_session(&id)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| match e {
+                            ResumeError::Account(problem) => problem.message(),
+                            ResumeError::NotFound(m)
+                            | ResumeError::NotRunning(m)
+                            | ResumeError::Archived(m)
+                            | ResumeError::Internal(m) => m,
+                        })
+                } else {
+                    routes.spawn_new_session_for_channel_checked(opts).await
+                };
                 crate::reset_carry::settle_terminal_holds(&routes, &holds, &spawned).await;
             }
         });
@@ -4230,8 +4429,11 @@ impl SessionRoutes {
             ok: true,
             archived_session_id: old_id,
             new_session_id: new_id,
+            account_switch: plan.result(),
+            // A Rich Chat account switch always writes a card, any carry (A9).
+            break_kind: (carry_over != CarryOver::Nothing || plan.is_account_switch())
+                .then_some(break_kind),
             carry_over,
-            break_kind: (carry_over != CarryOver::Nothing).then_some(break_kind),
         })
     }
 
@@ -4467,6 +4669,9 @@ impl SessionRoutes {
     ) -> Result<CarryPrepared, ResetError> {
         match carry_over {
             CarryOver::Nothing => Ok(CarryPrepared::default()),
+            // Native hand-over copies the CLI's own session store instead of
+            // preparing a summary/transcript; nothing to prepare here.
+            CarryOver::Native => Ok(CarryPrepared::default()),
             CarryOver::Summary => {
                 // The CLI `--summary-file` path sends both fields: use the text
                 // and run no handoff turn.
@@ -5248,39 +5453,51 @@ impl SessionRoutes {
             None => project.absolute_path.clone(),
         };
 
+        let mut launch_cfg = LaunchConfig {
+            project: project.clone(),
+            ctx: PluginContext {
+                cwd: PathBuf::from(&cwd),
+                project_id: project.id.clone(),
+                worktree: worktree.cloned(),
+            },
+            session: session.clone(),
+            daemon_port: self.daemon_port,
+            model: model.map(str::to_string),
+            account_dir: None,
+        };
+        // Account first (Decision 3/6): the restore command and the chat-id
+        // capture both read the CLI's own store under the account folder.
+        let (mut env, resolved) = account_sessions::account_launch_env(
+            plugin,
+            self.accounts_port(),
+            plugin.name(),
+            &launch_cfg,
+        )
+        .map_err(|e| {
+            crate::account_sessions::stored_account_problem(e, session.account_id.as_deref())
+                .message()
+        })?;
+        let account_dir = resolved.dir.clone();
+        launch_cfg.account_dir = account_dir.clone();
         let restore_argv = plugin
             .get_restore_command(RestoreArgs {
                 session,
                 project,
                 cwd: &cwd,
                 model,
+                account_dir: account_dir.clone(),
             })
             .await;
 
-        if let Some(argv) = restore_argv {
+        if let Some(mut argv) = restore_argv {
             // Resume path — same as POST /resume: self-heal hooks, then spawn the argv.
             plugin.setup_workspace_hooks(&cwd).await;
-            let launch_cfg = LaunchConfig {
-                project: project.clone(),
-                ctx: PluginContext {
-                    cwd: PathBuf::from(&cwd),
-                    project_id: project.id.clone(),
-                    worktree: worktree.cloned(),
-                },
-                session: session.clone(),
-                daemon_port: self.daemon_port,
-                model: model.map(str::to_string),
-            };
-            let mut env = build_vst_env(&BuildVstEnvOptions {
-                project: project.clone(),
-                worktree: worktree.cloned(),
-                session: session.clone(),
-                daemon_port: self.daemon_port,
-            });
-            for (k, v) in plugin.get_environment(&launch_cfg) {
-                env.insert(k, v);
-            }
             ensure_binary_on_path(plugin, &env)?;
+            // Unset first (inner wrapper), then the tmux key wrapper (outer).
+            argv = account_sessions::account_unset_argv(plugin, &resolved, &mut env, argv);
+            if session.use_tmux {
+                argv = account_sessions::tmux_key_safe_launch(plugin, &resolved, &mut env, argv);
+            }
             let ready = plugin.get_ready_signal();
             self.spawn_session_from_argv(
                 session,
@@ -5300,6 +5517,7 @@ impl SessionRoutes {
                         project,
                         cwd: &cwd,
                         worktree,
+                        account_dir: account_dir.clone(),
                     })
                     .await;
                 if captured_id.is_some() {
@@ -5335,6 +5553,7 @@ impl SessionRoutes {
                 model: model.map(str::to_string),
                 tmux: &self.tmux,
                 direct_ptys: &self.direct_ptys,
+                accounts: self.accounts_port(),
             })
             .await?;
             if session.agent_chat_id.is_none() {
@@ -5432,6 +5651,13 @@ impl SessionRoutes {
         };
 
         let plugin = resolve_plugin(mode.cli);
+
+        // A signed-out / pending account must block the tty spawn with its
+        // typed 409, not a generic spawn failure (R7, Decision 12).
+        if from_json {
+            self.check_session_account(mode.cli.as_str(), session.account_id.as_deref())
+                .map_err(ChannelError::Account)?;
+        }
 
         // A replacement `modeId` for a session whose own mode never resolved
         // (or resolves to a different CLI) means the old CLI is unknown — its
@@ -5550,12 +5776,19 @@ impl SessionRoutes {
                             .to_string(),
                         None => project.absolute_path.clone(),
                     };
+                    // The session's own account store, not the daemon-env one.
+                    let account_dir = self
+                        .accounts
+                        .as_ref()
+                        .and_then(|a| a.locate(mode.cli.as_str(), session.account_id.as_deref()))
+                        .and_then(|r| r.dir);
                     if let Some(refreshed_id) = plugin
                         .refresh_chat_id_on_toggle(CaptureArgs {
                             session: &session,
                             project: &project,
                             cwd: &cwd,
                             worktree: worktree.as_ref(),
+                            account_dir: account_dir.clone(),
                         })
                         .await
                     {
@@ -5582,6 +5815,7 @@ impl SessionRoutes {
                                 project: &project,
                                 cwd: &cwd,
                                 worktree: worktree.as_ref(),
+                                account_dir: account_dir.clone(),
                             })
                             .await
                         {
@@ -6527,7 +6761,14 @@ impl SessionRoutes {
     /// Release a session's live runtime resources (JSON agent, tmux/direct
     /// pty, idle-hash entry). Cross-part gap: `PtyHandle` doesn't yet impl
     /// `PtyKill`, so the direct-pty registry is built locally per call.
-    async fn release_session_runtime(&self, session: &SessionRecord, clear_attachments: bool) {
+    ///
+    /// `pub(crate)` because `account_sessions::halt_sessions_for_account` (a
+    /// sibling module) is the sign-out path's only effect.
+    pub(crate) async fn release_session_runtime(
+        &self,
+        session: &SessionRecord,
+        clear_attachments: bool,
+    ) {
         let direct_pty = self.build_direct_pty_registry();
         let on_clear_idle: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
         let on_clear_attachments: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
@@ -6599,6 +6840,9 @@ pub struct SpawnSessionOpts<'a> {
     pub model: Option<String>,
     pub tmux: &'a Tmux,
     pub direct_ptys: &'a std::sync::RwLock<HashMap<String, PtyHandle>>,
+    /// The accounts registry (`None` = the System login, e.g. in tests). The
+    /// only place a fresh spawn applies the session's account (Decision 3).
+    pub accounts: Option<&'a dyn vst_types::AccountPort>,
 }
 
 /// Build the argv for shell-launched plugins: `sh -c "exec <line>"`.
@@ -6634,7 +6878,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     // all, so its chat id can never be captured for the rest of its life.
     opts.plugin.setup_workspace_hooks(&cwd).await;
 
-    let launch_cfg = LaunchConfig {
+    let mut launch_cfg = LaunchConfig {
         project: opts.project.clone(),
         ctx: PluginContext {
             cwd: PathBuf::from(&cwd),
@@ -6644,7 +6888,21 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
         session: opts.session.clone(),
         daemon_port: opts.daemon_port,
         model: opts.model.clone(),
+        account_dir: None,
     };
+
+    // Apply the session's account BEFORE anything the CLI's own store readers
+    // touch (Decision 3/6): a broken account refuses the spawn, and the chat-id
+    // / prompt-file helpers below get the account folder.
+    let (mut base_env, resolved) = account_sessions::account_launch_env(
+        opts.plugin,
+        opts.accounts,
+        opts.plugin.name(),
+        &launch_cfg,
+    )
+    .map_err(|e| e.to_string())?;
+    let account_dir = resolved.dir.clone();
+    launch_cfg.account_dir = account_dir.clone();
 
     let mut captured_chat_id = opts
         .plugin
@@ -6653,6 +6911,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
             project: opts.project,
             cwd: &cwd,
             worktree: None,
+            account_dir: account_dir.clone(),
         })
         .await;
 
@@ -6677,15 +6936,6 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
             launch_cfg: launch_cfg.clone(),
         });
 
-    let mut base_env: HashMap<String, String> = build_vst_env(&BuildVstEnvOptions {
-        project: opts.project.clone(),
-        worktree: opts.worktree.cloned(),
-        session: opts.session.clone(),
-        daemon_port: opts.daemon_port,
-    });
-    for (k, v) in opts.plugin.get_environment(&launch_cfg) {
-        base_env.insert(k, v);
-    }
     ensure_binary_on_path(opts.plugin, &base_env)?;
 
     let command_parts: Vec<String> = if composed.use_shell && composed.shell_line.is_some() {
@@ -6698,6 +6948,10 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
         parts
     };
 
+    // Every terminal path (direct PTY and tmux) runs its argv through the unset
+    // wrapper, before the tmux key wrapper below.
+    let command_parts =
+        account_sessions::account_unset_argv(opts.plugin, &resolved, &mut base_env, command_parts);
     let ready = opts.plugin.get_ready_signal();
 
     if !opts.session.use_tmux {
@@ -6770,6 +7024,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
                     project: opts.project,
                     cwd: &cwd,
                     worktree: opts.worktree,
+                    account_dir: account_dir.clone(),
                 })
                 .await;
         }
@@ -6786,6 +7041,12 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
     {
         opts.tmux.kill_session(&opts.session.tmux_name);
     }
+    let command_parts = account_sessions::tmux_key_safe_launch(
+        opts.plugin,
+        &resolved,
+        &mut base_env,
+        command_parts,
+    );
     opts.tmux
         .new_session(&NewSessionOptions {
             name: opts.session.tmux_name.clone(),
@@ -6844,6 +7105,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>
                 project: opts.project,
                 cwd: &cwd,
                 worktree: opts.worktree,
+                account_dir: account_dir.clone(),
             })
             .await;
     }
@@ -6984,6 +7246,16 @@ enum NameFallback {
     Direct(i64),
 }
 
+/// A session record by id (worktree or direct), or `None`.
+async fn session_record_by_id(store: &StoreHandle, id: &str) -> Option<SessionRecord> {
+    match find_session_context(store, id).await? {
+        SessionContext::Worktree { session, .. } | SessionContext::Direct { session, .. } => {
+            Some(session)
+        }
+        SessionContext::Global { .. } => None,
+    }
+}
+
 /// Derive a session's display name + source, mirroring the create handlers.
 fn derive_name(
     provided: &Option<String>,
@@ -7033,6 +7305,8 @@ fn draft_session_record(
         r#type,
         mode_id: None,
         mode_icon: None,
+        // account is chosen at promotion (build_promoted_session)
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("__draft__-{session_id}"),
@@ -7297,6 +7571,10 @@ pub enum CreateError {
     Validation(String),
     NotFound(String),
     Internal(String),
+    /// A typed account refusal (404 `account_not_found` / 409
+    /// `account_signed_out` / `account_pending` / `account_removed` / 400
+    /// `account_cli_mismatch`) — never a silent fallback to another account.
+    Account(crate::account_sessions::AccountProblem),
 }
 
 fn create_err(e: vst_store::StoreError) -> CreateError {
@@ -7350,6 +7628,8 @@ pub enum StartError {
     /// A review refusal (409 `comments_changed`, 413 `review_too_large`, 403
     /// `not_attached`, ...).
     Review(vst_types::review::ReviewError),
+    /// A typed account refusal (see `AccountProblem`).
+    Account(crate::account_sessions::AccountProblem),
     Internal(String),
 }
 
@@ -7398,6 +7678,9 @@ pub enum ResumeError {
     NotRunning(String),
     Archived(String),
     Internal(String),
+    /// The session's STORED account no longer exists / is signed out / pending
+    /// (409 `account_removed` / `account_signed_out` / `account_pending`).
+    Account(crate::account_sessions::AccountProblem),
 }
 
 /// Why a handoff turn did not produce a summary. Channel-neutral: messages
@@ -7460,6 +7743,14 @@ pub enum ResetError {
     /// 413 — the carried review comments do not fit a Terminal agent's launch
     /// prompt; nothing changed.
     Review(vst_types::review::ReviewError),
+    /// A typed account refusal (404/409/400, see `AccountProblem`).
+    Account(crate::account_sessions::AccountProblem),
+    /// 400 — an explicit switch to the account the session already runs under.
+    AlreadyOnAccount(String),
+    /// 409 — a Terminal switch while the agent is writing its session file.
+    AgentBusy(String),
+    /// 409 — the native hand-over failed; the old session is intact.
+    HandoverFailed(String),
     Internal(String),
 }
 
@@ -7615,6 +7906,9 @@ pub enum ChannelError {
     JsonUnsupported(String),
     /// 409 — JSON session has an active turn or queued turns.
     NotIdle,
+    /// 409/404/400 — a typed account refusal on the tty spawn (see
+    /// `AccountProblem`).
+    Account(crate::account_sessions::AccountProblem),
     /// 500 — internal failure.
     Internal(String),
 }
@@ -8134,6 +8428,7 @@ mod tests {
             r#type: vst_types::SessionType::Agent,
             mode_id: None,
             mode_icon: None,
+            account_id: None,
             name: None,
             name_source: None,
             tmux_name: String::new(),

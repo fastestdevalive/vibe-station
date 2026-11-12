@@ -30,8 +30,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    Channel, LimitsResult, NormalizedEvent, PaneSnapshot, ProjectRecord, SessionRecord,
-    TerminalDeliveryCaps, TerminalReadiness, WorktreeRecord,
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, LimitSignal, LimitsResult, NormalizedEvent, PaneSnapshot, ProjectRecord,
+    ResolvedAccount, SessionRecord, SharedEntries, TerminalDeliveryCaps, TerminalReadiness,
+    WorktreeRecord,
 };
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
@@ -82,6 +84,9 @@ pub struct LaunchConfig {
     pub daemon_port: u16,
     /// Per-mode model override passed to the agent CLI when set.
     pub model: Option<String>,
+    /// The session's account folder, set by the spawn site after the account
+    /// resolves; `None` = System login.
+    pub account_dir: Option<PathBuf>,
 }
 
 /// An already-resolved skill invocation (skill-invocation-in-chat) — a plugin
@@ -142,6 +147,9 @@ pub struct CaptureArgs<'a> {
     pub cwd: &'a str,
     /// Only present for `refresh_chat_id_on_toggle` (a worktree session's record).
     pub worktree: Option<&'a WorktreeRecord>,
+    /// The session's account folder, or `None` for the System login (Decision 6).
+    /// Every CLI-store lookup prefers it over `$HOME`/env.
+    pub account_dir: Option<PathBuf>,
 }
 
 /// Args passed to `capture_native_chat_id`.
@@ -151,6 +159,8 @@ pub struct CaptureNativeChatIdArgs<'a> {
     pub project: &'a ProjectRecord,
     pub cwd: &'a str,
     pub acp_session_id: &'a str,
+    /// The session's account folder, or `None` for the System login (Decision 6).
+    pub account_dir: Option<PathBuf>,
 }
 
 /// Args passed to `get_restore_command`.
@@ -160,6 +170,8 @@ pub struct RestoreArgs<'a> {
     pub project: &'a ProjectRecord,
     pub cwd: &'a str,
     pub model: Option<&'a str>,
+    /// The session's account folder, or `None` for the System login (Decision 6).
+    pub account_dir: Option<PathBuf>,
 }
 
 /// The user's message + attachments for one turn — ports `TurnInput` from
@@ -225,6 +237,8 @@ pub struct TurnContext {
     /// Absolute path to the system-prompt file (applied on the first turn).
     pub system_prompt_file: PathBuf,
     pub daemon_port: u16,
+    /// The session's account folder; `None` = System login (Decision 6).
+    pub account_dir: Option<PathBuf>,
     pub on_spawn: Option<OnSpawn>,
     /// Called (once, CLI-agnostic) after the turn's prompt is dispatched.
     pub on_prompt_dispatched: Option<OnPromptDispatched>,
@@ -307,6 +321,149 @@ pub trait AgentPlugin: Send + Sync {
     fn get_limits(&self) -> AsyncResult<LimitsResult> {
         let harness = self.name().to_string();
         Box::pin(async move { LimitsResult::unsupported(&harness, &crate::util::now_iso_8601()) })
+    }
+
+    // -----------------------------------------------------------------
+    // Accounts (multi-account plan, R1: every CLI-specific account fact
+    // lives here or in this harness's one `*_accounts.rs` file)
+    // -----------------------------------------------------------------
+
+    /// Whether this CLI supports named accounts. Default `false`: a harness
+    /// whose login can only be redirected by shadowing the whole home
+    /// directory (agy) ships without accounts instead of hiding `~/.ssh` and
+    /// `~/.gitconfig` from the agent (Decision 12/A8).
+    fn supports_accounts(&self) -> bool {
+        false
+    }
+
+    /// The env vars that point this CLI at `acct`'s own login directory.
+    ///
+    /// CONTRACT: empty for the System login (`acct.dir == None`) — the daemon's
+    /// own environment already IS the System login, so nothing is overridden.
+    /// Applied at every spawn site through
+    /// [`crate::account_env::merge_account_env`], which is the only place an
+    /// account reaches a process env (Decision 3).
+    fn account_env(&self, _acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    /// The env var an API-key account's key is delivered through, or `None`
+    /// when this CLI has no API-key method. The key is env-only: never argv
+    /// (so never in `ps`), never logged, never serialized (R6).
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// argv of the vendor's own sign-in command, run with the account's env
+    /// inside its folder, or `None` when the CLI has no non-interactive login
+    /// argv. The shell line is built by
+    /// [`crate::account_cmd::login_shell_line`] (API keys are never included).
+    fn account_login_command(&self, _acct: &ResolvedAccount) -> Option<Vec<String>> {
+        None
+    }
+
+    /// argv of the vendor's read-only identity command ("who is signed in"),
+    /// run with the account's env. `None` ⇒ the account's `auth` stays
+    /// `unknown` and the display name falls back to label/id (Decision 12).
+    fn account_identity_command(&self, _acct: &ResolvedAccount) -> Option<Vec<String>> {
+        None
+    }
+
+    /// Parse [`Self::account_identity_command`]'s output (stdout, or stderr when
+    /// stdout is blank) into an identity.
+    ///
+    /// CONTRACT: pure and tolerant — any shape mismatch (or a failed command)
+    /// returns `AccountIdentity::default()`, i.e. `signed_in: None` = "unknown",
+    /// which changes nothing. Never parses a credential file.
+    fn parse_account_identity(&self, _stdout: &str, _exit_ok: bool) -> AccountIdentity {
+        AccountIdentity::default()
+    }
+
+    /// The CLI's own system directory plus the entries symlinked into an
+    /// account folder (skills, settings, ...). `None` ⇒ nothing is shared.
+    /// Identity-bearing files are deliberately never shared (Decision 1).
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        None
+    }
+
+    /// How the add-folder dialog describes this CLI's login folder: field
+    /// label, helper note, example path, the harness's own folder and whether
+    /// its identity command can verify sign-in (set by the daemon, so this
+    /// returns `false`). Default: a generic "Folder" with no note.
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        AccountLinkMeta {
+            example_path: String::new(),
+            field_label: "Folder".to_string(),
+            field_note: None,
+            system_dir: None,
+            verifies_identity: false,
+            first_run_note: None,
+        }
+    }
+
+    /// Whether a folder whose direct entry NAMES are `names` looks like this
+    /// CLI's login folder. CONTRACT: only file/dir names are passed in, never
+    /// file contents; default `true` (no check).
+    fn account_folder_looks_valid(&self, _names: &[String]) -> bool {
+        true
+    }
+
+    /// The one sentence shown in place of the default step-2 label, for a CLI
+    /// whose sign-in is finished inside its own UI. Default `None`.
+    fn account_sign_in_hint(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Env var names to REMOVE from the inherited environment for an account
+    /// (so a token from the daemon's own login cannot leak into a named folder).
+    /// CONTRACT: empty for the System login; applied by `env -u` wrapping, never
+    /// by map entries (Decision 9). Default empty.
+    fn account_env_unset(&self, _acct: &ResolvedAccount) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Why this CLI ships without accounts, for the Settings row. `Some` iff
+    /// [`Self::supports_accounts`] is `false` for a reason the user must see;
+    /// `account_switch_support()` is then `None` too.
+    fn accounts_unsupported_reason(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// How an account switch can keep the model's own context: files to copy
+    /// (or hard-link) into the target account folder, nothing to copy because
+    /// the native store is account-independent, or no bridge at all.
+    ///
+    /// CONTRACT: pure (no I/O beyond the plugin's own store probing); the
+    /// caller's planner downgrades this to Transcript/Fresh when the source
+    /// account is gone, the CLI changed or no chat id exists.
+    fn account_session_handover(&self, _args: &HandoverArgs<'_>) -> AccountHandover {
+        AccountHandover::Unsupported
+    }
+
+    /// How `GET /api/supported-clis` advertises an account switch for this CLI
+    /// (`native` / `transcript` / `none`). The UI learns it from data, never
+    /// from a harness name (R3). Default `None`.
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::None
+    }
+
+    /// [`Self::get_limits`] with the account's env applied, so the probe reads
+    /// THAT account's windows. Default ignores `env` and calls `get_limits()`
+    /// (correct for CLIs whose limits probe needs no login directory).
+    fn get_limits_with_env(&self, _env: BTreeMap<String, String>) -> AsyncResult<LimitsResult> {
+        self.get_limits()
+    }
+
+    /// One structured chat limit signal, or `None` (default). Feeders:
+    /// `vst-agents` maps a vendor ext notification into a [`LimitSignal`] here
+    /// and the session reports it through `AccountPort::report_limit`; it is
+    /// never persisted as a transcript row (Decision 10).
+    fn account_limit_signal(
+        &self,
+        _method: &str,
+        _params: &serde_json::Value,
+    ) -> Option<LimitSignal> {
+        None
     }
 
     /// The binary name to check for on PATH (`which <binary_name()>`) when

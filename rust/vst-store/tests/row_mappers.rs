@@ -49,6 +49,7 @@ fn base_row() -> SessionRow {
         pr_error: None,
         pr_error_kind: None,
         pr_stale_since: None,
+        account_id: None,
         last_activity_at: None,
         last_line: None,
         last_tool_name: None,
@@ -76,6 +77,7 @@ fn session_round_trip_every_field() {
         r#type: vst_types::SessionType::Agent,
         mode_id: Some("claude-default".into()),
         mode_icon: Some("sonnet".into()),
+        account_id: None,
         name: Some("fix-login-bug".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: "vst-vs-1-a-abcd1234".into(),
@@ -123,6 +125,7 @@ fn session_omits_optionals_when_null() {
         r#type: vst_types::SessionType::Terminal,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "vst-proj-1-t-11112222".into(),
@@ -169,6 +172,7 @@ fn parent_session_id_round_trips_through_spawned_from() {
         r#type: vst_types::SessionType::Agent,
         mode_id: Some("claude-default".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("fix-login-bug".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: "vst-vs-1-a-abcd1234".into(),
@@ -333,6 +337,7 @@ fn session_to_row_writes_pr_branch_null_when_absent() {
         r#type: vst_types::SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "t1".into(),
@@ -490,4 +495,32 @@ fn project_omits_hidden_when_false() {
     let row = project_to_row(&record);
     let back = row_to_project(&row, vec![], vec![]);
     assert!(back.hidden.is_none());
+}
+
+#[test]
+fn session_row_maps_account_id() {
+    let mut row = base_row();
+    row.account_id = Some("acc_1a2b3c4d".into());
+    let session = row_to_session(&row);
+    assert_eq!(
+        session.account_id.as_deref(),
+        Some("acc_1a2b3c4d"),
+        "the column reaches the record"
+    );
+    let back = session_to_row(&session, "proj-1", Some("vs-1"));
+    assert_eq!(
+        back.account_id.as_deref(),
+        Some("acc_1a2b3c4d"),
+        "the record reaches the column"
+    );
+
+    // NULL = the System login and stays NULL.
+    let mut system_row = base_row();
+    system_row.account_id = None;
+    let system = row_to_session(&system_row);
+    assert_eq!(system.account_id, None);
+    assert_eq!(
+        session_to_row(&system, "proj-1", Some("vs-1")).account_id,
+        None
+    );
 }

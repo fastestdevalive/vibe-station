@@ -27,13 +27,35 @@ use vst_types::domain::{Channel, LifecycleState};
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::doctor_hints::hint_dto;
 use vst_types::rest::modes::{
-    CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
+    AccountLink, AccountSwitchSupport, CliModels, CreateModeBody, DeleteModeResult, SupportedCli,
+    UpdateModeBody,
 };
 use vst_types::rest::shared::Mode;
-use vst_types::CliId;
+use vst_types::{collapse_home, CliId, ResolvedAccount};
 
 use crate::model_catalog::ModelCatalog;
 use crate::settings::load_default_channel_overrides;
+
+/// The add-folder contract for `plugin` (`GET /supported-clis` `accountLink`).
+/// `None` when the CLI ships without accounts. The daemon, not the plugin, sets
+/// `verifiesIdentity`: it is true only when an identity command exists.
+fn account_link(plugin: &dyn AgentPlugin) -> Option<AccountLink> {
+    if !plugin.supports_accounts() {
+        return None;
+    }
+    let meta = plugin.account_link_meta();
+    let home = home_dir();
+    let system = ResolvedAccount::system(plugin.name());
+    Some(AccountLink {
+        field_label: meta.field_label,
+        field_note: meta.field_note,
+        example_dir: meta.example_path,
+        system_dir: meta.system_dir.map(|dir| collapse_home(&dir, &home)),
+        supports_api_key: plugin.account_api_key_env().is_some(),
+        verifies_identity: plugin.account_identity_command(&system).is_some(),
+        first_run_note: meta.first_run_note,
+    })
+}
 
 pub const MAX_MODES: usize = 20;
 pub const MAX_CONTEXT_LEN: usize = 10_000;
@@ -440,6 +462,13 @@ impl ModeRoutes {
                 SupportedCli {
                     id: cli,
                     default_model,
+                    supports_accounts: plugin.supports_accounts(),
+                    account_switch: if plugin.supports_accounts() {
+                        plugin.account_switch_support()
+                    } else {
+                        AccountSwitchSupport::None
+                    },
+                    accounts_note: plugin.accounts_unsupported_reason().map(str::to_string),
                     supports_json,
                     supports_terminal_delivery: plugin.terminal_delivery().is_some(),
                     supports_terminal_comments: plugin
@@ -452,6 +481,7 @@ impl ModeRoutes {
                     using_fallback_only,
                     default_channel,
                     default_channel_overridden,
+                    account_link: account_link(&*plugin),
                     install_hint: if detected {
                         None
                     } else {

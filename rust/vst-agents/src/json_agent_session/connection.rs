@@ -24,6 +24,34 @@ use crate::{
 /// Extra setup rounds allowed when the desired model changed mid-setup.
 const MAX_MODEL_CHANGE_REDOS: usize = 2;
 
+/// The stable prefix a spawn-blocking account error carries, so callers can map
+/// it onto the session routes' typed 409s (Decision 3/R7).
+///
+/// `NotFound` on a session's STORED id means the account was removed ⇒
+/// `account_removed`; an id the caller picked never reaches this path (routes
+/// resolve it first, where `NotFound` is 404 `account_not_found`).
+fn account_error_prefix(err: vst_types::AccountResolveError) -> &'static str {
+    use vst_types::AccountResolveError;
+    match err {
+        AccountResolveError::NotFound => "account_removed",
+        AccountResolveError::SignedOut => "account_signed_out",
+        AccountResolveError::Pending => "account_pending",
+    }
+}
+
+/// `<prefix>: <human message>` — never carries an API key or account secret.
+fn account_error_message(
+    cli: &str,
+    account_id: Option<&str>,
+    err: vst_types::AccountResolveError,
+) -> String {
+    let account = account_id.unwrap_or("system");
+    format!(
+        "{}: the {cli} account `{account}` cannot run this session",
+        account_error_prefix(err)
+    )
+}
+
 impl JsonAgentSession {
     /// Get the live ACP connection, creating it if necessary.
     ///
@@ -126,6 +154,38 @@ impl JsonAgentSession {
             round_spec
                 .env
                 .extend(self.0.plugin.acp_model_env(&active_model));
+            // The account LAST: the CLI's own login dir must win over the
+            // daemon env, the launch spec and the model env (Decision 3). A
+            // resolved-account error means this session must NOT spawn (R7) —
+            // no silent fallback to another login.
+            let account_port = self.account_port();
+            let account_cli = super::provider_str(self.0.cli);
+            let account_id = session.account_id.clone();
+            let resolved = match crate::account_env::merge_account_env(
+                self.0.plugin.as_ref(),
+                account_port.as_deref(),
+                &account_cli,
+                account_id.as_deref(),
+                &mut round_spec.env,
+            ) {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    return Err(AcpTransportError::RequestFailed(account_error_message(
+                        &account_cli,
+                        account_id.as_deref(),
+                        err,
+                    )));
+                }
+            };
+            // Inherited tokens a named folder must not see: `env -u` wraps the argv.
+            let unset = crate::account_env::account_unset(self.0.plugin.as_ref(), &resolved);
+            let mut argv = vec![round_spec.command.clone()];
+            argv.extend(round_spec.args.iter().cloned());
+            let wrapped = crate::account_env::wrap_unset(argv, &unset);
+            if let Some((command, args)) = wrapped.split_first() {
+                round_spec.command = command.clone();
+                round_spec.args = args.to_vec();
+            }
 
             // Some adapters ignore `_meta` and only take a model through an
             // explicit `session/set_config_option`, and some lose a startup race
@@ -351,6 +411,7 @@ impl JsonAgentSession {
             let s = self.0.state.lock().unwrap();
             (s.session.clone(), s.project.clone(), self.0.cwd.clone())
         };
+        let account_dir = self.account_dir();
 
         let captured = self
             .0
@@ -360,6 +421,7 @@ impl JsonAgentSession {
                 project: &project,
                 cwd: cwd.to_str().unwrap_or(""),
                 acp_session_id: &acp_session_id,
+                account_dir,
             })
             .await;
 

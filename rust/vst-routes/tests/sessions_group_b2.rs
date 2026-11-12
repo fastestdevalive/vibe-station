@@ -65,6 +65,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("my-mode".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -164,6 +165,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             std::sync::Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 
@@ -1711,6 +1713,7 @@ async fn start_draft_agy_no_channel_defaults_to_tmux() {
         draft_prompt: "do it".into(),
         draft_config: DraftConfig {
             entry_point: DraftEntryPoint::Direct,
+            account_id: None,
             mode_id: Some("agy-mode".into()),
             channel: None, // no explicit channel -> effective default
             channel_explicit: None,
@@ -1732,6 +1735,7 @@ async fn start_draft_agy_no_channel_defaults_to_tmux() {
             ok: true,
             worktree_id: None,
             worktree: None,
+            account_id: None,
         }
     );
 
@@ -1750,6 +1754,7 @@ async fn worktree_draft_is_created_on_top_but_direct_draft_keeps_its_own_slot() 
     existing.lifecycle.state = LifecycleState::Drafting;
     existing.draft_config = Some(DraftConfig {
         entry_point: DraftEntryPoint::Worktree,
+        account_id: None,
         mode_id: None,
         channel: None,
         channel_explicit: None,

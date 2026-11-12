@@ -17,6 +17,8 @@ pub struct AgentCreateOptions {
     pub channel: Option<String>,
     pub parent: Option<String>,
     pub no_parent: bool,
+    /// Account id, label or `"system"` (multi-account); absent = CLI default.
+    pub account: Option<String>,
 }
 
 pub fn parse_agent_create_options(args: &[String]) -> Result<AgentCreateOptions, String> {
@@ -82,6 +84,16 @@ pub fn parse_agent_create_options(args: &[String]) -> Result<AgentCreateOptions,
             }
             "--no-parent" => {
                 opts.no_parent = true;
+            }
+            "--account" => {
+                opts.account = Some(
+                    iter.next()
+                        .cloned()
+                        .ok_or_else(|| "--account requires an argument".to_string())?,
+                );
+            }
+            s if s.starts_with("--account=") => {
+                opts.account = Some(s.trim_start_matches("--account=").to_string());
             }
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}"));
@@ -152,6 +164,7 @@ pub async fn run_agent_create(opts: AgentCreateOptions) -> Result<(), (String, i
         worktree_id,
         project_id,
         r#type: SessionType::Agent,
+        account_id: opts.account,
         mode_id: opts.mode,
         prompt,
         use_tmux: None,

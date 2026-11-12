@@ -291,7 +291,10 @@ fn test_session_start_fresh_options_parse_all_flags() {
 #[test]
 fn test_session_switch_options_require_mode() {
     let err = parse_session_switch_options(&["sess-1".to_string()]).expect_err("mode required");
-    assert!(err.contains("--mode is required"), "err was: {err}");
+    assert!(
+        err.contains("pass --mode, --account, or both"),
+        "err was: {err}"
+    );
 }
 
 #[test]
@@ -302,7 +305,7 @@ fn test_session_switch_options_default_to_summary() {
         "rust".to_string(),
     ];
     let opts = parse_session_switch_options(&args).expect("parse ok");
-    assert_eq!(opts.mode, "rust");
+    assert_eq!(opts.mode.as_deref(), Some("rust"));
     assert_eq!(
         opts.carry.carry,
         Some(vst_types::domain::CarryOver::Summary)
@@ -379,7 +382,7 @@ fn test_self_target_guard() {
         carry: Some(vst_types::domain::CarryOver::Summary),
         ..base.clone()
     };
-    let (msg, code) = check_self_target(&summary, vst_types::domain::CarryOver::Summary)
+    let (msg, code) = check_self_target(&summary, Some(vst_types::domain::CarryOver::Summary))
         .expect_err("summary refused");
     assert_eq!(code, 1);
     assert!(msg.contains("--summary-file"), "msg was: {msg}");
@@ -389,21 +392,21 @@ fn test_self_target_guard() {
         summary_file: Some("/tmp/s.md".to_string()),
         ..summary.clone()
     };
-    assert!(check_self_target(&with_file, vst_types::domain::CarryOver::Summary).is_ok());
+    assert!(check_self_target(&with_file, Some(vst_types::domain::CarryOver::Summary)).is_ok());
 
     // wait is refused outright (Decision 7).
     let wait = CarryOptions {
         when_busy: vst_types::rest::sessions::WhenBusy::Wait,
         ..base.clone()
     };
-    let (msg, code) =
-        check_self_target(&wait, vst_types::domain::CarryOver::Nothing).expect_err("wait refused");
+    let (msg, code) = check_self_target(&wait, Some(vst_types::domain::CarryOver::Nothing))
+        .expect_err("wait refused");
     assert_eq!(code, 1);
     assert!(msg.contains("--when-busy=wait"), "msg was: {msg}");
 
     // none and transcript are allowed.
-    assert!(check_self_target(&base, vst_types::domain::CarryOver::Nothing).is_ok());
-    assert!(check_self_target(&base, vst_types::domain::CarryOver::Transcript).is_ok());
+    assert!(check_self_target(&base, Some(vst_types::domain::CarryOver::Nothing)).is_ok());
+    assert!(check_self_target(&base, Some(vst_types::domain::CarryOver::Transcript)).is_ok());
 
     // A DIFFERENT session is never guarded, even with summary-without-file or
     // wait (only $VST_SESSION itself is special).
@@ -413,7 +416,7 @@ fn test_self_target_guard() {
         when_busy: vst_types::rest::sessions::WhenBusy::Wait,
         ..Default::default()
     };
-    assert!(check_self_target(&other, vst_types::domain::CarryOver::Summary).is_ok());
+    assert!(check_self_target(&other, Some(vst_types::domain::CarryOver::Summary)).is_ok());
 
     env::remove_var("VST_SESSION");
 }
@@ -427,6 +430,7 @@ fn test_reset_output_shapes() {
         ok: true,
         archived_session_id: "old".to_string(),
         new_session_id: "new".to_string(),
+        account_switch: None,
         carry_over: CarryOver::Summary,
         break_kind: Some(SessionBreakKind::Reset),
     };
@@ -492,6 +496,7 @@ fn test_previous_walks_three_session_chain() {
             state: LifecycleState::Exited,
             state_reason: None,
             lifecycle_state: LifecycleState::Exited,
+            account_id: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             pinned_at: None,
             archived_at: Some("2026-01-02T00:00:00Z".to_string()),
@@ -901,6 +906,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
         channel: Some("json".to_string()),
         parent: None,
         no_parent: true,
+        account: None,
     })
     .await;
     assert!(sess_create_res.is_ok());
@@ -915,6 +921,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
         channel: None,
         parent: None,
         no_parent: true,
+        account: None,
     })
     .await;
     assert!(sess_create_404.is_err());
@@ -1070,6 +1077,7 @@ async fn test_mock_agent_create_channel_body_omitted_vs_explicit() {
         channel: None,
         parent: None,
         no_parent: true,
+        account: None,
     })
     .await;
     assert!(r.is_ok());
@@ -1090,6 +1098,7 @@ async fn test_mock_agent_create_channel_body_omitted_vs_explicit() {
         channel: Some("tmux".to_string()),
         parent: None,
         no_parent: true,
+        account: None,
     })
     .await;
     assert!(r.is_ok());
@@ -1550,6 +1559,7 @@ async fn test_mock_cli_escapes_prompt_and_send_text_to_skill_grammar() {
         channel: None,
         parent: None,
         no_parent: true,
+        account: None,
     })
     .await;
     assert!(r.is_ok());
@@ -1571,6 +1581,218 @@ async fn test_mock_cli_escapes_prompt_and_send_text_to_skill_grammar() {
     assert!(r.is_ok());
     let body = send_body.lock().unwrap().clone().unwrap();
     assert_eq!(body.get("data").and_then(|v| v.as_str()), Some(wire));
+
+    env::remove_var("VST_DAEMON_URL");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-account: `--account` on create and switch (plan A3.T6)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_agent_create_parses_account() {
+    let opts = parse_agent_create_options(&[
+        "wt-1".to_string(),
+        "--account".to_string(),
+        "Work".to_string(),
+        "--no-parent".to_string(),
+    ])
+    .expect("parse ok");
+    assert_eq!(opts.account.as_deref(), Some("Work"));
+
+    let opts =
+        parse_agent_create_options(&["wt-1".to_string(), "--account=acc_1a2b3c4d".to_string()])
+            .expect("parse ok");
+    assert_eq!(opts.account.as_deref(), Some("acc_1a2b3c4d"));
+}
+
+#[test]
+fn test_session_switch_account_only_sends_no_carry() {
+    // `--account` alone is valid and leaves the carry unset (the daemon derives
+    // it from the hand-over it picks).
+    let opts = parse_session_switch_options(&["sess-1".to_string(), "--account=Work".to_string()])
+        .expect("parse ok");
+    assert!(opts.mode.is_none());
+    assert_eq!(opts.carry.account.as_deref(), Some("Work"));
+    assert_eq!(opts.carry.carry, None);
+}
+
+#[test]
+fn test_session_switch_requires_mode_or_account() {
+    let err = parse_session_switch_options(&["sess-1".to_string()]).expect_err("one required");
+    assert!(
+        err.contains("pass --mode, --account, or both"),
+        "err was: {err}"
+    );
+
+    // Both together are accepted.
+    let opts = parse_session_switch_options(&[
+        "sess-1".to_string(),
+        "--mode=rust".to_string(),
+        "--account=Work".to_string(),
+    ])
+    .expect("parse ok");
+    assert_eq!(opts.mode.as_deref(), Some("rust"));
+    assert_eq!(opts.carry.account.as_deref(), Some("Work"));
+    assert_eq!(opts.carry.carry, None, "no carry unless --carry is given");
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn agent_create_sends_account_id() {
+    let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
+    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+
+    let app = Router::new()
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({ "ok": true, "version": "0.1.0", "port": 8888, "uptime": 1 }))
+            }),
+        )
+        .route(
+            "/api/sessions",
+            post({
+                let captured = captured.clone();
+                move |Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        Json(json!({
+                            "id": "sess-new",
+                            "worktreeId": "wt-1",
+                            "projectId": "p1",
+                            "isMain": false,
+                            "type": "agent",
+                            "modeId": null,
+                            "modeIcon": null,
+                            "name": null,
+                            "nameSource": null,
+                            "tmuxName": "vst_sess-new",
+                            "useTmux": false,
+                            "channel": "json",
+                            "state": "not_started",
+                            "lifecycleState": "not_started",
+                            "createdAt": "2026-09-15T00:00:00Z",
+                            "pinnedAt": null,
+                            "archivedAt": null,
+                            "sortOrder": 1.0,
+                            "handoffSummary": null,
+                            "parentSessionId": null,
+                            "supersededBy": null,
+                            "pr": null,
+                            "draftPrompt": null,
+                            "draftConfig": null
+                        }))
+                    }
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let tmp = tempdir().expect("tempdir");
+    let vst_dir = tmp.path().join(".vibe-station");
+    fs::create_dir_all(&vst_dir).expect("mkdir");
+    fs::write(
+        vst_dir.join("config.json"),
+        format!(r#"{{"port": {}}}"#, addr.port()),
+    )
+    .expect("write config");
+    env::set_var("VST_DAEMON_URL", &base_url);
+
+    let opts = parse_agent_create_options(&[
+        "wt-1".to_string(),
+        "--account=Work".to_string(),
+        "--channel=json".to_string(),
+        "--no-parent".to_string(),
+    ])
+    .expect("parse ok");
+    assert!(run_agent_create(opts).await.is_ok());
+    let body = captured.lock().unwrap().clone().expect("body captured");
+    assert_eq!(body.get("accountId").and_then(|v| v.as_str()), Some("Work"));
+
+    env::remove_var("VST_DAEMON_URL");
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn agent_switch_account_only_sends_account_id() {
+    let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
+    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+
+    let app = Router::new()
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({ "ok": true, "version": "0.1.0", "port": 8888, "uptime": 1 }))
+            }),
+        )
+        .route(
+            "/api/sessions/:id/reset",
+            post({
+                let captured = captured.clone();
+                move |Path(id): Path<String>, Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        Json(json!({
+                            "ok": true,
+                            "archivedSessionId": id,
+                            "newSessionId": "s-new",
+                            "carryOver": "native",
+                            "breakKind": "switch",
+                            "accountSwitch": {
+                                "fromAccountId": null,
+                                "toAccountId": "acc_1a2b3c4d",
+                                "handover": "native"
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+
+    let tmp = tempdir().expect("tempdir");
+    let vst_dir = tmp.path().join(".vibe-station");
+    fs::create_dir_all(&vst_dir).expect("mkdir");
+    fs::write(
+        vst_dir.join("config.json"),
+        format!(r#"{{"port": {}}}"#, addr.port()),
+    )
+    .expect("write config");
+    env::set_var("VST_DAEMON_URL", &base_url);
+
+    let opts =
+        parse_session_switch_options(&["s-wt-1".to_string(), "--account=acc_1a2b3c4d".to_string()])
+            .expect("parse ok");
+    assert!(run_session_switch(opts).await.is_ok());
+    let body = captured.lock().unwrap().clone().expect("body captured");
+    assert_eq!(
+        body.get("accountId").and_then(|v| v.as_str()),
+        Some("acc_1a2b3c4d")
+    );
+    assert!(
+        body.get("carryOver").is_none(),
+        "an account-only switch must not force a carry"
+    );
+    assert!(body.get("modeId").is_none(), "no mode change");
 
     env::remove_var("VST_DAEMON_URL");
 }

@@ -101,6 +101,9 @@ pub enum ProjectRouteError {
     Internal(String),
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
+    /// A typed account refusal (404/409/400, see `AccountProblem`).
+    #[error("{0}")]
+    Account(crate::account_sessions::AccountProblem),
     #[error("Git init failed: {0}")]
     GitInitFailed(String),
 }
@@ -170,6 +173,9 @@ pub struct ProjectRoutes {
     /// so jobs stop and held comments are restored (`None` in tests that never
     /// schedule into a Terminal agent).
     pub terminal_delivery: Option<vst_review::TerminalDeliveryHandle>,
+    /// The accounts registry (multi-account, Decision 11). `None` = every
+    /// session is the System login (tests).
+    pub accounts: Option<vst_accounts::AccountsHandle>,
 }
 
 impl ProjectRoutes {
@@ -193,7 +199,15 @@ impl ProjectRoutes {
             paths: Paths::default(),
             artifacts: None,
             terminal_delivery: None,
+            accounts: None,
         }
+    }
+
+    /// Install the accounts registry (Decision 11).
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: Option<vst_accounts::AccountsHandle>) -> Self {
+        self.accounts = accounts;
+        self
     }
 
     pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
@@ -741,6 +755,28 @@ impl ProjectRoutes {
             }
         }
 
+        // The new project's agent runs under the CLI default. Resolve + validate
+        // it BEFORE any filesystem side effect, so a signed-out default refuses
+        // the whole create (A3.7a, Risk 4).
+        let start_account = match body
+            .start_agent
+            .as_ref()
+            .and_then(|start| resolve_mode_id(&start.mode_id))
+            .and_then(|id| resolve_mode(&id))
+        {
+            Some(mode) => Some(
+                crate::account_sessions::new_session_account(
+                    self.accounts.as_ref(),
+                    mode.cli.as_str(),
+                    None,
+                    None,
+                )
+                .map_err(ProjectRouteError::Account)?,
+            ),
+            // Unknown mode: the route warns and starts no agent.
+            None => None,
+        };
+
         if !is_git_available().await {
             return Err(ProjectRouteError::validation(
                 "git not found in PATH. Install git to create new projects.",
@@ -957,6 +993,7 @@ impl ProjectRoutes {
                             r#type: SessionType::Agent,
                             mode_id: Some(resolved_mode_id.clone()),
                             mode_icon: mode_icon_for(&resolved_mode_id),
+                            account_id: start_account.clone().flatten(),
                             name: wt_name.clone(),
                             name_source: wt_name
                                 .as_ref()
@@ -1121,6 +1158,7 @@ impl ProjectRoutes {
                     r#type: SessionType::Agent,
                     mode_id: Some(resolved_mode_id.clone()),
                     mode_icon: mode_icon_for(&resolved_mode_id),
+                    account_id: start_account.clone().flatten(),
                     name: Some(session_name),
                     name_source: heuristic_name
                         .as_ref()
@@ -1235,6 +1273,10 @@ impl ProjectRoutes {
             model: mode.model,
             tmux: &self.tmux,
             direct_ptys: &direct_ptys_map,
+            accounts: self
+                .accounts
+                .as_ref()
+                .map(|a| a as &dyn vst_types::AccountPort),
         };
 
         match spawn_session(&spawn_opts).await {
@@ -1332,6 +1374,10 @@ impl ProjectRoutes {
             model: mode.model,
             tmux: &self.tmux,
             direct_ptys: &direct_ptys_map,
+            accounts: self
+                .accounts
+                .as_ref()
+                .map(|a| a as &dyn vst_types::AccountPort),
         };
 
         match spawn_session(&spawn_opts).await {

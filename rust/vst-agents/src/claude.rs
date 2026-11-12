@@ -13,7 +13,11 @@ use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
+use vst_types::{
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, LimitSignal, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider,
+    ResolvedAccount, SharedEntries,
+};
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -482,7 +486,73 @@ impl AgentPlugin for ClaudePlugin {
     }
 
     fn get_limits(&self) -> AsyncResult<vst_types::LimitsResult> {
-        Box::pin(crate::claude_limits::probe_claude_limits())
+        // Same as before accounts: the probe under the daemon's own login.
+        self.get_limits_with_env(BTreeMap::new())
+    }
+
+    // ---- accounts (facts live in `claude_accounts.rs`, V1/V2/V11) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::claude_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::claude_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::claude_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::claude_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::claude_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::claude_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::claude_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::claude_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_env_unset(&self, acct: &ResolvedAccount) -> Vec<&'static str> {
+        crate::claude_accounts::account_env_unset(acct)
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::claude_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Native
+    }
+
+    fn get_limits_with_env(
+        &self,
+        env: BTreeMap<String, String>,
+    ) -> AsyncResult<vst_types::LimitsResult> {
+        Box::pin(crate::claude_limits::probe_claude_limits(env))
+    }
+
+    fn account_limit_signal(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Option<LimitSignal> {
+        crate::claude_accounts::account_limit_signal(method, params)
     }
 
     fn resolve_starter_model(&self, name: &str, live_models: &[String]) -> Option<String> {
@@ -541,10 +611,11 @@ impl AgentPlugin for ClaudePlugin {
         let uuid = args.session.agent_chat_id.clone();
         let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             let uuid = match uuid {
                 Some(u) if !u.is_empty() => u,
-                _ => match find_latest_claude_chat_uuid(&cwd).await {
+                _ => match find_latest_claude_chat_uuid(&cwd, account_dir.as_deref()).await {
                     Some(u) => u,
                     None => return None,
                 },

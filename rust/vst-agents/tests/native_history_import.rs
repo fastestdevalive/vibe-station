@@ -26,6 +26,7 @@ fn req(agent_chat_id: &str, cwd: &str) -> NativeImportRequest {
         agent_chat_id: agent_chat_id.into(),
         cwd: cwd.into(),
         watermark: None,
+        account_dir: None,
     }
 }
 
@@ -729,7 +730,7 @@ fn importer_registry_gate() {
 
 #[test]
 fn opencode_store_path_default() {
-    let p = opencode_native_store_path();
+    let p = opencode_native_store_path(None);
     assert!(p.ends_with(".local/share/opencode/opencode.db"));
 }
 
@@ -839,4 +840,163 @@ fn end_to_end_tty_json_toggle_imports_once() {
         .filter(|e| e.text.as_deref() == Some("status?"))
         .count();
     assert_eq!(status_checks, 1);
+}
+
+// ---------------------------------------------------------------------------
+// A2.T5 — every importer reads the SESSION'S account home (Decision 6)
+// ---------------------------------------------------------------------------
+
+/// Like [`req`], with an account folder.
+fn req_with_account(
+    agent_chat_id: &str,
+    cwd: &str,
+    account_dir: Option<&Path>,
+) -> NativeImportRequest {
+    NativeImportRequest {
+        account_dir: account_dir.map(Path::to_path_buf),
+        ..req(agent_chat_id, cwd)
+    }
+}
+
+/// One claude JSONL user line, with the text under test.
+fn claude_user_line(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "user",
+        "uuid": "u-account",
+        "timestamp": "2026-07-18T00:00:00Z",
+        "message": { "role": "user", "content": text }
+    })
+}
+
+fn claude_user_texts(r: &vst_agents::native_history_importer::NativeImportResult) -> Vec<String> {
+    r.events
+        .iter()
+        .filter(|e| e.kind == vst_types::NormalizedEventKind::User)
+        .filter_map(|e| e.text.clone())
+        .collect()
+}
+
+#[test]
+fn importers_read_account_home() {
+    // The daemon-env home holds a DIFFERENT conversation for the same chat id;
+    // the account folder must win (Decision 6).
+    let home = tempfile::tempdir().unwrap();
+    let _guard = vst_agents::home::with_home(home.path().to_path_buf());
+
+    // --- claude ---
+    let account = tempfile::tempdir().unwrap();
+    let home_projects = home.path().join(".claude").join("projects");
+    std::fs::create_dir_all(&home_projects).unwrap();
+    write_claude_store(
+        &home_projects,
+        "-home-u--wt-proj",
+        CHAT_ID,
+        &[claude_user_line("from the daemon home")],
+    );
+    let account_projects = account.path().join("projects");
+    std::fs::create_dir_all(&account_projects).unwrap();
+    write_claude_store(
+        &account_projects,
+        "-home-u--wt-proj",
+        CHAT_ID,
+        &[claude_user_line("from the account home")],
+    );
+
+    let claude = create_claude_history_importer(None);
+    assert_eq!(
+        claude_user_texts(&claude.import(&req_with_account(CHAT_ID, CWD, Some(account.path())))),
+        vec!["from the account home".to_string()]
+    );
+    // Control: with no account folder the same importer reads the home store.
+    assert_eq!(
+        claude_user_texts(&claude.import(&req(CHAT_ID, CWD))),
+        vec!["from the daemon home".to_string()]
+    );
+
+    // --- codex ---
+    let codex_account = tempfile::tempdir().unwrap();
+    write_codex_store(&codex_account.path().join("sessions"));
+    // The home store has a rollout with the same name but no content: reading it
+    // would yield zero events.
+    let home_store = home.path().join(".codex").join("sessions");
+    let home_rollout = write_codex_store(&home_store);
+    std::fs::write(&home_rollout, "").unwrap();
+
+    let codex = create_codex_history_importer(None);
+    let from_account = codex.import(&req_with_account(
+        CODEX_CHAT_ID,
+        "/whatever",
+        Some(codex_account.path()),
+    ));
+    assert!(!from_account.events.is_empty(), "reads the account rollout");
+    assert!(
+        codex
+            .import(&req(CODEX_CHAT_ID, "/whatever"))
+            .events
+            .is_empty(),
+        "the empty home rollout is what the daemon env would read"
+    );
+
+    // --- omp ---
+    // omp resolves the private store first, then `<account>/sessions/vst-links`.
+    let omp_account = tempfile::tempdir().unwrap();
+    let chat = "chat-account";
+    let name = format!("2026-11-12T10-00-00-000Z_{chat}.jsonl");
+    let omp_links = omp_account.path().join("sessions").join("vst-links");
+    std::fs::create_dir_all(&omp_links).unwrap();
+    std::fs::copy(
+        Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/omp/session-18.12.6-two-plain-turns.jsonl"
+        )),
+        omp_links.join(&name),
+    )
+    .unwrap();
+    let home_links = home
+        .path()
+        .join(".omp")
+        .join("agent")
+        .join("sessions")
+        .join("vst-links");
+    std::fs::create_dir_all(&home_links).unwrap();
+    std::fs::write(home_links.join(&name), "").unwrap();
+
+    let omp = vst_agents::omp_import::omp_history_importer();
+    let from_account = omp.import(&req_with_account(
+        chat,
+        "/no/private/store",
+        Some(omp_account.path()),
+    ));
+    assert!(
+        !from_account.events.is_empty(),
+        "reads the account's vst-links conversation"
+    );
+    assert!(
+        omp.import(&req(chat, "/no/private/store"))
+            .events
+            .is_empty(),
+        "the empty home conversation is what the daemon env would read"
+    );
+}
+
+#[test]
+fn codex_home_for_account_overrides_env() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = vst_agents::home::with_home(home.path().to_path_buf());
+    let account = tempfile::tempdir().unwrap();
+
+    // No account folder: the daemon home's `~/.codex`.
+    assert_eq!(
+        vst_agents::codex_import::codex_home_for(None),
+        home.path().join(".codex")
+    );
+    // Account folder wins over `$CODEX_HOME`/the home dir.
+    assert_eq!(
+        vst_agents::codex_import::codex_home_for(Some(account.path())),
+        account.path()
+    );
+    assert_eq!(
+        vst_agents::codex_import::codex_native_store_path_for(Some(account.path())),
+        account.path().join("sessions")
+    );
 }

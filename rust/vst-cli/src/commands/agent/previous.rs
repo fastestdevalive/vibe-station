@@ -131,6 +131,7 @@ fn carry_label(c: Option<vst_types::domain::CarryOver>) -> &'static str {
         Some(CarryOver::Nothing) => "none",
         Some(CarryOver::Summary) => "summary",
         Some(CarryOver::Transcript) => "transcript",
+        Some(CarryOver::Native) => "native",
         None => "unrecorded",
     }
 }

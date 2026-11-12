@@ -26,7 +26,11 @@ use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_proc::sq;
-use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
+use vst_types::{
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, ResolvedAccount,
+    SharedEntries,
+};
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -55,7 +59,13 @@ fn session_dir(cwd: &Path, session_id: &str) -> PathBuf {
 
 /// omp's default session store, `<home>/.omp/agent/sessions` (or
 /// `$PI_CODING_AGENT_DIR/sessions`; pattern: `pi.rs`'s `pi_sessions_root`).
-fn omp_default_sessions_root() -> PathBuf {
+///
+/// `account_dir: Some(..)` is a session's own account folder (Decision 6) and
+/// wins over both: the daemon env would read the wrong account's store.
+fn omp_default_sessions_root(account_dir: Option<&Path>) -> PathBuf {
+    if let Some(dir) = account_dir {
+        return dir.join("sessions");
+    }
     match std::env::var_os("PI_CODING_AGENT_DIR")
         .filter(|_| !crate::home::is_overridden())
         .filter(|v| !v.is_empty())
@@ -85,9 +95,20 @@ fn find_conversation_in(dir: &Path, chat_id: &str) -> Option<PathBuf> {
 /// the per-vst private store first (omp writes here), then the default store's
 /// `vst-links/` (a contended-writer sibling can land there as a REAL file, not
 /// just the symlink the resume path creates). None when neither exists.
-pub(crate) fn conversation_file(cwd: &Path, session_id: &str, chat_id: &str) -> Option<PathBuf> {
-    find_conversation_in(&session_dir(cwd, session_id), chat_id)
-        .or_else(|| find_conversation_in(&omp_default_sessions_root().join("vst-links"), chat_id))
+///
+/// `account_dir: Some(..)` is the session's account folder; `None` = System.
+pub(crate) fn conversation_file(
+    cwd: &Path,
+    session_id: &str,
+    chat_id: &str,
+    account_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    find_conversation_in(&session_dir(cwd, session_id), chat_id).or_else(|| {
+        find_conversation_in(
+            &omp_default_sessions_root(account_dir).join("vst-links"),
+            chat_id,
+        )
+    })
 }
 
 /// Make session `chat_id` loadable by `omp acp`. `session/new` honours
@@ -97,14 +118,19 @@ pub(crate) fn conversation_file(cwd: &Path, session_id: &str, chat_id: &str) -> 
 /// under `<default store>/vst-links/` is enough for the lookup, and omp keeps
 /// appending through it, so the private store stays the single copy. Best effort:
 /// failure only costs the resume (the session layer falls back to `session/new`).
-fn link_into_default_store(cwd: &Path, session_id: &str, chat_id: &str) {
+fn link_into_default_store(
+    cwd: &Path,
+    session_id: &str,
+    chat_id: &str,
+    account_dir: Option<&Path>,
+) {
     // Only the private store matters here: omp appends through the link, so the
     // default store's `vst-links` entry, if present, is the symlink back to the
     // private file (linking it to itself would be a self-reference).
     let Some(file) = find_conversation_in(&session_dir(cwd, session_id), chat_id) else {
         return;
     };
-    let links = omp_default_sessions_root().join("vst-links");
+    let links = omp_default_sessions_root(account_dir).join("vst-links");
     let Some(name) = file.file_name() else {
         return;
     };
@@ -413,6 +439,10 @@ impl AgentPlugin for OmpPlugin {
     }
 
     /// Whether this session's store holds any started omp conversation (≥1 user turn on disk).
+    ///
+    /// Account-independent (V10): the conversation lives in
+    /// `<cwd>/.vibe-station/omp-sessions/<id>`, so `account_dir` is not needed
+    /// here — the account only changes where omp's own default store lives.
     fn chat_established(&self, args: RestoreArgs<'_>) -> AsyncResult<bool> {
         let dir = session_dir(Path::new(args.cwd), &args.session.id);
         Box::pin(async move {
@@ -479,6 +509,56 @@ impl AgentPlugin for OmpPlugin {
     /// (which would otherwise win on reconnect). Decision 5.
     fn acp_session_id_is_native(&self) -> bool {
         true
+    }
+
+    // ---- accounts (facts live in `omp_accounts.rs`, V10) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::omp_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::omp_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::omp_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::omp_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::omp_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::omp_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::omp_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::omp_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_sign_in_hint(&self) -> Option<&'static str> {
+        crate::omp_accounts::account_sign_in_hint()
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::omp_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Native
     }
 
     /// Mid-turn steering is verified end-to-end for omp (both gates hold:
@@ -554,10 +634,11 @@ impl AgentPlugin for OmpPlugin {
             .clone()
             .or_else(|| ctx.session.agent_chat_id.clone());
         let (cwd, session_id) = (ctx.cwd.clone(), ctx.session.id.clone());
+        let account_dir = ctx.account_dir.clone();
         tokio::spawn(async move {
             if let Some(id) = resume_id.filter(|id| !id.is_empty()) {
                 let _ = tokio::task::spawn_blocking(move || {
-                    link_into_default_store(&cwd, &session_id, &id)
+                    link_into_default_store(&cwd, &session_id, &id, account_dir.as_deref());
                 })
                 .await;
             }
@@ -675,6 +756,22 @@ mod tests {
     }
 
     #[test]
+    fn link_goes_into_the_account_store() {
+        let cwd = tmp();
+        let acct = tmp();
+        let dir = session_dir(&cwd, "s1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("1000_abc.jsonl"), "{}\n").unwrap();
+
+        link_into_default_store(&cwd, "s1", "abc", Some(&acct));
+        let link = acct
+            .join("sessions")
+            .join("vst-links")
+            .join("1000_abc.jsonl");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
+    #[test]
     fn links_session_file_into_default_store_for_acp_load() {
         let home = tmp();
         let _guard = crate::home::with_home(home.clone());
@@ -684,14 +781,14 @@ mod tests {
         let file = dir.join("2026-10-22T10-00-00-000Z_abc.jsonl");
         fs::write(&file, "{}\n").unwrap();
 
-        link_into_default_store(&cwd, "s1", "abc");
-        let link = omp_default_sessions_root()
+        link_into_default_store(&cwd, "s1", "abc", None);
+        let link = omp_default_sessions_root(None)
             .join("vst-links")
             .join("2026-10-22T10-00-00-000Z_abc.jsonl");
         assert_eq!(fs::read_link(&link).unwrap(), file);
         // Idempotent, and a different id (no file) is a no-op.
-        link_into_default_store(&cwd, "s1", "abc");
-        link_into_default_store(&cwd, "s1", "missing");
+        link_into_default_store(&cwd, "s1", "abc", None);
+        link_into_default_store(&cwd, "s1", "missing", None);
         assert_eq!(fs::read_dir(link.parent().unwrap()).unwrap().count(), 1);
         // A dangling link to a moved project is replaced.
         let moved = tmp();
@@ -699,7 +796,7 @@ mod tests {
         fs::create_dir_all(&moved_dir).unwrap();
         let moved_file = moved_dir.join("2026-10-22T10-00-00-000Z_abc.jsonl");
         fs::write(&moved_file, "{}\n").unwrap();
-        link_into_default_store(&moved, "s1", "abc");
+        link_into_default_store(&moved, "s1", "abc", None);
         assert_eq!(fs::read_link(&link).unwrap(), moved_file);
         for d in [home, cwd, moved] {
             fs::remove_dir_all(d).unwrap();
@@ -716,15 +813,15 @@ mod tests {
         let _guard = crate::home::with_home(home.clone());
         let cwd = tmp();
         // Nothing anywhere yet.
-        assert_eq!(conversation_file(&cwd, "s1", "abc"), None);
+        assert_eq!(conversation_file(&cwd, "s1", "abc", None), None);
         // Default-store, real file only -> found in vst-links (the private store
         // has no copy).
-        let links = omp_default_sessions_root().join("vst-links");
+        let links = omp_default_sessions_root(None).join("vst-links");
         fs::create_dir_all(&links).unwrap();
         let linked = links.join("2026-10-22T10-00-00-000Z_abc.jsonl");
         fs::write(&linked, "{}\n").unwrap();
         assert_eq!(
-            conversation_file(&cwd, "s1", "abc").as_deref(),
+            conversation_file(&cwd, "s1", "abc", None).as_deref(),
             Some(linked.as_path())
         );
         // A private-store copy shadows the default-store one.
@@ -733,10 +830,10 @@ mod tests {
         let private = dir.join("2026-10-22T11-00-00-000Z_abc.jsonl");
         fs::write(&private, "{}\n").unwrap();
         assert_eq!(
-            conversation_file(&cwd, "s1", "abc").as_deref(),
+            conversation_file(&cwd, "s1", "abc", None).as_deref(),
             Some(private.as_path())
         );
-        assert_eq!(conversation_file(&cwd, "s1", "missing"), None);
+        assert_eq!(conversation_file(&cwd, "s1", "missing", None), None);
         for d in [home, cwd] {
             fs::remove_dir_all(d).unwrap();
         }
@@ -751,14 +848,14 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let name = "2026-10-22T10-00-00-000Z_abc.jsonl";
         fs::write(dir.join(name), "{}\n").unwrap();
-        let links = omp_default_sessions_root().join("vst-links");
+        let links = omp_default_sessions_root(None).join("vst-links");
         fs::create_dir_all(&links).unwrap();
         // A real file omp wrote at the link path is left untouched.
         fs::write(links.join(name), "REAL").unwrap();
         // A dangling link from a deleted worktree is pruned.
         std::os::unix::fs::symlink(cwd.join("gone.jsonl"), links.join("old_x.jsonl")).unwrap();
 
-        link_into_default_store(&cwd, "s1", "abc");
+        link_into_default_store(&cwd, "s1", "abc", None);
         assert_eq!(fs::read_to_string(links.join(name)).unwrap(), "REAL");
         assert!(links.join("old_x.jsonl").symlink_metadata().is_err());
         for d in [home, cwd] {
@@ -919,6 +1016,7 @@ mod tests {
             project: &project,
             cwd: cwd.to_str().unwrap(),
             worktree: None,
+            account_dir: None,
         };
         assert_eq!(
             plugin.capture_chat_id(capture()).await.as_deref(),
@@ -948,6 +1046,7 @@ mod tests {
             r#type: vst_types::SessionType::Agent,
             mode_id: None,
             mode_icon: None,
+            account_id: None,
             name: None,
             name_source: None,
             tmux_name: String::new(),

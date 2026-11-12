@@ -73,6 +73,7 @@ async fn diffstat_e2e_file_edit_activity_and_client_gate() {
         r#type: SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: "vst-sess-1".into(),

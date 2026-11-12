@@ -7,6 +7,7 @@
 //! Group A. HTTP/axum wiring lives in part 08; this crate exposes handler
 //! bodies as testable functions on [`sessions::SessionRoutes`].
 
+pub mod account_sessions;
 pub mod artifact_gate;
 pub mod artifact_response;
 pub mod attachments;

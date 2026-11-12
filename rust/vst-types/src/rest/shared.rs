@@ -60,6 +60,9 @@ pub struct Session {
     /// Tool call the Rich Chat agent most recently made (`{name, detail?}`).
     #[serde(default)]
     pub last_tool: Option<crate::activity::ToolActivity>,
+    /// The account this session runs under (absent = the CLI's System login).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 /// A global (project-less) draft session — same key set as `Session`, with

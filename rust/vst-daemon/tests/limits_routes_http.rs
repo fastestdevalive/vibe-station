@@ -16,7 +16,9 @@ use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
-use vst_harness_limits::{HarnessProbe, LimitsDeps, LimitsHandle, LimitsTiming};
+use vst_harness_limits::{
+    LimitsDeps, LimitsHandle, LimitsTiming, ProbeFn, ProbeTarget, SessionTargetFn, TargetsFn,
+};
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
 use vst_types::limits::{
@@ -30,6 +32,7 @@ use vst_daemon::server::{build_app, BuildServerOptions};
 fn ok_claude_result() -> LimitsResult {
     LimitsResult {
         harness: "claude".to_string(),
+        account_id: None,
         status: LimitStatus::Ok,
         message: None,
         as_of: "2026-10-11T00:00:00.000Z".to_string(),
@@ -54,17 +57,27 @@ fn ok_claude_result() -> LimitsResult {
 
 fn claude_handle() -> LimitsHandle {
     let broadcaster = Broadcaster::new(16);
-    let probe = HarnessProbe {
-        harness: "claude".to_string(),
-        probe: Arc::new(|| {
-            let r = ok_claude_result();
-            Box::pin(async move { r })
-        }),
-    };
+    let targets: TargetsFn = Arc::new(|| {
+        vec![
+            ProbeTarget::system("claude"),
+            // The pinned account of `put_slots_with_account_id_round_trips`
+            // must be a live target, else its slot is served as System.
+            ProbeTarget {
+                harness: "claude".to_string(),
+                account_id: Some("acc_1a2b3c4d".to_string()),
+            },
+        ]
+    });
+    let probe: ProbeFn = Arc::new(|_| {
+        let r = ok_claude_result();
+        Box::pin(async move { r })
+    });
+    let session_target: SessionTargetFn = Arc::new(|_| Box::pin(async { None }));
     LimitsHandle::new(LimitsDeps {
         broadcaster,
-        probes: vec![probe],
-        session_harness: Arc::new(|_| Box::pin(async { None })),
+        targets,
+        probe,
+        session_target,
         host: "test".to_string(),
         initial_slots: default_slots(),
         timing: LimitsTiming::default(),
@@ -272,4 +285,74 @@ async fn refresh_then_immediate_second_returns_started_false() {
         "second refresh inside cooldown must not start"
     );
     assert!(second.retry_after_secs.is_some());
+}
+
+/// A3.T4: a slot may carry `accountId` (round-trips through PUT/GET), and a
+/// slot persisted in the OLD key form (`"<h>/<w>"`) still loads as System.
+#[tokio::test]
+async fn put_slots_with_account_id_round_trips() {
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(&tmp.path().join("test.db")).unwrap();
+    let router = build_app(make_opts(tmp.path(), store.clone()));
+
+    let account_slot = LimitSlotRef {
+        harness: "claude".to_string(),
+        window_id: "five_hour".to_string(),
+        account_id: Some("acc_1a2b3c4d".to_string()),
+    };
+    let system_slot = LimitSlotRef::new("codex", "primary");
+    let body = serde_json::to_string(&PutLimitSlotsBody {
+        slots: vec![account_slot.clone(), system_slot.clone()],
+    })
+    .unwrap();
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/limits/slots")
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/limits")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snap: LimitsSnapshot = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(snap.slots[0], account_slot);
+    assert_eq!(snap.slots[1].account_id, None);
+}
+
+/// An OLD persisted slot key (no `@account`) loads as the System login.
+#[tokio::test]
+async fn old_slot_key_without_account_still_loads() {
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(&tmp.path().join("test.db")).unwrap();
+    store
+        .set_ordered_list(
+            vst_routes::limits::LIMITS_SLOTS_SCOPE,
+            vec!["claude/five_hour".to_string(), "codex/primary".to_string()],
+        )
+        .await;
+
+    let loaded = vst_routes::limits::LimitsRoutes::load_slots(&store).await;
+    assert_eq!(loaded[0], LimitSlotRef::new("claude", "five_hour"));
+    assert_eq!(loaded[1], LimitSlotRef::new("codex", "primary"));
 }

@@ -8,7 +8,7 @@
 //!
 //! Production call sites never touch the override — it defaults to `$HOME`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 static HOME_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -42,6 +42,29 @@ pub(crate) fn is_overridden() -> bool {
         .is_some()
 }
 
+/// A harness folder: `value` when it is a non-empty ABSOLUTE path (the XDG
+/// rule; relative or empty values are ignored), else `home/default_rel`.
+pub(crate) fn dir_from_env(
+    value: Option<std::ffi::OsString>,
+    home: &Path,
+    default_rel: &str,
+) -> PathBuf {
+    match value.map(PathBuf::from) {
+        Some(p) if p.is_absolute() => p,
+        _ => home.join(default_rel),
+    }
+}
+
+/// `$var` as a folder per [`dir_from_env`]; the env var is ignored while a test
+/// home override is active.
+pub(crate) fn env_dir_or(var: &str, default_rel: &str) -> PathBuf {
+    dir_from_env(
+        std::env::var_os(var).filter(|_| !is_overridden()),
+        &home_dir(),
+        default_rel,
+    )
+}
+
 /// Guard returned by [`with_home`]; resets the override on drop.
 pub struct HomeGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -59,4 +82,21 @@ pub fn with_home(temp_home: PathBuf) -> HomeGuard {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(temp_home);
     HomeGuard { _lock: lock }
+}
+
+#[cfg(test)]
+mod env_dir_tests {
+    use super::dir_from_env;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn absolute_wins_else_default_under_home() {
+        let home = Path::new("/home/u");
+        let d = |v: Option<&str>| dir_from_env(v.map(OsString::from), home, ".claude");
+        assert_eq!(d(Some("/x/cfg")), PathBuf::from("/x/cfg"));
+        assert_eq!(d(Some("rel/cfg")), home.join(".claude"));
+        assert_eq!(d(Some("")), home.join(".claude"));
+        assert_eq!(d(None), home.join(".claude"));
+    }
 }

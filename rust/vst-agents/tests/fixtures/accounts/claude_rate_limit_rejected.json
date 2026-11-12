@@ -1,0 +1,16 @@
+{
+  "sessionId": "sess-1",
+  "message": {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+      "status": "rejected",
+      "unifiedWindows": {
+        "five_hour": {
+          "utilization": 1.0,
+          "resetsAt": 1762951200,
+          "status": "rejected"
+        }
+      }
+    }
+  }
+}

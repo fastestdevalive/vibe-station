@@ -21,8 +21,9 @@ use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult,
-    UsageInfo,
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, ResolvedAccount,
+    Role, SharedEntries, ToolResult, UsageInfo,
 };
 
 use crate::acp_connection::AcpLaunchSpec;
@@ -450,10 +451,11 @@ impl AgentPlugin for CursorPlugin {
         let chat_id = args.session.agent_chat_id.clone();
         let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             let chat_id = match chat_id {
                 Some(c) if !c.is_empty() => c,
-                _ => match find_latest_cursor_chat_id(&cwd).await {
+                _ => match find_latest_cursor_chat_id(&cwd, account_dir.as_deref()).await {
                     Some(c) => c,
                     None => return None,
                 },
@@ -485,17 +487,64 @@ impl AgentPlugin for CursorPlugin {
         false
     }
 
+    // ---- accounts (facts live in `cursor_accounts.rs`, V6 unverified) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::cursor_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::cursor_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::cursor_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::cursor_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::cursor_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::cursor_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::cursor_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::cursor_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::cursor_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Transcript
+    }
+
     fn capture_native_chat_id(
         &self,
         args: CaptureNativeChatIdArgs<'_>,
     ) -> AsyncResult<Option<String>> {
         let known = args.session.agent_chat_id.clone();
         let cwd = args.cwd.to_string();
+        let account_dir = args.account_dir.clone();
         Box::pin(async move {
             if let Some(id) = known.filter(|id| !id.is_empty()) {
                 return Some(id);
             }
-            find_latest_cursor_chat_id(&cwd).await
+            find_latest_cursor_chat_id(&cwd, account_dir.as_deref()).await
         })
     }
 

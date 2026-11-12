@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 use vst_proc::sq;
 
-use vst_types::{Channel, SessionRecord};
+use vst_types::{
+    rest::modes::AccountSwitchSupport, AccountHandover, AccountIdentity, AccountLinkMeta, Channel,
+    HandoverArgs, ResolvedAccount, SessionRecord, SharedEntries,
+};
 
 use crate::plugin::{
     AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult, LaunchConfig,
@@ -50,7 +53,13 @@ fn session_chat_id(session: &SessionRecord) -> String {
 /// pi's session store root: `<home>/.pi/agent/sessions`, or
 /// `$PI_CODING_AGENT_DIR/sessions` (the var IS pi's agent dir) when that env var is set and no test
 /// home override is active (pattern: `codex_import.rs`'s `codex_home`).
-fn pi_sessions_root() -> PathBuf {
+///
+/// `account_dir: Some(..)` is a session's own account folder (Decision 6) and
+/// wins over both: the daemon env would read the wrong account's sessions.
+pub(crate) fn pi_sessions_root(account_dir: Option<&Path>) -> PathBuf {
+    if let Some(dir) = account_dir {
+        return dir.join("sessions");
+    }
     match std::env::var_os("PI_CODING_AGENT_DIR")
         .filter(|_| !crate::home::is_overridden())
         .filter(|v| !v.is_empty())
@@ -61,6 +70,12 @@ fn pi_sessions_root() -> PathBuf {
             .join("agent")
             .join("sessions"),
     }
+}
+
+/// The `<ts>_<id>.jsonl` file for `id` under `root` (used by the account
+/// hand-over, which copies this session's own file across accounts).
+pub(crate) fn find_pi_session_file(root: &Path, id: &str) -> Option<PathBuf> {
+    search_pi_session_file(root, &format!("_{id}.jsonl"))
 }
 
 /// `pi_conversation_started(root, id)` — whether pi has actually begun a
@@ -268,7 +283,7 @@ impl AgentPlugin for PiPlugin {
     /// once a user turn exists, so a session that never started a conversation
     /// doesn't record a stale id for a resume that would replay nothing.
     fn capture_chat_id(&self, args: CaptureArgs<'_>) -> AsyncResult<Option<String>> {
-        let root = pi_sessions_root();
+        let root = pi_sessions_root(args.account_dir.as_deref());
         let id = session_chat_id(args.session);
         Box::pin(async move {
             if pi_conversation_started(&root, &id) {
@@ -282,14 +297,64 @@ impl AgentPlugin for PiPlugin {
     /// Whether the stored id corresponds to a real pi conversation — i.e. the
     /// session file holds ≥1 user turn (see [`pi_conversation_started`]).
     fn chat_established(&self, args: RestoreArgs<'_>) -> AsyncResult<bool> {
-        let root = pi_sessions_root();
+        let root = pi_sessions_root(args.account_dir.as_deref());
         let id = session_chat_id(args.session);
         Box::pin(async move { pi_conversation_started(&root, &id) })
     }
 
+    // ---- accounts (facts live in `pi_accounts.rs`, V10) ----
+
+    fn supports_accounts(&self) -> bool {
+        true
+    }
+
+    fn account_env(&self, acct: &ResolvedAccount) -> BTreeMap<String, String> {
+        crate::pi_accounts::account_env(acct)
+    }
+
+    fn account_api_key_env(&self) -> Option<&'static str> {
+        crate::pi_accounts::account_api_key_env()
+    }
+
+    fn account_login_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::pi_accounts::account_login_command(acct)
+    }
+
+    fn account_identity_command(&self, acct: &ResolvedAccount) -> Option<Vec<String>> {
+        crate::pi_accounts::account_identity_command(acct)
+    }
+
+    fn parse_account_identity(&self, stdout: &str, exit_ok: bool) -> AccountIdentity {
+        crate::pi_accounts::parse_account_identity(stdout, exit_ok)
+    }
+
+    fn account_shared_entries(&self) -> Option<SharedEntries> {
+        crate::pi_accounts::account_shared_entries()
+    }
+
+    fn account_link_meta(&self) -> AccountLinkMeta {
+        crate::pi_accounts::account_link_meta()
+    }
+
+    fn account_folder_looks_valid(&self, names: &[String]) -> bool {
+        crate::pi_accounts::account_folder_looks_valid(names)
+    }
+
+    fn account_sign_in_hint(&self) -> Option<&'static str> {
+        crate::pi_accounts::account_sign_in_hint()
+    }
+
+    fn account_session_handover(&self, args: &HandoverArgs<'_>) -> AccountHandover {
+        crate::pi_accounts::account_session_handover(args)
+    }
+
+    fn account_switch_support(&self) -> AccountSwitchSupport {
+        AccountSwitchSupport::Native
+    }
+
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
         let id = session_chat_id(args.session);
-        let root = pi_sessions_root();
+        let root = pi_sessions_root(args.account_dir.as_deref());
         let model = args.model.map(|m| m.to_string());
         let prompt_file = system_prompt_path(std::path::Path::new(args.cwd), &args.session.id);
         Box::pin(async move {
@@ -415,7 +480,7 @@ mod tests {
     #[tokio::test]
     async fn pi_restore_capture_and_established_gated_on_user_turn() {
         let _guard = home::with_home(tmp());
-        let root = pi_sessions_root();
+        let root = pi_sessions_root(None);
         let sid = "sess-123";
         let session = SessionRecord {
             agent_chat_id: Some(sid.to_string()),
@@ -429,12 +494,14 @@ mod tests {
             project: &project,
             cwd,
             model: None,
+            account_dir: None,
         };
         let capture_args = || CaptureArgs {
             session: &session,
             project: &project,
             cwd,
             worktree: None,
+            account_dir: None,
         };
 
         // Header-only file even with agent_chat_id stored → None / false.
@@ -488,6 +555,7 @@ mod tests {
             r#type: vst_types::SessionType::Agent,
             mode_id: None,
             mode_icon: None,
+            account_id: None,
             name: None,
             name_source: None,
             tmux_name: format!("vst-{id}"),

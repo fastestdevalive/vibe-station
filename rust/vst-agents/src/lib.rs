@@ -49,23 +49,29 @@
 //! They are implemented faithfully here so 04a's plugin methods behave
 //! identically to the TS; the owning parts will reconcile/own them.
 
+pub mod account_cmd;
+pub mod account_env;
 pub mod acp_connection;
 pub mod acp_file_system;
 pub mod acp_run_turn;
 pub mod acp_terminal_manager;
 pub mod acp_transport;
 pub mod agy;
+pub mod agy_accounts;
 pub mod agy_limits;
 pub mod claude;
+pub mod claude_accounts;
 pub mod claude_import;
 pub mod claude_limits;
 pub mod claude_tasks;
 pub mod claude_terminal;
 pub mod codex;
+pub mod codex_accounts;
 pub mod codex_import;
 pub mod codex_limits;
 pub mod context;
 pub mod cursor;
+pub mod cursor_accounts;
 pub mod file_effects;
 pub mod home;
 pub mod json_agent_chat;
@@ -77,12 +83,15 @@ pub mod native_chat_id;
 pub mod native_history_importer;
 pub mod normalize;
 pub mod omp;
+pub mod omp_accounts;
 pub mod omp_import;
 pub mod opencode;
+pub mod opencode_accounts;
 pub mod opencode_config;
 pub mod opencode_import;
 pub mod paths;
 pub mod pi;
+pub mod pi_accounts;
 pub mod plugin;
 pub mod prompt_builder;
 pub mod registry;

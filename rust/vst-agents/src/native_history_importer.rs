@@ -7,6 +7,8 @@
 //! (AGENTS.md § Agent plugin). claude + opencode + codex + omp return their
 //! singletons; cursor + agy (+ pi, terminal-only) are DEFERRED and absent.
 
+use std::path::PathBuf;
+
 use vst_types::NormalizedEvent;
 
 /// Inputs to one import pass.
@@ -20,6 +22,9 @@ pub struct NativeImportRequest {
     pub cwd: String,
     /// The native cursor watermark from the previous import (per-CLI coordinate).
     pub watermark: Option<String>,
+    /// The session's account folder, or `None` for the System login
+    /// (Decision 6). Every resolver prefers it over `$HOME`/env.
+    pub account_dir: Option<PathBuf>,
 }
 
 /// Result of one import pass.

@@ -258,6 +258,7 @@ fn session(id: &str, worktree: &str, is_main: bool, state: LifecycleState) -> Se
         state,
         state_reason: None,
         lifecycle_state: state,
+        account_id: None,
         created_at: "2024-02-01T00:00:00Z".to_string(),
         pinned_at: None,
         archived_at: None,

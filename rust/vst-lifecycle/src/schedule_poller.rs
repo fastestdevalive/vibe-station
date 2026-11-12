@@ -323,6 +323,7 @@ mod tests {
             r#type: SessionType::Agent,
             mode_id: Some("m".into()),
             mode_icon: None,
+            account_id: None,
             name: Some("Agent".into()),
             name_source: Some(SessionNameSource::Auto),
             tmux_name: format!("vst-{id}"),

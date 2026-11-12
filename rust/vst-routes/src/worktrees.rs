@@ -436,6 +436,9 @@ pub enum WorktreeRouteError {
     ServiceUnavailable(String),
     #[error("Internal server error: {0}")]
     Internal(String),
+    /// A typed account refusal (404/409/400, see `AccountProblem`).
+    #[error("{0}")]
+    Account(crate::account_sessions::AccountProblem),
 }
 
 impl From<crate::search_util::RgSearchError> for WorktreeRouteError {
@@ -520,6 +523,9 @@ pub struct WorktreeRoutes {
     pub account_source: AccountSource,
     /// Injected diffstat snapshot supplier (GET /worktrees/diffstats).
     pub diffstats_fn: Option<DiffStatsSnapshotFn>,
+    /// The accounts registry (multi-account, Decision 11). `None` = every
+    /// session is the System login (tests).
+    pub accounts: Option<vst_accounts::AccountsHandle>,
 }
 
 /// Closure shape supplying the in-memory diffstat snapshot.
@@ -555,7 +561,15 @@ impl WorktreeRoutes {
             account_cache: Arc::new(AccountCache::default()),
             account_source: vst_lifecycle::pr_poller::default_account_source(),
             diffstats_fn: None,
+            accounts: None,
         }
+    }
+
+    /// Install the accounts registry (Decision 11).
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: Option<vst_accounts::AccountsHandle>) -> Self {
+        self.accounts = accounts;
+        self
     }
 
     pub fn with_terminal_delivery(mut self, td: vst_review::TerminalDeliveryHandle) -> Self {
@@ -698,6 +712,16 @@ impl WorktreeRoutes {
             WorktreeRouteError::Validation(format!("Mode '{mode_id_input}' not found"))
         })?;
         let mode_id = mode.id.clone();
+
+        // The new worktree's main session runs under an explicit pick, else the
+        // CLI default — validated BEFORE any git side effect (A3.7a, Risk 4).
+        let account_id = crate::account_sessions::new_session_account(
+            self.accounts.as_ref(),
+            mode.cli.as_str(),
+            body.account_id.as_deref(),
+            None,
+        )
+        .map_err(WorktreeRouteError::Account)?;
 
         let overrides = load_default_channel_overrides();
         let channel = body.channel.unwrap_or_else(|| match body.use_tmux {
@@ -843,6 +867,7 @@ impl WorktreeRoutes {
                         r#type: SessionType::Agent,
                         mode_id: Some(mode_id_clone.clone()),
                         mode_icon: mode_icon_clone.clone(),
+                        account_id: account_id.clone(),
                         name,
                         name_source,
                         tmux_name: main_tmux_name,
@@ -979,6 +1004,10 @@ impl WorktreeRoutes {
             model: mode.model,
             tmux: &self.tmux,
             direct_ptys: &direct_ptys_map,
+            accounts: self
+                .accounts
+                .as_ref()
+                .map(|a| a as &dyn vst_types::AccountPort),
         };
 
         match spawn_session(&spawn_opts).await {

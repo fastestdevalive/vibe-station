@@ -9,6 +9,7 @@ license.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 vst-types = { workspace = true }
 vst-store = { workspace = true }
+vst-accounts = { workspace = true }
 vst-git = { workspace = true }
 vst-agents = { workspace = true }
 vst-tasks = { workspace = true }

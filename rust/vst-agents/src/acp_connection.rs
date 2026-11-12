@@ -83,7 +83,7 @@ pub struct AcpExtNotification {
 
 /// Launch spec for the agent process — a plugin supplies only this (argv/env
 /// plus timeouts); everything below is identical for every plugin.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AcpLaunchSpec {
     pub command: String,
     pub args: Vec<String>,
@@ -113,6 +113,20 @@ pub struct AcpLaunchSpec {
     /// 7 days at use. Measured with `Instant` (monotonic): it pauses across
     /// system sleep, so a sleeping laptop does not burn the budget.
     pub open_tool_idle_timeout_ms: Option<u64>,
+}
+
+/// `env` can carry an account's API key, so `Debug` prints only its keys.
+impl std::fmt::Debug for AcpLaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut env_keys: Vec<&String> = self.env.keys().collect();
+        env_keys.sort();
+        f.debug_struct("AcpLaunchSpec")
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("env_keys", &env_keys)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Upper bound for `open_tool_idle_timeout_ms` (avoids `Instant` overflow).
@@ -341,7 +355,7 @@ impl AcpConnection {
     /// Build a connection handle and spawn its background actor. Must be
     /// called from within a tokio runtime (as all tests and the daemon are).
     pub fn new(spec: AcpLaunchSpec) -> Self {
-        let command_desc = format!("{} {}", spec.command, spec.args.join(" "));
+        let command_desc = crate::account_env::describe_command(&spec.command, &spec.args);
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
         let shared = Arc::new(Shared::new());
         let spec = Arc::new(spec);
@@ -584,6 +598,9 @@ fn spawn_actor(
         // taken at close (see `snapshot_descendants`).
         let mut agent_env = spec.env.clone();
         agent_env.insert(ROOT_TAG_ENV.to_string(), shared.root_tag.clone());
+        // `spec.env` already carries the session's ACCOUNT env: the session layer
+        // merges it last (`json_agent_session::connection`), so nothing
+        // account-related is resolved here (Decision 3).
         let agent = AcpAgent::new(
             AcpAgentConfig::new(spec.command.clone())
                 .args(spec.args.clone())
@@ -1531,6 +1548,25 @@ async fn do_set_config_option(
 #[cfg(test)]
 mod wire_tests {
     use super::*;
+
+    #[test]
+    fn launch_spec_debug_hides_env_values() {
+        let spec = AcpLaunchSpec {
+            command: "agent".into(),
+            args: vec![],
+            cwd: std::path::PathBuf::from("/tmp"),
+            env: [("K".to_string(), "sk-secret".to_string())].into(),
+            initialize_timeout_ms: None,
+            prompt_timeout_ms: None,
+            reap_detached_descendants: false,
+            open_tool_idle_timeout_ms: None,
+        };
+        let shown = format!("{spec:?}");
+        assert!(
+            shown.contains("\"K\"") && !shown.contains("sk-secret"),
+            "{shown}"
+        );
+    }
 
     /// No child of the daemon carries the tag (agent already gone): graceful
     /// empty result, not a panic.

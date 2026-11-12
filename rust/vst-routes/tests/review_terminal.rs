@@ -89,6 +89,7 @@ fn session(id: &str, channel: Channel) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("m-claude".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -227,6 +228,8 @@ async fn env() -> Env {
         handoff_timeout: Duration::from_secs(120),
         reset_cancels: Default::default(),
         terminal_delivery: delivery,
+
+        accounts: None,
     };
     let (port, observer) = vst_review::hooks(&review);
     routes.json_registry.set_review_hooks(port, observer);

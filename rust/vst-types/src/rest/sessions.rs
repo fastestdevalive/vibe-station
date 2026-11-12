@@ -102,6 +102,10 @@ pub struct CreateSessionBody {
     /// terminal, return the scope's existing live terminal instead of creating
     /// another. Absent ≡ false. Request-only; never persisted.
     pub only_if_none: Option<bool>,
+    /// The account to run under (id, label or `"system"`); the server resolves
+    /// it. Absent = the CLI's default account.
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 /// `CreateSessionBody.target`.
@@ -167,6 +171,10 @@ pub struct StartDraftResult {
     /// store immediately off this response rather than depending on the
     /// `worktree:created` broadcast racing its own navigation.
     pub worktree: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The account the promoted session runs under (absent = System login),
+    /// so the requester need not wait for a reload to learn it.
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 /// `PATCH /sessions/:id/pin` request body.
@@ -256,6 +264,33 @@ pub struct ResetBody {
     pub when_busy: Option<WhenBusy>,
     /// `"carry" | "drop"` (default `carry`; only meaningful with `whenBusy=stop`).
     pub queued: Option<QueuedPolicy>,
+    /// Switch this session to another account (id, label or `"system"`). When
+    /// present and different from the session's, `breakKind` becomes `switch`.
+    #[serde(default)]
+    pub account_id: Option<String>,
+}
+
+/// Which hand-over the reset actually chose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSwitchHandover {
+    /// The CLI's own session store crossed accounts and the model kept context.
+    Native,
+    /// Rows carried, the model starts empty (Markdown export of the old chat).
+    Transcript,
+    /// Nothing carried.
+    Fresh,
+}
+
+/// `ResetResult.accountSwitch` — present only for an account switch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSwitchInfo {
+    /// `null` = the old account was the System login.
+    pub from_account_id: Option<String>,
+    /// `null` = the new account is the System login.
+    pub to_account_id: Option<String>,
+    pub handover: AccountSwitchHandover,
 }
 
 /// `POST /sessions/:id/reset` success.
@@ -271,6 +306,9 @@ pub struct ResetResult {
     pub carry_over: CarryOver,
     /// `"reset" | "switch"`; absent when `carryOver` is `none`.
     pub break_kind: Option<SessionBreakKind>,
+    /// Present only when this reset switched accounts.
+    #[serde(default)]
+    pub account_switch: Option<AccountSwitchInfo>,
 }
 
 /// `POST /sessions/:id/reset/cancel` success.

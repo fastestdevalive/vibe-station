@@ -623,9 +623,12 @@ impl NativeHistoryImporter for OmpHistoryImporter {
     }
 
     fn import(&self, req: &NativeImportRequest) -> NativeImportResult {
-        let Some(path) =
-            crate::omp::conversation_file(Path::new(&req.cwd), &req.session_id, &req.agent_chat_id)
-        else {
+        let Some(path) = crate::omp::conversation_file(
+            Path::new(&req.cwd),
+            &req.session_id,
+            &req.agent_chat_id,
+            req.account_dir.as_deref(),
+        ) else {
             return NativeImportResult {
                 events: Vec::new(),
                 next_watermark: req.watermark.clone().unwrap_or_default(),
@@ -644,6 +647,7 @@ impl NativeHistoryImporter for OmpHistoryImporter {
             Path::new(&req.cwd),
             &req.session_id,
             &req.agent_chat_id,
+            req.account_dir.as_deref(),
         )?;
         omp_current_cursor(&path)
     }

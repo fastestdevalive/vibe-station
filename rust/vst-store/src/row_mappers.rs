@@ -200,6 +200,8 @@ pub struct SessionRow {
     pub pr_error_kind: Option<String>,
     /// When the shown PR value went stale (ISO8601); NULL means fresh.
     pub pr_stale_since: Option<String>,
+    /// The account the session runs under; NULL = the CLI's System login.
+    pub account_id: Option<String>,
 }
 
 /// Row -> `SessionRecord`, applying the `needs_review` back-compat (R10): a
@@ -252,6 +254,7 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
         r#type: parse_type(&row.r#type),
         mode_id: row.mode_id.clone(),
         mode_icon: row.mode_icon.clone(),
+        account_id: row.account_id.clone(),
         name: row.name.clone(),
         name_source: row.name_source.as_deref().and_then(parse_name_source),
         tmux_name: row.tmux_name.clone(),
@@ -361,6 +364,7 @@ pub fn session_to_row(
             .map(pr_error_kind_str)
             .map(str::to_string),
         pr_stale_since: session.pr.as_ref().and_then(|p| p.stale_since.clone()),
+        account_id: session.account_id.clone(),
     }
 }
 

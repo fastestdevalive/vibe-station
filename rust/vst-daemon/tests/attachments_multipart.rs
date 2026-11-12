@@ -71,6 +71,7 @@ fn agent_session(id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("mode-1".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: None,
         tmux_name: "tmux-1".into(),

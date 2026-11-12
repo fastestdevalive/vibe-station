@@ -36,6 +36,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: Some("my-mode".into()),
         mode_icon: None,
+        account_id: None,
         name: Some("Agent".into()),
         name_source: Some(SessionNameSource::Auto),
         tmux_name: format!("vst-{id}"),
@@ -115,6 +116,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
             Arc::new(vst_proc::test_support::isolated_tmux()),
             None,
         ),
+        accounts: None,
     }
 }
 
@@ -247,6 +249,7 @@ async fn start_draft_pi_explicit_json_rejected() {
         draft_prompt: "do it".into(),
         draft_config: DraftConfig {
             entry_point: DraftEntryPoint::Direct,
+            account_id: None,
             mode_id: Some("pi-mode".into()),
             channel: Some(Channel::Json), // explicit json -> must be rejected
             channel_explicit: Some(true),

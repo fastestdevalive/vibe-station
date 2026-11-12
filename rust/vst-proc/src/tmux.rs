@@ -387,7 +387,7 @@ impl Tmux {
     ///
     /// Env is inherited from the daemon process (PATH, HOME, SHELL, NVM bits,
     /// etc.) so shell launchers can resolve binaries like `claude`.
-    fn run(&self, args: &[&str]) -> Result<String, TmuxError> {
+    pub(crate) fn run(&self, args: &[&str]) -> Result<String, TmuxError> {
         let out = self.output_bounded(args).map_err(|e| TmuxError {
             args: args.join(" "),
             stderr: format!("io: {e}"),

@@ -17,7 +17,7 @@ use vst_agents::native_chat_id::find_latest_claude_chat_uuid;
 async fn returns_none_when_projects_dir_does_not_exist() {
     let dir = tempdir().unwrap();
     let _guard = with_home(dir.path().to_path_buf());
-    let uuid = find_latest_claude_chat_uuid("/some/nonexistent/worktree").await;
+    let uuid = find_latest_claude_chat_uuid("/some/nonexistent/worktree", None).await;
     assert!(uuid.is_none());
 }
 
@@ -34,7 +34,7 @@ async fn returns_uuid_of_newest_jsonl_by_mtime() {
     fs::write(projects.join("old-uuid.jsonl"), "old content").unwrap();
     thread::sleep(Duration::from_millis(10));
     fs::write(projects.join("new-uuid.jsonl"), "new content").unwrap();
-    let uuid = find_latest_claude_chat_uuid("/test/path/to/worktree").await;
+    let uuid = find_latest_claude_chat_uuid("/test/path/to/worktree", None).await;
     assert_eq!(uuid.as_deref(), Some("new-uuid"));
 }
 
@@ -49,7 +49,7 @@ async fn returns_uuid_when_only_one_jsonl_exists() {
         .join("-single-file-test");
     fs::create_dir_all(&projects).unwrap();
     fs::write(projects.join("chat-uuid-12345.jsonl"), "chat content").unwrap();
-    let uuid = find_latest_claude_chat_uuid("/single/file/test").await;
+    let uuid = find_latest_claude_chat_uuid("/single/file/test", None).await;
     assert_eq!(uuid.as_deref(), Some("chat-uuid-12345"));
 }
 
@@ -62,9 +62,11 @@ async fn slug_strips_dots() {
     let projects = dir.path().join(".claude").join("projects").join(slug);
     fs::create_dir_all(&projects).unwrap();
     fs::write(projects.join("abc-123.jsonl"), "chat").unwrap();
-    let uuid =
-        find_latest_claude_chat_uuid("/home/gb/.vibe-station/projects/console-home/worktrees/ch-2")
-            .await;
+    let uuid = find_latest_claude_chat_uuid(
+        "/home/gb/.vibe-station/projects/console-home/worktrees/ch-2",
+        None,
+    )
+    .await;
     assert_eq!(uuid.as_deref(), Some("abc-123"));
 }
 
@@ -81,6 +83,6 @@ async fn ignores_non_jsonl_files_and_directories() {
     fs::write(projects.join("valid-uuid.jsonl"), "chat").unwrap();
     fs::write(projects.join("readme.txt"), "not a chat").unwrap();
     fs::create_dir(projects.join("subdir")).unwrap();
-    let uuid = find_latest_claude_chat_uuid("/mixed/files/test").await;
+    let uuid = find_latest_claude_chat_uuid("/mixed/files/test", None).await;
     assert_eq!(uuid.as_deref(), Some("valid-uuid"));
 }

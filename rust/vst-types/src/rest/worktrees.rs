@@ -23,6 +23,10 @@ pub struct CreateWorktreeBody {
     pub name: Option<String>,
     pub source_agent_id: Option<String>,
     pub skip_auto_turn: Option<bool>,
+    /// The account the new worktree's main session runs under (id, label or
+    /// `"system"`); the server resolves it. Absent = the CLI's default account.
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 /// `PATCH /worktrees/:id/pin` and `PATCH /worktrees/:id/hide` request body.

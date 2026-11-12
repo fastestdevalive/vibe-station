@@ -413,6 +413,7 @@ async fn test_git_init_makes_project_usable_for_worktree_creation() {
             name: Some("Recovered".into()),
             source_agent_id: None,
             skip_auto_turn: Some(true),
+            account_id: None,
         })
         .await
         .expect("worktree creation should succeed against a git-init-recovered project");

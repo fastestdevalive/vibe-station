@@ -7,6 +7,7 @@
 //! tokens/credential files; never panics; bounded by [`PROBE_TIMEOUT`];
 //! failures are folded into `LimitsResult.status`.
 
+use std::collections::BTreeMap;
 use std::process::Stdio;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -67,6 +68,7 @@ pub fn interpret_codex_rate_limits(msg: &serde_json::Value, as_of: &str) -> Limi
             windows.push(vst_types::LimitWindow {
                 harness: HARNESS.into(),
                 window_id: id.into(),
+                account_id: None,
                 cadence_minutes: cadence,
                 used_pct: Some(used),
                 resets_at,
@@ -88,6 +90,7 @@ pub fn interpret_codex_rate_limits(msg: &serde_json::Value, as_of: &str) -> Limi
 
     LimitsResult {
         harness: HARNESS.into(),
+        account_id: None,
         status: LimitStatus::Ok,
         message: None,
         as_of: as_of.into(),
@@ -96,9 +99,12 @@ pub fn interpret_codex_rate_limits(msg: &serde_json::Value, as_of: &str) -> Limi
 }
 
 /// Spawns `codex app-server`, bounded; never panics.
-pub async fn probe_codex_limits() -> LimitsResult {
+///
+/// `env` is the account's env (Decision 9): the probe must read THAT account's
+/// windows, so the vendor binary runs under its login directory.
+pub async fn probe_codex_limits(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
-    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_codex_limits_inner()).await;
+    let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_codex_limits_inner(env)).await;
     match outcome {
         Ok(r) => r,
         Err(_) => LimitsResult::failure(
@@ -111,7 +117,7 @@ pub async fn probe_codex_limits() -> LimitsResult {
     }
 }
 
-async fn probe_codex_limits_inner() -> LimitsResult {
+async fn probe_codex_limits_inner(env: BTreeMap<String, String>) -> LimitsResult {
     let as_of = crate::util::now_iso_8601();
     let path = match crate::claude_limits::resolve_or_not_installed(
         HARNESS,
@@ -121,7 +127,7 @@ async fn probe_codex_limits_inner() -> LimitsResult {
         &as_of,
     ) {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
 
     let probe_dir = crate::home::home_dir()
@@ -141,6 +147,7 @@ async fn probe_codex_limits_inner() -> LimitsResult {
         .args(["app-server"])
         .current_dir(&probe_dir)
         .env("PATH", crate::context::effective_path())
+        .envs(env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

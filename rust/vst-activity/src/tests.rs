@@ -12,6 +12,7 @@ fn session(id: &str, project_id: &str) -> SessionRecord {
         r#type: SessionType::Agent,
         mode_id: None,
         mode_icon: None,
+        account_id: None,
         name: None,
         name_source: None,
         tmux_name: format!("{id}-pane"),
