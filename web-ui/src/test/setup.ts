@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Local CI only (see vitest.config.ts): `waitFor`/`findBy*` give up after 1 s by
+// default, which a loaded CI host exceeds without anything being wrong.
+if (process.env.VST_CI === "1") {
+  configure({ asyncUtilTimeout: 10_000 });
+}
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,

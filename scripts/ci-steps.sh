@@ -53,7 +53,8 @@ if want web; then
   step "web-ui lint"
   pnpm lint
   step "web-ui test"
-  pnpm test
+  # VST_CI=1: fewer workers, longer timeouts and retries (web-ui/vitest.config.ts says why).
+  VST_CI=1 pnpm test
   step "web-ui build"
   pnpm --filter ./web-ui exec vite build
 fi

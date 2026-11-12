@@ -66,17 +66,23 @@ pub fn shell_file_effects(command: &str, cwd: Option<&Path>) -> Vec<FileEffect> 
 
 /// (destination, move source) pairs.
 fn run_command(command: &str, cwd: Option<&Path>) -> Vec<(PathBuf, Option<PathBuf>)> {
-    if command.len() > MAX_COMMAND_BYTES {
-        return Vec::new();
-    }
+    run_bounded(command, cwd).out
+}
+
+/// Interpret `command` until it ends, [`MAX_TARGETS`] is reached or the work
+/// budget is spent. Returns the whole [`Run`] so tests can read the work charged.
+fn run_bounded(command: &str, cwd: Option<&Path>) -> Run {
     let mut run = Run::new(cwd);
+    if command.len() > MAX_COMMAND_BYTES {
+        return run;
+    }
     for cmd in lex(command) {
         run.exec(cmd);
         if run.out.len() >= MAX_TARGETS || run.exhausted() {
             break;
         }
     }
-    run.out
+    run
 }
 
 // ---------------------------------------------------------------- lexer ----

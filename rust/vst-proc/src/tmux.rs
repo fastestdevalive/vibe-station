@@ -67,6 +67,19 @@ pub fn exact_pane(name: &str) -> String {
     format!("={name}:")
 }
 
+/// `set-option -w -t =name: remain-on-exit on` (window option; never `-g`).
+fn remain_on_exit_args(name: &str) -> [String; 6] {
+    [
+        "set-option",
+        "-w",
+        "-t",
+        &exact_pane(name),
+        "remain-on-exit",
+        "on",
+    ]
+    .map(str::to_string)
+}
+
 /// Options for `tmux new-session -d`.
 #[derive(Debug, Clone, Default)]
 pub struct NewSessionOptions {
@@ -79,10 +92,11 @@ pub struct NewSessionOptions {
     /// Command + args to run as the initial command (must be the last argv).
     pub command: Option<Vec<String>>,
     /// Keep the session (with a dead pane) after the pane command exits, so the
-    /// exit status/signal can be read. Set per session AFTER creation via
-    /// [`Tmux::set_remain_on_exit`] (best-effort; failure only logs) — never
-    /// `-g`, and never chained into the `new-session` argv (tmux splits an
-    /// argv element ending in `;`).
+    /// exit status/signal can be read. Set per session (never `-g`) by a
+    /// `set-option` chained after `new-session` in the SAME tmux invocation, so
+    /// it is in place before the server can see the pane exit. tmux skips it
+    /// when `new-session` itself fails, and splits commands at an argv element ending in
+    /// `;`, with or without the chain, so `command` must not rely on one.
     pub remain_on_exit: bool,
 }
 
@@ -487,30 +501,25 @@ impl Tmux {
                 args.extend(command.iter().cloned());
             }
         }
+        if opts.remain_on_exit {
+            // Chained onto the same tmux invocation (`new-session ... ; set-option`),
+            // so the server runs both before it can notice the pane exiting. As two
+            // invocations, a command that exits at once (the launch failure most
+            // worth explaining) took its session with it before the option landed.
+            args.push(";".to_string());
+            args.extend(remain_on_exit_args(&opts.name));
+        }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.run(&refs)?;
-        if opts.remain_on_exit {
-            if let Err(e) = self.set_remain_on_exit(&opts.name) {
-                tracing::warn!(
-                    "[tmux] could not set remain-on-exit on a new session (exit reason will not be recorded): {}",
-                    e.stderr().trim()
-                );
-            }
-        }
         Ok(())
     }
 
     /// Per-session `remain-on-exit on` (a window option in tmux >= 3.x, set on
     /// the session's window via `-w`; never `-g`).
     pub fn set_remain_on_exit(&self, name: &str) -> Result<(), TmuxError> {
-        self.run(&[
-            "set-option",
-            "-w",
-            "-t",
-            &exact_pane(name),
-            "remain-on-exit",
-            "on",
-        ])?;
+        let args = remain_on_exit_args(name);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.run(&refs)?;
         Ok(())
     }
 
@@ -535,17 +544,29 @@ impl Tmux {
     /// status/signal only once it has reaped the child — under load the gap is
     /// visible. A dead pane that has neither yet is re-read for a short, bounded
     /// time so the poller never records a bare "pane exited" (and then kills the
-    /// session) for a pane whose real reason lands a few milliseconds later.
+    /// session) for a pane whose real reason lands a few milliseconds later. If
+    /// the first wait does not help, the server is nudged ([`Self::nudge_reap`]).
     pub fn pane_exit_info(&self, name: &str) -> Option<SessionPaneInfo> {
         let mut info = self.pane_exit_info_once(name)?;
-        for _ in 0..PANE_STATUS_SETTLE_TRIES {
+        for attempt in 0..PANE_STATUS_SETTLE_TRIES {
             if !info.dead || info.dead_status.is_some() || info.dead_signal.is_some() {
                 break;
+            }
+            if attempt > 0 {
+                self.nudge_reap();
             }
             std::thread::sleep(PANE_STATUS_SETTLE_DELAY);
             info = self.pane_exit_info_once(name)?;
         }
         Some(info)
+    }
+
+    /// Make the server reap its children now. tmux 3.3a under load can miss the
+    /// SIGCHLD of a pane's command: the pane reads dead, the child stays a
+    /// zombie and the status never arrives by waiting alone. Any later child
+    /// exit makes the server reap everything, so run a no-op job. Best-effort.
+    fn nudge_reap(&self) {
+        let _ = self.run(&["run-shell", "true"]);
     }
 
     fn pane_exit_info_once(&self, name: &str) -> Option<SessionPaneInfo> {

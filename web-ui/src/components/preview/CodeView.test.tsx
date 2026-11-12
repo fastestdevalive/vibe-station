@@ -4,6 +4,9 @@ import { CodeView, type GutterMarkKind } from "./CodeView";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import * as lspApi from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
+import { loadShikiBeforeAll } from "@/test/shikiReady";
+
+loadShikiBeforeAll();
 
 describe("CodeView", () => {
   it("5.T1: renders line with added modifier class when gutterMarks contains that line", () => {

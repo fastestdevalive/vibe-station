@@ -57,6 +57,12 @@ function browserClick(el: Element): MouseEvent {
 describe("useDragClickGuard", () => {
   beforeEach(() => {
     installDndKitClickSuppressor();
+    // Freeze the clock. The guard compares two performance.now() readings
+    // against a 250 ms window, and on a loaded CI host more than that passed
+    // between dragEnds() and the click (the first getByRole in a worker is
+    // slow), so the click was not treated as part of the drag. Tests that need
+    // time to pass install their own clock.
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
   });
   afterEach(() => {
     if (dndSuppressor) document.removeEventListener("click", dndSuppressor, true);

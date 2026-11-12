@@ -637,3 +637,26 @@ fn exit_status_is_reported_for_a_normal_exit() {
     assert_eq!(i.dead_status, Some(7));
     assert_eq!(describe_exit(&i), "exited with status 7");
 }
+
+#[test]
+fn a_command_that_exits_at_once_keeps_its_session_and_status() {
+    // remain-on-exit must be in place before the server can see the pane exit:
+    // set by a second tmux invocation it lost this race and the session vanished.
+    let Some(srv) = Server::new() else { return };
+    srv.session("anchor", &["sleep", "60"]);
+    srv.tmux
+        .new_session(&NewSessionOptions {
+            name: "gone".into(),
+            command: Some(vec!["sh".into(), "-c".into(), "exit 7".into()]),
+            remain_on_exit: true,
+            ..Default::default()
+        })
+        .unwrap();
+    wait_for("dead pane", || {
+        srv.tmux.pane_exit_info("gone").is_some_and(|i| i.dead)
+    });
+    assert_eq!(
+        srv.tmux.pane_exit_info("gone").unwrap().dead_status,
+        Some(7)
+    );
+}
