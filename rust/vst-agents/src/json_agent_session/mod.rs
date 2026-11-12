@@ -359,10 +359,38 @@ impl std::fmt::Debug for Inner {
 // Constructor
 // ---------------------------------------------------------------------------
 
+/// The per-session transcript store could not be opened, so no live
+/// `JsonAgentSession` was built (nothing registered; a later call retries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionOpenError(pub String);
+
+impl std::fmt::Display for SessionOpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SessionOpenError {}
+
 impl JsonAgentSession {
+    /// Test/fixture convenience: [`try_new`](Self::try_new), panicking on a
+    /// transcript open failure. Production code must use `try_new` (via
+    /// [`get_or_create_json_agent_session`]) — a panic on the `chat:open` path
+    /// is what once took Rich Chat down for every session.
+    ///
+    /// # Panics
+    /// When the transcript store cannot be opened.
+    #[doc(hidden)]
+    pub fn new(opts: JsonAgentSessionOptions) -> Self {
+        Self::try_new(opts).expect("open transcript store (test fixture)")
+    }
+
     /// Create a new session from `opts`. Opens the per-session SQLite transcript
     /// store, seeds meta from the transcript tail, and primes `first_turn_done`.
-    pub fn new(opts: JsonAgentSessionOptions) -> Self {
+    ///
+    /// # Errors
+    /// [`SessionOpenError`] when the transcript store cannot be opened.
+    pub fn try_new(opts: JsonAgentSessionOptions) -> Result<Self, SessionOpenError> {
         let session_paths = crate::paths::Paths::default();
         let cwd: PathBuf = match &opts.worktree {
             Some(wt) => {
@@ -399,7 +427,10 @@ impl JsonAgentSession {
 
         // Open the transcript store; create data_dir if needed.
         let _ = std::fs::create_dir_all(&data_dir);
-        let store = open_transcript_store(&data_dir, &opts.session.id);
+        let store = open_transcript_store(&data_dir, &opts.session.id).map_err(|e| {
+            tracing::warn!(session_id = %opts.session.id, error = %e, "[json-agent] transcript open failed");
+            SessionOpenError(e.to_string())
+        })?;
 
         // Seed display model from requested model, then from transcript tail.
         let meta_tail = store.last_meta();
@@ -495,7 +526,7 @@ impl JsonAgentSession {
             drain_tx,
         };
 
-        Self(Arc::new(inner))
+        Ok(Self(Arc::new(inner)))
     }
 }
 
@@ -1053,20 +1084,20 @@ impl JsonAgentSession {
 
 /// Get (or lazily create + register) the `JsonAgentSession` for a session.
 /// Registered on first turn and reused for later turns.
+///
+/// # Errors
+/// [`SessionOpenError`] when a new session's transcript cannot be opened;
+/// nothing is registered and the next call tries again.
 pub fn get_or_create_json_agent_session(
     registry: &JsonAgentRegistry<JsonAgentSession>,
     opts: JsonAgentSessionOptions,
-) -> JsonAgentSession {
+) -> Result<JsonAgentSession, SessionOpenError> {
     let session_id = opts.session.id.clone();
-    // `get_or_insert_with` holds the registry's lock across the whole
-    // check-and-construct — see its doc comment for why a separate
-    // `get()` ... `set()` here was a lost-update race that could silently
-    // build and immediately discard a whole `JsonAgentSession` (with its
-    // own turn stream nobody was listening to).
-    let mut created = false;
-    let session = registry.get_or_insert_with(&session_id, || {
-        created = true;
-        let s = JsonAgentSession::new(opts);
+    // `try_get_or_insert_with` builds at most one instance per id and runs the
+    // constructor (which opens the SQLite transcript) OUTSIDE the registry's
+    // map lock — see its doc comment for both bugs that shape prevents.
+    let (session, created) = registry.try_get_or_insert_with(&session_id, || {
+        let s = JsonAgentSession::try_new(opts)?;
         if let Some(sink) = registry.activity_sink() {
             s.attach_activity_sink(sink);
         }
@@ -1078,15 +1109,15 @@ pub fn get_or_create_json_agent_session(
         if let Some(obs) = registry.review_observer() {
             s.attach_review_observer(obs);
         }
-        s
-    });
+        Ok(s)
+    })?;
     let session = (*session).clone();
     if created {
-        // OUTSIDE the registry lock: reads the transcript.
+        // After registration (outside the creation gate): reads the transcript.
         session.start_task_rebuild();
         session.start_hold_follower();
     }
-    session
+    Ok(session)
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,10 +1144,13 @@ impl JsonAgentSession {
             return false;
         }
         match store.as_mut() {
-            Some(store) => {
-                store.append(ev);
-                true
-            }
+            Some(store) => match store.try_append(ev) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!(error = %e, "[json-agent] transcript append failed; event not persisted");
+                    false
+                }
+            },
             None => false,
         }
     }
@@ -1175,10 +1209,38 @@ fn with_disk_store<T>(
     if !has_db && !has_legacy {
         return fallback;
     }
-    let store = open_transcript_store(data_dir, session_id);
+    // Degrade, never panic: a read-only disk path (snapshot fallback, REST
+    // history) must not take a handler down over one unreadable DB.
+    let store = match open_transcript_store(data_dir, session_id) {
+        Ok(store) => store,
+        Err(e) => {
+            tracing::warn!(session_id, error = %e, "[json-agent] transcript open failed; serving empty");
+            return fallback;
+        }
+    };
     let out = f(&store);
     store.close();
     out
+}
+
+/// Whether a session's on-disk transcript (if any) can be opened. `Ok` when
+/// there is nothing on disk yet — an empty history is then the truth, not a
+/// degraded read. Lets `chat:open` tell "no history" apart from "history we
+/// can't read" before serving a disk snapshot (the readers below degrade to
+/// empty, which on their own would show a misleading "Start chatting").
+///
+/// # Errors
+/// [`SessionOpenError`] when the transcript exists but cannot be opened.
+pub fn probe_disk_transcript(data_dir: &Path, session_id: &str) -> Result<(), SessionOpenError> {
+    let has_db = transcript_db_path(data_dir).exists();
+    let has_legacy = data_dir.join("messages.jsonl").exists();
+    if !has_db && !has_legacy {
+        return Ok(());
+    }
+    let store =
+        open_transcript_store(data_dir, session_id).map_err(|e| SessionOpenError(e.to_string()))?;
+    store.close();
+    Ok(())
 }
 
 /// Read a session's full transcript from disk (no live session).
@@ -1317,11 +1379,18 @@ pub fn carry_session_transcript(
         return 0;
     }
 
-    let old = open_transcript_store(old_dir, old_id);
+    let (old, mut new) = match (
+        open_transcript_store(old_dir, old_id),
+        open_transcript_store(new_dir, new_id),
+    ) {
+        (Ok(old), Ok(new)) => (old, new),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!(old_id, new_id, error = %e, "[json-agent] transcript carry skipped: open failed");
+            return 0;
+        }
+    };
     let rows = old.read_all();
     old.close();
-
-    let mut new = open_transcript_store(new_dir, new_id);
 
     let mut carried: Vec<NormalizedEvent> = Vec::new();
     for mut ev in rows {

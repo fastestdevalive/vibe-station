@@ -1886,7 +1886,7 @@ fn phase2_ev(
 /// (the same override-aware Paths the route's carry uses).
 fn phase2_seed_old_store(project_id: &str, session_id: &str) {
     let dir = AgentPaths::default().direct_session_data_dir(project_id, session_id);
-    let mut s = open_transcript_store(&dir, session_id);
+    let mut s = open_transcript_store(&dir, session_id).unwrap();
     for (kind, turn, text) in [
         (NormalizedEventKind::User, "t1", "hello"),
         (NormalizedEventKind::Thinking, "t1", "thinking"),
@@ -2127,7 +2127,7 @@ async fn session_output_excludes_carried_rows_of_reset_agent() {
     // Simulate the new conversation: append a fresh Text turn to the new store
     // (as if the new agent replied after the carried history + marker).
     let new_dir = AgentPaths::default().direct_session_data_dir("p1", &new_id);
-    let mut s = open_transcript_store(&new_dir, &new_id);
+    let mut s = open_transcript_store(&new_dir, &new_id).unwrap();
     let mut new_text = phase2_ev(NormalizedEventKind::Text, &new_id, "new-turn", "");
     new_text.text = Some("post-reset reply".into());
     s.append(&mut new_text);
@@ -2404,7 +2404,7 @@ async fn reset_cancelled_after_export_leaves_no_new_dir() {
     seeded_claude_json_session(&store).await;
     // Make the export take long enough that the cancel lands before commit.
     let old_dir = AgentPaths::default().direct_session_data_dir("p1", "s1");
-    let mut s = open_transcript_store(&old_dir, "s1");
+    let mut s = open_transcript_store(&old_dir, "s1").unwrap();
     for i in 0..20_000 {
         let mut e = phase2_ev(
             NormalizedEventKind::Text,

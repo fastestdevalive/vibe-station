@@ -225,6 +225,7 @@ fn agent_for(
             broadcaster: Broadcaster(broadcast::channel(64).0),
         },
     )
+    .unwrap()
 }
 
 impl Env {

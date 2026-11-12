@@ -23,9 +23,9 @@ use crate::json_agent_registry::JsonAgentRegistry;
 use crate::json_agent_session::{
     self, get_or_create_json_agent_session,
     meta::{build_meta_from_store_meta, MetaOptions},
-    read_meta_from_data_dir, read_page_before_from_data_dir, read_since_from_data_dir,
-    read_tail_from_data_dir, read_transcript_from_data_dir, JsonAgentSession,
-    JsonAgentSessionOptions,
+    probe_disk_transcript, read_meta_from_data_dir, read_page_before_from_data_dir,
+    read_since_from_data_dir, read_tail_from_data_dir, read_transcript_from_data_dir,
+    JsonAgentSession, JsonAgentSessionOptions,
 };
 use crate::paths::Paths;
 use crate::plugin::AgentPlugin;
@@ -235,9 +235,17 @@ pub struct ResolvedJsonAgent {
 /// Errors from `resolve_json_agent`.
 #[derive(Debug)]
 pub enum ResolveJsonAgentError {
-    NotFound { session_id: String },
-    NotJson { session_id: String },
+    NotFound {
+        session_id: String,
+    },
+    NotJson {
+        session_id: String,
+    },
     ModeError(String),
+    /// The session's transcript store could not be opened (e.g. a disk I/O
+    /// error while its data dir is being deleted). Transient: nothing was
+    /// registered, so a later resolve retries.
+    StoreOpen(String),
 }
 
 /// Resolve (or lazily create + register) the `JsonAgentSession`.
@@ -272,6 +280,7 @@ pub async fn resolve_json_agent(
         .clone()
         .or_else(|| mode.model.clone());
 
+    let existed = registry.get(session_id).is_some();
     let agent = get_or_create_json_agent_session(
         registry,
         JsonAgentSessionOptions {
@@ -287,7 +296,20 @@ pub async fn resolve_json_agent(
             store_handle: store.clone(),
             broadcaster,
         },
-    );
+    )
+    .map_err(|e| ResolveJsonAgentError::StoreOpen(e.0))?;
+
+    // A delete can land between the context read above and the lazy create
+    // (`resolve_mode` awaits): its `registry.remove` found nothing to remove, so
+    // the instance we just built would outlive its session. Re-check and undo.
+    if !existed && find_json_session_context(store, session_id).await.is_none() {
+        if let Some(stale) = registry.remove(session_id) {
+            stale.release().await;
+        }
+        return Err(ResolveJsonAgentError::NotFound {
+            session_id: session_id.to_string(),
+        });
+    }
 
     Ok(ResolvedJsonAgent { agent, ctx, mode })
 }
@@ -556,6 +578,23 @@ pub fn read_session_transcript(
 }
 
 /// Bounded tail-N turns + cursor, narrowed by a byte budget.
+/// Whether this session's history can be read: always `Ok` for a live
+/// (registered) session; otherwise probes the on-disk transcript. `chat:open`
+/// calls this before a disk snapshot so an unreadable store answers with an
+/// error instead of an empty replay.
+///
+/// # Errors
+/// The transcript exists on disk but cannot be opened (message only).
+pub fn check_session_history_readable(
+    ctx: &JsonSessionContext,
+    registry: &JsonAgentRegistry<JsonAgentSession>,
+) -> Result<(), String> {
+    if registry.get(&ctx.session.id).is_some() {
+        return Ok(());
+    }
+    probe_disk_transcript(&session_data_dir_for(ctx), &ctx.session.id).map_err(|e| e.0)
+}
+
 pub fn read_session_tail(
     ctx: &JsonSessionContext,
     registry: &JsonAgentRegistry<JsonAgentSession>,
@@ -925,6 +964,9 @@ async fn deliver_plain(
             "The session is no longer a Rich Chat session.".to_string()
         }
         ResolveJsonAgentError::ModeError(m) => format!("The agent could not be started: {m}"),
+        ResolveJsonAgentError::StoreOpen(m) => {
+            format!("The chat history could not be opened: {m}")
+        }
     })?;
     if let Some(agent) = registry.get(&row.session_id) {
         agent.write_working_for_human_turn().await;

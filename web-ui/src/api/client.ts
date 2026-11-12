@@ -1577,6 +1577,29 @@ export function createClientApi() {
       }
     },
 
+    /** Re-request a full tail replay for an ALREADY-open chat (the "Retry"
+     *  after a failed/unanswered load). Unlike `openChat`, sends `chat:open`
+     *  even when other subscribers hold the session (the refcount would make a
+     *  close+open a no-op on the wire) and does not change the refcount; the
+     *  daemon replaces this connection's prior subscription for the session.
+     *  Falls back to a plain `openChat` when nothing holds it. */
+    async reopenChat(sessionId: string): Promise<void> {
+      const entry = chatSubs.get(sessionId);
+      if (!entry || entry.refs <= 0) {
+        await api.openChat(sessionId);
+        return;
+      }
+      // Reconnect replays must also ask for a fresh tail now.
+      chatSubs.set(sessionId, { refs: entry.refs, sinceSeq: undefined });
+      if (ws?.readyState !== WebSocket.OPEN) {
+        // The handshake's onopen re-sends `chat:open` for every chatSubs entry
+        // (now without sinceSeq) — sending here too would replay twice.
+        await ensureWs();
+        return;
+      }
+      ws.send(JSON.stringify({ type: "chat:open", sessionId }));
+    },
+
     /** Refcounted close: chat:close is only sent to the daemon when the last
      *  subscriber closes (count drops to 0). Guards against going negative. */
     async closeChat(sessionId: string): Promise<void> {

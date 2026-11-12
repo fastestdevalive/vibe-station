@@ -795,7 +795,7 @@ async fn seal_then_import_emits_only_post_seal_turn() {
     // (2) Pre-seed the LIVE store with live-shaped rows matching those Rich-Chat
     // turns: a UUID-turn-id user, a silent notice user row, and a tool row.
     let data_dir = home.join(".vibe-station/projects/p1/sessions").join(SID);
-    let mut store = open_transcript_store(&data_dir, SID);
+    let mut store = open_transcript_store(&data_dir, SID).unwrap();
     store.append(&mut live_ev(
         NormalizedEventKind::User,
         SID,
@@ -881,7 +881,7 @@ async fn seal_then_import_emits_only_post_seal_turn() {
     // No duplicate user rows — the pre-seed count grows by exactly 1 (the
     // terminal turn), and none of the Rich-Chat / silent rows are re-added.
     session.dispose();
-    let store = open_transcript_store(&data_dir, SID);
+    let store = open_transcript_store(&data_dir, SID).unwrap();
     let all = store.read_all();
     let user_texts: Vec<Option<&str>> = all
         .iter()

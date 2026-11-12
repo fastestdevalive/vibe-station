@@ -15,8 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use vst_agents::json_agent_chat::{
-    find_json_session_context, read_schedule_state, read_session_meta, read_session_since,
-    read_session_tail, resolve_json_agent, JsonSessionContext,
+    check_session_history_readable, find_json_session_context, read_schedule_state,
+    read_session_meta, read_session_since, read_session_tail, resolve_json_agent,
+    JsonSessionContext, ResolveJsonAgentError,
 };
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
@@ -25,7 +26,7 @@ use vst_store::StoreHandle;
 use vst_types::domain::LifecycleState;
 use vst_types::events::Broadcaster;
 use vst_types::ws::ClientMessage;
-use vst_types::ws::ServerMessage;
+use vst_types::ws::{ServerMessage, SessionErrorReason};
 use vst_types::{NormalizedEvent, SessionMeta};
 
 use crate::connection::{ChatStreamEntry, WsConnection};
@@ -106,6 +107,18 @@ impl Snapshot {
             has_more,
         }
     }
+}
+
+/// Answer a `chat:open` whose history cannot be read with a transient
+/// `session:error`, so the client shows an error + Retry instead of waiting
+/// forever for a `chat:replay` (or rendering an empty chat that has history).
+/// The chat subscription stays registered, like the other early returns.
+fn send_history_error(conn: &WsConnection, session_id: &str, error: &str) {
+    conn.send(ServerMessage::SessionError {
+        session_id: session_id.to_string(),
+        message: format!("Couldn't open this chat's history: {error}"),
+        reason: Some(SessionErrorReason::Transient),
+    });
 }
 
 fn send_snapshot(
@@ -202,6 +215,10 @@ pub async fn handle_chat_open(
     // it would lazily RE-CREATE it. Serve it from disk instead.
     if ctx.session.lifecycle.state == LifecycleState::Done {
         conn.unregister_chat_stream(&session_id);
+        if let Err(error) = check_session_history_readable(&ctx, registry) {
+            send_history_error(conn, &session_id, &error);
+            return;
+        }
         send_snapshot(conn, &ctx, registry, &session_id, since_seq);
         let meta = read_session_meta(&ctx, registry).await;
         conn.send(ServerMessage::SessionMetaEvent {
@@ -213,11 +230,27 @@ pub async fn handle_chat_open(
         return;
     }
 
-    let resolved = resolve_json_agent(&session_id, daemon_port, store, registry, broadcaster)
-        .await
-        .ok();
+    let resolved =
+        match resolve_json_agent(&session_id, daemon_port, store, registry, broadcaster).await {
+            Ok(resolved) => Some(resolved),
+            // The transcript itself can't be opened, so the disk snapshot below
+            // would fail the same way: tell the client instead of leaving its
+            // "Loading history…" spinner waiting for a replay that never comes.
+            Err(ResolveJsonAgentError::StoreOpen(error)) => {
+                // Like the Done branch: no stale stream entry bound to a released
+                // instance survives the failed open.
+                conn.unregister_chat_stream(&session_id);
+                send_history_error(conn, &session_id, &error);
+                return;
+            }
+            Err(_) => None,
+        };
 
     let Some(resolved) = resolved else {
+        if let Err(error) = check_session_history_readable(&ctx, registry) {
+            send_history_error(conn, &session_id, &error);
+            return;
+        }
         // No task snapshot: resolution failing is not proof the session has no tasks, and an empty
         // snapshot would wipe the client's tray (and bump its held rev past the real registry's).
         send_snapshot(conn, &ctx, registry, &session_id, since_seq);

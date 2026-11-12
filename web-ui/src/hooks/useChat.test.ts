@@ -1,8 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
 import type { BeginEditResponse, NormalizedEvent, SendChatResponse, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
-import { useChat } from "./useChat";
+import { COLD_START_TIMEOUT_MESSAGE, COLD_START_TIMEOUT_MS, useChat } from "./useChat";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** Minimal fake api with controllable WS emission for deterministic ordering. */
@@ -20,6 +20,7 @@ function makeApi(sendChatResult: SendChatResponse = { turnId: "t1", queuePositio
       return () => listeners.get(type)!.delete(h);
     },
     openChat: vi.fn(async () => {}),
+    reopenChat: vi.fn(async () => {}),
     closeChat: vi.fn(async () => {}),
     sendChat: vi.fn(async () => sendChatResult),
     stopChat: vi.fn(async () => ({ ok: true as const })),
@@ -1046,5 +1047,177 @@ describe("useChat review comments (6.4 / 6.5)", () => {
       await result.current.saveEdit("t1", "m2", []);
     });
     expect((api.resubmitQueuedTurn.mock.calls.at(-1) as unknown as unknown[])[2]).not.toHaveProperty("keepReview");
+  });
+});
+
+describe("useChat cold-start bound (registry-poison fix)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const replay = (events: NormalizedEvent[] = []): WSEvent => ({
+    type: "chat:replay",
+    sessionId: "s1",
+    events,
+    hasMore: false,
+  });
+
+  it("3.T1 — no reply within the bound: spinner becomes an error", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    expect(result.current.loading).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS - 1);
+    });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadError).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBe(COLD_START_TIMEOUT_MESSAGE);
+  });
+
+  it("3.T2 — retry() forces a fresh chat:open and restarts the bound", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS);
+    });
+    expect(result.current.loadError).not.toBeNull();
+    act(() => {
+      result.current.retry();
+    });
+    // Forced re-send (refcount-proof), not a close + open pair.
+    expect(api.reopenChat).toHaveBeenCalledWith("s1");
+    expect(api.closeChat).not.toHaveBeenCalled();
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadError).toBeNull();
+    act(() => {
+      api.emit(replay([ev("e1", { kind: "user", role: "user", turnId: "t1", logSeq: 1 })]));
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.events.map((e) => e.id)).toEqual(["e1"]);
+    // The old timer was cleared: nothing flips back to an error later.
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS * 2);
+    });
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("3.T3 — session:error before the first replay is surfaced; after a load it is not", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:error", sessionId: "s1", message: "Couldn't open this chat's history: disk I/O error", reason: "transient" });
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBe("Couldn't open this chat's history: disk I/O error");
+
+    // A second mount that loads fine ignores a later (transient) session:error.
+    const api2 = makeApi();
+    const { result: r2 } = renderHook(() => useChat(api2 as unknown as ApiInstance, "s1", true, { cache: false }));
+    act(() => {
+      api2.emit(replay());
+    });
+    act(() => {
+      api2.emit({ type: "session:error", sessionId: "s1", message: "tty hiccup", reason: "transient" });
+    });
+    expect(r2.current.loadError).toBeNull();
+  });
+
+  it("3.T4 — a late replay after the timeout clears the error", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS);
+    });
+    expect(result.current.loadError).not.toBeNull();
+    act(() => {
+      api.emit(replay([ev("e1", { kind: "text", logSeq: 1 })]));
+    });
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.events).toHaveLength(1);
+  });
+
+  it("3.T5 — a WS reconnect restarts the bound (offline time is not 'no reply')", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS - 1000);
+    });
+    act(() => {
+      api.emit({ type: "ws:open" } as unknown as WSEvent);
+    });
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS - 1);
+    });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadError).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.loadError).toBe(COLD_START_TIMEOUT_MESSAGE);
+  });
+
+  it("error -> Retry -> error again surfaces the second error; error -> reconnect shows the spinner again", () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    const err = (message: string): WSEvent => ({ type: "session:error", sessionId: "s1", message, reason: "transient" });
+    act(() => {
+      api.emit(err("first"));
+    });
+    expect(result.current.loadError).toBe("first");
+    act(() => {
+      result.current.retry();
+    });
+    expect(result.current.loading).toBe(true);
+    act(() => {
+      api.emit(err("second"));
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBe("second");
+    act(() => {
+      api.emit({ type: "ws:open" } as WSEvent);
+    });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("a successful Retry makes the snapshot cacheable again", () => {
+    const api = makeApi();
+    const { result, unmount } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      api.emit({ type: "session:error", sessionId: "s1", message: "boom", reason: "transient" });
+    });
+    act(() => {
+      result.current.retry();
+    });
+    act(() => {
+      api.emit(replay([ev("e1", { kind: "text", logSeq: 1 })]));
+    });
+    unmount();
+    expect(chatSnapshotCache.restore("s1")?.events.map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("does not arm the bound on the cached-snapshot path", () => {
+    chatSnapshotCache.save("s1", {
+      events: [ev("e1", { kind: "text", logSeq: 1 })],
+      hasMore: false,
+      userTurnIds: new Set(),
+      latestSeq: 1,
+      savedAt: Date.now(),
+    });
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    act(() => {
+      vi.advanceTimersByTime(COLD_START_TIMEOUT_MS * 2);
+    });
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.events).toHaveLength(1);
   });
 });

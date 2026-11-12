@@ -1413,7 +1413,7 @@ impl AgentPlugin for FastPlugin {
 /// has something to copy.
 fn seed_old_transcript(project_id: &str, session_id: &str) {
     let dir = AgentPaths::default().direct_session_data_dir(project_id, session_id);
-    let mut s = open_transcript_store(&dir, session_id);
+    let mut s = open_transcript_store(&dir, session_id).unwrap();
     let mut e = NormalizedEvent::default();
     e.id = "seed-user".into();
     e.session_id = session_id.into();

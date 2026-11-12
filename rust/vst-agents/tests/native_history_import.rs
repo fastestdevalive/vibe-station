@@ -773,7 +773,7 @@ fn end_to_end_tty_json_toggle_imports_once() {
     std::fs::create_dir_all(&projects).unwrap();
 
     // Live log: turn-1 prompt-only, toolu_A (the same tool id the native turn 1 has).
-    let mut store = vst_store::transcript::open_transcript_store(tmp.path(), SESSION_ID);
+    let mut store = vst_store::transcript::open_transcript_store(tmp.path(), SESSION_ID).unwrap();
     store.append(&mut store_ev(
         vst_types::NormalizedEventKind::User,
         serde_json::json!({"text": "build it", "turnId": "live-1"}),

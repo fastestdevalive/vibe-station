@@ -88,7 +88,7 @@ fn empty_dir_returns_fallbacks_and_creates_nothing() {
 fn read_transcript_returns_all_stored_events() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_path_buf();
-    let mut store = open_transcript_store(&data_dir, SESSION_ID);
+    let mut store = open_transcript_store(&data_dir, SESSION_ID).unwrap();
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
     store.close();
@@ -104,7 +104,7 @@ fn read_transcript_returns_all_stored_events() {
 fn read_tail_returns_last_n_turns() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_path_buf();
-    let mut store = open_transcript_store(&data_dir, SESSION_ID);
+    let mut store = open_transcript_store(&data_dir, SESSION_ID).unwrap();
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
     append_turn(&mut store, "t3");
@@ -130,7 +130,7 @@ fn read_tail_returns_last_n_turns() {
 fn read_meta_returns_last_model_and_real_usage() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_path_buf();
-    let mut store = open_transcript_store(&data_dir, SESSION_ID);
+    let mut store = open_transcript_store(&data_dir, SESSION_ID).unwrap();
     let mut user = ev(NormalizedEventKind::User, "hi", "t1");
     user.model = Some("sonnet".to_string());
     store.append(&mut user);
@@ -159,7 +159,7 @@ fn read_meta_returns_last_model_and_real_usage() {
 fn page_before_and_since_return_keyset_pages() {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_path_buf();
-    let mut store = open_transcript_store(&data_dir, SESSION_ID);
+    let mut store = open_transcript_store(&data_dir, SESSION_ID).unwrap();
     append_turn(&mut store, "t1");
     append_turn(&mut store, "t2");
     store.close();

@@ -172,7 +172,7 @@ fn break_ev(session_id: &str, turn_id: &str) -> NormalizedEvent {
 
 /// Seed the old store with a realistic mix of carried and dropped kinds.
 fn seed_old_store(old_dir: &std::path::Path, old_id: &str) {
-    let mut s = open_transcript_store(old_dir, old_id);
+    let mut s = open_transcript_store(old_dir, old_id).unwrap();
     // Carried kinds.
     for (kind, turn, meta) in [
         (NormalizedEventKind::User, "t1", true),

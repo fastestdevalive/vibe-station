@@ -230,26 +230,29 @@ async fn env() -> Env {
     let messages = Arc::new(Mutex::new(Vec::new()));
     let mut agents = Vec::new();
     for id in ["d1", "d3"] {
-        agents.push(get_or_create_json_agent_session(
-            &routes.json_registry,
-            JsonAgentSessionOptions {
-                project: project(),
-                worktree: None,
-                session: draft(id, Channel::Json),
-                plugin: Arc::new(RecPlugin {
-                    messages: messages.clone(),
-                    block: false,
-                    cancelled: Arc::new(AtomicBool::new(false)),
-                }),
-                daemon_port: 0,
-                cli: NormalizedEventProvider::Claude,
-                model: None,
-                mode_id: Some("my-mode".into()),
-                mode_name: Some("My Mode".into()),
-                store_handle: store.clone(),
-                broadcaster: Broadcaster(broadcast::channel(64).0),
-            },
-        ));
+        agents.push(
+            get_or_create_json_agent_session(
+                &routes.json_registry,
+                JsonAgentSessionOptions {
+                    project: project(),
+                    worktree: None,
+                    session: draft(id, Channel::Json),
+                    plugin: Arc::new(RecPlugin {
+                        messages: messages.clone(),
+                        block: false,
+                        cancelled: Arc::new(AtomicBool::new(false)),
+                    }),
+                    daemon_port: 0,
+                    cli: NormalizedEventProvider::Claude,
+                    model: None,
+                    mode_id: Some("my-mode".into()),
+                    mode_name: Some("My Mode".into()),
+                    store_handle: store.clone(),
+                    broadcaster: Broadcaster(broadcast::channel(64).0),
+                },
+            )
+            .unwrap(),
+        );
     }
     Env {
         _home: home,

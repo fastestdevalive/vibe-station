@@ -409,6 +409,12 @@
 .chat-pane__empty {
   flex-direction: column;
 }
+/* Cold-start load failed (session:error or no reply): message + Retry. */
+.chat-pane__load-error {
+  flex-direction: column;
+  padding: 0 var(--space-4);
+  text-align: center;
+}
 .chat-pane__empty-icon {
   font-size: var(--font-size-3xl);
   margin-bottom: var(--space-2);
