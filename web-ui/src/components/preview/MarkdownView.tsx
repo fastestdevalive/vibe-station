@@ -18,6 +18,7 @@ import { PinGutter } from "@/components/comments/CommentPins";
 import type { PinTarget } from "@/components/comments/pinMeasurer";
 import { usePinHost } from "@/components/comments/usePinHost";
 import { asRehypePlugin, rehypeSourceLines } from "@/components/comments/rehypeSourceLines";
+import { rehypeFindMarks } from "@/lib/rehypeFindMarks";
 
 interface MarkdownImageProps {
   src?: string;
@@ -178,9 +179,11 @@ interface MarkdownViewProps {
    * (`segmentMarkdownWithLines`), since react-markdown positions are relative to the segment it renders.
    */
   commentSource?: { startLine: number };
+  /** Optional find highlight context (terms + anchor key prefix) */
+  find?: { terms: string[]; keyPrefix: string };
 }
 
-export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null, external = false, commentSource }: MarkdownViewProps) {
+export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null, external = false, commentSource, find }: MarkdownViewProps) {
   const cs = useCommentSurface();
   const startLine = commentSource?.startLine;
   const commentsOn = startLine != null && !!cs && cs.enabled && (filePath === cs.path || filePath?.endsWith(`/${cs.path}`) === true);
@@ -188,15 +191,21 @@ export function MarkdownView({ source, api = null, worktreeId = null, scope = "w
   const pinLabel = cs?.pinLabel;
   const draft = commentsOn && cs.draft?.surface === "markdown" ? cs.draft : null;
   const activeId = commentsOn ? cs.activeId : null;
+  const findTermsKey = find?.terms.join("\0");
   const rehypePlugins = useMemo(() => {
-    if (startLine == null) return [rehypeHighlight];
+    const basePlugins = [
+      rehypeHighlight,
+      ...(find && find.terms.length ? [asRehypePlugin(rehypeFindMarks(find))] : []),
+    ];
+    if (startLine == null) return basePlugins;
     const marks: MarkComment[] = [...(markList ?? []), ...(draft ? [draft] : [])].map((comment) => ({ comment }));
     return [
-      rehypeHighlight,
+      ...basePlugins,
       asRehypePlugin(rehypeSourceLines({ startLine })),
       ...(marks.length ? [asRehypePlugin(rehypeCommentMarks({ comments: marks, startLine }))] : []),
     ];
-  }, [startLine, markList, draft]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startLine, markList, draft, findTermsKey, find?.keyPrefix]);
   // Pins live OUTSIDE the rendered hast, in a right gutter of the container, lined up with each comment's last mark.
   const hostRef = useRef<HTMLDivElement>(null);
   const targets = useMemo<PinTarget[]>(() => {

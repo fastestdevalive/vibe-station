@@ -3523,7 +3523,8 @@
   color: var(--fg-muted);
   user-select: none;
   text-align: right;
-  padding-left: 16px;
+  /* 4px change lane at the left edge (fixed x), then the right-aligned number. */
+  padding-left: 20px;
   padding-right: 16px;
   flex-shrink: 0;
 }
@@ -3536,19 +3537,20 @@
   background: var(--bg-active);
 }
 
-/* Git change marks sit on the RIGHT edge of the numbers (between number and code). */
+/* Git change marks sit in the LEFT lane of the gutter: gutter | numbers | code, at a fixed x
+ * regardless of digit count. The lane is part of the sticky gutter, so it pins on horizontal scroll. */
 .workspace-code-line--added .workspace-code-gutter {
-  box-shadow: inset -2px 0 0 rgb(22, 163, 74);
+  box-shadow: inset 2px 0 0 var(--git-added);
 }
 
 .workspace-code-line--modified .workspace-code-gutter {
-  box-shadow: inset -2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .workspace-code-line--deleted .workspace-code-gutter::after {
   content: "";
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: -3px;
   z-index: 3;
   border-left: 4px solid var(--fg-danger);
@@ -3559,7 +3561,7 @@
 .workspace-code-line--deleted-top .workspace-code-gutter::before {
   content: "";
   position: absolute;
-  right: 0;
+  left: 0;
   top: -3px;
   z-index: 3;
   border-left: 4px solid var(--fg-danger);
@@ -3713,7 +3715,7 @@
   font-size: 10px;
   font-weight: 500;
   padding: 1px 4px;
-  border-radius: var(--radius-xs, 2px);
+  border-radius: 2px;
   background: var(--bg-secondary);
   color: var(--fg-muted);
   border: var(--border-width) solid var(--border-default);
@@ -4167,7 +4169,7 @@
   gap: 3px;
   font-size: 10px;
   padding: 1px 4px;
-  border-radius: var(--radius-xs, 2px);
+  border-radius: 2px;
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-default);
   color: var(--fg-muted);
@@ -4227,7 +4229,7 @@
   font-size: 10px;
   font-weight: 600;
   padding: 1px 4px;
-  border-radius: var(--radius-xs, 2px);
+  border-radius: 2px;
   background: color-mix(in srgb, var(--fg-success) 15%, transparent);
   color: var(--fg-success);
   border: var(--border-width) solid color-mix(in srgb, var(--fg-success) 40%, transparent);
@@ -4237,7 +4239,7 @@
   font-size: 10px;
   font-weight: 600;
   padding: 1px 4px;
-  border-radius: var(--radius-xs, 2px);
+  border-radius: 2px;
   background: var(--bg-secondary);
   color: var(--fg-muted);
   border: var(--border-width) solid var(--border-default);

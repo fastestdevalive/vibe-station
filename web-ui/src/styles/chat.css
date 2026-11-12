@@ -232,6 +232,21 @@
   align-items: center;
   gap: 2px;
 }
+@media (max-width: 640px) {
+  .chat-font-overlay .terminal-font-overlay__btn {
+    width: 40px;
+    height: 40px;
+  }
+  .chat-font-overlay .channel-toggle-button {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    padding: 0;
+  }
+  .chat-font-overlay .channel-toggle-button__text {
+    display: none;
+  }
+}
 
 /* Font size + channel toggle overlay — groups −/+ buttons with the ⇄ toggle
    in the top-right corner of the terminal pane. The channel-toggle-button's
@@ -385,6 +400,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Size container so pane-scoped overlays (find results popover) can size
+     themselves against the message viewport with `cqh`, not the 56px find-bar
+     host or the whole window. Width equals the pane's, so the existing
+     `@container (max-width: 420px)` rules resolve the same. */
+  container-type: size;
 }
 
 .chat-pane__body {
@@ -395,6 +415,14 @@
   /* Chrome's native scroll anchoring would double up with the manual prepend /
      resize corrections the chat applies — disable it. */
   overflow-anchor: none;
+}
+
+/* The message viewport is focusable (`tabIndex={-1}`) so a click into the
+   transcript puts focus inside the pane and the pane-scoped keys (Ctrl/Cmd+F
+   seed-from-selection, Alt+↑/↓ turn jump) actually arrive. It is not a tab stop
+   and must not paint a focus ring. */
+.chat-pane__body:focus {
+  outline: none;
 }
 
 .chat-pane__state {
@@ -435,7 +463,14 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
+  padding-left: 32px;
   min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .chat-message-list {
+    padding-left: 20px;
+  }
 }
 
 /* Virtualized chat (≥ VIRTUALIZE_MIN_ITEMS): rows are absolutely positioned

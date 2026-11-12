@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent, ReviewSummary, SessionMeta } from "@/api/types";
 import { createChatRepository } from "@/api/repositories/chatRepository";
 import { ensureTaskSubscription } from "@/hooks/useTaskStore";
 import { fromWire, toWire } from "@/lib/mentions";
 import * as chatSnapshotCache from "./chatSnapshotCache";
+import { countUserTurns } from "@/lib/chatTurns";
+import { alignForwardPage, firstLogSeq } from "./chatForwardPage";
 
 /** Cap on live (non-load-all) events held in memory. When exceeded, the oldest
  *  events are trimmed back to `TRIM_TO` (at a `user` turn boundary). */
@@ -65,8 +68,11 @@ export interface UseChatResult {
   hasMore: boolean;
   /** True while a `loadEarlier`/`loadAll` fetch is in flight. */
   loadingEarlier: boolean;
-  /** Fetch + prepend the previous keyset page of history (R2.2). No-op at the top. */
-  loadEarlier: () => Promise<void>;
+  /** Fetch + prepend the previous keyset page of history (R2.2), `limit` events
+   *  (the client's default when omitted). No-op at the top. */
+  loadEarlier: (limit?: number) => Promise<void>;
+  /** Fetch + prepend history up to (and including) `seq`, aligned to turn boundaries. */
+  loadEarlierTo: (seq: number) => Promise<void>;
   /** Guarded escape hatch: fetch the WHOLE transcript and merge it in (R2.5). */
   loadAll: () => Promise<void>;
   /** Runnable queued turnIds (from meta) — drives per-turn affordances. */
@@ -104,6 +110,17 @@ export interface UseChatResult {
   /** Enable/disable live-event trimming. Call with the scroller's `atBottom`
    *  so history is not trimmed out from under a user who scrolled up. */
   setCanTrim: (v: boolean) => void;
+  /** User turns strictly before the loaded window (from replay/around/page); null if unknown. */
+  turnsBefore: number | null;
+  /** True when the chat is viewing a detached historical window around a match or turn. */
+  detached: boolean;
+  /** View a historical window around a specific log sequence number. */
+  viewAround: (seq: number) => Promise<void>;
+  /** Return to the latest live conversation window, restoring any stashed live messages. */
+  returnToLatest: () => void;
+  /** While detached: append the next newer page, and rejoin the live tail once
+   *  the window reaches it. Resolves true when the window moved forward. */
+  loadLater: () => Promise<boolean>;
 }
 
 /**
@@ -151,6 +168,27 @@ export function useChat(
   const [stoppingTurnId, setStoppingTurnId] = useState<string | null>(null);
   const stopPending = stoppingTurnId !== null;
 
+  const [turnsBefore, setTurnsBefore] = useState<number | null>(null);
+  const turnsBeforeRef = useRef<number | null>(null);
+  turnsBeforeRef.current = turnsBefore;
+
+  const [detached, setDetached] = useState<boolean>(false);
+  const detachedRef = useRef<boolean>(false);
+  detachedRef.current = detached;
+
+  const stashRef = useRef<{
+    events: NormalizedEvent[];
+    turnsBefore: number | null;
+    oldestSeq: number | null;
+    hasMore: boolean;
+    /** Ids already in `events`, so a live append is O(1) and in place. */
+    ids: Set<string>;
+  } | null>(null);
+
+  /** Forward cursor of a detached window: `logSeq` of its newest loaded row. */
+  const newestSeqRef = useRef<number | null>(null);
+  const loadingLaterRef = useRef(false);
+
   /** turnIds that have an authoritative `user` event — used to dedupe optimistic
    *  bubbles when the daemon echo lands (possibly before `send` resolves). */
   const userTurnIdsRef = useRef<Set<string>>(new Set());
@@ -167,6 +205,19 @@ export function useChat(
   const canTrimRef = useRef(true);
   /** Set by the live-event trim inside the `setEvents` updater; an effect turns it into `hasMore` state. */
   const trimmedRef = useRef(false);
+  /** User turns cut by each live trim, keyed by the first removed event's id so
+   *  a double-invoked updater (StrictMode) records a trim once. The effect below
+   *  folds them into `turnsBefore` (no setState inside an updater). */
+  const pendingTrimsRef = useRef(new Map<string, number>());
+  /** Bumped by every window load (`viewAround` / `loadEarlierTo`), by a session
+   *  switch, by `returnToLatest` and by a reconnect replay that replaces a
+   *  detached window: only the latest load may commit its page. */
+  const windowLoadSeqRef = useRef(0);
+  /** The `loadEarlierTo` call that last turned the `loadingEarlier` spinner on. */
+  const loadingEarlierOwnerRef = useRef(0);
+  const spinnerTokenRef = useRef(0);
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   // Snapshot-cache support refs — synced every render so the effect cleanup
   // always reads the freshest values without needing them in its deps array.
@@ -186,6 +237,12 @@ export function useChat(
       trimmedRef.current = false;
       setHasMore(true);
     }
+    if (pendingTrimsRef.current.size > 0) {
+      let turnsTrimmed = 0;
+      for (const n of pendingTrimsRef.current.values()) turnsTrimmed += n;
+      pendingTrimsRef.current.clear();
+      setTurnsBefore((prevTb) => (prevTb !== null ? prevTb + turnsTrimmed : null));
+    }
   }, [events]);
   isDeltaLoadingRef.current = isDeltaLoading;
 
@@ -193,6 +250,9 @@ export function useChat(
 
   useEffect(() => {
     setLoadError(null);
+    // A window load still in flight belongs to the previous session.
+    windowLoadSeqRef.current++;
+    pendingTrimsRef.current.clear();
     if (!active || !sessionId) {
       setEvents([]);
       setMeta(null);
@@ -203,6 +263,10 @@ export function useChat(
       setHasMore(false);
       setLoadingEarlier(false);
       setEditingDrafts({});
+      setTurnsBefore(null);
+      setDetached(false);
+      detachedRef.current = false;
+      stashRef.current = null;
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
@@ -252,6 +316,8 @@ export function useChat(
       // Restore cached state immediately — no spinner, events visible at once.
       setEvents(snapshot.events);
       setHasMore(snapshot.hasMore);
+      // A sinceSeq delta carries no turnsBefore, so the snapshot's is the only source.
+      setTurnsBefore(snapshot.turnsBefore);
       setMeta(null);
       setPending([]);
       setLoadingEarlier(false);
@@ -321,13 +387,50 @@ export function useChat(
     const offReplay = chatRepo.on("chat:replay", (e) => {
       if (e.type !== "chat:replay" || e.sessionId !== sessionId) return;
 
+      const wasDetached = detachedRef.current;
+      if (wasDetached) {
+        detachedRef.current = false;
+        setDetached(false);
+      }
+
+      const clearStash = () => {
+        stashRef.current = null;
+      };
+
       if (e.hasMore === undefined) {
         // ── sinceSeq delta path ──────────────────────────────────────────────
         // Cursor fields absent → merge the delta, keep existing window top.
         for (const ev of e.events) {
           if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
         }
-        setEvents((prev) => mergeEvents([...e.events, ...prev]));
+        if (wasDetached) {
+          // Reconnect while detached: the displayed window is an `around`
+          // window, not a prefix of the live tail, so merging this delta into it
+          // would leave a hole. Restore the stashed live tail first, then merge
+          // the delta into THAT. The window is replaced, so any in-flight
+          // loadEarlier / viewAround from the old one is dropped (as in the
+          // bounded-tail branch below and `returnToLatest`).
+          windowLoadSeqRef.current++;
+          const stash = stashRef.current;
+          const tail = stash?.events ?? [];
+          setEvents(() => mergeEvents([...e.events, ...tail]));
+          if (stash?.turnsBefore != null) {
+            setTurnsBefore(stash.turnsBefore);
+          }
+          if (stash?.oldestSeq != null) {
+            oldestSeqRef.current = stash.oldestSeq;
+          }
+          if (stash) {
+            hasMoreRef.current = stash.hasMore;
+            setHasMore(stash.hasMore);
+          }
+          clearStash();
+        } else {
+          setEvents((prev) => mergeEvents([...e.events, ...prev]));
+          if (e.turnsBefore !== undefined) {
+            setTurnsBefore(e.turnsBefore);
+          }
+        }
         restoredLatestSeqRef.current = null;
       } else {
         // ── Plain bounded tail path ──────────────────────────────────────────
@@ -339,13 +442,18 @@ export function useChat(
           restoredLatestSeqRef.current != null &&
           e.oldestSeq > restoredLatestSeqRef.current;
 
-        if (gapDetected) {
-          // Drop restored events; render only the fresh delta.
+        const prevOldestSeq = oldestSeqRef.current;
+        if (gapDetected || wasDetached) {
+          // The window is replaced: an in-flight loadEarlier must not merge into it.
+          windowLoadSeqRef.current++;
+          // Drop the current window; render only the fresh tail. `wasDetached`
+          // takes this branch too: a bounded tail is the newest window and must
+          // never be merged onto an `around` window (that left a hole).
           userTurnIdsRef.current = new Set();
           for (const ev of e.events) {
             if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
           }
-          setEvents(_prev => e.events.slice());
+          setEvents(() => e.events.slice());
           oldestSeqRef.current = e.oldestSeq ?? null;
           hasMoreRef.current = e.hasMore;
           setHasMore(e.hasMore);
@@ -355,12 +463,11 @@ export function useChat(
             if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
           }
           setEvents((prev) => mergeEvents([...e.events, ...prev]));
-          // Fix 2: only widen hasMore, never narrow it — the snapshot may have
-          // already loaded more history than the fresh tail knows about.
-          if (e.hasMore) {
-            hasMoreRef.current = true;
-            setHasMore(true);
-          }
+          // The daemon's answer decides: `true` widens a window the snapshot
+          // thought complete; `false` means the tail reaches the first event, so
+          // the merged window holds the whole history and nothing is earlier.
+          hasMoreRef.current = e.hasMore;
+          setHasMore(e.hasMore);
           // Fix 2: only move the cursor backward (lower seq = older = further
           // back in history) — never let a fresh tail rewind a pre-loaded cursor.
           const newOldestSeq = e.oldestSeq ?? null;
@@ -371,7 +478,11 @@ export function useChat(
             }
           }
         }
+        if (gapDetected || wasDetached || prevOldestSeq === null || (e.oldestSeq != null && e.oldestSeq <= prevOldestSeq)) {
+          setTurnsBefore(e.turnsBefore !== undefined ? e.turnsBefore : null);
+        }
         restoredLatestSeqRef.current = null;
+        if (wasDetached) clearStash();
       }
 
       setPending((prev) => prev.filter((p) => !userTurnIdsRef.current.has(p.turnId)));
@@ -392,6 +503,30 @@ export function useChat(
       if (e.type !== "session:message" || e.sessionId !== sessionId) return;
       const ev = e.event;
       noteUserTurn(ev);
+
+      if (detachedRef.current) {
+        const stash = stashRef.current;
+        if (stash && !(ev.id && stash.ids.has(ev.id))) {
+          if (ev.id) stash.ids.add(ev.id);
+          stash.events.push(ev);
+          // Same live cap as the attached window: the stash is the live tail a
+          // return to latest mounts, so it must not grow without bound.
+          if (!loadedAllRef.current && stash.events.length > MAX_LIVE_EVENTS) {
+            const cut = findTrimIndex(stash.events, TRIM_TO);
+            if (cut > 0) {
+              const removed = stash.events.splice(0, cut);
+              for (const r of removed) if (r.id) stash.ids.delete(r.id);
+              if (stash.turnsBefore != null) stash.turnsBefore += countUserTurns(removed);
+              const firstSeq = stash.events[0]?.logSeq ?? null;
+              if (firstSeq != null) stash.oldestSeq = firstSeq;
+              stash.hasMore = true;
+            }
+          }
+        }
+        setLoading(false);
+        return;
+      }
+
       // Functional updater so it composes with queued replay/loadEarlier/fork
       // updates instead of overwriting them with a stale snapshot. Trim side
       // effects are idempotent ref writes; the `hasMore` state flip is deferred
@@ -406,6 +541,8 @@ export function useChat(
         if (!loadedAllRef.current && canTrimRef.current && next.length > MAX_LIVE_EVENTS) {
           const cut = findTrimIndex(next, TRIM_TO);
           if (cut > 0) {
+            const removed = next.slice(0, cut);
+            pendingTrimsRef.current.set(removed[0]!.id, countUserTurns(removed));
             next = next.slice(cut);
             const firstSeq = next[0]?.logSeq ?? null;
             if (firstSeq != null) oldestSeqRef.current = firstSeq;
@@ -499,6 +636,11 @@ export function useChat(
       const dropped = new Set(e.supersededTurnIds);
       if (dropped.size === 0) return;
       for (const t of dropped) userTurnIdsRef.current.delete(t);
+      if (stashRef.current) {
+        const kept = stashRef.current.events.filter((ev) => !ev.turnId || !dropped.has(ev.turnId));
+        stashRef.current.events = kept;
+        stashRef.current.ids = new Set(kept.flatMap((ev) => (ev.id ? [ev.id] : [])));
+      }
       setEvents((prev) => prev.filter((ev) => !ev.turnId || !dropped.has(ev.turnId)));
       setPending((prev) => prev.filter((p) => !dropped.has(p.turnId)));
       setEditingDrafts((prev) => {
@@ -580,6 +722,7 @@ export function useChat(
           events: eventsRef.current,
           hasMore: hasMoreRef.current,
           userTurnIds: userTurnIdsRef.current,
+          turnsBefore: turnsBeforeRef.current,
           latestSeq: computeLatestSeq(eventsRef.current),
           savedAt: Date.now(),
         });
@@ -591,6 +734,28 @@ export function useChat(
     // registers directly on `api.on`, out of ChatRepository's scope (Decision 4).
   }, [api, chatRepo, sessionId, active, cacheEnabled]);
 
+  /** Return to the latest live conversation window, restoring any stashed live messages. */
+  const returnToLatest = useCallback(() => {
+    if (!detachedRef.current) return;
+    detachedRef.current = false;
+    // Supersede any in-flight `viewAround` so it cannot re-detach after this.
+    windowLoadSeqRef.current++;
+    setDetached(false);
+    const stash = stashRef.current;
+    if (stash) {
+      setEvents(stash.events);
+      if (stash.turnsBefore != null) {
+        setTurnsBefore(stash.turnsBefore);
+      }
+      if (stash.oldestSeq != null) {
+        oldestSeqRef.current = stash.oldestSeq;
+      }
+      hasMoreRef.current = stash.hasMore;
+      setHasMore(stash.hasMore);
+      stashRef.current = null;
+    }
+  }, []);
+
   const send = useCallback(
     async (
       message: string,
@@ -599,6 +764,9 @@ export function useChat(
       review?: SendReview,
     ): Promise<"queued" | "steered" | undefined> => {
       if (!sessionId) return;
+      if (detachedRef.current) {
+        returnToLatest();
+      }
       const w = toWire(message);
       // A turn carrying comments always queues (the daemon never steers it); the ids ride as the last argument.
       const res = review
@@ -625,7 +793,7 @@ export function useChat(
       });
       return res.delivery;
     },
-    [chatRepo, sessionId],
+    [chatRepo, sessionId, returnToLatest],
   );
 
   useEffect(() => {
@@ -734,12 +902,16 @@ export function useChat(
 
   /** Prepend the previous keyset page (R2.2). Guarded against concurrent runs
    *  and the top-of-history (`hasMore` false / no cursor). */
-  const loadEarlier = useCallback(async () => {
+  const loadEarlier = useCallback(async (limit?: number) => {
     if (!sessionId) return;
     if (!hasMoreRef.current || oldestSeqRef.current == null) return;
+    const loadId = windowLoadSeqRef.current;
+    const token = ++spinnerTokenRef.current;
+    loadingEarlierOwnerRef.current = token;
     setLoadingEarlier(true);
     try {
-      const page = await chatRepo.getTranscriptPage(sessionId, oldestSeqRef.current);
+      const page = await chatRepo.getTranscriptPage(sessionId, oldestSeqRef.current, limit);
+      if (loadId !== windowLoadSeqRef.current || sessionIdRef.current !== sessionId) return;
       for (const ev of page.events) {
         if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
       }
@@ -747,8 +919,11 @@ export function useChat(
       oldestSeqRef.current = page.oldestSeq ?? oldestSeqRef.current;
       hasMoreRef.current = page.hasMore;
       setHasMore(page.hasMore);
+      if (page.turnsBefore !== undefined) {
+        setTurnsBefore(page.turnsBefore);
+      }
     } finally {
-      setLoadingEarlier(false);
+      if (loadingEarlierOwnerRef.current === token) setLoadingEarlier(false);
     }
   }, [chatRepo, sessionId]);
 
@@ -765,12 +940,131 @@ export function useChat(
       oldestSeqRef.current = all.length ? (all[0]!.logSeq ?? null) : oldestSeqRef.current;
       hasMoreRef.current = false;
       setHasMore(false);
+      setTurnsBefore(0);
       // Never trim once the whole transcript has been fetched and held in memory.
       loadedAllRef.current = true;
     } finally {
       setLoadingEarlier(false);
     }
   }, [chatRepo, sessionId]);
+
+  /** View a historical window around a specific log sequence number. Rejects
+   *  when the fetch fails; a load superseded by a newer one or by a session
+   *  switch resolves without committing. */
+  const viewAround = useCallback(
+    async (seq: number) => {
+      if (!sessionId) return;
+      const loadId = ++windowLoadSeqRef.current;
+      const page = await chatRepo.getTranscriptAround(sessionId, seq);
+      if (loadId !== windowLoadSeqRef.current || sessionIdRef.current !== sessionId) return;
+      // Committing a window swap supersedes any loadEarlier still in flight.
+      windowLoadSeqRef.current++;
+      if (!detachedRef.current) {
+        stashRef.current = {
+          // A copy: live appends push in place and must not touch the rendered array.
+          events: [...eventsRef.current],
+          ids: new Set(eventsRef.current.flatMap((ev) => (ev.id ? [ev.id] : []))),
+          turnsBefore: turnsBeforeRef.current,
+          oldestSeq: oldestSeqRef.current,
+          hasMore: hasMoreRef.current,
+        };
+      }
+      detachedRef.current = true;
+      for (const ev of page.events) {
+        if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+      }
+      oldestSeqRef.current = page.oldestSeq ?? null;
+      hasMoreRef.current = page.hasMore;
+      newestSeqRef.current = computeLatestSeq(page.events) ?? seq;
+      // Commit the window swap synchronously before the promise resolves: find's
+      // `jumpTo` awaits this call and then reads `navRef.current`, which
+      // `MessageList` assigns during its render. Without the flush the
+      // render lands in a later scheduler task and the caller still sees the
+      // OLD nav (anchor `undefined` → no scroll, no highlight).
+      flushSync(() => {
+        setDetached(true);
+        setEvents(page.events.slice());
+        setHasMore(page.hasMore);
+        setTurnsBefore(page.turnsBefore ?? 0);
+      });
+    },
+    [chatRepo, sessionId],
+  );
+
+  const loadLater = useCallback(async (): Promise<boolean> => {
+    const since = newestSeqRef.current;
+    if (!sessionId || !detachedRef.current || since == null || loadingLaterRef.current) return false;
+    // Not bumped: a `viewAround` / `loadEarlierTo` started meanwhile supersedes this load.
+    const loadId = windowLoadSeqRef.current;
+    loadingLaterRef.current = true;
+    try {
+      const page = alignForwardPage(await chatRepo.getTranscriptSince(sessionId, since), since);
+      if (loadId !== windowLoadSeqRef.current || sessionIdRef.current !== sessionId || !detachedRef.current) {
+        return false;
+      }
+      for (const ev of page.events) {
+        if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+      }
+      newestSeqRef.current = page.cursor;
+      // The stash is the live tail (plus what streamed in since the jump). Once
+      // the window has no newer rows left to read, or its newest row is at or
+      // past the stash's first, their union is gap-free: rejoin the live tail.
+      const stash = stashRef.current;
+      const stashFirst = stash ? firstLogSeq(stash.events) : null;
+      const rejoin = !page.hasMore || (stashFirst != null && page.cursor >= stashFirst);
+      if (!rejoin && page.cursor <= since) return false;
+      if (rejoin) {
+        detachedRef.current = false;
+        stashRef.current = null;
+      }
+      // Committed before resolving so the caller can restore its scroll anchor
+      // against the appended rows before the browser paints.
+      flushSync(() => {
+        setEvents((prev) => mergeEvents([...prev, ...page.events, ...(rejoin && stash ? stash.events : [])]));
+        if (rejoin) setDetached(false);
+      });
+      return true;
+    } finally {
+      loadingLaterRef.current = false;
+    }
+  }, [chatRepo, sessionId]);
+
+  /** Fetch + prepend history up to (and including) `seq`, aligned to turn boundaries. */
+  const loadEarlierTo = useCallback(
+    async (seq: number) => {
+      if (!sessionId) return;
+      if (!hasMoreRef.current || oldestSeqRef.current == null) return;
+      const limit = Math.max(1, oldestSeqRef.current - seq);
+      const loadId = ++windowLoadSeqRef.current;
+      const isLatest = () => loadId === windowLoadSeqRef.current && sessionIdRef.current === sessionId;
+      const token = ++spinnerTokenRef.current;
+      loadingEarlierOwnerRef.current = token;
+      setLoadingEarlier(true);
+      try {
+        const page = await chatRepo.getTranscriptPage(sessionId, oldestSeqRef.current, limit);
+        if (!isLatest()) return;
+        for (const ev of page.events) {
+          if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+        }
+        oldestSeqRef.current = page.oldestSeq ?? oldestSeqRef.current;
+        hasMoreRef.current = page.hasMore;
+        // Same commit-before-resolve rule as `viewAround`: the caller reads
+        // `navRef.current` on the line after awaiting this promise.
+        flushSync(() => {
+          setEvents((prev) => mergeEvents([...page.events, ...prev]));
+          setHasMore(page.hasMore);
+          if (page.turnsBefore !== undefined) {
+            setTurnsBefore(page.turnsBefore);
+          }
+        });
+      } finally {
+        // A newer `loadEarlierTo` owns the spinner; a `viewAround` or a session
+        // switch does not, so the spinner still clears for those.
+        if (loadingEarlierOwnerRef.current === token) setLoadingEarlier(false);
+      }
+    },
+    [chatRepo, sessionId],
+  );
 
   /** Enable/disable live-event trimming (Phase 4). Called with the scroller's
    *  `atBottom` so history isn't trimmed out from under a scrolled-up user. */
@@ -792,6 +1086,7 @@ export function useChat(
     hasMore,
     loadingEarlier,
     loadEarlier,
+    loadEarlierTo,
     loadAll,
     queuedTurnIds: meta?.queuedTurnIds ?? [],
     editingTurnIds: meta?.editingTurnIds ?? [],
@@ -806,6 +1101,11 @@ export function useChat(
     sendNow,
     forkTurn,
     setCanTrim,
+    turnsBefore,
+    detached,
+    viewAround,
+    returnToLatest,
+    loadLater,
   };
 }
 

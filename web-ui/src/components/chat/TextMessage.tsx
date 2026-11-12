@@ -5,6 +5,7 @@ import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { parseDraftSegments } from "@/lib/mentions";
 import { MentionChipView } from "@/components/mentions/MentionChipView";
+import { FindText } from "./find/FindText";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { AttachmentChip } from "./AttachmentChip";
 import { ReviewFooter } from "@/components/comments/ReviewFooter";
@@ -23,6 +24,9 @@ interface TextMessageProps {
   scheduled?: boolean;
   /** Row key from MessageList; keeps html card UI state across virtualized remounts. */
   rowKey?: string;
+  /** Find-mark key prefix: the row's `MessageNav` anchor (`u:` / `a:`), so the
+   *  ordinal walk resolves marks inside that anchor only. */
+  findKeyPrefix?: string;
   /** ISO timestamp of the message; clicking the bubble toggles showing it. */
   ts?: string;
   /** User bubbles: the review comments this turn carried (footer `N review comments · M files`). */
@@ -49,7 +53,7 @@ function formatSentTime(ts: string): { label: string; full: string } | null {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey, ts, review, reviewParsed, sessionId, turnId }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope, scheduled, rowKey, findKeyPrefix, ts, review, reviewParsed, sessionId, turnId }: TextMessageProps) {
   const isUser = role === "user";
   const [showTime, setShowTime] = useState(false);
   const sent = ts ? formatSentTime(ts) : null;
@@ -81,7 +85,9 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
               seg.type === "mention" ? (
                 <MentionChipView key={i} mention={seg.mention} />
               ) : seg.type === "text" ? (
-                <span key={i}>{seg.text}</span>
+                <span key={i}>
+                  <FindText text={seg.text} keyPrefix={`${findKeyPrefix ?? rowKey ?? "u"}/${i}`} />
+                </span>
               ) : (
                 <span key={i} className="chat-msg-skill">
                   <span className="chat-msg-skill__name">/{seg.name}</span>
@@ -99,7 +105,7 @@ export const TextMessage = memo(function TextMessage({ role, text, attachments, 
             )}
           </div>
         ) : !isUser ? (
-          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} renderHtml rowKey={rowKey} />
+          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} renderHtml rowKey={rowKey} findKeyPrefix={findKeyPrefix} />
         ) : null}
         {attachments && attachments.length > 0 ? (
           <div className="chat-bubble__attachments">

@@ -115,6 +115,16 @@ export function summarizeDiffLines(hunks: DiffHunk[]): { additions: number; dele
   return { additions, deletions };
 }
 
+/**
+ * The hunks a diff preview renders: the parsed `diffText`, or, when there is no
+ * diff text (an untracked file), the whole file as added lines.
+ */
+export function previewDiffHunks(diffText: string | undefined, fileContentFallback: string | undefined): DiffHunk[] {
+  if ((diffText ?? "").trim().length > 0) return parseUnifiedDiff(diffText ?? "");
+  if (fileContentFallback) return syntheticUntrackedHunks(fileContentFallback);
+  return [];
+}
+
 export function syntheticUntrackedHunks(content: string): DiffHunk[] {
   const rawLines = content.split(/\r?\n/);
   const lines: DiffLine[] = rawLines.map((text, idx) => ({

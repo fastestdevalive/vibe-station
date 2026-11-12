@@ -57,7 +57,11 @@ import type {
   SupportedCli,
   TranscriptResponse,
   TaskOutput,
+  TranscriptAroundPage,
   TranscriptPage,
+  TranscriptSincePage,
+  TranscriptSearchPage,
+  TranscriptSearchScope,
   TreeEntry,
   TailscaleQrResponse,
   TailscaleStatus,
@@ -73,6 +77,7 @@ import type {
 import { ApiError } from "./errors";
 import { createLatestOnly } from "./latestOnly";
 import { createArtifactsClient } from "./artifactsClient";
+import { createTranscriptOutlineClient } from "./transcriptOutlineClient";
 import { createCommentsClient, parseReviewJson } from "./commentsClient";
 
 export function baseUrl() {
@@ -556,6 +561,7 @@ export function createClientApi() {
   const api = {
     ...createArtifactsClient({ baseUrl, apiFetch }),
     ...createCommentsClient({ baseUrl, apiFetch }),
+    ...createTranscriptOutlineClient({ baseUrl, apiFetch }),
 
     async health(): Promise<HealthResponse> {
       const root = baseUrl();
@@ -1830,11 +1836,61 @@ export function createClientApi() {
       return parseJson<TranscriptPage>(res);
     },
 
+    /** Forward page: events strictly newer than `sinceSeq`, oldest first. */
+    async getTranscriptSince(sessionId: string, sinceSeq: number): Promise<TranscriptSincePage> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript?since=${sinceSeq}`);
+      return parseJson<TranscriptSincePage>(res);
+    },
+
     /** Whole transcript for the guarded "load all" escape hatch (R2.5). */
     async getTranscriptAll(sessionId: string): Promise<TranscriptResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript?all=1`);
       return parseJson<TranscriptResponse>(res);
+    },
+
+    /** Search whole transcript on daemon. */
+    async searchTranscript(
+      sessionId: string,
+      params: {
+        q: string;
+        scope?: TranscriptSearchScope;
+        after?: string;
+        limit?: number;
+        snippets?: boolean;
+      },
+      signal?: AbortSignal,
+    ): Promise<TranscriptSearchPage> {
+      const root = baseUrl();
+      const qp = new URLSearchParams();
+      qp.set("q", params.q);
+      if (params.scope) qp.set("scope", params.scope);
+      if (params.after) qp.set("after", params.after);
+      if (params.limit != null) qp.set("limit", String(params.limit));
+      if (params.snippets != null) {
+        qp.set("snippets", params.snippets ? "1" : "0");
+      }
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/transcript/search?${qp.toString()}`,
+        signal ? { signal } : undefined,
+      );
+      return parseJson<TranscriptSearchPage>(res);
+    },
+
+    /** Turn-aligned transcript window around a given sequence number. */
+    async getTranscriptAround(
+      sessionId: string,
+      aroundSeq: number,
+      opts?: { limit?: number; signal?: AbortSignal },
+    ): Promise<TranscriptAroundPage> {
+      const root = baseUrl();
+      const limit = opts?.limit != null ? `&limit=${opts.limit}` : "";
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/transcript?aroundSeq=${aroundSeq}${limit}`,
+        opts?.signal ? { signal: opts.signal } : undefined,
+      );
+      return parseJson<TranscriptAroundPage>(res);
     },
 
     /** A session's scheduled-send state: pending (incl. waiting/pasting), failed,

@@ -35,7 +35,10 @@ import { isHtmlPath } from "@/components/preview/htmlDocument";
 import { isImagePath } from "@/lib/imageFile";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
-import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
+import { previewDiffHunks, summarizeDiffLines } from "@/preview/diffParser";
+import { PreviewScrollMap } from "@/components/preview/scrollmap/PreviewScrollMap";
+import { ScrollMapToggle } from "@/components/preview/scrollmap/ScrollMapToggle";
+import type { EffectiveScrollMap } from "@/components/preview/scrollmap/effectiveScrollMapMode";
 
 /** Decision 6 — bypasses the global store's `activeFilePath`/`diffScopeByWorktree`
  *  slices so a caller outside the Files tab (the VCS commit view) doesn't steal
@@ -57,6 +60,7 @@ interface FilePreviewPaneProps {
 }
 
 export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
+  const [scrollMapDisplay, setScrollMapDisplay] = useState<EffectiveScrollMap | null>(null);
   const pendingLineTarget = useWorkspaceStore((s) => s.pendingLineTarget);
   const peekFile = useWorkspaceStore((s) => s.peekFile);
 
@@ -722,22 +726,18 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight, hunksVersion, revealKey]);
   // ─────────────────────────────────────────────────────────────────────
 
+  // One derivation of the diff hunks (DiffView's rule), shared by the diff-stat
+  // and the scroll map.
+  const previewHunks = useMemo(() => previewDiffHunks(diffBody ?? "", fileBody ?? undefined), [diffBody, fileBody]);
+
   const diffStats = useMemo(() => {
     // Decision 4 (9.4): plain mode (`"none"`) also computes a diff-stat from
     // the same local-diff fetch diff/branch mode already use. `DiffScope` is
     // `"local" | "branch" | "none" | "commit"` — every value is handled here,
     // so there is no scope left to early-return `null` for.
-    const diffText = diffBody ?? "";
-    const trimmed = diffText.trim();
-    const hunks =
-      trimmed.length > 0
-        ? parseUnifiedDiff(diffText)
-        : fileBody
-          ? syntheticUntrackedHunks(fileBody)
-          : [];
-    if (hunks.length === 0) return null;
-    return summarizeDiffLines(hunks);
-  }, [diffBody, fileBody]);
+    if (previewHunks.length === 0) return null;
+    return summarizeDiffLines(previewHunks);
+  }, [previewHunks]);
 
   // Memoized so the 2s gutter poll's re-renders don't give CodeView a new
   // `lspFileRef` object identity every tick — CodeView's file-switch effect
@@ -910,6 +910,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         <span className="artifact-strip__spacer" />
       )}
       {artifactPanel ? null : htmlToggle}
+      {artifactPanel ? null : <ScrollMapToggle display={scrollMapDisplay} />}
       {artifactPanel ? null : <CommentStripButton disabledReason={commentDisabledReason} />}
       {tail}
     </div>
@@ -944,6 +945,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       ) : null}
       {htmlToggle}
       {stripRow ? <ArtifactStripItems api={api} scopeId={worktreeId} row={stripRow} /> : null}
+      <ScrollMapToggle display={scrollMapDisplay} />
       <CommentStripButton disabledReason={commentDisabledReason} />
       {tail}
     </div>
@@ -1109,15 +1111,32 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         </Banner>
       ) : null}
       {truncatedTotal != null ? <TruncatedBanner total={truncatedTotal} onCopyPath={copyPath} /> : null}
-      <div
-        ref={setBodyRef}
-        onScroll={handleScroll}
-        data-comment-surface={commentDisabledReason || showHtmlRendered ? undefined : ""}
-        tabIndex={-1}
-        className={`preview-body${useCodeChrome ? " preview-body--code" : ""}${showHtmlRendered ? " preview-body--html" : ""}`}
-        style={previewScaleStyle}
-      >
-        {body}
+      <div className="preview-body-container">
+        <div
+          ref={setBodyRef}
+          onScroll={handleScroll}
+          data-comment-surface={commentDisabledReason || showHtmlRendered ? undefined : ""}
+          tabIndex={-1}
+          className={`preview-body${useCodeChrome ? " preview-body--code" : ""}${showHtmlRendered ? " preview-body--html" : ""}`}
+          style={previewScaleStyle}
+        >
+          {body}
+        </div>
+        <PreviewScrollMap
+          scrollEl={scrollEl}
+          path={path}
+          viewScope={viewScope}
+          diffBody={diffBody}
+          previewHunks={previewHunks}
+          fileBody={fileBody}
+          showHtmlRendered={showHtmlRendered}
+          isMd={isMd}
+          isImage={isImage}
+          gutterMarks={gutterMarks}
+          effectiveLine={effectiveLine}
+          codeViewRef={codeViewRef}
+          onDisplayChange={setScrollMapDisplay}
+        />
       </div>
       <ImageZoomOverlay
         src={imageFullscreen ? imageBlobUrl : null}

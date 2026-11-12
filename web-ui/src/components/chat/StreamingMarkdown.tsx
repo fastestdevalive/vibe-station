@@ -2,6 +2,7 @@ import { memo, useMemo } from "react";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { HtmlBlock } from "./HtmlBlock";
+import { useFindMarks } from "./find/FindMarksContext";
 import { segmentMarkdown } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
 import type { ApiInstance } from "@/api";
@@ -43,6 +44,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   scope = "worktree",
   renderHtml = false,
   rowKey,
+  findKeyPrefix,
 }: {
   source: string;
   /** When provided, repo-relative image paths resolve via `getFileBlob`. */
@@ -53,14 +55,25 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
   renderHtml?: boolean;
   /** Message-row key (from MessageList) — persists html card UI state across virtualized remounts. */
   rowKey?: string;
+  /** Find-mark key prefix: the row's `MessageNav` anchor (`a:` / `th:`), so the
+   *  ordinal walk resolves marks inside that anchor only. */
+  findKeyPrefix?: string;
 }) {
   const { theme } = useTheme();
+  const findMarks = useFindMarks();
   const segments = useMemo(() => segmentMarkdown(source, { html: renderHtml }), [source, renderHtml]);
   return (
     <div className="chat-md-segments">
       {segments.map((seg, i) =>
         seg.type === "markdown" ? (
-          <MarkdownView key={i} source={closeUnterminatedFences(seg.content)} api={api} worktreeId={worktreeId} scope={scope} />
+          <MarkdownView
+            key={i}
+            source={closeUnterminatedFences(seg.content)}
+            api={api}
+            worktreeId={worktreeId}
+            scope={scope}
+            find={findMarks && findMarks.terms.length > 0 ? { terms: findMarks.terms, keyPrefix: `${findKeyPrefix ?? rowKey ?? "a"}/${i}` } : undefined}
+          />
         ) : seg.type === "html" ? (
           <HtmlBlock key={i} source={seg.content} stateKey={rowKey != null ? `html:${rowKey}:${i}` : undefined} />
         ) : (

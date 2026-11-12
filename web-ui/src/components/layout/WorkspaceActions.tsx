@@ -16,6 +16,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useDemoEnv, useEventTargets, usePortalRoot, useViewportWidth } from "@/context/DemoEnv";
 import { shortcutHints } from "@/lib/shortcutHints";
 import { CommentCountChip } from "@/components/comments/CommentsRailBadge";
+import { useActiveFindPane } from "@/components/chat/find/findRegistry";
 
 /**
  * Last button of the actions group: classic = tools pane toggle; canvas = Add/Remove Tools tile.
@@ -91,6 +92,7 @@ export function WorkspaceActions({ isMobile, onOpenQuickOpen, canvasWorktreeId, 
   const portalRoot = usePortalRoot();
   const viewportW = useViewportWidth();
   const hints = shortcutHints();
+  const activeFindPane = useActiveFindPane();
 
   // The "..." menu is portaled to the portal root and positioned with `position: fixed` from the
   // trigger's rect, so no row/pane overflow or stacking context clips it.
@@ -203,6 +205,20 @@ export function WorkspaceActions({ isMobile, onOpenQuickOpen, canvasWorktreeId, 
                       <span>{canvasToolbarVisible ? "Hide toolbar" : "Show toolbar"}</span>
                     </button>
                   </>
+                ) : null}
+                {activeFindPane ? (
+                  <button
+                    type="button"
+                    className="top-bar__overflow-item"
+                    role="menuitem"
+                    onClick={() => {
+                      activeFindPane.open();
+                      setOverflowOpen(false);
+                    }}
+                  >
+                    <span>Find in chat</span>
+                    <span className="top-bar__overflow-kbd">{hints.find}</span>
+                  </button>
                 ) : null}
                 <button
                   type="button"

@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { useRowOpen } from "./rowUiState";
+import { useFindMarks, FindMarksContext } from "./find/FindMarksContext";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 
@@ -11,6 +12,9 @@ interface ThinkingBlockProps {
   /** Stable key for this row within the `MessageList` — used to persist the
    *  block's open/closed state across virtualized unmount/remount. */
   rowKey?: string;
+  /** Find-mark key prefix: the row's `MessageNav` anchor (`th:`), so the ordinal
+   *  walk resolves marks inside that anchor only. */
+  findKeyPrefix?: string;
   /** `ts` of the first event in this thinking group (always present —
    *  `groupEvents` stamps it when the group opens). */
   startedTs: string;
@@ -54,8 +58,10 @@ function thinkingLabel(startedTs: string, endedTs: string | undefined, hadToolCa
  *  extended by Decision 4). Signature-only / redacted thinking events carry no
  *  text — those render as a plain label with no chevron, since there's
  *  nothing to expand. */
-export const ThinkingBlock = memo(function ThinkingBlock({ text, defaultOpen = false, rowKey, startedTs, endedTs, hadToolCall, api, worktreeId, scope }: ThinkingBlockProps) {
+export const ThinkingBlock = memo(function ThinkingBlock({ text, defaultOpen = false, rowKey, findKeyPrefix, startedTs, endedTs, hadToolCall, api, worktreeId, scope }: ThinkingBlockProps) {
   const [open, setOpen] = useRowOpen(rowKey != null ? `think:${rowKey}` : undefined, defaultOpen);
+  const findMarks = useFindMarks();
+  const findMarksForThinking = findMarks?.scope === "all" ? findMarks : null;
   const hasContent = text.trim().length > 0;
   const label = thinkingLabel(startedTs, endedTs, hadToolCall);
   if (!hasContent) {
@@ -87,7 +93,9 @@ export const ThinkingBlock = memo(function ThinkingBlock({ text, defaultOpen = f
        *  row is redundant, not additive. */}
       {open ? (
         <div className="chat-thinking__body">
-          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} />
+          <FindMarksContext.Provider value={findMarksForThinking}>
+            <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} rowKey={rowKey} findKeyPrefix={findKeyPrefix} />
+          </FindMarksContext.Provider>
         </div>
       ) : null}
     </div>

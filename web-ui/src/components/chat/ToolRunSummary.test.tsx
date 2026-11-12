@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { ToolRunSummary, toolRunSummaryPropsEqual } from "./ToolRunSummary";
 import { summarizeToolInput, type ToolCallEntry } from "./toolFormat";
 import type { ToolDiff } from "@/api/types";
+import { FindMarksProvider } from "./find/FindMarksContext";
+import { RowUiStateProvider } from "./rowUiState";
 
 function tool(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
   return { id: "t1", toolName: "Bash", ...overrides };
@@ -478,5 +480,44 @@ describe("ToolRunSummary — MCP tool rows start collapsed", () => {
     expect(screen.queryByText(/"url"/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /browser_navigate/ }));
     expect(screen.getByText(/"url"/)).toBeTruthy();
+  });
+});
+
+describe("ToolRunSummary — find marks", () => {
+  it("tool output marks only in scope 'all'", () => {
+    const entry: ToolCallEntry = {
+      id: "t1",
+      toolName: "fetch",
+      toolKind: "fetch",
+      toolInput: { url: "https://example.com" },
+      result: { content: "target-file.txt\nother.txt" },
+    };
+
+    // scope = messages -> no marks on tool output
+    const { rerender, container } = render(
+      <RowUiStateProvider>
+        <FindMarksProvider terms={["target"]} scope="messages">
+          <ToolRunSummary tools={[entry]} live={false} />
+        </FindMarksProvider>
+      </RowUiStateProvider>,
+    );
+    // Expand the tool row so output renders
+    const header = container.querySelector(".chat-tool-entry__header");
+    if (header) fireEvent.click(header);
+
+    let marks = container.querySelectorAll("mark.find-hit");
+    expect(marks.length).toBe(0);
+
+    // scope = all -> marks appear on tool output
+    rerender(
+      <RowUiStateProvider>
+        <FindMarksProvider terms={["target"]} scope="all">
+          <ToolRunSummary tools={[entry]} live={false} />
+        </FindMarksProvider>
+      </RowUiStateProvider>,
+    );
+    marks = container.querySelectorAll("mark.find-hit");
+    expect(marks.length).toBeGreaterThanOrEqual(1);
+    expect(marks[0]?.textContent).toBe("target");
   });
 });

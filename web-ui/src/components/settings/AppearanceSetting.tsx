@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
+import { useFileScrollMap } from "@/hooks/useFileScrollMap";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { themes, type ThemeRegistryEntry } from "@/theme/registry";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SectionHeader } from "./SectionHeader";
 import { SettingsPreviewFixture } from "./SettingsPreviewFixture";
+import { MINIMAP_CAP_LABEL } from "@/components/preview/scrollmap/minimapSummary";
 
 function Row({
   label,
@@ -221,6 +223,7 @@ function ThemeGroup({
 
 export function AppearanceSetting() {
   const { themeId, font, setTheme, toggleFont } = useTheme();
+  const [fileScrollMap, setFileScrollMap] = useFileScrollMap();
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
   const toggleAgentStatusBorders = useWorkspaceStore((s) => s.toggleAgentStatusBorders);
   const terminalLineHeight = useWorkspaceStore((s) => s.terminalLineHeight);
@@ -304,6 +307,21 @@ export function AppearanceSetting() {
             onChange={(v) => {
               if ((v === "on") !== themeAgentTerminals) toggleThemeAgentTerminals();
             }}
+          />
+        }
+      />
+
+      <Row
+        label="File scroll bar"
+        description={`Minimap: a code outline beside the file. Marks: changes and comments in the scrollbar. Short files, narrow panes, phones, diffs and files over ${MINIMAP_CAP_LABEL} always use marks.`}
+        control={
+          <SegmentedControl
+            options={[
+              { value: "minimap", label: "Minimap" },
+              { value: "marks", label: "Marks" },
+            ]}
+            value={fileScrollMap}
+            onChange={(v) => setFileScrollMap(v as "marks" | "minimap")}
           />
         }
       />

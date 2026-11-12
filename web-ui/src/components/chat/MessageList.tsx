@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useVirtualizer, defaultRangeExtractor, type Virtualizer } from "@tanstack/react-virtual";
 import type { ApiInstance } from "@/api";
 import type { Attachment, CarryOver, Command, FileScope, NormalizedEvent, ReviewRecord } from "@/api/types";
@@ -9,11 +9,15 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
 import { WorkingDots } from "./WorkingDots";
-import { RowUiStateProvider } from "./rowUiState";
-import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
+import { RowUiStateProvider, createRowUiStore } from "./rowUiState";
+import { blocksToPlaceholder, isTaskName, type ToolCallEntry } from "./toolFormat";
 import { SessionBreakCard } from "./SessionBreakCard";
 import { fromWire } from "@/lib/mentions";
 import { looksLikeReviewText, parseReviewText } from "@/components/comments/parseReviewText";
+import { itemAnchorKey, type MessageNav } from "./messageNav";
+import { useChatOutline } from "./useChatOutline";
+import { useLoadLater } from "./useLoadLater";
+import type { OutlineSource } from "./outline/outlineSource";
 
 /** A user row's text and review: the stored snapshot, else the Appendix A block parsed out of imported history. */
 type UserReview = { text: string; review?: ReviewRecord; reviewParsed?: boolean };
@@ -32,13 +36,15 @@ function userReview(ev: Pick<NormalizedEvent, "review" | "cancelled">, text: str
   return result;
 }
 
-type RenderItem =
+export type RenderItem =
   | {
       type: "user";
       id: string;
       text: string;
       attachments?: Attachment[];
       turnId?: string;
+      /** The event's seq, set on a persisted turn (absent on a row not in the log yet). */
+      seq?: number;
       cancelled?: boolean;
       ts?: string;
       /** The turn's review comments (stored snapshot, or parsed from imported history). Never on cancelled rows. */
@@ -68,9 +74,9 @@ type RenderItem =
     }
   | ({ type: "tool" } & ToolCallEntry)
   | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
-  | { type: "error"; id: string; text: string }
-  | { type: "status"; id: string; text: string }
-  | { type: "system_event"; id: string; text: string; agentName?: string }
+  | { type: "error"; id: string; text: string; ts?: string }
+  | { type: "status"; id: string; text: string; ts?: string }
+  | { type: "system_event"; id: string; text: string; agentName?: string; ts?: string }
   | {
       type: "session_break";
       id: string;
@@ -144,7 +150,7 @@ function isBenignRateLimit(text: string): boolean {
   return /^rate limit:\s*(unknown|allowed)/i.test(text.trim());
 }
 
-export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
+export function groupEvents(events: NormalizedEvent[], seqIndex?: Map<number, string>): RenderItem[] {
   const items: RenderItem[] = [];
   // Maps a toolId to the ACTUAL tool RenderItem object (not an index) — a
   // nested (Task-bracketed) tool call lives inside another item's `children`
@@ -158,9 +164,6 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
   // `toolKind` is "think", shared with the plain Think tool).
   let openTask: ToolItem | null = null;
   let openTaskTurnId: string | undefined;
-  function isTaskName(name: string | undefined): boolean {
-    return (name ?? "").toLowerCase() === "task";
-  }
   function closeOpenTask(): void {
     openTask = null;
     openTaskTurnId = undefined;
@@ -217,6 +220,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         // Silent user events (subagent-ux-v2 notice turns) must not render as
         // human bubbles — they are daemon-internal turn inputs, not real messages.
         if (ev.silent) break;
+        if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `u:${ev.turnId ?? ev.id}`);
         if (ev.turnId) {
           const existingIdx = userIndexByTurnId.get(ev.turnId);
           if (existingIdx != null) {
@@ -244,6 +248,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           attachments: ev.attachments,
           ts: ev.ts,
           ...(ev.turnId ? { turnId: ev.turnId } : {}),
+          ...(ev.logSeq != null ? { seq: ev.logSeq } : {}),
           ...(ev.cancelled ? { cancelled: true } : {}),
         });
         if (ev.turnId) userIndexByTurnId.set(ev.turnId, items.length - 1);
@@ -259,8 +264,10 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         const incomingText = ev.text ?? (ev.blocks && ev.blocks.length > 0 ? blocksToPlaceholder(ev.blocks) : "");
         if (last && last.type === "assistant" && last.turnId === ev.turnId) {
           last.text += incomingText;
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `a:${last.id}`);
         } else {
           items.push({ type: "assistant", id: ev.id, text: incomingText, turnId: ev.turnId, ts: ev.ts });
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `a:${ev.id}`);
         }
         break;
       }
@@ -294,6 +301,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           // don't call closeOpenThinking, so the group stays open through them.
           open.text += incoming;
           if (open.openedEmpty && open.text.trim().length > 0) open.openedEmpty = false;
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `th:${open.id}`);
         } else {
           items.push({
             type: "thinking",
@@ -304,6 +312,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
             openedEmpty: incoming.trim().length === 0,
           });
           if (ev.turnId) thinkingOpenByTurnId.set(ev.turnId, items.length - 1);
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `th:${ev.id}`);
         }
         break;
       }
@@ -319,6 +328,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           diffs: ev.toolDiffs,
           locations: ev.toolLocations,
           toolKind: ev.toolKind,
+          ts: ev.ts,
         };
         const opensTask = isTaskName(ev.toolName);
         if (openTask) {
@@ -340,6 +350,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           }
         }
         if (ev.toolId) toolRefById.set(ev.toolId, toolItem);
+        if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `t:${toolItem.id}`);
         break;
       }
       case "tool_result": {
@@ -354,6 +365,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           if (ev.toolDiffs !== undefined) target.diffs = ev.toolDiffs;
           if (ev.toolLocations !== undefined) target.locations = ev.toolLocations;
           if (ev.toolKind !== undefined) target.toolKind = ev.toolKind;
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `t:${target.id}`);
           // A Task's OWN completed/failed result closes its bracket — this is
           // the terminal signal the research found: a subagent's tool calls
           // appear strictly between the Task's tool_use and its completed
@@ -371,11 +383,12 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           const toolItem: ToolItem = {
             type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", turnId: ev.turnId,
             result: ev.toolResult !== undefined ? { content: ev.toolResult.content, isError: ev.toolResult.isError } : undefined,
-            status: ev.toolStatus, diffs: ev.toolDiffs, locations: ev.toolLocations, toolKind: ev.toolKind,
+            status: ev.toolStatus, diffs: ev.toolDiffs, locations: ev.toolLocations, toolKind: ev.toolKind, ts: ev.ts,
           };
           if (openTask) (openTask.children ??= []).push(toolItem);
           else items.push(toolItem);
           if (ev.toolId) toolRefById.set(ev.toolId, toolItem);
+          if (ev.logSeq != null) seqIndex?.set(ev.logSeq, `t:${toolItem.id}`);
         }
         break;
       }
@@ -385,7 +398,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       case "error":
         closeOpenThinking(ev.turnId, ev.ts);
-        items.push({ type: "error", id: ev.id, text: ev.text ?? "" });
+        items.push({ type: "error", id: ev.id, text: ev.text ?? "", ts: ev.ts });
         break;
       case "status":
         // Only surface a status marker that carries text (e.g. "Turn stopped");
@@ -401,12 +414,12 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         // still closes the group as before.
         if (ev.text && !isBenignRateLimit(ev.text)) {
           closeOpenThinking(ev.turnId, ev.ts);
-          items.push({ type: "status", id: ev.id, text: ev.text });
+          items.push({ type: "status", id: ev.id, text: ev.text, ts: ev.ts });
         }
         break;
       case "mode_update":
         closeOpenThinking(ev.turnId, ev.ts);
-        items.push({ type: "status", id: ev.id, text: `Mode changed${ev.modeId ? ` to ${ev.modeId}` : ""}` });
+        items.push({ type: "status", id: ev.id, text: `Mode changed${ev.modeId ? ` to ${ev.modeId}` : ""}`, ts: ev.ts });
         break;
       case "commands_update": {
         closeOpenThinking(ev.turnId, ev.ts);
@@ -418,6 +431,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           type: "status",
           id: ev.id,
           text: `${names.length} command${names.length === 1 ? "" : "s"} available${shown ? `: ${shown}${more}` : ""}`,
+          ts: ev.ts,
         });
         break;
       }
@@ -448,6 +462,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           id: ev.id,
           text: pillText,
           agentName: pillAgentName,
+          ts: ev.ts,
         });
         break;
       }
@@ -562,8 +577,9 @@ interface MessageListProps {
   loadingEarlier?: boolean;
   /** Fetch + prepend the previous keyset page. May return a promise — when it
    *  does, THAT promise (not the `loadingEarlier` prop's render transitions)
-   *  is what releases the internal prepend-pending state. */
-  onLoadEarlier?: () => void | Promise<void>;
+   *  is what releases the internal prepend-pending state. `limit` is the page
+   *  size in events (the outline asks for larger pages); omitted, the default. */
+  onLoadEarlier?: (limit?: number) => void | Promise<void>;
   /** Guarded escape hatch: load the whole transcript. */
   onLoadAll?: () => void;
   onRetry?: () => void;
@@ -591,6 +607,34 @@ interface MessageListProps {
   scheduledTurnIds?: string[];
   /** Opens the Previous sessions dialog (break-card "Previous sessions" link). */
   onOpenPrevious?: () => void;
+  /** Element where overlays (such as the turn chain and label panel) should be portaled. */
+  overlayHost?: HTMLElement | null;
+  /** The outline is open or just loaded earlier turns: live trimming must not drop them. */
+  onOutlineHoldTrim?: (hold: boolean) => void;
+  /** Whole-chat outline skeleton and window loaders; absent or not complete: the outline covers the loaded window. */
+  outlineSource?: OutlineSource;
+  /** Ref where MessageNav is exposed for outer components (such as find bar or Alt+arrow navigation). */
+  navRef?: MutableRefObject<MessageNav | null>;
+  /** Number of user turns before the loaded window, or null if all history is loaded. */
+  turnsBefore?: number | null;
+  /** Whether the chat is currently viewing an older turn window away from the live edge. */
+  detached?: boolean;
+  /** Callback to return to the live tail from a detached window. */
+  onReturnToLatest?: () => void;
+  /** Bumped by the parent on every explicit return-to-latest; scrolls to the bottom once live. */
+  returnSeq?: number;
+  /** Detached window: append the next newer page; true when the window moved forward. */
+  onLoadLater?: () => Promise<boolean>;
+  /** Turn anchors containing search matches */
+  hitTurns?: Set<string>;
+  /** Anchor of the turn containing the current match */
+  currentTurn?: string;
+  /** Anchor of the turn under hover in results dropdown */
+  peekTurn?: string;
+  /** Sequence number of the current find match */
+  currentSeq?: number;
+  /** Whether find bar is currently open */
+  findOpen?: boolean;
 }
 
 export function MessageList({
@@ -615,6 +659,20 @@ export function MessageList({
   commands,
   scheduledTurnIds,
   onOpenPrevious,
+  overlayHost,
+  onOutlineHoldTrim,
+  outlineSource,
+  navRef,
+  turnsBefore,
+  detached,
+  onReturnToLatest,
+  returnSeq = 0,
+  onLoadLater,
+  hitTurns,
+  currentTurn,
+  peekTurn,
+  currentSeq,
+  findOpen,
 }: MessageListProps) {
   const scheduledTurnIdSet = useMemo(
     () => (scheduledTurnIds ? new Set(scheduledTurnIds) : null),
@@ -626,7 +684,11 @@ export function MessageList({
   // Forking is only offered when the session is idle (no turn in flight) — an
   // "answered" message (J6). Attachments/composer reuse the queued-turn editor.
   const canFork = !!onForkTurn && !!api && !!sessionId && !turnActive;
-  const grouped = useMemo(() => groupEvents(events), [events]);
+  const seqIndex = useMemo(() => new Map<number, string>(), []);
+  const grouped = useMemo(() => {
+    seqIndex.clear();
+    return groupEvents(events, seqIndex);
+  }, [events, seqIndex]);
   // The turnId of the turn that is actually running RIGHT NOW — the last
   // event carrying one, since turns are strictly sequential (one active
   // turnId at a time per session). Only meaningful while `turnActive`.
@@ -696,6 +758,30 @@ export function MessageList({
     setAtBottom(next);
     onAtBottomChangeRef.current?.(next);
   }, []);
+
+  // Opening find clears the list's at-bottom pin without scrolling; closing never re-pins.
+  // A detached window's bottom is not the live edge either, so rejoining the
+  // live tail there keeps the reader's place instead of snapping to the end.
+  const detachedRef = useRef(!!detached);
+  detachedRef.current = !!detached;
+  useEffect(() => {
+    if (findOpen || detached) {
+      applyAtBottom(false);
+    }
+  }, [findOpen, detached, applyAtBottom]);
+
+  // An explicit return to latest (the arrow button or the find bar's "Jump to latest") bumps
+  // `returnSeq`; the list lands at the bottom once the window is live. A rejoin by scrolling
+  // down (loadLater) never bumps it, so it keeps the reader's place.
+  const handledReturnSeqRef = useRef(returnSeq);
+  useLayoutEffect(() => {
+    if (detached || handledReturnSeqRef.current === returnSeq) return;
+    handledReturnSeqRef.current = returnSeq;
+    const container = listRef.current?.parentElement;
+    if (container) container.scrollTop = container.scrollHeight;
+    // While find is open the list is never pinned (see the rule above).
+    if (!findOpen) applyAtBottom(true);
+  }, [detached, returnSeq, findOpen, applyAtBottom]);
 
   // --- infinite-scroll-upward (auto "load earlier") state ---------------
   // Set the moment a load-earlier is initiated (by the scroll trigger OR the
@@ -800,6 +886,8 @@ export function MessageList({
   });
   virtualizerRef.current = virtualizer;
 
+  const rowUiStore = useMemo(() => createRowUiStore(), []);
+
   // Re-measure `scrollMargin` when the header (which sits above the sizer)
   // appears or disappears, and once the sizer mounts.
   useLayoutEffect(() => {
@@ -813,12 +901,14 @@ export function MessageList({
   // 2.6 — while pinned to the bottom, re-pin whenever the total size changes
   // (new rows measured at the bottom, an expanding tool card), so streaming
   // content keeps the live edge in view without waiting on a `scroll` event.
+  const totalSize = virtualizer.getTotalSize();
   useLayoutEffect(() => {
+    if (detached) return;
     if (!atBottomRef.current) return;
     const container = listRef.current?.parentElement;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [virtualizer.getTotalSize(), virtualized]);
+  }, [totalSize, virtualized, detached]);
 
   /** Clear the pending-prepend state and restore the read position.
    *
@@ -854,10 +944,30 @@ export function MessageList({
     prevScrollHeightRef.current = container.scrollHeight;
   }, []);
 
-  const startLoadEarlier = useCallback(() => {
-    if (prependPendingRef.current || loadingEarlier || !hasMore || !onLoadEarlier) return;
+  /** 2.5 — capture the key anchor for a pending prepend: the first visible item
+   *  with index >= 1 (index 0 can be re-keyed by a turn merge at a page
+   *  boundary). `visible.start` already includes `scrollMargin`, so the captured
+   *  offset (`container.scrollTop - visible.start`) is relative to the sizer, and
+   *  `sizerTop` is NOT added back at restore time. */
+  const captureAnchor = useCallback(() => {
+    const container = listRef.current?.parentElement;
+    if (!container || !prependPendingRef.current || !virtualizerRef.current) return;
+    const visible = virtualizerRef.current.getVirtualItems().find((v) => v.index >= 1);
+    if (visible && itemsRef.current[visible.index]) {
+      anchorRef.current = {
+        key: itemKey(itemsRef.current[visible.index]!),
+        offset: container.scrollTop - visible.start,
+      };
+    }
+  }, []);
+
+  /** Returns the load's settle promise, or undefined when nothing started. */
+  const startLoadEarlier = useCallback((limit?: number): Promise<void> | undefined => {
+    if (prependPendingRef.current || loadingEarlier || !hasMore || !onLoadEarlier) return undefined;
     prependPendingRef.current = true;
     sawLoadingRef.current = false;
+    // A load not started by a scroll (the outline, the button) has no anchor yet.
+    captureAnchor();
     const token = ++loadTokenRef.current;
     // Settlement is observed on the triggered call ITSELF, not inferred from
     // the `loadingEarlier` prop's render transitions — a parent can
@@ -877,8 +987,34 @@ export function MessageList({
     };
     // `Promise.resolve` normalizes a `void`-returning parent too, so a silent
     // no-op still settles (on the next microtask) instead of wedging.
-    Promise.resolve(onLoadEarlier()).then(settle, settle);
-  }, [hasMore, loadingEarlier, onLoadEarlier, releasePendingPrepend]);
+    return Promise.resolve(onLoadEarlier(limit)).then(settle, settle);
+  }, [hasMore, loadingEarlier, onLoadEarlier, releasePendingPrepend, captureAnchor]);
+
+  // The outline's nav, cached turn nodes and the portaled chain live in one hook.
+  const outline = useChatOutline({
+    items,
+    seqIndex,
+    virtualizer,
+    virtualized,
+    listRef,
+    rowUiStore,
+    navRef,
+    activeTurnId,
+    turnsBefore,
+    hasMore,
+    loadingEarlier,
+    detached,
+    onLoadEarlier: onLoadEarlier ? (limit) => startLoadEarlier(limit) : undefined,
+    overlayHost,
+    onHoldTrim: onOutlineHoldTrim,
+    hitTurns,
+    currentTurn,
+    peekTurn,
+    currentSeq,
+    source: outlineSource,
+  });
+
+  useLoadLater({ listRef, virtualizerRef, itemsRef, itemKey, detached: !!detached, onLoadLater });
 
   // The scroll listener is registered ONCE (empty deps, passive) — read the
   // current trigger through a ref instead of re-attaching on every prop change.
@@ -897,28 +1033,16 @@ export function MessageList({
     const onScroll = () => {
       lastScrollTopRef.current = container.scrollTop;
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      const near = distance < 80;
+      const near = distance < 80 && !detachedRef.current;
       applyAtBottom(near);
       if (container.scrollTop < NEAR_TOP_PX) startLoadEarlierRef.current();
-      // 2.5 — while a load-earlier is pending, keep the key anchor current (the
-      // user may keep scrolling during the fetch). Anchor on the first visible
-      // item with index >= 1 — index 0 can be re-keyed by a turn merge at a
-      // page boundary. `visible.start` already includes `scrollMargin`, so the
-      // captured offset (`container.scrollTop - visible.start`) is relative to
-      // the sizer, and `sizerTop` is NOT added back at restore time.
-      if (prependPendingRef.current && virtualizerRef.current) {
-        const visible = virtualizerRef.current.getVirtualItems().find((v) => v.index >= 1);
-        if (visible && itemsRef.current[visible.index]) {
-          anchorRef.current = {
-            key: itemKey(itemsRef.current[visible.index]!),
-            offset: container.scrollTop - visible.start,
-          };
-        }
-      }
+      // While a load-earlier is pending, keep the key anchor current (the user
+      // may keep scrolling during the fetch).
+      captureAnchor();
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
-  }, [applyAtBottom]);
+  }, [applyAtBottom, captureAnchor]);
 
   // MUST be useLayoutEffect, not useEffect: this needs to read/write layout
   // (scrollTop) before the browser paints the just-added content, so the
@@ -946,7 +1070,7 @@ export function MessageList({
     // for it — snapping to the bottom here first would either fight that
     // restore or overshoot past it. `ownSend` still wins: the user pressing
     // send always jumps to their own message.
-    if (!ownSend && prependPendingRef.current) return;
+    if (!ownSend && (prependPendingRef.current || detached)) return;
     if (ownSend || atBottomRef.current) {
       container.scrollTop = container.scrollHeight;
       // The scroll above doesn't fire a `scroll` event synchronously in every
@@ -957,7 +1081,7 @@ export function MessageList({
     }
     // `turnActive` here so the WorkingIndicator's own appear/disappear (it
     // changes the feed's content height) re-triggers the scroll too.
-  }, [items.length, pending.length, thinking, turnActive, applyAtBottom]);
+  }, [items.length, pending.length, thinking, turnActive, applyAtBottom, detached]);
 
   // Scroll anchoring for prepended history. Declared AFTER the primary effect
   // on purpose: layout effects run in declaration order, so this is the last
@@ -1149,10 +1273,10 @@ export function MessageList({
             </div>
           );
         }
-        return <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} {...reviewProps(item)} />;
+        return <TextMessage role="user" text={item.text} attachments={item.attachments} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} scheduled={isScheduled} findKeyPrefix={itemAnchorKey(item)} {...reviewProps(item)} />;
       }
       case "assistant":
-        return <TextMessage role="assistant" text={item.text} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} />;
+        return <TextMessage role="assistant" text={item.text} ts={item.ts} api={api} worktreeId={worktreeId} scope={scope} rowKey={itemKey(item)} findKeyPrefix={itemAnchorKey(item)} />;
       case "thinking":
         // The null-render gate for unclosed/empty thinking groups is folded
         // into the `items` memo (2.2b), so any thinking item that reaches here
@@ -1164,6 +1288,7 @@ export function MessageList({
             endedTs={item.endedTs}
             hadToolCall={item.hadToolCall}
             rowKey={itemKey(item)}
+            findKeyPrefix={itemAnchorKey(item)}
             api={api}
             worktreeId={worktreeId}
             scope={scope}
@@ -1216,7 +1341,7 @@ export function MessageList({
   };
 
   return (
-    <RowUiStateProvider>
+    <RowUiStateProvider store={rowUiStore}>
     <div
       ref={listRef}
       className={`chat-message-list${virtualized ? " chat-message-list--virtual" : ""}`}
@@ -1237,7 +1362,7 @@ export function MessageList({
           <button
             type="button"
             className="chat-load-earlier__btn"
-            onClick={startLoadEarlier}
+            onClick={() => startLoadEarlier()}
             disabled={loadingEarlier}
           >
             {loadingEarlier ? "Loading…" : "Load earlier messages"}
@@ -1275,6 +1400,7 @@ export function MessageList({
                 ref={virtualizer.measureElement}
                 data-index={v.index}
                 data-row-index={v.index}
+                data-find-anchor={itemAnchorKey(item)}
                 className="chat-vrow"
                 style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
                 role="article"
@@ -1291,6 +1417,7 @@ export function MessageList({
           <div
             key={itemKey(item)}
             data-row-index={i}
+            data-find-anchor={itemAnchorKey(item)}
             className="chat-vrow chat-vrow--flow"
             role="article"
             aria-setsize={items.length}
@@ -1319,21 +1446,27 @@ export function MessageList({
        *  non-scrolling wrapper around `.chat-pane__body`, see chat.css), so it
        *  neither scrolls away with the content it lives in nor overlaps the
        *  footer below the viewport. */}
-      {!atBottom ? (
+      {!atBottom || detached ? (
         <button
           type="button"
           className="chat-jump-to-bottom"
-          aria-label="Jump to latest message"
+          aria-label={detached ? "Return to latest message" : "Jump to latest message"}
           onClick={() => {
-            const container = listRef.current?.parentElement;
-            if (!container) return;
-            container.scrollTop = container.scrollHeight;
-            applyAtBottom(true);
+            if (detached) {
+              onReturnToLatest?.();
+            } else {
+              const container = listRef.current?.parentElement;
+              if (!container) return;
+              container.scrollTop = container.scrollHeight;
+              applyAtBottom(true);
+            }
           }}
         >
           ↓
         </button>
       ) : null}
+
+      {outline}
     </div>
     </RowUiStateProvider>
   );

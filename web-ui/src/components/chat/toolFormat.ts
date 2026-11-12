@@ -34,6 +34,8 @@ export interface ToolCallEntry {
    *  level deep only — a Task opening while another is already open closes
    *  the first rather than nesting task-in-task. */
   children?: ToolCallEntry[];
+  /** Timestamp of the tool_use event (or of an orphan tool_result). */
+  ts?: string;
 }
 
 /** One-line placeholder for a non-text content block, joined into a bubble's
@@ -122,6 +124,10 @@ export interface TodoItem {
 export function isTodoToolName(name: string | undefined): boolean {
   const lower = (name ?? "").toLowerCase().replace(/[^a-z0-9_]/g, "");
   return lower === "todowrite" || lower === "todo_write" || lower === "todo" || lower === "todolist";
+}
+
+export function isTaskName(name: string | undefined): boolean {
+  return (name ?? "").toLowerCase() === "task";
 }
 
 /** Parse a markdown checkbox list (`- [x] item`) or a plain JSON string array

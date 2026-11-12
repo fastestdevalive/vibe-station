@@ -5,6 +5,9 @@ import { DiffView } from "@/components/preview/DiffView";
 import { countLines } from "@/preview/diffFromTexts";
 import type { ToolDiff } from "@/api/types";
 import { useRowOpen } from "./rowUiState";
+import { FindText } from "./find/FindText";
+import { useFindMarks } from "./find/FindMarksContext";
+import { rehypeFindMarks } from "@/lib/rehypeFindMarks";
 import {
   capForDisplay,
   extractToolDiffs,
@@ -245,6 +248,8 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   const hasChildren = !!tool.children && tool.children.length > 0;
   const hasBody = hasInputBody || hasResultBody || hasDiffs || hasChildren;
   const done = tool.status ? tool.status === "completed" : (!hasBody && !!result);
+  const findMarks = useFindMarks();
+  const findInAll = findMarks?.scope === "all";
 
   return (
     <div className={`chat-tool-entry${isError ? " chat-tool-entry--error" : ""}`}>
@@ -265,10 +270,22 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
         <span className="chat-tool-entry__icon" aria-hidden>
           {isError ? "⚠" : "🔧"}
         </span>
-        <span className="chat-tool-entry__name">{isBash ? "Ran" : tool.toolName}</span>
+        <span className="chat-tool-entry__name">
+          {isBash ? (
+            "Ran"
+          ) : findInAll ? (
+            <FindText text={tool.toolName} keyPrefix={`t:${tool.id}/name`} />
+          ) : (
+            tool.toolName
+          )}
+        </span>
         {pathParts ? (
           <code className="chat-tool-entry__inline chat-tool-entry__inline--path">
-            {pathParts.name}
+            {findInAll ? (
+              <FindText text={pathParts.name} keyPrefix={`t:${tool.id}/path`} />
+            ) : (
+              pathParts.name
+            )}
           </code>
         ) : inline ? (
           <code className="chat-tool-entry__inline">{inline}</code>
@@ -297,7 +314,7 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
           ) : null}
           {hasInputBody && !hasDiffs ? (
             <pre className="chat-tool-entry__pre">
-              <code>{pretty}</code>
+              <code>{findInAll ? <FindText text={pretty} keyPrefix={`t:${tool.id}/input`} /> : pretty}</code>
             </pre>
           ) : null}
           {hasDiffs ? (
@@ -308,11 +325,16 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
               <DiffView diffText={resultText} />
             ) : isBash ? (
               <div className="chat-tool-entry__md workspace-markdown-preview">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{resultText}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={findInAll && findMarks ? [rehypeFindMarks({ terms: findMarks.terms, keyPrefix: `t:${tool.id}/output` })] : undefined}
+                >
+                  {resultText}
+                </ReactMarkdown>
               </div>
             ) : (
               <pre className="chat-tool-entry__pre">
-                <code>{resultText}</code>
+                <code>{findInAll ? <FindText text={resultText} keyPrefix={`t:${tool.id}/output`} /> : resultText}</code>
               </pre>
             )
           ) : null}

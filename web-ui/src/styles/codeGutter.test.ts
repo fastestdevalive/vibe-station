@@ -22,11 +22,11 @@ describe("code viewer line-number gutter", () => {
     expect(l).toMatch(/min-width:\s*100%/);
   });
 
-  it("git change marks sit on the RIGHT of the numbers", () => {
-    expect(block(".workspace-code-line--added .workspace-code-gutter")).toMatch(/inset -2px/);
-    expect(block(".workspace-code-line--modified .workspace-code-gutter")).toMatch(/inset -2px/);
-    expect(block(".workspace-code-line--deleted .workspace-code-gutter::after")).toMatch(/right:\s*0/);
-    expect(block(".workspace-code-line--deleted-top .workspace-code-gutter::before")).toMatch(/right:\s*0/);
+  it("git change marks sit on the LEFT of the numbers (gutter | numbers | code)", () => {
+    expect(block(".workspace-code-line--added .workspace-code-gutter")).toMatch(/inset 2px 0 0 var\(--git-added\)/);
+    expect(block(".workspace-code-line--modified .workspace-code-gutter")).toMatch(/inset 2px/);
+    expect(block(".workspace-code-line--deleted .workspace-code-gutter::after")).toMatch(/left:\s*0/);
+    expect(block(".workspace-code-line--deleted-top .workspace-code-gutter::before")).toMatch(/left:\s*0/);
   });
 });
 

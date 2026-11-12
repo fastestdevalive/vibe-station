@@ -71,7 +71,7 @@ button.comment-footer__link {
   position: relative;
 }
 
-/* The "+" sits beside the line number, never over it: in the diff's +/- glyph cell, in the code gutter's padding. */
+/* The "+" sits beside the line number, never over it: in the diff's +/- glyph cell, in the code gutter's padding (right of the change lane). */
 .diff-gutter > .comment-plus {
   right: auto;
   left: 100%;
@@ -79,7 +79,8 @@ button.comment-footer__link {
 
 .workspace-code-gutter > .comment-plus {
   right: auto;
-  left: 0;
+  /* Right of the 2px change lane, left of the number. */
+  left: 3px;
 }
 
 .preview-body[data-comment-surface] .diff-marker {

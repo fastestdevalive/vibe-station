@@ -14,7 +14,7 @@ import { createContext, useCallback, useContext, useRef, useState, useSyncExtern
  * so components remain testable and usable outside a `MessageList`.
  */
 
-interface RowUiStore {
+export interface RowUiStore {
   /** Read the stored flag for `key`, or `undefined` if never set. */
   get: (key: string) => boolean | undefined;
   /** Write (or, when `v === dflt`, drop) the flag for `key`; notifies only that key's subscribers. */
@@ -24,7 +24,7 @@ interface RowUiStore {
 
 const RowUiStateContext = createContext<RowUiStore | null>(null);
 
-function createStore(): RowUiStore {
+export function createRowUiStore(): RowUiStore {
   const map = new Map<string, boolean>();
   const listeners = new Map<string, Set<() => void>>();
   return {
@@ -48,12 +48,12 @@ function createStore(): RowUiStore {
   };
 }
 
-export function RowUiStateProvider({ children }: { children: ReactNode }) {
+export function RowUiStateProvider({ children, store }: { children: ReactNode; store?: RowUiStore }) {
   // Stable store identity: a toggle re-renders only the row that owns the key
   // (via useSyncExternalStore), not every consumer of the context.
   const storeRef = useRef<RowUiStore | null>(null);
-  if (!storeRef.current) storeRef.current = createStore();
-  return <RowUiStateContext.Provider value={storeRef.current}>{children}</RowUiStateContext.Provider>;
+  const effectiveStore = store ?? (storeRef.current ??= createRowUiStore());
+  return <RowUiStateContext.Provider value={effectiveStore}>{children}</RowUiStateContext.Provider>;
 }
 
 const NOOP_UNSUBSCRIBE = () => {};

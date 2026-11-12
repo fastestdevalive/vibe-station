@@ -1,6 +1,6 @@
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, Search } from "lucide-react";
 import { FontResetButton } from "./FontResetButton";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, FileScope, ReviewSummary, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
@@ -10,6 +10,10 @@ import { listPredecessors } from "@/lib/sessionVisibility";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
+import type { MessageNav } from "@/components/chat/messageNav";
+import { createFetchWindow, type OutlineSource } from "@/components/chat/outline/outlineSource";
+import { useTranscriptOutline } from "@/hooks/useTranscriptOutline";
+import { useOutlineWindows } from "@/hooks/useOutlineWindows";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
 import { RescheduleHost, type EditingScheduled } from "@/components/schedule/RescheduleHost";
@@ -33,8 +37,16 @@ import { useSessionTasks } from "@/hooks/useSessionTasks";
 import { TaskTray } from "@/components/tasks/TaskTray";
 import { TaskView } from "@/components/tasks/TaskView";
 import { useTaskFocusReturn } from "@/components/tasks/useTaskFocusReturn";
+import { useDelayedUnmount } from "@/components/tasks/useDelayedUnmount";
 import { summarizeReview } from "@/components/comments/commentSelectors";
 import { useCommentStore } from "@/components/comments/useCommentStore";
+import { FindMarksProvider } from "@/components/chat/find/FindMarksContext";
+import { useChatFind } from "@/components/chat/find/useChatFind";
+import { ChatFindBar } from "@/components/chat/find/ChatFindBar";
+import { ChatFindResults } from "@/components/chat/find/ChatFindResults";
+import { registerFindPane, updateFindPaneFocus } from "@/components/chat/find/findRegistry";
+import { shortcutHints } from "@/lib/shortcutHints";
+import { countUserTurns } from "@/lib/chatTurns";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -174,6 +186,9 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     paneObserverRef.current = ro;
   }, []);
 
+  const [viewportEl, setViewportEl] = useState<HTMLDivElement | null>(null);
+  const navRef = useRef<MessageNav | null>(null);
+
   const {
     events,
     meta,
@@ -184,7 +199,13 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     hasMore,
     loadingEarlier,
     loadEarlier,
+    loadEarlierTo,
     loadAll,
+    turnsBefore,
+    detached,
+    viewAround,
+    returnToLatest,
+    loadLater,
     queuedTurnIds,
     editingTurnIds,
     editingDrafts,
@@ -198,6 +219,32 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     sendNow,
     setCanTrim,
   } = useChat(api, sessionId, enabled);
+  // The whole-chat outline: the summary (one owner), its turn windows, and the loaders the outline's rail and list use.
+  // A window that disagrees with the summary's revision bumps `outlineRefresh`, which refetches the summary.
+  const [outlineRefresh, setOutlineRefresh] = useState(0);
+  // Bumped on every explicit return-to-latest (arrow button and find bar) so MessageList scrolls to the bottom.
+  const [returnSeq, setReturnSeq] = useState(0);
+  const handleReturnToLatest = useCallback(() => {
+    setReturnSeq((n) => n + 1);
+    returnToLatest();
+  }, [returnToLatest]);
+  const onOutlineRevisionMismatch = useCallback(() => setOutlineRefresh((n) => n + 1), []);
+  const outlineSummary = useTranscriptOutline(api, sessionId, enabled, outlineRefresh);
+  const outlineWindows = useOutlineWindows(
+    api,
+    sessionId,
+    outlineSummary.status === "ready" ? outlineSummary.revision : null,
+    onOutlineRevisionMismatch,
+  );
+  const fetchWindow = useMemo(
+    () => (sessionId ? createFetchWindow(api, sessionId) : undefined),
+    [api, sessionId],
+  );
+  const outlineSource = useMemo<OutlineSource | undefined>(
+    () => (fetchWindow ? { summary: outlineSummary, windows: outlineWindows, viewAround, onMismatch: onOutlineRevisionMismatch, fetchWindow }
+        : undefined),
+    [outlineSummary, outlineWindows, viewAround, onOutlineRevisionMismatch, fetchWindow],
+  );
   // The only client copy of this session's scheduled sends (one fetch + one
   // subscribe per pane); the strip below renders it. A hidden pane (a Terminal
   // agent's idle ChatPane) must not subscribe, so it gets no session id.
@@ -238,6 +285,186 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // measurement) so `useChat` can pause live-event trimming while the user is
   // scrolled up. Defaults to `true`, matching MessageList's own initial value.
   const [atBottom, setAtBottom] = useState(true);
+
+  const find = useChatFind({
+    sessionId: sessionId ?? "",
+    api,
+    events,
+    navRef,
+    turnActive,
+    onViewAround: async (seq) => {
+      await viewAround(seq);
+    },
+    onLoadEarlierTo: loadEarlierTo,
+  });
+
+  const [findMoreOpen, setFindMoreOpen] = useState(false);
+  const findBarMounted = useDelayedUnmount(find.open, 120);
+  const isFindClosing = findBarMounted && !find.open;
+  const loadedUserTurns = countUserTurns(events);
+  const detachedTurns: [number, number] | undefined =
+    detached && turnsBefore != null
+      ? [turnsBefore + 1, turnsBefore + loadedUserTurns]
+      : undefined;
+
+  useEffect(() => {
+    if (!find.open) {
+      setFindMoreOpen(false);
+    }
+  }, [find.open]);
+
+  // Outside click listener for findMoreOpen dropdown
+  useEffect(() => {
+    if (!findMoreOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest(".fbar__more-btn, .chat-font-overlay")) {
+        setFindMoreOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [findMoreOpen]);
+
+  const getMessageSelection = useCallback((): string | undefined => {
+    if (typeof window === "undefined") return undefined;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return undefined;
+    const text = sel.toString().trim();
+    if (!text || text.includes("\n") || text.length > 200) return undefined;
+    const node = sel.anchorNode;
+    if (paneElRef.current && node && !paneElRef.current.contains(node)) return undefined;
+    const el = node instanceof Element ? node : node?.parentElement;
+    if (!el) return undefined;
+    if (el.closest(".chat-composer, textarea, input")) return undefined;
+    if (el.closest(".chat-pane__viewport, .chat-message-list, .chat-bubble, .chat-user-turn")) {
+      return text;
+    }
+    return undefined;
+  }, []);
+
+  const openFindRef = useRef(find.openFind);
+  openFindRef.current = find.openFind;
+  // Two panes can show one session, so the find registry is keyed per pane.
+  const findPaneId = useId();
+
+  useEffect(() => {
+    if (!enabled || !sessionId) return;
+    return registerFindPane({
+      paneId: findPaneId,
+      sessionId,
+      open: (seed?: string) => {
+        const initialSeed = seed ?? getMessageSelection();
+        openFindRef.current(initialSeed);
+      },
+      lastFocusedAt: Date.now(),
+    });
+  }, [enabled, sessionId, getMessageSelection, findPaneId]);
+
+  const hitTurnSet = useMemo(() => {
+    if (find.matches.length === 0) return undefined;
+    const set = new Set<string>();
+    for (const m of find.matches) {
+      if (m.turnId) set.add(`u:${m.turnId}`);
+    }
+    return set;
+  }, [find.matches]);
+
+  const currentMatch = find.current
+    ? find.matches.find(
+        (m) => m.seq === find.current!.seq && m.occurrence === find.current!.occurrence,
+      )
+    : undefined;
+  const currentTurnAnchor = currentMatch?.turnId ? `u:${currentMatch.turnId}` : undefined;
+
+  const peekTurnAnchor = find.peekMatch?.turnId
+    ? `u:${find.peekMatch.turnId}`
+    : undefined;
+
+  const handlePaneKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    updateFindPaneFocus(findPaneId);
+
+    const target = e.target as HTMLElement | null;
+
+    // Ctrl/Cmd+F
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (find.open) {
+        const input = paneElRef.current?.querySelector<HTMLInputElement>(".fbar__input");
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      } else {
+        const seed = getMessageSelection();
+        find.openFind(seed);
+      }
+      return;
+    }
+
+    // F3 / Shift+F3
+    if (e.key === "F3" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (find.open) {
+        if (e.shiftKey) find.prev();
+        else find.next();
+      }
+      return;
+    }
+
+    // The footer (composer, queued tray, status bar menus) keeps its own keys:
+    // only Ctrl/Cmd+F and F3 above fire from it, never the turn jump, the list
+    // toggle or the Esc ladder below.
+    if (target?.closest(".chat-pane__footer")) return;
+
+    // Alt+ArrowUp / Alt+ArrowDown: jump turn. Only from the message list —
+    // never from a text field (the find input keeps its caret keys).
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (target?.closest("input, textarea, [contenteditable], .chat-composer")) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      navRef.current?.jumpTurn(e.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
+
+    // Alt+Enter (toggle list)
+    if (e.altKey && e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (find.open) {
+        e.preventDefault();
+        e.stopPropagation();
+        find.toggleList();
+        return;
+      }
+    }
+
+    // Esc ladder: more dropdown -> results -> bar -> focus composer at its caret
+    if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (findMoreOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setFindMoreOpen(false);
+        return;
+      }
+      if (find.listOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        find.toggleList();
+        return;
+      }
+      if (find.open) {
+        e.preventDefault();
+        e.stopPropagation();
+        find.close();
+        composerRef.current?.focus();
+        return;
+      }
+    }
+  };
+
   // `ChatPane` is NOT re-keyed per session — this one instance survives a pane
   // hide (`enabled` flips), a channel toggle and a session switch, while the
   // `MessageList` below fully unmounts/remounts across all three (the
@@ -254,9 +481,12 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // Mirror the scroller's `atBottom` into `useChat` so live-event trimming is
   // disabled while the user has scrolled up (history must not be cut from under
   // them). Fires on every scroll-state change; `setCanTrim` is stable.
+  // The turn outline holds trimming too while it is open or has just loaded
+  // earlier turns, or the next live event would drop the pages it loaded.
+  const [outlineHoldTrim, setOutlineHoldTrim] = useState(false);
   useEffect(() => {
-    setCanTrim(atBottom);
-  }, [atBottom, setCanTrim]);
+    setCanTrim(atBottom && !find.open && !outlineHoldTrim);
+  }, [atBottom, find.open, outlineHoldTrim, setCanTrim]);
   const [steerNotice, setSteerNotice] = useState<string | null>(null);
   // Strip actions on scheduled rows (send now / cancel / retry / dismiss) report
   // a daemon rejection in the shared notice strip instead of failing silently.
@@ -489,15 +719,83 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   }
 
   return (
-    <div className="chat-pane" style={chatFontVars} ref={setPaneRef}>
-      <OfflineOverlay api={api} />
-      {/* Non-scrolling wrapper whose box is exactly the scroll VIEWPORT — it,
-          not `.chat-pane`, is the containing block for the floating
-          jump-to-bottom button, so the button clears the footer (queued tray +
-          status bar + auto-growing composer) at any footer height instead of
-          relying on a fixed offset that a tall footer overlaps. */}
-      <div className="chat-pane__viewport" inert={taskViewOpen} aria-hidden={taskViewOpen || undefined}>
-        <div className="chat-pane__body" ref={setBodyRef}>
+    <div
+      className="chat-pane"
+      style={chatFontVars}
+      ref={setPaneRef}
+      onKeyDown={handlePaneKeyDown}
+      onFocus={() => {
+        updateFindPaneFocus(findPaneId);
+      }}
+      data-find-open={find.open ? "" : undefined}
+      data-find-pane={sessionId ?? undefined}
+      data-find-more-open={findMoreOpen ? "" : undefined}
+    >
+      <FindMarksProvider terms={find.terms} scope={find.scope}>
+        <OfflineOverlay api={api} />
+        {/* Non-scrolling wrapper whose box is exactly the scroll VIEWPORT — it,
+            not `.chat-pane`, is the containing block for the floating
+            jump-to-bottom button, so the button clears the footer (queued tray +
+            status bar + auto-growing composer) at any footer height instead of
+            relying on a fixed offset that a tall footer overlaps. */}
+        <div className="chat-pane__viewport" ref={setViewportEl} inert={taskViewOpen} aria-hidden={taskViewOpen || undefined}>
+          {sessionId && findBarMounted ? (
+            <ChatFindBar
+              sessionId={sessionId}
+              query={find.query}
+              scope={find.scope}
+              status={find.status}
+              matches={find.matches}
+              total={find.total}
+              totalCapped={find.totalCapped}
+              current={find.current}
+              currentIsStreaming={find.currentIsStreaming}
+              fallbackRowAnchor={find.fallbackRowAnchor}
+              newCount={find.newCount}
+              listOpen={find.listOpen}
+              backfilling={find.backfilling}
+              turnCount={find.turnCount || (turnsBefore != null ? turnsBefore + loadedUserTurns : loadedUserTurns)}
+              loadedTurnsCount={loadedUserTurns}
+              detached={detached}
+              detachedTurns={detachedTurns}
+              currentStyleKey={find.currentStyleKey}
+              announcement={find.announcement}
+              moreOpen={findMoreOpen}
+              closing={isFindClosing}
+              results={
+                find.listOpen ? (
+                  <ChatFindResults
+                    matches={find.matches}
+                    totalCapped={find.totalCapped}
+                    current={find.current}
+                    peekMatch={find.peekMatch}
+                    navRef={navRef}
+                    scope={find.scope}
+                    onToggleScope={find.toggleScope}
+                    onJump={find.jumpTo}
+                    onPeek={find.setPeekMatch}
+                    onClose={find.toggleList}
+                  />
+                ) : null
+              }
+              onSetQuery={find.setQuery}
+              onToggleScope={find.toggleScope}
+              onToggleList={find.toggleList}
+              onNext={find.next}
+              onPrev={find.prev}
+              onClose={() => {
+                find.close();
+                setFindMoreOpen(false);
+                composerRef.current?.focus();
+              }}
+              onToggleMore={() => setFindMoreOpen((v) => !v)}
+              onRetry={find.retry}
+              jumpFailed={find.jumpFailed}
+              onRetryJump={find.retryJump}
+              onJumpToLatest={handleReturnToLatest}
+            />
+          ) : null}
+          <div className="chat-pane__body" ref={setBodyRef} tabIndex={-1}>
           {loading ? (
             <div className="chat-pane__state">
               <span className="chat-spinner" aria-hidden /> Loading history…
@@ -542,8 +840,17 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               hiddenTurnIds={hiddenTurnIds}
               hasMore={hasMore}
               loadingEarlier={loadingEarlier}
-              onLoadEarlier={() => loadEarlier()}
+              onLoadEarlier={(limit) => loadEarlier(limit)}
               onLoadAll={() => void loadAll()}
+              turnsBefore={turnsBefore}
+              detached={detached}
+              onReturnToLatest={handleReturnToLatest}
+              returnSeq={returnSeq}
+              onLoadLater={loadLater}
+              overlayHost={viewportEl}
+              onOutlineHoldTrim={setOutlineHoldTrim}
+              outlineSource={outlineSource}
+              navRef={navRef}
               onRetry={handleRetry}
               api={api}
               worktreeId={contextId}
@@ -558,6 +865,11 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
                   ? () => useWorkspaceStore.getState().setActiveSession(predecessors[0]!.id)
                   : undefined
               }
+              hitTurns={hitTurnSet}
+              currentTurn={currentTurnAnchor}
+              peekTurn={peekTurnAnchor}
+              currentSeq={currentMatch?.seq}
+              findOpen={find.open}
             />
           )}
         </div>
@@ -612,6 +924,26 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           queueDepth={trayRows.length}
           api={api}
           {...(sessionId ? { sessionId } : {})}
+          trailingControls={
+            sessionId ? (
+              <button
+                type="button"
+                className="terminal-font-overlay__btn"
+                aria-label={`Find in chat (${shortcutHints().find})`}
+                aria-expanded={find.open}
+                onClick={() => {
+                  if (find.open) {
+                    find.close();
+                    setFindMoreOpen(false);
+                  } else {
+                    find.openFind(getMessageSelection());
+                  }
+                }}
+              >
+                <Search size={11} />
+              </button>
+            ) : null
+          }
           fontControls={
             <div className="chat-font-overlay__btns">
               <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease chat font" onClick={() => bumpTerminalFont(-0.05)}>
@@ -760,6 +1092,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           focusOnMount={focusOnMount}
         />
       ) : null}
+      </FindMarksProvider>
     </div>
   );
 }
