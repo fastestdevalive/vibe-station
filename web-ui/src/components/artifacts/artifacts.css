@@ -49,10 +49,106 @@
   flex-wrap: wrap;
   padding: 8px 10px;
 }
-.artifacts-tools__seg {
+/* Agent filter trigger: an agent row in a quiet control box (mode icon, name, count, chevron). */
+.artifacts-agent-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px 0 8px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--fg-primary);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.artifacts-agent-picker:hover,
+.artifacts-agent-picker[aria-expanded="true"] {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.artifacts-agent-picker:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--fg-muted);
+}
+.artifacts-agent-picker__count {
+  flex: none;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.artifacts-agent-picker__chevron {
+  flex: none;
+  color: var(--fg-muted);
+}
+
+/* An agent's mode icon + name (filter, row writer, preview strip). */
+.artifacts-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.artifacts-agent__icon {
+  display: inline-flex;
+  flex: none;
+}
+.artifacts-agent__all-icon,
+.artifacts-agent__deleted-icon {
+  flex: none;
+  color: var(--fg-muted);
+}
+.artifacts-agent__name {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifacts-agent--deleted .artifacts-agent__name {
+  font-style: italic;
+  color: var(--fg-muted);
+}
+
+/* Agent filter menu items: icon · name · status · count · check. */
+.artifacts-agent-menu {
+  overflow-y: auto;
+}
+.artifacts-agent-option__icon {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 18px;
+  color: var(--fg-muted);
+}
+.artifacts-agent-option__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifacts-agent-option__count {
+  flex: none;
+  min-width: 2ch;
+  text-align: right;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.artifacts-agent-option__check {
+  flex: none;
+  visibility: hidden;
+  color: var(--fg-secondary);
+}
+.artifacts-agent-option[aria-checked="true"] .artifacts-agent-option__check {
+  visibility: visible;
+}
+.artifacts-agent-option[aria-checked="true"] {
+  background: var(--bg-active);
 }
 .artifacts-tools__meta {
   margin-left: auto;
@@ -176,9 +272,17 @@
 }
 .artifacts-row__by {
   flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 100%;
+  color: var(--fg-secondary);
+}
+.artifacts-row__more-writers {
+  flex: none;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.artifacts-row__edits {
+  flex: none;
   white-space: nowrap;
 }
 
@@ -225,7 +329,16 @@
 }
 .artifacts-row--mobile .artifacts-row__sub {
   margin-top: -6px;
+  flex-wrap: nowrap;
   font-size: 12px;
+}
+/* One sub-line on phones: the path gives way first, then the agent name ellipsizes beside its icon. */
+.artifacts-row--mobile .artifacts-row__path {
+  min-width: 0;
+}
+.artifacts-row--mobile .artifacts-row__by {
+  flex: 0 0 auto;
+  max-width: 60%;
 }
 .artifacts-listbox--mobile .artifacts-row__more {
   display: none !important;
@@ -415,18 +528,11 @@
   text-decoration: underline dotted;
 }
 
-.artifacts-tools__select {
-  height: 24px;
-}
-
 @media (max-width: 768px) {
   .artifacts-group__head--button {
     min-height: 44px;
   }
-  .artifacts-tools__seg [role="radio"] {
-    min-height: 44px;
-  }
-  .artifacts-tools__select {
+  .artifacts-agent-picker {
     height: 44px;
   }
   .preview-diffinfo.artifact-strip {

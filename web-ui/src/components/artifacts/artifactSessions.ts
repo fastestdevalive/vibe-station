@@ -55,12 +55,54 @@ export function matchesSession(row: ArtifactRow, selectedId: string, byId: Map<s
   return row.writers.some((w) => byId.has(w) && rootSessionId(w, byId) === selectedId);
 }
 
+export const DELETED_AGENT_LABEL = "deleted agent";
+
+/**
+ * The writer to display: the first writer whose root session is `selectedId` when one is given (the same
+ * predicate as `matchesSession`), else `writers[0]`.
+ * `undefined` when no writer is recorded, `null` when it is an unknown (deleted) session.
+ */
+export function writerOf(row: ArtifactRow, byId: Map<string, Session>, selectedId?: string): Session | null | undefined {
+  const w = row.writers[0];
+  if (w == null) return undefined;
+  if (selectedId) {
+    const match = row.writers.find((id) => byId.has(id) && rootSessionId(id, byId) === selectedId);
+    if (match != null) return byId.get(match) ?? null;
+  }
+  return byId.get(w) ?? null;
+}
+
+/** Number of unique writers beyond the displayed writer (the first, or the filtered agent's match). */
+export function otherWriterCount(row: ArtifactRow): number {
+  return Math.max(0, new Set(row.writers).size - 1);
+}
+
+/** Other writers' labels joined with ", " (`sessionLabel`, or `DELETED_AGENT_LABEL`), excluding the displayed writer. */
+export function otherWriterNames(row: ArtifactRow, byId: Map<string, Session>, displayedWriter?: Session | null): string {
+  const displayedId = displayedWriter?.id;
+  const seen = new Set<string>();
+  const others: string[] = [];
+  let skippedDisplayed = false;
+  for (const w of row.writers) {
+    if (seen.has(w)) continue;
+    seen.add(w);
+    if (!skippedDisplayed) {
+      if (displayedId ? w === displayedId : displayedWriter === null && !byId.has(w)) {
+        skippedDisplayed = true;
+        continue;
+      }
+    }
+    const s = byId.get(w);
+    others.push(s ? sessionLabel(s) : DELETED_AGENT_LABEL);
+  }
+  return others.join(", ");
+}
+
 /** Newest writer's label, or "deleted agent" for an unknown session. */
 export function writerLabel(row: ArtifactRow, byId: Map<string, Session>): string | null {
-  const w = row.writers[0];
-  if (w == null) return null;
-  const s = byId.get(w);
-  return s ? sessionLabel(s) : "deleted agent";
+  const s = writerOf(row, byId);
+  if (s === undefined) return null;
+  return s ? sessionLabel(s) : DELETED_AGENT_LABEL;
 }
 
 export function baseName(displayPath: string): string {

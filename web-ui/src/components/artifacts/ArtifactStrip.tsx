@@ -4,11 +4,14 @@ import type { ApiInstance } from "@/api";
 import type { ArtifactRow } from "@/api/types";
 import { Chip } from "@/components/ui/Chip";
 import { useServerStore } from "@/hooks/useServerStore";
-import { writerLabel } from "./artifactSessions";
+import { useModesSync, type ModesApi } from "@/store/modesStore";
+import { AgentLabel } from "./AgentLabel";
+import { MoreWritersBadge } from "./MoreWritersBadge";
+import { DELETED_AGENT_LABEL, otherWriterCount, otherWriterNames, writerLabel, writerOf } from "./artifactSessions";
 import "./artifacts.css";
 import { toggleArtifactPin } from "./artifactActions";
 
-type StripApi = Pick<ApiInstance, "pinArtifact">;
+type StripApi = Pick<ApiInstance, "pinArtifact"> & ModesApi;
 
 interface ArtifactStripItemsProps {
   api: StripApi;
@@ -24,7 +27,12 @@ interface ArtifactStripItemsProps {
 export function ArtifactStripItems({ api, scopeId, row }: ArtifactStripItemsProps) {
   const sessions = useServerStore((s) => s.sessions);
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
-  const writer = writerLabel(row, byId);
+  const writerSession = writerOf(row, byId);
+  const moreWriters = otherWriterCount(row);
+  const names = moreWriters > 0 ? otherWriterNames(row, byId, writerSession) : undefined;
+  const name = writerLabel(row, byId) ?? DELETED_AGENT_LABEL;
+  const stripTitle = moreWriters > 0 ? `Written by ${name} and ${moreWriters} more` : `Written by ${name}`;
+  useModesSync(api);
   const [note, setNote] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -50,9 +58,10 @@ export function ArtifactStripItems({ api, scopeId, row }: ArtifactStripItemsProp
           {note}
         </span>
       ) : null}
-      {writer ? (
-        <Chip size="md" title={`Written by ${writer}`}>
-          {writer}
+      {writerSession !== undefined ? (
+        <Chip size="md">
+          <AgentLabel session={writerSession} title={stripTitle} />
+          <MoreWritersBadge count={moreWriters} names={names} />
         </Chip>
       ) : null}
       {!row.inRepo ? (

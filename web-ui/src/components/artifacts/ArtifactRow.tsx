@@ -1,17 +1,23 @@
 import { memo } from "react";
 import { FileText, Image as ImageIcon, MoreHorizontal } from "lucide-react";
-import type { ArtifactRow as Row } from "@/api/types";
+import type { ArtifactRow as Row, Session } from "@/api/types";
 import { RelativeTime } from "@/components/layout/RelativeTime";
 import { Chip } from "@/components/ui/Chip";
+import { AgentLabel } from "./AgentLabel";
+import { MoreWritersBadge } from "./MoreWritersBadge";
 import { baseName, dirOf } from "./artifactSessions";
 
 interface ArtifactRowProps {
   row: Row;
-  /** Newest writer's label ("deleted agent" for an unknown session), or null when no writer is recorded. */
-  writer: string | null;
+  /** Newest writer: the agent, null for a deleted one, undefined when no writer is recorded. */
+  writer: Session | null | undefined;
+  /** Number of additional writers beyond the displayed writer. */
+  moreWriters?: number;
+  /** Names of additional writers for tooltip. */
+  otherWriters?: string;
   selected: boolean;
   tabbable: boolean;
-  /** ≤768 px: `.mrow` metrics and a plain-text sub-line (no chip). */
+  /** ≤768 px: `.mrow` metrics and a plain-text path line (no status chips); the writer chip and edits stay. */
   mobile: boolean;
   menuOpen: boolean;
   onOpen: (row: Row) => void;
@@ -22,7 +28,7 @@ interface ArtifactRowProps {
 }
 
 /** One artifact row (`Main.dc.html` `.fr`, `Mobile.dc.html` `.mrow`). */
-export const ArtifactRow = memo(function ArtifactRow({ row, writer, selected, tabbable, mobile, menuOpen, onOpen, onFocusRow, onMenu, setRef }: ArtifactRowProps) {
+export const ArtifactRow = memo(function ArtifactRow({ row, writer, moreWriters = 0, otherWriters, selected, tabbable, mobile, menuOpen, onOpen, onFocusRow, onMenu, setRef }: ArtifactRowProps) {
   const missing = row.state === "missing";
   const Icon = row.kind === "image" ? ImageIcon : FileText;
   const dir = dirOf(row.displayPath);
@@ -38,7 +44,11 @@ export const ArtifactRow = memo(function ArtifactRow({ row, writer, selected, ta
     .join(" ");
 
   // Missing rows show the chip and the full path only (no writer or edit count).
-  const tail = missing ? [] : [writer, edits].filter((x): x is string => x != null);
+  const showWriter = !missing && writer !== undefined;
+  const showEdits = !missing && edits != null;
+  const mobileText = [!row.inRepo ? "outside repo" : null, missing ? "missing" : null, missing ? row.displayPath : dir || null]
+    .filter((x): x is string => x != null && x !== "")
+    .join(" · ");
 
   return (
     <div className="artifacts-row-wrap" role="presentation">
@@ -61,11 +71,7 @@ export const ArtifactRow = memo(function ArtifactRow({ row, writer, selected, ta
         <RelativeTime at={row.lastWrittenAt} className="artifacts-row__time" />
         <span className="artifacts-row__sub">
           {mobile ? (
-            <span className="artifacts-row__path">
-              {[!row.inRepo ? "outside repo" : null, missing ? "missing" : null, missing ? row.displayPath : dir || null, ...tail]
-                .filter((x): x is string => x != null && x !== "")
-                .join(" · ")}
-            </span>
+            mobileText && <span className="artifacts-row__path">{mobileText}</span>
           ) : (
             <>
               {!row.inRepo && (
@@ -81,9 +87,15 @@ export const ArtifactRow = memo(function ArtifactRow({ row, writer, selected, ta
               {(missing || dir) && <span className="artifacts-row__path" title={missing ? row.displayPath : dir}>
                   {missing ? row.displayPath : dir}
                 </span>}
-              {tail.length > 0 && <span className="artifacts-row__by">· {tail.join(" · ")}</span>}
             </>
           )}
+          {showWriter && (
+            <>
+              <AgentLabel session={writer ?? null} size={10} className="artifacts-row__by" />
+              <MoreWritersBadge count={moreWriters} names={otherWriters} />
+            </>
+          )}
+          {showEdits && <span className="artifacts-row__edits">· {edits}</span>}
         </span>
       </div>
       <button

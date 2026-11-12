@@ -2,11 +2,13 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { memo } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ArtifactRow, Session, SessionState } from "@/api/types";
+import type { ArtifactRow, Mode, Session, SessionState } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { __resetForDemo, useModesStore } from "@/store/modesStore";
 import { ArtifactsList } from "./ArtifactsList";
+import { otherWriterCount, otherWriterNames, writerOf } from "./artifactSessions";
 import { useArtifactsStore } from "./artifactsStore";
 import { makeRow, upsert } from "./testFixtures";
 
@@ -46,6 +48,8 @@ function makeApi() {
     listArtifacts: vi.fn(async () => ({ rev: 1, cap: 500, total: 0, items: [] as ArtifactRow[] })),
     pinArtifact: vi.fn(async (id: string, pinned: boolean) => ({ ...makeRow({ id }), pinned })),
     removeArtifact: vi.fn(async () => ({ ok: true as const })),
+    listModes: vi.fn(async () => [] as Mode[]),
+    on: vi.fn(() => () => {}),
   };
 }
 
@@ -136,68 +140,169 @@ describe("ArtifactsList groups (7.T1)", () => {
   });
 });
 
-describe("ArtifactsList session filter (7.T2)", () => {
+describe("ArtifactsList agent filter (7.T2)", () => {
   const rows = [
     makeRow({ id: "by-main", writers: ["main"], lastWrittenAt: "2026-10-27T10:03:00.000Z" }),
     makeRow({ id: "by-child", writers: ["child"], lastWrittenAt: "2026-10-27T10:02:00.000Z" }),
     makeRow({ id: "by-b", writers: ["b"], lastWrittenAt: "2026-10-27T10:01:00.000Z" }),
     makeRow({ id: "multi", writers: ["b", "main"], lastWrittenAt: "2026-10-27T10:00:00.000Z" }),
   ];
-  const three = [session("main", { name: "main", isMain: true }), session("b", { name: "Agent B" }), session("c", { name: "Agent C" }), session("child", { name: "Sub", parentSessionId: "main" })];
+  const three = [
+    session("main", { name: "main", isMain: true, modeIcon: "claude", channel: "json" }),
+    session("b", { name: "Agent B", modeIcon: "codex" }),
+    session("c", { name: "Agent C", state: "idle" }),
+    session("child", { name: "Sub", parentSessionId: "main" }),
+  ];
+  const trigger = () => screen.getByRole("button", { name: /^Filter by agent:/ });
+  const agentList = () => names();
 
-  it("3 top-level sessions render a segmented control; children are not options; default is All", () => {
+  it("the trigger reads All agents with the artifact count; no session wording anywhere", () => {
     seed(rows, { sessions: three });
     renderList();
-    const group = screen.getByRole("radiogroup");
-    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["All sessions", "main", "Agent B", "Agent C"]);
-    expect(within(group).getByRole("radio", { name: "All sessions" })).toHaveAttribute("aria-checked", "true");
-    expect(names()).toHaveLength(4);
+    expect(trigger()).toHaveAccessibleName("Filter by agent: All agents");
+    expect(trigger()).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger()).toHaveAttribute("aria-expanded", "false");
+    // No count on "All agents": the "N of 500" meta beside it already says it.
+    expect(trigger()).toHaveTextContent(/^All agents$/);
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/session/i);
+    expect(agentList()).toHaveLength(4);
   });
 
-  it("falls back to the dropdown when the segmented control overflows; the N of 500 meta stays", () => {
-    const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
-    const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-    const isSeg = (el: HTMLElement) => el.classList.contains("artifacts-tools__seg");
-    Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get() { return isSeg(this as HTMLElement) ? 270 : 0; } });
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return isSeg(this as HTMLElement) ? 200 : 0; } });
-    try {
-      seed(rows, { sessions: three });
-      renderList();
-      expect(screen.queryByRole("radiogroup")).toBeNull();
-      expect(screen.getByRole("combobox", { name: "Filter by session" })).toBeInTheDocument();
-      expect(screen.getByText(/of 500$/)).toBeInTheDocument();
-    } finally {
-      if (sw) Object.defineProperty(HTMLElement.prototype, "scrollWidth", sw);
-      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
-      if (cw) Object.defineProperty(HTMLElement.prototype, "clientWidth", cw);
-      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
-    }
+  it("options render as agent rows: All agents first, mode icon, name, live status, count; children fold into parents", async () => {
+    seed(rows, { sessions: three, states: { b: "waiting_for_human" } });
+    renderList();
+    await userEvent.click(trigger());
+    const menu = screen.getByRole("menu", { name: "Filter by agent" });
+    const items = within(menu).getAllByRole("menuitemradio");
+    expect(items.map((i) => i.getAttribute("aria-label"))).toEqual([
+      "All agents, 4 artifacts",
+      "main, working, 3 artifacts",
+      "Agent B, waiting for human, 2 artifacts",
+      "Agent C, idle, 0 artifacts",
+    ]);
+    expect(items[0]).toHaveAttribute("aria-checked", "true");
+    expect(items[0]).toHaveFocus();
+    // Live status comes from sessionStates first (b), falling back to session.state (c).
+    expect(items[2]!.querySelector(".status-dot--waiting_for_human")).not.toBeNull();
+    expect(items[3]!.querySelector(".status-dot--idle")).not.toBeNull();
+    expect(items[1]!.querySelector(".mode-icon")).not.toBeNull();
+    expect(items[1]!.querySelector(".mode-icon--terminal")).toBeNull();
+    expect(items[2]!.querySelector(".mode-icon--terminal")).not.toBeNull();
+    expect(menu.textContent).not.toMatch(/Sub/);
   });
 
   it("selecting a parent includes rows written by its children; any writer in `writers` matches", async () => {
     seed(rows, { sessions: three });
     renderList();
-    await userEvent.click(screen.getByRole("radio", { name: "main" }));
-    expect(names()).toEqual(["by-main.md", "by-child.md", "multi.md"]);
-    await userEvent.click(screen.getByRole("radio", { name: "Agent B" }));
-    expect(names()).toEqual(["by-b.md", "multi.md"]);
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^main,/ }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger()).toHaveAccessibleName("Filter by agent: main");
+    expect(trigger()).toHaveFocus();
+    expect(agentList()).toEqual(["by-main.md", "by-child.md", "multi.md"]);
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^Agent B,/ }));
+    expect(agentList()).toEqual(["by-b.md", "multi.md"]);
   });
 
-  it("4 top-level sessions render a dropdown labelled Session: All (4)", async () => {
-    seed(rows, { sessions: [...three, session("d", { name: "Agent D" })] });
+  it("keyboard: ArrowDown opens on the checked item, arrows/Home/End move, Enter picks, Escape closes and returns focus", async () => {
+    seed(rows, { sessions: three });
     renderList();
-    expect(screen.queryByRole("radiogroup")).toBeNull();
-    const select = screen.getByRole("combobox", { name: "Filter by session" });
-    expect(within(select).getByRole("option", { name: "Session: All (4)" })).toBeInTheDocument();
-    expect(within(select).queryByRole("option", { name: /Sub/ })).toBeNull();
-    await userEvent.selectOptions(select, "b");
-    expect(names()).toEqual(["by-b.md", "multi.md"]);
+    trigger().focus();
+    await userEvent.keyboard("{ArrowDown}");
+    const items = () => screen.getAllByRole("menuitemradio");
+    expect(items()[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(items()[2]).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(items()[3]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items()[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{Home}{ArrowDown}{ArrowDown}{Enter}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger()).toHaveFocus();
+    expect(agentList()).toEqual(["by-b.md", "multi.md"]);
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitemradio", { name: /^Agent B,/ })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger()).toHaveFocus();
+    expect(agentList()).toEqual(["by-b.md", "multi.md"]);
   });
 
-  it("the session dropdown may use the full row width (R1F-04)", () => {
-    seed(rows, { sessions: [...three, session("d", { name: "Agent D" })] });
+  it("an outside click closes the menu without changing the filter", async () => {
+    seed(rows, { sessions: three });
     renderList();
-    expect(screen.getByLabelText("Filter by session").style.maxWidth).toBe("100%");
+    await userEvent.click(trigger());
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(agentList()).toHaveLength(4);
+  });
+
+  it("an agent with no artifacts shows the agent empty state", async () => {
+    seed(rows, { sessions: three });
+    renderList();
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^Agent C,/ }));
+    expect(screen.getByText("No artifacts from this agent.")).toBeInTheDocument();
+  });
+
+  it("a selected agent that gets archived or deleted falls back to All agents and every row shows", async () => {
+    seed(rows, { sessions: three });
+    renderList();
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^Agent B,/ }));
+    expect(agentList()).toEqual(["by-b.md", "multi.md"]);
+    expect(trigger()).toHaveTextContent("Agent B2");
+
+    act(() => useServerStore.setState({ sessions: three.map((s) => (s.id === "b" ? { ...s, archivedAt: "2026-10-27T11:00:00.000Z" } : s)) }));
+    expect(trigger()).toHaveAccessibleName("Filter by agent: All agents");
+    // An archived writer is not live: its row moves to the collapsed Earlier group.
+    fireEvent.click(screen.getByRole("button", { name: "Earlier, 1 artifact" }));
+    expect(agentList()).toHaveLength(4);
+
+    act(() => useServerStore.setState({ sessions: three }));
+    // Restored agent: the filter stays All, it does not silently re-apply.
+    expect(trigger()).toHaveAccessibleName("Filter by agent: All agents");
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^Agent C,/ }));
+    act(() => useServerStore.setState({ sessions: three.filter((s) => s.id !== "c") }));
+    expect(trigger()).toHaveAccessibleName("Filter by agent: All agents");
+    expect(agentList()).toHaveLength(4);
+  });
+
+  it("Tab stays inside the open picker", async () => {
+    seed(rows, { sessions: three });
+    renderList();
+    await userEvent.click(trigger());
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items[0]).toHaveFocus();
+    await userEvent.tab();
+    expect(items[1]).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    await userEvent.tab({ shift: true });
+    expect(items[items.length - 1]).toHaveFocus();
+    expect(screen.getByRole("menu", { name: "Filter by agent" })).toBeInTheDocument();
+  });
+
+  it("loads the modes once for every icon in the list", async () => {
+    __resetForDemo();
+    useModesStore.setState({ modes: new Map(), loaded: false });
+    seed(rows, { sessions: three });
+    const { api } = renderList();
+    await waitFor(() => expect(api.listModes).toHaveBeenCalledTimes(1));
+    expect(api.on).toHaveBeenCalledWith("mode:updated", expect.any(Function));
+  });
+
+  it("the picker is used for many agents too and the N of 500 meta stays", () => {
+    seed(rows, { sessions: [...three, session("d", { name: "Agent D" }), session("e", { name: "Agent E" })] });
+    renderList();
+    expect(trigger()).toBeInTheDocument();
+    expect(screen.getByText(/of 500$/)).toBeInTheDocument();
   });
 });
 
@@ -295,7 +400,11 @@ describe("ArtifactsList row render (7.T4)", () => {
     const out = screen.getAllByRole("option")[0]!;
     expect(within(out).getByText("outside repo")).toHaveClass("chip", "chip--warn", "chip--sm");
     expect(within(out).getByText("~/.claude/plans/")).toBeInTheDocument();
-    expect(out).toHaveTextContent("· main · 3 edits");
+    const by = out.querySelector(".artifacts-row__by")!;
+    expect(by).toHaveTextContent("main");
+    expect(by).toHaveAttribute("title", "main");
+    expect(by.querySelector(".mode-icon")).not.toBeNull();
+    expect(out.querySelector(".artifacts-row__edits")).toHaveTextContent("· 3 edits");
     expect(within(out).getByText("2m")).toBeInTheDocument();
     expect(out).toHaveAttribute("aria-selected", "false");
 
@@ -309,7 +418,9 @@ describe("ArtifactsList row render (7.T4)", () => {
 
     // deleted writer goes to Earlier
     fireEvent.click(screen.getByRole("button", { name: /^Earlier/ }));
-    expect(screen.getByRole("option", { name: /ghost\.md/ })).toHaveTextContent("· deleted agent");
+    const ghost = screen.getByRole("option", { name: /ghost\.md/ });
+    expect(ghost.querySelector(".artifacts-agent--deleted")).toHaveTextContent("deleted agent");
+    expect(ghost.querySelector(".artifacts-agent--deleted svg")).not.toBeNull();
   });
 
   it("no outside-repo chip for an in-repo row; no edits text for a single edit", () => {
@@ -516,6 +627,56 @@ describe("ArtifactsList menu and keyboard (7.T6)", () => {
   });
 });
 
+describe("ArtifactsList popovers close when the pane is hidden", () => {
+  const observers: { cb: IntersectionObserverCallback; el: Element | null }[] = [];
+  beforeEach(() => {
+    observers.length = 0;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        private entry: { cb: IntersectionObserverCallback; el: Element | null };
+        constructor(cb: IntersectionObserverCallback) {
+          this.entry = { cb, el: null };
+          observers.push(this.entry);
+        }
+        observe(el: Element) {
+          this.entry.el = el;
+        }
+        disconnect() {
+          this.entry.el = null;
+        }
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const hide = () =>
+    act(() => {
+      for (const o of observers.filter((x) => x.el)) {
+        o.cb([{ isIntersecting: false, target: o.el } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+      }
+    });
+
+  it("the row menu closes", async () => {
+    seed([makeRow({ id: "r2", writers: ["s-run"] })]);
+    renderList();
+    const wrap = screen.getByRole("option", { name: /r2\.md/ }).parentElement!;
+    await userEvent.click(within(wrap).getByRole("button", { name: "Row actions" }));
+    expect(screen.getByRole("menu", { name: "Artifact actions" })).toBeInTheDocument();
+    hide();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("the agent picker closes", async () => {
+    seed([makeRow({ id: "r2", writers: ["s-run"] })]);
+    renderList();
+    await userEvent.click(screen.getByRole("button", { name: /^Filter by agent:/ }));
+    expect(screen.getByRole("menu", { name: "Filter by agent" })).toBeInTheDocument();
+    hide();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
 describe("ArtifactsList live-state rule (7.T8)", () => {
   it("resolves state via sessionStates[id] ?? session.state, never lifecycleState", () => {
     // `lifecycleState` is "drafting" (frozen) on every fixture session: if it were read, none would be live.
@@ -551,5 +712,75 @@ describe("ArtifactsList re-render budget (R1F-15)", () => {
     renderRowCounter.count = 0;
     act(() => useArtifactsStore.getState().patchRow(S, { ...rows[3]!, editCount: 9 }));
     expect(renderRowCounter.count).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("artifactSessions and multi-writer rows (R2F-25)", () => {
+  const mainSession = session("main", { name: "main", isMain: true, modeIcon: "claude", channel: "json" });
+  const agent2 = session("agent-2", { name: "agent-2", modeIcon: "codex" });
+  const subagent = session("sub-1", { name: "sub-1", parentSessionId: "main" });
+  const sessions = [mainSession, agent2, subagent];
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+
+  const rowMulti = makeRow({ id: "doc-multi", writers: ["main", "agent-2"] });
+  const rowSub = makeRow({ id: "doc-sub", writers: ["sub-1", "agent-2"] });
+  const rowSingle = makeRow({ id: "doc-single", writers: ["main"] });
+
+  it("writerOf and otherWriterCount unit behavior", () => {
+    expect(writerOf(rowMulti, byId)?.id).toBe("main");
+    expect(writerOf(rowMulti, byId, "agent-2")?.id).toBe("agent-2");
+    expect(writerOf(rowSub, byId, "main")?.id).toBe("sub-1");
+
+    expect(otherWriterCount(rowMulti)).toBe(1);
+    expect(otherWriterCount(rowSingle)).toBe(0);
+    expect(otherWriterNames(rowMulti, byId, mainSession)).toBe("agent-2");
+    expect(otherWriterNames(rowMulti, byId, agent2)).toBe("main");
+  });
+
+  it("a row with writers [main, agent-2] shows main +1 unfiltered and agent-2 +1 when filtered to agent-2", async () => {
+    seed([rowMulti, rowSingle], { sessions });
+    renderList();
+
+    const findOption = (id: string) => document.querySelector(`[data-artifact-id="${id}"]`)!;
+
+    // Unfiltered: shows main +1
+    const optUnfiltered = findOption("doc-multi");
+    expect(optUnfiltered.querySelector(".artifacts-row__by")).toHaveTextContent("main");
+    expect(optUnfiltered.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
+    expect(optUnfiltered.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "agent-2");
+
+    // Single-writer row shows no +N
+    const optSingle = findOption("doc-single");
+    expect(optSingle.querySelector(".artifacts-row__by")).toHaveTextContent("main");
+    expect(optSingle.querySelector(".artifacts-row__more-writers")).toBeNull();
+
+    // Filter to agent-2
+    const trigger = screen.getByRole("button", { name: /^Filter by agent:/ });
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^agent-2,/ }));
+
+    // When filtered to agent-2: doc-multi shows agent-2 +1
+    const optFiltered = findOption("doc-multi");
+    expect(optFiltered.querySelector(".artifacts-row__by")).toHaveTextContent("agent-2");
+    expect(optFiltered.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
+    expect(optFiltered.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "main");
+  });
+
+  it("a subagent writer resolves to its parent's filter", async () => {
+    seed([rowSub], { sessions });
+    renderList();
+
+    const findOption = (id: string) => document.querySelector(`[data-artifact-id="${id}"]`)!;
+
+    // Filter to main (parent of sub-1)
+    const trigger = screen.getByRole("button", { name: /^Filter by agent:/ });
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /^main,/ }));
+
+    // rowSub matches because sub-1's rootSessionId is main; writerOf returns sub-1
+    const opt = findOption("doc-sub");
+    expect(opt.querySelector(".artifacts-row__by")).toHaveTextContent("sub-1");
+    expect(opt.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
+    expect(opt.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "agent-2");
   });
 });

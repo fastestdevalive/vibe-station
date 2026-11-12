@@ -81,6 +81,8 @@ describe("FilesLeftPane", () => {
       listArtifacts: vi.fn(async () => ({ rev: 1, cap: 500, total: 1, items: [] })),
       pinArtifact: vi.fn(),
       removeArtifact: vi.fn(),
+      listModes: vi.fn(async () => []),
+      on: vi.fn(() => () => {}),
     } as unknown as ApiInstance;
 
     beforeEach(() => {

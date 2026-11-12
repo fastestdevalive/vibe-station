@@ -23,7 +23,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
-import type { DiffStatEntry, DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
+import type { DiffStatEntry, Project, Session, SessionState, Worktree } from "@/api/types";
 import { useDoctorStatus } from "@/hooks/useDoctorStatus";
 import { doctorSummary } from "@/components/doctor/doctorSummary";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
@@ -35,9 +35,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
-import { ModeIcon } from "@/components/agent/ModeIcon";
-import { useModeIcon } from "@/store/modesStore";
-import { sessionModeId } from "@/lib/modeIcon";
+import { SessionModeIcon } from "@/components/agent/SessionModeIcon";
 import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
@@ -255,21 +253,6 @@ function DiffStatBadge({
 function WorktreeDiffStatBadge({ worktreeId }: { worktreeId: string }) {
   const stat = useServerStore((s) => s.diffStats[worktreeId]);
   return <DiffStatBadge stat={stat ?? null} />;
-}
-
-function SidebarSessionModeIcon({
-  session,
-  api,
-}: {
-  session: Session;
-  api?: ApiInstance;
-}) {
-  const iconKey = useModeIcon(sessionModeId(session), api, session.modeIcon);
-  return (
-    <span className="direct-session__mode-icon" aria-hidden="true">
-      <ModeIcon iconKey={iconKey} channel={session.channel} size={13} />
-    </span>
-  );
 }
 
 interface LeftSidebarProps {
@@ -608,7 +591,6 @@ export function LeftSidebar({
       ...globalDrafts.map((s) => ({ kind: "global_draft" as const, data: s, id: s.id })),
     ];
     const stored = sortOrders["projects"] ?? [];
-    const storedSet = new Set(stored);
     const knownIds = stored.filter((id) => items.some((x) => x.id === id));
     const knownSet = new Set(knownIds);
     const knownItems = knownIds
@@ -1343,7 +1325,6 @@ export function LeftSidebar({
   // sidebar's top-level row and the DraftComposer both subscribe to it.
   const globalDraft = useGlobalDraftStore((s) => s.draft);
   const globalDraftClear = useGlobalDraftStore((s) => s.clearDraft);
-  const globalDraftSet = useGlobalDraftStore((s) => s.setDraft);
 
   /** Navigate to a draft by id, closing any open plus menu first. */
   function gotoDraft(id: string) {
@@ -2580,7 +2561,7 @@ export function LeftSidebar({
                                         />
                                       </span>
                                       {!collapsed ? (
-                                        <SidebarSessionModeIcon session={sess} api={api} />
+                                        <SessionModeIcon session={sess} api={api} className="direct-session__mode-icon" />
                                       ) : null}
                                       {!collapsed &&
                                       inlineRename?.kind === "session" &&
@@ -3004,7 +2985,7 @@ export function LeftSidebar({
                                                         />
                                                       </span>
                                                       {!collapsed ? (
-                                                        <SidebarSessionModeIcon session={sess} api={api} />
+                                                        <SessionModeIcon session={sess} api={api} className="direct-session__mode-icon" />
                                                       ) : null}
                                                       {!collapsed &&
                                                       inlineRename?.kind === "session" &&
