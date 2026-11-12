@@ -88,7 +88,7 @@ jobs:
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app
         # No GITHUB_TOKEN: without tagName/releaseId tauri-action uploads nothing (needs a live PR run to confirm).
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         with:
           projectPath: desktop
           args: --target ${{ matrix.target }}
