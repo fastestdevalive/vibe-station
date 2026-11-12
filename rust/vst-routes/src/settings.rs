@@ -17,7 +17,9 @@ use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_types::domain::{Channel, CliId};
 use vst_types::events::{Broadcaster, ServerEvent};
-use vst_types::rest::settings::{MarkdownStyle, PatchSettingsBody, PatchSettingsResult, Settings};
+use vst_types::rest::settings::{
+    FileScrollMap, MarkdownStyle, PatchSettingsBody, PatchSettingsResult, Settings,
+};
 
 /// Errors returned by `PATCH /settings`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -165,6 +167,12 @@ pub struct SettingsRoutes {
     write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
+fn parse_file_scroll_map(raw: &serde_json::Value) -> FileScrollMap {
+    raw.get("fileScrollMap")
+        .and_then(|v| serde_json::from_value::<FileScrollMap>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
 impl SettingsRoutes {
     pub fn new(paths: Paths, broadcaster: Broadcaster) -> Self {
         Self {
@@ -251,6 +259,8 @@ impl SettingsRoutes {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let file_scroll_map = parse_file_scroll_map(&raw);
+
         Settings {
             default_projects_dir: Some(default_projects_dir),
             skill_paths: Some(skill_paths),
@@ -264,6 +274,7 @@ impl SettingsRoutes {
             started_at,
             home_dir: home_dir().to_string_lossy().to_string(),
             last_mode_id,
+            file_scroll_map: Some(file_scroll_map),
             search_case_sensitive: Some(search_case_sensitive),
             search_regex: Some(search_regex),
             search_whole_word: Some(search_whole_word),
@@ -427,6 +438,14 @@ impl SettingsRoutes {
             }
         }
 
+        let effective_file_scroll_map = if let Some(map) = body.file_scroll_map {
+            raw["fileScrollMap"] = serde_json::to_value(map)
+                .map_err(|e| SettingsRouteError::Internal(e.to_string()))?;
+            Some(map)
+        } else {
+            None
+        };
+
         let vst_home = self.paths.vst_home();
         tokio::fs::create_dir_all(vst_home)
             .await
@@ -457,6 +476,7 @@ impl SettingsRoutes {
         self.broadcaster.send(ServerEvent::SettingsThemeUpdated {
             theme_id: result_theme_id,
             markdown_style: result_markdown_style,
+            file_scroll_map: effective_file_scroll_map,
         });
 
         Ok(PatchSettingsResult { ok: true })

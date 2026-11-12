@@ -32,7 +32,7 @@ use vst_types::domain::{
 };
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::ordered_lists::{PutOrderedListBody, PINNED_ALL};
-use vst_types::rest::settings::{MarkdownStyle, PatchSettingsBody};
+use vst_types::rest::settings::{FileScrollMap, MarkdownStyle, PatchSettingsBody};
 use vst_types::ws::ServerMessage;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
@@ -191,6 +191,7 @@ async fn test_settings_get_patch_and_validation() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap_err();
@@ -213,6 +214,7 @@ async fn test_settings_get_patch_and_validation() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap_err();
@@ -255,6 +257,7 @@ async fn test_settings_get_patch_and_validation() {
             search_whole_word: None,
             last_mode_id: Some("mode-x".into()),
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap();
@@ -331,6 +334,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap_err();
@@ -387,6 +391,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap();
@@ -403,6 +408,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
         ServerMessage::SettingsThemeUpdated {
             theme_id,
             markdown_style,
+            file_scroll_map: _,
         } => {
             assert_eq!(theme_id, Some("dracula".into()));
             assert_eq!(markdown_style, Some(style));
@@ -423,6 +429,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap();
@@ -464,6 +471,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_whole_word: None,
             last_mode_id: None,
             default_channel_by_cli: None,
+            file_scroll_map: None,
         })
         .await
         .unwrap();
@@ -486,7 +494,62 @@ fn baseline_patch() -> PatchSettingsBody {
         search_whole_word: None,
         last_mode_id: None,
         default_channel_by_cli: None,
+        file_scroll_map: None,
     }
+}
+
+#[tokio::test]
+async fn file_scroll_map_defaults_persists_and_tolerates_bogus() {
+    let tmp = tempdir().unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let mut rx = broadcaster.subscribe();
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let routes = SettingsRoutes::new(paths.clone(), broadcaster);
+
+    // GET /settings defaults fileScrollMap to "minimap"
+    let s = routes.get_settings().await;
+    assert_eq!(s.file_scroll_map, Some(FileScrollMap::Minimap));
+
+    // PATCH { fileScrollMap: "marks" }
+    let res = routes
+        .patch_settings(PatchSettingsBody {
+            file_scroll_map: Some(FileScrollMap::Marks),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+    assert!(res.ok);
+
+    let updated = routes.get_settings().await;
+    assert_eq!(updated.file_scroll_map, Some(FileScrollMap::Marks));
+
+    // Broadcast carries fileScrollMap
+    let ev = rx.try_recv().unwrap();
+    let msg = vst_ws::broadcaster::server_event_to_message(ev);
+    match msg {
+        vst_types::ws::ServerMessage::SettingsThemeUpdated {
+            file_scroll_map, ..
+        } => {
+            assert_eq!(file_scroll_map, Some(FileScrollMap::Marks));
+        }
+        other => panic!("expected settings:updated, got {:?}", other),
+    }
+
+    // Stored "marks" survives a re-read
+    let re_read = routes.get_settings().await;
+    assert_eq!(re_read.file_scroll_map, Some(FileScrollMap::Marks));
+
+    // A config.json holding "fileScrollMap": "bogus" reads as "minimap"
+    let cfg_path = paths.vst_home().join("config.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&tokio::fs::read_to_string(&cfg_path).await.unwrap()).unwrap();
+    raw["fileScrollMap"] = serde_json::json!("bogus");
+    tokio::fs::write(&cfg_path, serde_json::to_string_pretty(&raw).unwrap())
+        .await
+        .unwrap();
+
+    let bogus_read = routes.get_settings().await;
+    assert_eq!(bogus_read.file_scroll_map, Some(FileScrollMap::Minimap));
 }
 
 #[tokio::test]

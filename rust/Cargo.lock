@@ -3210,6 +3210,7 @@ dependencies = [
  "regex",
  "reqwest",
  "ring",
+ "rusqlite",
  "rust-embed",
  "semver",
  "serde",

@@ -330,6 +330,8 @@ impl NotifyDeps for ProductionNotifyDeps {
 mod notify_listener_tests;
 mod spa_cache;
 mod tasks_route;
+mod transcript_outline_route;
+mod transcript_search_route;
 
 fn spawn_subagent_notify_listener(
     handle: SubagentNotifyHandle,
@@ -976,6 +978,18 @@ pub fn router_from_state(state: AppState) -> Router {
         .route(
             "/sessions/:id/transcript",
             get(handle_get_session_transcript),
+        )
+        .route(
+            "/sessions/:id/transcript/outline",
+            get(transcript_outline_route::handle_get_session_transcript_outline),
+        )
+        .route(
+            "/sessions/:id/transcript/outline/window",
+            get(transcript_outline_route::handle_get_session_transcript_outline_window),
+        )
+        .route(
+            "/sessions/:id/transcript/search",
+            get(transcript_search_route::handle_search_session_transcript),
         )
         .route("/sessions/:id/meta", get(handle_get_session_meta))
         .route(
@@ -3864,6 +3878,8 @@ async fn handle_patch_session_channel(
 
 #[derive(Deserialize)]
 struct TranscriptReqQuery {
+    #[serde(rename = "aroundSeq")]
+    around_seq: Option<String>,
     #[serde(rename = "beforeSeq")]
     before_seq: Option<String>,
     limit: Option<String>,
@@ -3876,6 +3892,18 @@ async fn handle_get_session_transcript(
     axum::extract::Path(id): axum::extract::Path<String>,
     Query(q): Query<TranscriptReqQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(around_seq) = &q.around_seq {
+        return transcript_search_route::around(&state, &id, around_seq, q.limit.as_deref())
+            .await
+            .and_then(|Json(page)| {
+                serde_json::to_value(page).map(Json).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                })
+            });
+    }
     let query = TranscriptQuery {
         before_seq: q.before_seq,
         limit: q.limit,

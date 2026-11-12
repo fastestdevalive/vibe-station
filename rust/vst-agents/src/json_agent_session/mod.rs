@@ -11,6 +11,7 @@
 
 mod activity;
 mod artifacts;
+mod backfill;
 pub mod background;
 pub mod boot_sweep;
 pub mod connection;
@@ -25,6 +26,8 @@ pub mod queue;
 pub mod review;
 pub mod task_signals;
 pub mod tasks;
+pub mod transcript_outline;
+pub mod transcript_search;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -714,6 +717,7 @@ impl JsonAgentSession {
                 events: Vec::new(),
                 oldest_seq: None,
                 has_more: false,
+                turns_before: 0,
                 payload_bytes: 0,
             },
             |st| st.tail(n_turns, max_bytes),
@@ -727,6 +731,7 @@ impl JsonAgentSession {
                 events: Vec::new(),
                 oldest_seq: None,
                 has_more: false,
+                turns_before: 0,
                 payload_bytes: 0,
             },
             |st| st.page_before(before_seq, limit),
@@ -1198,10 +1203,20 @@ impl JsonAgentSession {
 // ---------------------------------------------------------------------------
 
 /// Open the per-session store from disk, run `f`, and close it.
-fn with_disk_store<T>(
+pub(super) fn with_disk_store<T>(
     data_dir: &Path,
     session_id: &str,
     f: impl FnOnce(&TranscriptStore) -> T,
+    fallback: T,
+) -> T {
+    with_disk_store_mut(data_dir, session_id, |s| f(s), fallback)
+}
+
+/// Open the per-session store from disk mutably, run `f`, and close it.
+pub(super) fn with_disk_store_mut<T>(
+    data_dir: &Path,
+    session_id: &str,
+    f: impl FnOnce(&mut TranscriptStore) -> T,
     fallback: T,
 ) -> T {
     let has_db = transcript_db_path(data_dir).exists();
@@ -1211,14 +1226,14 @@ fn with_disk_store<T>(
     }
     // Degrade, never panic: a read-only disk path (snapshot fallback, REST
     // history) must not take a handler down over one unreadable DB.
-    let store = match open_transcript_store(data_dir, session_id) {
+    let mut store = match open_transcript_store(data_dir, session_id) {
         Ok(store) => store,
         Err(e) => {
             tracing::warn!(session_id, error = %e, "[json-agent] transcript open failed; serving empty");
             return fallback;
         }
     };
-    let out = f(&store);
+    let out = f(&mut store);
     store.close();
     out
 }
@@ -1263,6 +1278,7 @@ pub fn read_tail_from_data_dir(
             events: Vec::new(),
             oldest_seq: None,
             has_more: false,
+            turns_before: 0,
             payload_bytes: 0,
         },
     )
@@ -1283,6 +1299,7 @@ pub fn read_page_before_from_data_dir(
             events: Vec::new(),
             oldest_seq: None,
             has_more: false,
+            turns_before: 0,
             payload_bytes: 0,
         },
     )

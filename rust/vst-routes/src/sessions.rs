@@ -5881,6 +5881,7 @@ impl SessionRoutes {
                 events: page.events,
                 oldest_seq: page.oldest_seq,
                 has_more: page.has_more,
+                turns_before: Some(page.turns_before),
             }));
         }
 
@@ -5898,6 +5899,7 @@ impl SessionRoutes {
             events: page.events,
             oldest_seq: page.oldest_seq,
             has_more: page.has_more,
+            turns_before: Some(page.turns_before),
         }))
     }
 

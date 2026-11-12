@@ -331,9 +331,11 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
         ServerEvent::SettingsThemeUpdated {
             theme_id,
             markdown_style,
+            file_scroll_map,
         } => ServerMessage::SettingsThemeUpdated {
             theme_id,
             markdown_style,
+            file_scroll_map,
         },
         ServerEvent::OobeStateUpdated { completed } => {
             ServerMessage::OobeStateUpdated { completed }

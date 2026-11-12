@@ -428,6 +428,118 @@ pub struct TranscriptPage {
     pub events: Vec<NormalizedEvent>,
     pub oldest_seq: Option<i64>,
     pub has_more: bool,
+    pub turns_before: Option<i64>,
+}
+
+/// A matched slice inside a highlighted snippet.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnippetSegment {
+    pub text: String,
+    pub hit: Option<bool>,
+}
+
+/// A single occurrence match in the session transcript.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSearchMatch {
+    pub seq: i64,
+    pub turn_id: Option<String>,
+    /// 1-based turn number of the match; 0 means before the first turn.
+    pub turn_index: i64,
+    pub kind: String,
+    pub occurrence: u32,
+    pub ts: Option<String>,
+    pub snippet: Option<Vec<SnippetSegment>>,
+}
+
+/// `GET /sessions/:id/transcript/search` page.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSearchPage {
+    pub query: String,
+    /// Matches after the request cursor (all matches when none), capped at the search max; not just this page.
+    pub total: usize,
+    pub total_capped: bool,
+    pub matches: Vec<TranscriptSearchMatch>,
+    pub next_cursor: Option<String>,
+    pub indexed_through_seq: Option<i64>,
+    pub backfilling: bool,
+    pub turn_count: i64,
+}
+
+/// `GET /sessions/:id/transcript?aroundSeq=` page.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptAroundPage {
+    pub events: Vec<NormalizedEvent>,
+    pub oldest_seq: Option<i64>,
+    pub has_more: bool,
+    pub turns_before: i64,
+}
+
+/// Per-turn counts in a whole-chat outline row.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOutlineCounts {
+    /// Distinct tool calls in the turn.
+    pub tools: u32,
+    /// Tool calls that write files.
+    pub edits: u32,
+    /// Failed tool calls and error rows.
+    pub errors: u32,
+}
+
+/// One user turn of an outline window.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOutlineTurn {
+    /// First seq of the turn.
+    pub seq: i64,
+    /// `turn_id`, or `seq:<seq>` for a row without one.
+    pub turn_key: String,
+    /// Sanitized first line of the prompt, at most 80 characters.
+    pub label: String,
+    /// Timestamp of the turn's user row, when it has one.
+    pub ts: Option<String>,
+    pub counts: TranscriptOutlineCounts,
+}
+
+/// `GET /sessions/:id/transcript/outline`: fixed-size bucketed counts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOutlineSummary {
+    /// False while the index is still being built; the other fields are then empty.
+    pub ready: bool,
+    /// User turns in the whole session.
+    pub total_turns: i64,
+    /// Changes when already-served turns may differ (fork), not on append.
+    pub revision: String,
+    /// Turns per bucket: `max(1, ceil(total_turns / 1000))`.
+    pub bucket_size: i64,
+    /// Per bucket: distinct top-level tool calls.
+    pub tools: Vec<u32>,
+    /// Per bucket: top-level tool calls that write files.
+    pub edits: Vec<u32>,
+    /// Per bucket: failed top-level tool calls and error rows.
+    pub errors: Vec<u32>,
+}
+
+/// `GET /sessions/:id/transcript/outline/window`: turns by index range.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOutlineWindow {
+    pub ready: bool,
+    pub total_turns: i64,
+    pub revision: String,
+    /// Index of `turns[0]`.
+    pub from: i64,
+    pub turns: Vec<TranscriptOutlineTurn>,
 }
 
 /// `GET /sessions/:id/transcript?since=` — delta page.

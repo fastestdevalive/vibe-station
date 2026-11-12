@@ -199,6 +199,7 @@ impl OobeRoutes {
                 search_whole_word: None,
                 last_mode_id: None,
                 default_channel_by_cli: None,
+                file_scroll_map: None,
             })
             .await
             .map_err(|_| OobeRouteError::ValidationError("path is not writable".into()))?;

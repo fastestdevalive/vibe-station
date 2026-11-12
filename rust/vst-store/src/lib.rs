@@ -19,6 +19,10 @@ pub mod migration;
 pub mod row_mappers;
 pub mod schema;
 pub mod transcript;
+pub mod transcript_outline;
+pub mod transcript_search;
+pub mod transcript_window;
+mod turn_outline;
 
 pub mod artifacts;
 pub mod comment_consumers;

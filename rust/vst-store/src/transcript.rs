@@ -48,6 +48,8 @@ pub struct NativeWatermark {
     pub cursor: String,
 }
 
+pub use crate::transcript_window::{AroundPage, WINDOW_BYTE_BUDGET, WINDOW_TURNS};
+
 /// Last model + last real-usage summary for the status-bar meta rebuild.
 #[derive(Clone, Debug, Default)]
 pub struct TranscriptMeta {
@@ -62,6 +64,7 @@ pub struct TranscriptPage {
     pub events: Vec<NormalizedEvent>,
     pub oldest_seq: Option<i64>,
     pub has_more: bool,
+    pub turns_before: i64,
     /// Sum of the stored `payload` lengths (UTF-8 bytes) of the rows loaded
     /// for this page. Approximates the replay frame size: it counts rows
     /// `parse_row` may drop and excludes the re-serialised frame envelope.
@@ -253,10 +256,50 @@ fn migrate_jsonl_into_db(
 
 /// The synchronous, per-session SQLite transcript store.
 pub struct TranscriptStore {
-    conn: Connection,
-    session_id: String,
+    pub(crate) conn: Connection,
+    pub(crate) session_id: String,
     /// Next `log_seq` to assign — seeded from `MAX(seq)+1`.
-    next_seq: i64,
+    pub(crate) next_seq: i64,
+    pub(crate) search: crate::transcript_search::SearchWriter,
+    pub(crate) outline: crate::turn_outline::OutlineWriter,
+}
+
+const INSERT_MESSAGE_SQL: &str =
+    "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+
+// The message row must never be lost because an index failed: an FTS error is logged,
+// flags the index stale (rebuilt before the next search) and the transaction still commits. The
+// outline apply is savepointed for the same reason.
+fn insert_message(
+    txn: &rusqlite::Transaction,
+    search: &mut crate::transcript_search::SearchWriter,
+    outline: &mut crate::turn_outline::OutlineWriter,
+    sid: &str,
+    seq: i64,
+    ev: &NormalizedEvent,
+    payload: &str,
+) -> rusqlite::Result<()> {
+    txn.execute(
+        INSERT_MESSAGE_SQL,
+        params![
+            sid,
+            seq,
+            ev.ts,
+            Some(kind_str(ev.kind)),
+            ev.turn_id,
+            payload
+        ],
+    )?;
+    if let Err(e) = search.index_event(txn, sid, seq, ev) {
+        tracing::warn!(
+            session_id = sid,
+            seq,
+            "transcript_search: index write failed: {e}"
+        );
+        search.mark_stale(txn, sid);
+    }
+    outline.apply_live(txn, sid, seq, ev);
+    Ok(())
 }
 
 impl TranscriptStore {
@@ -322,6 +365,12 @@ impl TranscriptStore {
             migrate_jsonl_into_db(&mut conn, session_id, jsonl)?;
         }
 
+        let mut search = crate::transcript_search::SearchWriter::new();
+        // Rows rewritten below invalidate their index entries. The flag is
+        // persisted only after `ensure_schema`, because on a DB that predates the
+        // index the state table does not exist yet.
+        let mut needs_stale = false;
+
         // One-time whole-file-diff trim — MUST run before the cap below, or a
         // whole-file diff over the cap has already been replaced by
         // "(diff omitted — N bytes)" and is unrecoverable.
@@ -372,6 +421,7 @@ impl TranscriptStore {
                 result
             };
             let txn = conn.transaction()?;
+            let mut diff_trim_updated = 0;
             {
                 let mut upd = txn.prepare(
                     "UPDATE message SET payload = ?1 WHERE session_id = ?2 AND seq = ?3",
@@ -393,6 +443,7 @@ impl TranscriptStore {
                             continue;
                         };
                         upd.execute(params![out, session_id, seq])?;
+                        diff_trim_updated += 1;
                     }
                 }
             }
@@ -400,6 +451,9 @@ impl TranscriptStore {
                 "PRAGMA user_version = {DIFF_TRIM_BACKFILL_VERSION}"
             ))?;
             txn.commit()?;
+            if diff_trim_updated > 0 {
+                needs_stale = true;
+            }
         }
 
         // Oversized `tool_result` backfill — runs on every open, idempotent.
@@ -416,6 +470,7 @@ impl TranscriptStore {
         };
         if !oversized.is_empty() {
             let txn = conn.transaction()?;
+            let mut oversized_updated = 0;
             {
                 let mut upd = txn.prepare(
                     "UPDATE message SET payload = ?1 WHERE session_id = ?2 AND seq = ?3",
@@ -426,11 +481,20 @@ impl TranscriptStore {
                         let Ok(out) = serde_json::to_string(&ev) else {
                             continue;
                         };
+                        // A row over the cap that cannot shrink stays untouched, so
+                        // it neither rewrites nor marks the index stale on each open.
+                        if out == *payload {
+                            continue;
+                        }
                         upd.execute(params![out, session_id, seq])?;
+                        oversized_updated += 1;
                     }
                 }
             }
             txn.commit()?;
+            if oversized_updated > 0 {
+                needs_stale = true;
+            }
         }
 
         // Seed the writer cursor from the durable max.
@@ -441,11 +505,44 @@ impl TranscriptStore {
         )?;
         let next_seq = max_seq.map_or(0, |m| m + 1);
 
+        match crate::transcript_search::ensure_schema(&conn, session_id) {
+            Ok(()) => {
+                if needs_stale {
+                    search.mark_stale(&conn, session_id);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(session_id, "transcript_search: ensure_schema failed: {e}");
+                // Best effort: persist the flag too, so rows appended while stale
+                // are re-indexed after a restart (the in-memory flag alone dies
+                // with this process). Without a state row this write is a no-op;
+                // the next open then seeds one whose backfill covers every row
+                // appended meanwhile.
+                search.mark_stale(&conn, session_id);
+            }
+        }
+
+        // A failed schema disables the outline for this open (reads answer 503); the
+        // transcript itself stays usable.
+        let outline = match crate::turn_outline::ensure_schema(&conn, session_id) {
+            Ok(()) => crate::turn_outline::OutlineWriter::new(true),
+            Err(e) => {
+                tracing::warn!(session_id, "turn_outline: ensure_schema failed: {e}");
+                crate::turn_outline::OutlineWriter::new(false)
+            }
+        };
+
         Ok(TranscriptStore {
             conn,
             session_id: session_id.to_string(),
             next_seq,
+            search,
+            outline,
         })
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Append one event, returning the durable monotonic `log_seq` (also set on
@@ -459,7 +556,24 @@ impl TranscriptStore {
     pub fn try_append(&mut self, ev: &mut NormalizedEvent) -> rusqlite::Result<i64> {
         let seq = self.next_seq;
         ev.log_seq = Some(seq);
-        if let Err(e) = self.insert_row(seq, ev) {
+        let payload = serde_json::to_string(ev).unwrap_or_default();
+        let inserted = self.conn.transaction().and_then(|txn| {
+            insert_message(
+                &txn,
+                &mut self.search,
+                &mut self.outline,
+                &self.session_id,
+                seq,
+                ev,
+                &payload,
+            )?;
+            txn.commit()
+        });
+        if let Err(e) = inserted {
+            // A rolled-back insert must not leave the cached run pointing at a dead FTS doc,
+            // nor the outline tail counting rows that were rolled back.
+            self.search.reset_open_run();
+            self.outline.reset();
             ev.log_seq = None;
             return Err(e);
         }
@@ -479,15 +593,6 @@ impl TranscriptStore {
             tracing::warn!(session_id = %self.session_id, seq, error = %e, "[transcript] append failed; row dropped");
         }
         seq
-    }
-
-    fn insert_row(&self, seq: i64, ev: &NormalizedEvent) -> rusqlite::Result<()> {
-        let payload = serde_json::to_string(ev).unwrap_or_default();
-        self.conn.execute(
-            "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![self.session_id, seq, ev.ts, Some(kind_str(ev.kind)), ev.turn_id, payload],
-        )?;
-        Ok(())
     }
 
     /// Full transcript in insertion (`logSeq`) order, live rows only.
@@ -547,23 +652,19 @@ impl TranscriptStore {
         let mut local_next = self.next_seq;
         let result = (|| -> rusqlite::Result<()> {
             let txn = self.conn.transaction()?;
-            {
-                let mut stmt = txn.prepare(
-                    "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            for ev in events.iter_mut() {
+                ev.log_seq = Some(local_next);
+                let payload = serde_json::to_string(&*ev).unwrap_or_default();
+                insert_message(
+                    &txn,
+                    &mut self.search,
+                    &mut self.outline,
+                    &self.session_id,
+                    local_next,
+                    ev,
+                    &payload,
                 )?;
-                for ev in events.iter_mut() {
-                    ev.log_seq = Some(local_next);
-                    let payload = serde_json::to_string(&*ev).unwrap_or_default();
-                    stmt.execute(params![
-                        self.session_id,
-                        local_next,
-                        ev.ts,
-                        kind_str(ev.kind),
-                        ev.turn_id,
-                        payload
-                    ])?;
-                    local_next += 1;
-                }
+                local_next += 1;
             }
             txn.commit()
         })();
@@ -573,7 +674,10 @@ impl TranscriptStore {
                 Ok(events.len())
             }
             Err(e) => {
-                // Rolled back: rows + next_seq untouched.
+                // Rolled back: rows + next_seq untouched. The cached open run may
+                // name a document that was rolled back with them.
+                self.search.reset_open_run();
+                self.outline.reset();
                 tracing::warn!(
                     "[transcript] append_batch rollback for session={}: {e}",
                     self.session_id
@@ -608,7 +712,7 @@ impl TranscriptStore {
 
     /// Mark every row at/after `seq` superseded; return the distinct `turnId`s
     /// flagged (for the fork broadcast).
-    pub fn mark_superseded_from(&self, seq: i64) -> Vec<String> {
+    pub fn mark_superseded_from(&mut self, seq: i64) -> Vec<String> {
         let turns: Vec<String> = (|| -> rusqlite::Result<Vec<String>> {
             let mut stmt = self.conn.prepare(
                 "SELECT DISTINCT turn_id AS t FROM message WHERE session_id = ?1 AND seq >= ?2 AND turn_id IS NOT NULL AND superseded = 0",
@@ -619,12 +723,15 @@ impl TranscriptStore {
             Ok(result)
         })()
         .unwrap_or_default();
-        self.conn
-            .execute(
-                "UPDATE message SET superseded = 1 WHERE session_id = ?1 AND seq >= ?2",
-                params![self.session_id, seq],
-            )
-            .ok();
+        if let Err(e) = crate::turn_outline::supersede_from(
+            &mut self.conn,
+            &mut self.outline,
+            &self.session_id,
+            seq,
+        ) {
+            tracing::warn!(session_id = %self.session_id, seq, "[transcript] supersede failed: {e}");
+        }
+        self.outline.reset();
         turns
     }
 
@@ -833,9 +940,14 @@ impl TranscriptStore {
                     let Ok(payload) = serde_json::to_string(&ev) else {
                         continue;
                     };
-                    txn.execute(
-                        "INSERT INTO message (session_id, seq, ts, kind, turn_id, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![self.session_id, local_next, ev.ts, Some(kind_str(ev.kind)), ev.turn_id, payload],
+                    insert_message(
+                        &txn,
+                        &mut self.search,
+                        &mut self.outline,
+                        &self.session_id,
+                        local_next,
+                        &ev,
+                        &payload,
                     )?;
                     local_next += 1;
                     imported += 1;
@@ -859,7 +971,10 @@ impl TranscriptStore {
         match result {
             Ok(()) => self.next_seq = local_next,
             Err(e) => {
-                // Rolled back: rows + watermark unchanged, nextSeq untouched.
+                // Rolled back: rows + watermark unchanged, nextSeq untouched. The
+                // cached open run may name a document that was rolled back with them.
+                self.search.reset_open_run();
+                self.outline.reset();
                 tracing::warn!(
                     "[native-import] rollback for session={}: {e}",
                     self.session_id
@@ -958,6 +1073,7 @@ impl TranscriptStore {
                 events: vec![],
                 oldest_seq: None,
                 has_more: false,
+                turns_before: 0,
                 payload_bytes: 0,
             };
         }
@@ -1027,6 +1143,7 @@ impl TranscriptStore {
                 events: vec![],
                 oldest_seq: None,
                 has_more: false,
+                turns_before: 0,
                 payload_bytes: 0,
             };
         }
@@ -1036,10 +1153,12 @@ impl TranscriptStore {
             None => *oldest_seq,
         };
         let (events, payload_bytes) = self.range_asc(start_seq, seq);
+        let turns_before = self.user_turns_before_lossy(start_seq);
         TranscriptPage {
             events,
             oldest_seq: Some(start_seq),
             has_more: self.exists_before(start_seq),
+            turns_before,
             payload_bytes,
         }
     }
@@ -1095,9 +1214,11 @@ impl TranscriptStore {
             .iter()
             .filter_map(|(s, p)| self.parse_row(*s, p))
             .collect();
+        let turns_before = self.user_turns_before_lossy(from_seq);
         TranscriptPage {
             oldest_seq: (!events.is_empty()).then_some(from_seq),
             has_more: self.exists_before(from_seq),
+            turns_before,
             events,
             payload_bytes,
         }
@@ -1134,7 +1255,7 @@ impl TranscriptStore {
             .unwrap_or(0)
     }
 
-    fn exists_before(&self, seq: i64) -> bool {
+    pub(crate) fn exists_before(&self, seq: i64) -> bool {
         self.conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ?1 AND superseded = 0 AND seq < ?2)",
@@ -1145,7 +1266,7 @@ impl TranscriptStore {
             .unwrap_or(false)
     }
 
-    fn exists_after(&self, seq: i64) -> bool {
+    pub(crate) fn exists_after(&self, seq: i64) -> bool {
         self.conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ?1 AND superseded = 0 AND seq > ?2)",
@@ -1158,7 +1279,7 @@ impl TranscriptStore {
 
     /// Parse a stored payload; synthesize `logSeq` for legacy rows (N3).
     /// Returns `None` for a malformed row (skipped, matching the TS reader).
-    fn parse_row(&self, seq: i64, payload: &str) -> Option<NormalizedEvent> {
+    pub(crate) fn parse_row(&self, seq: i64, payload: &str) -> Option<NormalizedEvent> {
         let mut ev = serde_json::from_str::<NormalizedEvent>(payload).ok()?;
         if ev.log_seq.is_none() {
             ev.log_seq = Some(seq);

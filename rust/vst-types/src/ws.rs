@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{Channel, LifecycleState, NormalizedEvent, PrStatus, SessionMeta};
 use crate::limits::LimitsSnapshot;
-use crate::rest::settings::MarkdownStyle;
+use crate::rest::settings::{FileScrollMap, MarkdownStyle};
 use crate::rest::update::UpdateStatus;
 
 /// Client-to-server message. Tagged on `type`.
@@ -267,6 +267,8 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         theme_id: Option<String>,
         markdown_style: Option<MarkdownStyle>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_scroll_map: Option<FileScrollMap>,
     },
     #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]
     OobeStateUpdated { completed: bool },
@@ -292,6 +294,8 @@ pub enum ServerMessage {
         has_more: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         next_seq: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turns_before: Option<i64>,
     },
     #[serde(rename = "session:message", rename_all = "camelCase")]
     SessionMessage {

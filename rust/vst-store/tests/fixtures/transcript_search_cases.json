@@ -1,0 +1,238 @@
+[
+  {
+    "q": "refresh",
+    "terms": [
+      "refresh"
+    ],
+    "text": "Please refresh the page to continue.",
+    "ranges": [
+      [
+        7,
+        14
+      ]
+    ]
+  },
+  {
+    "q": "refresh token",
+    "terms": [
+      "refresh",
+      "token"
+    ],
+    "text": "The token needs a refresh.",
+    "ranges": [
+      [
+        4,
+        9
+      ],
+      [
+        18,
+        25
+      ]
+    ]
+  },
+  {
+    "q": "ReFresh Token",
+    "terms": [
+      "ReFresh",
+      "Token"
+    ],
+    "text": "refresh token is ready",
+    "ranges": [
+      [
+        0,
+        7
+      ],
+      [
+        8,
+        13
+      ]
+    ]
+  },
+  {
+    "q": "café Résumé",
+    "terms": [
+      "café",
+      "Résumé"
+    ],
+    "text": "Welcome to the cafe, here is my resume.",
+    "ranges": [
+      [
+        15,
+        19
+      ],
+      [
+        32,
+        38
+      ]
+    ]
+  },
+  {
+    "q": "Tiếng Việt",
+    "terms": [
+      "Tiếng",
+      "Việt"
+    ],
+    "text": "hoc tieng viet rat hay",
+    "ranges": [
+      [
+        4,
+        9
+      ],
+      [
+        10,
+        14
+      ]
+    ]
+  },
+  {
+    "q": "крайний случай",
+    "terms": [
+      "крайний",
+      "случай"
+    ],
+    "text": "В крайнем случае это крайний случай.",
+    "ranges": [
+      [
+        21,
+        28
+      ],
+      [
+        29,
+        35
+      ]
+    ]
+  },
+  {
+    "q": "große Straße",
+    "terms": [
+      "große",
+      "Straße"
+    ],
+    "text": "Eine große Straße in Berlin",
+    "ranges": [
+      [
+        5,
+        10
+      ],
+      [
+        11,
+        17
+      ]
+    ]
+  },
+  {
+    "q": "İstanbul",
+    "terms": [
+      "İstanbul"
+    ],
+    "text": "Welcome to istanbul city",
+    "ranges": [
+      [
+        11,
+        19
+      ]
+    ]
+  },
+  {
+    "q": "数据库系统",
+    "terms": [
+      "数据库系统"
+    ],
+    "text": "现代关系型数据库系统的架构设计",
+    "ranges": [
+      [
+        5,
+        10
+      ]
+    ]
+  },
+  {
+    "q": "rocket launch",
+    "terms": [
+      "rocket",
+      "launch"
+    ],
+    "text": "🚀 Ready for rocket launch now!",
+    "ranges": [
+      [
+        13,
+        19
+      ],
+      [
+        20,
+        26
+      ]
+    ]
+  },
+  {
+    "q": "foo\"bar",
+    "terms": [
+      "foo\"bar"
+    ],
+    "text": "The special key foo\"bar was updated.",
+    "ranges": [
+      [
+        16,
+        23
+      ]
+    ]
+  },
+  {
+    "q": "to refresh",
+    "terms": [
+      "refresh"
+    ],
+    "text": "Time to refresh the session.",
+    "ranges": [
+      [
+        8,
+        15
+      ]
+    ]
+  },
+  {
+    "q": "to be",
+    "terms": [
+      "to be"
+    ],
+    "text": "To be or not to be, that is the question.",
+    "ranges": [
+      [
+        0,
+        5
+      ],
+      [
+        13,
+        18
+      ]
+    ]
+  },
+  {
+    "q": "foo bar",
+    "terms": [
+      "foo",
+      "bar"
+    ],
+    "text": "The foobar variable is defined.",
+    "ranges": [
+      [
+        4,
+        10
+      ]
+    ]
+  },
+  {
+    "q": "abc bcd",
+    "terms": [
+      "abc",
+      "bcd"
+    ],
+    "text": "Sequence abcd contains both.",
+    "ranges": [
+      [
+        9,
+        13
+      ]
+    ]
+  }
+]

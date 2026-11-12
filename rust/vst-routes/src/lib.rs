@@ -34,4 +34,6 @@ mod start_review;
 pub mod tailscale;
 pub mod terminal_delivery;
 pub mod terminal_reaper;
+pub mod transcript_outline;
+pub mod transcript_search;
 pub mod worktrees;
