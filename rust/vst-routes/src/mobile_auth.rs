@@ -840,57 +840,134 @@ pub struct ContinueRedeemResponse {
 }
 
 fn pick_best_network_ip() -> Option<(String, ConnectionType)> {
-    use std::net::IpAddr;
-
-    // Use getifaddrs or parse system interfaces
-    // Look for Tailscale (100.64.0.0/10 or 100.x.x.x) first, then private LAN IPv4
-    let mut tailscale_ip = None;
-    let mut lan_ip = None;
-
-    if let Ok(interfaces) = get_system_ipv4_addrs() {
-        for ip in interfaces {
-            if ip.is_loopback() {
-                continue;
-            }
-            if let IpAddr::V4(v4) = ip {
-                let octets = v4.octets();
-                if octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127 {
-                    tailscale_ip = Some(ip.to_string());
-                    break;
-                }
-                if lan_ip.is_none() {
-                    lan_ip = Some(ip.to_string());
-                }
-            }
-        }
-    }
-
-    if let Some(ts) = tailscale_ip {
-        return Some((ts, ConnectionType::Tailscale));
-    }
-    if let Some(lan) = lan_ip {
-        return Some((lan, ConnectionType::Lan));
-    }
-
+    let addrs = get_system_ipv4_addrs().unwrap_or_default();
+    let default_iface = default_route_interface();
     // Fallback: 127.0.0.1 for isolated tests
-    Some(("127.0.0.1".to_string(), ConnectionType::Lan))
+    Some(
+        choose_network_ip(&addrs, default_iface.as_deref())
+            .unwrap_or_else(|| ("127.0.0.1".to_string(), ConnectionType::Lan)),
+    )
 }
 
-fn get_system_ipv4_addrs() -> std::io::Result<Vec<std::net::IpAddr>> {
-    // Read from /proc/net/arp or hostname -I or ip route
-    // Or std::net fallback
-    let mut addrs = Vec::new();
-    if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
-        let text = String::from_utf8_lossy(&output.stdout);
-        for part in text.split_whitespace() {
-            if let Ok(ip) = part.parse::<std::net::IpAddr>() {
-                if ip.is_ipv4() && !ip.is_loopback() {
-                    addrs.push(ip);
-                }
+/// An IPv4 address and the interface it is on (`iface` is empty when the
+/// source does not say, e.g. `hostname -I`).
+#[derive(Clone, Debug, PartialEq)]
+struct IfAddr {
+    iface: String,
+    ip: std::net::Ipv4Addr,
+}
+
+/// Pick the address a phone should use, in order:
+/// 1. Tailscale (100.64.0.0/10),
+/// 2. the interface that carries the default route (the Wi-Fi/Ethernet the
+///    machine actually uses — not a VM bridge, Docker network or VPN tunnel),
+/// 3. any private LAN address (RFC 1918),
+/// 4. any other address.
+///
+/// Loopback, link-local (169.254/16) and unspecified addresses are never chosen.
+fn choose_network_ip(
+    addrs: &[IfAddr],
+    default_iface: Option<&str>,
+) -> Option<(String, ConnectionType)> {
+    let usable = || {
+        addrs
+            .iter()
+            .map(|a| a.ip)
+            .filter(|ip| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified())
+    };
+    if let Some(ts) = usable().find(|ip| {
+        let o = ip.octets();
+        o[0] == 100 && (64..=127).contains(&o[1])
+    }) {
+        return Some((ts.to_string(), ConnectionType::Tailscale));
+    }
+    let on_default_route = default_iface.and_then(|name| {
+        addrs
+            .iter()
+            .filter(|a| a.iface == name)
+            .map(|a| a.ip)
+            .find(|ip| usable().any(|u| u == *ip))
+    });
+    on_default_route
+        .or_else(|| usable().find(std::net::Ipv4Addr::is_private))
+        .or_else(|| usable().next())
+        .map(|ip| (ip.to_string(), ConnectionType::Lan))
+}
+
+/// IPv4 addresses assigned to this machine's interfaces.
+///
+/// Linux uses `hostname -I`. macOS (and other BSDs) have no `-I` flag, so the
+/// command fails there and the LAN QR used to fall back to 127.0.0.1; read
+/// `ifconfig` instead.
+fn get_system_ipv4_addrs() -> std::io::Result<Vec<IfAddr>> {
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("hostname").arg("-I").output()?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|part| part.parse().ok())
+            .map(|ip| IfAddr {
+                iface: String::new(),
+                ip,
+            })
+            .collect())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Absolute path: the daemon may be launched with a minimal PATH.
+        let output = std::process::Command::new("/sbin/ifconfig").output()?;
+        Ok(parse_ifconfig(&String::from_utf8_lossy(&output.stdout)))
+    }
+}
+
+/// Name of the interface carrying the default route (`en0` on a Mac on Wi-Fi),
+/// from `route -n get default`. `None` on Linux or when there is no route.
+fn default_route_interface() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let output = std::process::Command::new("/sbin/route")
+            .args(["-n", "get", "default"])
+            .output()
+            .ok()?;
+        parse_route_interface(&String::from_utf8_lossy(&output.stdout))
+    }
+}
+
+/// IPv4 addresses with their interface from `ifconfig` output: a header line
+/// `en0: flags=...` starts an interface, `\tinet 192.168.1.20 netmask ...`
+/// lines under it are its addresses.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn parse_ifconfig(text: &str) -> Vec<IfAddr> {
+    let mut iface = String::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            if let Some((name, _)) = line.split_once(':') {
+                iface = name.to_string();
+            }
+        } else if let Some(rest) = line.trim_start().strip_prefix("inet ") {
+            if let Some(ip) = rest.split_whitespace().next().and_then(|w| w.parse().ok()) {
+                out.push(IfAddr {
+                    iface: iface.clone(),
+                    ip,
+                });
             }
         }
     }
-    Ok(addrs)
+    out
+}
+
+/// `interface: en0` from `route -n get default` output.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn parse_route_interface(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("interface:"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
 }
 
 const EXPIRED_HTML: &str = r#"<!DOCTYPE html>
@@ -951,3 +1028,144 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 </div>
 </body>
 </html>"#;
+
+#[cfg(test)]
+mod network_ip_tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    fn ip(s: &str) -> Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    fn addrs(list: &[(&str, &str)]) -> Vec<IfAddr> {
+        list.iter()
+            .map(|(iface, a)| IfAddr {
+                iface: (*iface).to_string(),
+                ip: ip(a),
+            })
+            .collect()
+    }
+
+    fn lan(a: &str) -> (String, ConnectionType) {
+        (a.into(), ConnectionType::Lan)
+    }
+
+    #[test]
+    fn prefers_tailscale_over_lan() {
+        let got = choose_network_ip(
+            &addrs(&[("en0", "192.168.1.20"), ("utun3", "100.101.102.103")]),
+            Some("en0"),
+        );
+        assert_eq!(
+            got,
+            Some(("100.101.102.103".into(), ConnectionType::Tailscale))
+        );
+    }
+
+    #[test]
+    fn prefers_default_route_interface_over_vm_bridge() {
+        // A VM/Docker bridge listed before Wi-Fi must not win.
+        let got = choose_network_ip(
+            &addrs(&[("bridge100", "192.168.64.1"), ("en0", "192.168.100.96")]),
+            Some("en0"),
+        );
+        assert_eq!(got, Some(lan("192.168.100.96")));
+    }
+
+    #[test]
+    fn prefers_default_route_interface_over_vpn() {
+        let got = choose_network_ip(
+            &addrs(&[("utun5", "10.8.0.4"), ("en0", "192.168.100.96")]),
+            Some("en0"),
+        );
+        assert_eq!(got, Some(lan("192.168.100.96")));
+    }
+
+    #[test]
+    fn without_default_route_prefers_private_lan_over_other() {
+        let got = choose_network_ip(
+            &addrs(&[("en1", "203.0.113.5"), ("en0", "192.168.100.96")]),
+            None,
+        );
+        assert_eq!(got, Some(lan("192.168.100.96")));
+    }
+
+    #[test]
+    fn skips_loopback_and_link_local() {
+        let got = choose_network_ip(
+            &addrs(&[
+                ("lo0", "127.0.0.1"),
+                ("en5", "169.254.10.1"),
+                ("en0", "10.0.0.7"),
+            ]),
+            None,
+        );
+        assert_eq!(got, Some(lan("10.0.0.7")));
+    }
+
+    #[test]
+    fn none_when_only_unusable_addresses() {
+        let got = choose_network_ip(
+            &addrs(&[("lo0", "127.0.0.1"), ("en5", "169.254.1.1")]),
+            Some("en0"),
+        );
+        assert_eq!(got, None);
+    }
+
+    const MACOS_IFCONFIG: &str = "\
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+\tinet 127.0.0.1 netmask 0xff000000
+\tinet6 ::1 prefixlen 128
+bridge100: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tinet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tether a1:b2:c3:d4:e5:f6
+\tinet6 fe80::1c2b:3d4e:5f6a:7b8c%en0 prefixlen 64 secured scopeid 0xe
+\tinet 192.168.100.96 netmask 0xffffff00 broadcast 192.168.100.255
+";
+
+    const MACOS_ROUTE_DEFAULT: &str = "\
+   route to: default
+destination: default
+       mask: default
+    gateway: 192.168.100.1
+  interface: en0
+      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>
+";
+
+    #[test]
+    fn parses_interfaces_and_addresses_from_macos_ifconfig() {
+        assert_eq!(
+            parse_ifconfig(MACOS_IFCONFIG),
+            addrs(&[
+                ("lo0", "127.0.0.1"),
+                ("bridge100", "192.168.64.1"),
+                ("en0", "192.168.100.96"),
+            ])
+        );
+    }
+
+    #[test]
+    fn parses_interface_from_route_get_default() {
+        assert_eq!(
+            parse_route_interface(MACOS_ROUTE_DEFAULT),
+            Some("en0".into())
+        );
+        assert_eq!(
+            parse_route_interface("route: writing to routing socket: not in table"),
+            None
+        );
+    }
+
+    #[test]
+    fn macos_picks_the_wifi_address_not_loopback_or_vm_bridge() {
+        // Regression: on macOS `hostname -I` fails, which left only the
+        // 127.0.0.1 fallback, so the phone was sent to itself.
+        let got = choose_network_ip(
+            &parse_ifconfig(MACOS_IFCONFIG),
+            parse_route_interface(MACOS_ROUTE_DEFAULT).as_deref(),
+        );
+        assert_eq!(got, Some(lan("192.168.100.96")));
+    }
+}
