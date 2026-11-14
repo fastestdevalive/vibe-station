@@ -166,8 +166,8 @@ describe("ToolPanel", () => {
           vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } },
         } as never);
         const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
-        await screen.findByText(/commit #abc1234/);
-        const head = container.querySelector(".commit-files__head") as HTMLElement;
+        await screen.findByText("abc1234", { selector: ".vcs-commit-detail__subject" });
+        const head = container.querySelector(".vcs-commit-detail__head") as HTMLElement;
         expect(head.contains(screen.getByLabelText("Switch to stacked layout"))).toBe(true);
         expect(head.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
         expect(container.querySelector(".vcs-topbar")!.querySelector(".tab--icon")).toBeNull();
@@ -321,13 +321,13 @@ describe("ToolPanel", () => {
         vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } },
       } as never);
       const { container } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
-      await screen.findByText(/commit #abc1234/);
+      await screen.findByText("abc1234", { selector: ".vcs-commit-detail__subject" });
       // The commit view focuses its file list once on open; let that settle before moving focus to the toggle.
       await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("treeitem"));
       screen.getByRole("button", { name: "Switch to stacked layout" }).focus();
       await user.keyboard("{Enter}");
       const next = screen.getByRole("button", { name: "Switch to side-by-side layout" });
-      expect((container.querySelector(".commit-files__head") as HTMLElement).contains(next)).toBe(true);
+      expect((container.querySelector(".vcs-commit-detail__head") as HTMLElement).contains(next)).toBe(true);
       expect(document.activeElement).toBe(next);
     });
   });
@@ -561,21 +561,23 @@ describe("ToolPanel", () => {
     it("5.T3 — VCS tab: reserve in .vcs-topbar, including the commit view's bar", async () => {
       useWorkspaceStore.setState({ layoutByWorktree: filesLayout({ toolPanelTab: "vcs" as const }) });
       const { container, unmount } = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
-      let bar = container.querySelector(".vcs-topbar") as HTMLElement;
+      // No commit open: the list fills the pane and its own rail header is the VCS top row (tool host, the chip's reserve).
+      let bar = container.querySelector(".vcs-list-pane > .rail-header") as HTMLElement;
       expect(bar).not.toBeNull();
       expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
       expect(bar.contains(activeReserve(container))).toBe(true);
-      expect(bar.contains(screen.getByRole("button", { name: /fullscreen/i }))).toBe(true);
+      // Other panes in this file may leave their own fullscreen control mounted; the VCS top row must hold one.
+      expect(screen.getAllByRole("button", { name: /fullscreen/i }).some((b) => bar.contains(b))).toBe(true);
       unmount();
 
       useWorkspaceStore.setState({ vcsSelectedCommitByWorktree: { "wt-1": { sha: "abc1234" } } } as never);
       const second = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
-      await screen.findByText(/commit #abc1234/);
+      await screen.findByText("abc1234", { selector: ".vcs-commit-detail__subject" });
       bar = second.container.querySelector(".vcs-topbar") as HTMLElement;
       expect(screen.getAllByLabelText("Search files")).toHaveLength(1);
       // Commit open, list docked right: the chip's reserve moves into the list header (like the Files list header);
       // the pane controls stay in the bar.
-      const head = second.container.querySelector(".commit-files__head") as HTMLElement;
+      const head = second.container.querySelector(".vcs-commit-detail__head") as HTMLElement;
       expect(head).toHaveClass("actions-row");
       expect(head.contains(activeReserve(second.container))).toBe(true);
       expect(bar.contains(activeReserve(second.container))).toBe(false);
@@ -585,7 +587,7 @@ describe("ToolPanel", () => {
       // List closed (VCS rail icon): the reserve is back in the bar.
       useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: { "wt-1": false } });
       const third = renderHosted([{ api, worktreeId: "wt-1", scope: "worktree" }]);
-      await screen.findByText(/commit #abc1234/);
+      await screen.findByText("abc1234", { selector: ".vcs-commit-detail__subject" });
       bar = third.container.querySelector(".vcs-topbar") as HTMLElement;
       expect(bar.contains(activeReserve(third.container))).toBe(true);
       useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: {}, vcsSelectedCommitByWorktree: {} } as never);

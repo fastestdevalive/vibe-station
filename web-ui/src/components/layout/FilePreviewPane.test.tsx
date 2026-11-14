@@ -8,6 +8,16 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import * as lspApi from "@/lib/lspApi";
 import { HTML_FILE_MAX_BYTES } from "@/components/preview/htmlDocument";
 
+/** The scope label ("Compared to HEAD" / "fork base" / "Commit diff") is the counts' tooltip now (tools-pane-rework B4). */
+function statsTitle(): string | null {
+  return document.querySelector(".file-strip__stats")?.getAttribute("title") ?? null;
+}
+
+/** The strip's one menu (tools-pane-rework B4.2). */
+function openFileMenu(): void {
+  fireEvent.click(screen.getByRole("button", { name: "File menu" }));
+}
+
 describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", () => {
   const api = createMockApi();
 
@@ -26,14 +36,14 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     });
   });
 
-  it("R1F-01 — the font controls are the last child of the preview strip (in flow)", async () => {
+  it("R1F-01 — the File menu is the last child of the preview strip (in flow); no font overlay", async () => {
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => {
       expect(screen.getByLabelText("Diff line counts")).toBeInTheDocument();
     });
     const strip = container.querySelector(".preview-diffinfo")!;
-    expect(strip.lastElementChild).toHaveClass("preview-font-overlay");
-    expect(container.querySelectorAll(".preview-font-overlay")).toHaveLength(1);
+    expect(strip.lastElementChild).toHaveAttribute("aria-label", "File menu");
+    expect(container.querySelectorAll(".preview-font-overlay")).toHaveLength(0);
   });
 
   it("R1F-01 — the error path renders the strip without font controls", async () => {
@@ -77,7 +87,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     await waitFor(() => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
+    expect(statsTitle()).toBe("Compared to fork base");
   });
 
   it("never renders the previous file's body under a new path while the new fetch is in flight", async () => {
@@ -119,13 +129,13 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
   it("still reacts to scope changes made elsewhere (e.g. FileTreeSidebar's header selector) via the shared diffScopeByWorktree store slice", async () => {
     render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => {
-      expect(screen.getByText("Compared to HEAD")).toBeInTheDocument();
+      expect(statsTitle()).toBe("Compared to HEAD");
     });
     act(() => {
       useWorkspaceStore.getState().setDiffScopeForWorktree("wt-1", "branch");
     });
     await waitFor(() => {
-      expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
+      expect(statsTitle()).toBe("Compared to fork base");
     });
   });
 
@@ -181,7 +191,8 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
       expect(getFileSpy).toHaveBeenCalledWith("proj-1", "README.md", "project");
       expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project", undefined);
     });
-    expect(await screen.findByText("Compared to HEAD")).toBeInTheDocument();
+    // No hunks in this diff, so no counts (and no tooltip): the strip itself is the signal.
+    await waitFor(() => expect(document.querySelector(".file-strip--file")).toBeTruthy());
     // `Promise.all([getFile, getDiff])` rejects as a whole if EITHER call
     // rejects, which flips the pane into its generic error state (a bare
     // `.empty-state` div showing the thrown message) instead of rendering
@@ -227,7 +238,7 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText("Commit diff")).toBeInTheDocument();
+      expect(statsTitle()).toBe("Commit diff");
     });
     expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
   });
@@ -614,7 +625,9 @@ describe("FilePreviewPane — commit view 'View source'", () => {
         controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123" }}
       />,
     );
-    const btn = await screen.findByRole("button", { name: "View source" });
+    // "View source" is now "Open in Files" in the strip's File menu (tools-pane-rework B4.2).
+    openFileMenu();
+    const btn = await screen.findByRole("menuitem", { name: "Open in Files" });
     fireEvent.click(btn);
     const st = useWorkspaceStore.getState();
     expect(st.openFileTabsByWorktree["wt-1"]).toEqual(["src/App.tsx"]);
@@ -628,7 +641,8 @@ describe("FilePreviewPane — commit view 'View source'", () => {
         controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123", deleted: true }}
       />,
     );
-    expect(screen.queryByRole("button", { name: "View source" })).toBeNull();
+    openFileMenu();
+    expect(screen.queryByRole("menuitem", { name: "Open in Files" })).toBeNull();
   });
 });
 
@@ -915,7 +929,7 @@ describe("FilePreviewPane — 5.T4 (markdown raw-view toggle)", () => {
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
+      expect(statsTitle()).toBe("Compared to fork base");
     });
 
     expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
@@ -1008,7 +1022,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
     expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
   });
 
-  it("controlled mode ignores peekFile entirely (peek never leaks into VcsCommitView)", async () => {
+  it("controlled mode ignores peekFile entirely (peek never leaks into the VCS commit view)", async () => {
     const api = createMockApi();
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
@@ -1023,7 +1037,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
         controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123" }}
       />,
     );
-    await waitFor(() => expect(screen.getByText("Commit diff")).toBeInTheDocument());
+    await waitFor(() => expect(statsTitle()).toBe("Commit diff"));
   });
 
   it("a peek-sourced scroll-to-line does not re-fire on an unrelated re-render once consumed (B2)", async () => {
@@ -1343,7 +1357,7 @@ describe("FilePreviewPane — HTML rendering (Rendered / Source toggle)", () => 
     });
     expect(container.querySelector(".workspace-code-viewer")).toBeTruthy();
     expect(window.localStorage.getItem("vibestation:html-preview-mode")).toBe("source");
-    expect(container.querySelector(".preview-font-overlay")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "File menu" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Rendered" }));
     await waitFor(() => {
@@ -1429,9 +1443,10 @@ describe("FilePreviewPane — HTML rendering (Rendered / Source toggle)", () => 
         });
         const { unmount } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
 
-        // For a scrollable code file: toggle appears
+        // For a scrollable code file: the scroll-map group is in the File menu (tools-pane-rework B4.2).
+        openFileMenu();
         await waitFor(() => {
-          expect(screen.getByRole("button", { name: "File minimap" })).toBeInTheDocument();
+          expect(screen.getByRole("group", { name: "Scroll map" })).toBeInTheDocument();
         });
 
         unmount();
@@ -1445,9 +1460,10 @@ describe("FilePreviewPane — HTML rendering (Rendered / Source toggle)", () => 
         render(<FilePreviewPane api={api} worktreeId="wt-1" />);
 
         await waitFor(() => {
-          expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
+          expect(document.querySelector(".file-strip--file, .file-strip--commit")).toBeTruthy();
         });
-        expect(screen.queryByRole("button", { name: "File minimap" })).not.toBeInTheDocument();
+        openFileMenu();
+        expect(screen.queryByRole("group", { name: "Scroll map" })).not.toBeInTheDocument();
       } finally {
         scrollHeightSpy.mockRestore();
         clientHeightSpy.mockRestore();

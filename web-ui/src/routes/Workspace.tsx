@@ -1,5 +1,6 @@
 import { useArtifactsSync } from "@/components/artifacts/useArtifactsSync";
 import { useCommentsSync } from "@/components/comments/useCommentsSync";
+import { useVcsSync } from "@/components/vcs/useVcsSync";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useDemoEnv } from "../context/DemoEnv";
@@ -67,6 +68,7 @@ export function Workspace() {
   useServerSync(api);
   useArtifactsSync(api);
   useCommentsSync(api);
+  useVcsSync(api);
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);

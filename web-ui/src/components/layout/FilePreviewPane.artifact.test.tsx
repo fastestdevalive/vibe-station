@@ -61,6 +61,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+
+/** The strip's one menu (tools-pane-rework B4): Pin/Unpin lives here, not in the strip. */
+function openFileMenu(): void {
+  fireEvent.click(screen.getByRole("button", { name: "File menu" }));
+}
+
 describe("FilePreviewPane artifact branch (8.T4)", () => {
   it("an outside-repo path with a row fetches getArtifactContent and never uses the repo pipeline or watchers", async () => {
     const api = createMockApi();
@@ -268,7 +274,8 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     act(() => {
       useArtifactsStore.getState().applyUpserted({ scopeId: WT, rev: 2, rows: [{ ...outsideRow({ pinned: true }), created: false }] });
     });
-    expect(screen.getByRole("button", { name: "Unpin" })).toHaveAttribute("aria-pressed", "true");
+    openFileMenu();
+    expect(screen.getByRole("menuitem", { name: "Unpin" })).toBeInTheDocument();
     expect(content).toHaveBeenCalledTimes(1);
   });
 
@@ -308,7 +315,8 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     await waitFor(() => expect(getGutter).toHaveBeenCalled());
     expect(getArtifactContent).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Diff line counts")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Pin" })).toBeInTheDocument();
+    openFileMenu();
+    expect(screen.getByRole("menuitem", { name: "Pin" })).toBeInTheDocument();
     // No outside-repo chip for an in-repo row.
     expect(screen.queryByText("outside repo")).not.toBeInTheDocument();
   });
@@ -337,7 +345,7 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     expect(screen.getByText("12 MB")).toBeInTheDocument();
   });
 
-  it("the strip shows the display path, writer chip, outside repo chip and a working pin toggle", async () => {
+  it("the strip shows the name and the display directory; no outside-repo chip, writer chip or pin button; Pin works from the File menu", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getArtifactContent").mockResolvedValue({ kind: "text", body: "# P" });
     const pin = vi.spyOn(api, "pinArtifact").mockResolvedValue(outsideRow({ pinned: true }));
@@ -362,17 +370,20 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     openTab(OUT);
     render(<FilePreviewPane api={api} worktreeId={WT} />);
     await screen.findByRole("heading", { name: "P" });
-    expect(screen.getByTitle(OUT)).toHaveTextContent("~/.claude/plans/plan.md");
-    expect(screen.getByText("outside repo")).toBeInTheDocument();
-    expect(screen.getByTitle("Written by main")).toBeInTheDocument();
-    // The board's strip has no Copy path button.
+    // Name never truncates; the directory is the muted part (display path, not the absolute one).
+    expect(screen.getByRole("button", { name: "plan.md" })).toBeInTheDocument();
+    expect(screen.getByText("~/.claude/plans")).toBeInTheDocument();
+    // The outside-repo chip, the writer chip and the Pin button left the strip (writer moves to Details, pin to the menu).
+    expect(screen.queryByText("outside repo")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pin" })).not.toBeInTheDocument();
+    // The strip has no Copy path button; Copy path lives in the File menu.
     expect(screen.queryByRole("button", { name: "Copy path" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
     await waitFor(() => expect(pin).toHaveBeenCalledWith("a1", true));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Unpin" })).toHaveAttribute("aria-pressed", "true"));
   });
 
-  it("R1F-01: the root reserves the font overlay's width and still contains the pin", async () => {
+  it("R1F-01: the strip is the one file strip, with its menu as the last in-flow child (no font overlay)", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getArtifactContent").mockResolvedValue({ kind: "text", body: "# P" });
     seed([outsideRow()]);
@@ -380,11 +391,10 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     const { container } = render(<FilePreviewPane api={api} worktreeId={WT} />);
     await screen.findByRole("heading", { name: "P" });
     const root = container.querySelector(".preview-pane")!;
-    expect(root).toHaveClass("preview-pane--font-overlay");
-    expect(root.querySelector(".artifact-strip__pin")).toBeTruthy();
-    // R1F-01 (round 1): the font controls are the strip's last in-flow child, not an absolute sibling.
-    const strip = root.querySelector(".preview-diffinfo.artifact-strip")!;
-    expect(strip.lastElementChild).toHaveClass("preview-font-overlay");
+    expect(root).not.toHaveClass("preview-pane--font-overlay");
+    const strip = root.querySelector(".file-strip--artifact")!;
+    expect(strip).toHaveClass("preview-diffinfo");
+    expect(strip.lastElementChild).toHaveAttribute("aria-label", "File menu");
   });
 
   it("a PIN_LIMIT failure from the strip pin shows the limit notice", async () => {
@@ -395,7 +405,8 @@ describe("FilePreviewPane artifact branch (8.T4)", () => {
     openTab(OUT);
     render(<FilePreviewPane api={api} worktreeId={WT} />);
     await screen.findByRole("heading", { name: "P" });
-    fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
     expect(await screen.findByText("50 pinned is the limit")).toBeInTheDocument();
   });
 

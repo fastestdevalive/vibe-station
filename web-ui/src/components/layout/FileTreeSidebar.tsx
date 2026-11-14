@@ -1,5 +1,8 @@
 import { File, FileText, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { FileContextItems } from "@/components/details/FileContextMenu";
+import type { DetailsTarget } from "@/components/details/detailsStore";
+import { useRowContextMenu } from "@/components/details/useRowContextMenu";
 import type { ApiInstance } from "@/api";
 import type { ChangedPathEntry, DiffScope, FileScope, GitStatusChar, TreeEntry } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -448,6 +451,30 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     el?.scrollIntoView({ block: "nearest" });
   }, [activeFilePath]);
 
+  // Row menu (tools-pane-rework B7.4): right-click, the Menu key / Shift+F10 on a focused row, touch long-press.
+  const rowMenu = useRowContextMenu<DetailsTarget>({
+    resolve: (el) => {
+      const row = el.closest<HTMLElement>("[data-row-path]");
+      const path = row?.dataset.rowPath;
+      if (!row || !path || !activeWorktreeId) return null;
+      const git = row.dataset.rowGit;
+      return {
+        row,
+        t: {
+          scope: fileScope,
+          scopeId: activeWorktreeId,
+          path,
+          name: path.split("/").pop() ?? path,
+          isDir: row.dataset.rowKind === "dir",
+          git: git ? { status: git as GitStatusChar, baseLabel: effectiveTreeScope === "branch" ? "base branch" : "HEAD" } : undefined,
+        },
+      };
+    },
+    items: (t, close) => <FileContextItems api={api} target={t} close={close} />,
+    itemCount: 3,
+    label: "File actions",
+  });
+
   if (!activeWorktreeId) {
     return (
       <div className="pane pane-stack">
@@ -460,6 +487,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   return (
     <div className="pane pane-stack">
       <FileTreeHeader contextId={activeWorktreeId} isProject={isProject} />
+      {rowMenu.menu}
       <div
         className="scroll-stable"
         style={{ flex: 1, overflow: "auto", padding: "var(--space-2)" }}
@@ -472,7 +500,12 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
               : "Worktree files"
         }
         tabIndex={-1}
-        onKeyDown={handleKeyDown}
+        onKeyDown={(e) => {
+          handleKeyDown(e);
+          rowMenu.rowProps.onKeyDown(e);
+        }}
+        onContextMenu={rowMenu.rowProps.onContextMenu}
+        {...rowMenu.longPressProps}
         onFocusCapture={() => {
           setFocusedPane("file-tree");
           treeHasFocusRef.current = true;
@@ -504,7 +537,18 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
             </div>
           ) : null}
           {diffMode ? (
-            <ChangedFileList scopeId={activeWorktreeId} entries={groupedEntries} loading={groupedLoading} error={groupedError} />
+            <ChangedFileList
+              api={api}
+              scopeId={activeWorktreeId}
+              entries={groupedEntries}
+              loading={groupedLoading}
+              error={groupedError}
+              detailsScope={{
+                scope: fileScope,
+                scopeId: activeWorktreeId,
+                baseLabel: effectiveTreeScope === "branch" ? "base branch" : "HEAD",
+              }}
+            />
           ) : (
             visibleRows.map((row) => {
               const isDir = row.type === "dir";
@@ -529,6 +573,9 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
                   tabIndex={isTabbable(row.path) ? 0 : -1}
                   data-active={activeFilePath === row.path}
                   data-git-status={badgeStatus ?? undefined}
+                  data-row-path={row.path}
+                  data-row-kind={isDir ? "dir" : "file"}
+                  data-row-git={fileStatus ?? undefined}
                   style={{ paddingLeft: `calc(${row.level} * var(--space-4) + var(--space-2))` }}
                   onClick={(e) => (isDir ? toggle(row.path) : openFile(row.path, e.ctrlKey || e.metaKey))}
                   onFocus={() => setCursorPath(row.path)}

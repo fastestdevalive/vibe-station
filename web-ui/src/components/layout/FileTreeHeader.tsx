@@ -1,8 +1,8 @@
-import { Triangle } from "lucide-react";
 import type { DiffScope } from "@/api/types";
+import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
-import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
+import { RailHeader } from "@/components/layout/RailHeader";
+import { RailMenu } from "@/components/layout/ViewOptionsMenu";
 
 interface FileTreeHeaderProps {
   /** Browsing context id (worktree id, or project id for direct sessions) —
@@ -85,48 +85,75 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
     }
   }
 
+  // The compare-base label reads the worktree's real base branch ("vs main"); project scope has none.
+  const baseBranch = useServerStore((s) => (contextId ? s.worktrees.find((w) => w.id === contextId)?.baseBranch : undefined)) || "main";
+
   return (
-    <div
-      className="pane-header pane-header--compact file-tree-sidebar-header actions-row"
-      style={{
-        height: "35px",
-        minHeight: "35px",
-        maxHeight: "35px",
-        boxSizing: "border-box",
-      }}
-    >
-      {/* One scope selector, always visible in the Files header — not
-          gated on diff mode — working in both plain-tree and Changes-list
-          mode (Task A.2). Git-only; hidden for project (direct-session)
-          scope, same as the diff-view toggle below. */}
-      {!isProject ? (
-        <div className="file-tree-scope-slot">
-          <span
-            className="file-tree-scope-delta"
-            title="Git changes compared against: local (HEAD) or branch (base branch)"
-            aria-hidden
+    <RailHeader
+      mode="tree"
+      className="file-tree-sidebar-header"
+      left={
+        // Files | Changes: the two halves of one switch (the Changes half keeps its "Changes view on/off" name).
+        <div className="rail-seg" role="group" aria-label="Files or changes">
+          <button
+            type="button"
+            className="rail-seg__btn"
+            aria-pressed={!diffMode}
+            aria-label="Files"
+            title="Show the file tree"
+            onClick={() => {
+              if (diffMode) toggleDiffMode();
+            }}
           >
-            <Triangle size={11} strokeWidth={2.25} />
-          </span>
-          <DiffScopeSelector scope={effectiveTreeScope} onChange={handleTreeScopeChipChange} />
+            Files
+          </button>
+          <button
+            type="button"
+            className="rail-seg__btn"
+            aria-pressed={diffMode}
+            aria-label={diffMode ? "Changes view on" : "Changes view off"}
+            title="Show changed files"
+            onClick={toggleDiffMode}
+          >
+            Changes
+          </button>
         </div>
-      ) : null}
-      <div className="file-tree-sidebar-header__tail">
-        {/* Changes view works for project scope too — it's always local scope
-            there (no branch concept), so only the chip selector above is
-            gated on isProject, not this toggle. */}
-        <button
-          type="button"
-          className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
-          aria-pressed={diffMode}
-          aria-label={diffMode ? "Changes view on" : "Changes view off"}
-          title="Toggle changes view"
-          onClick={toggleDiffMode}
-        >
-          Changes
-        </button>
-      </div>
-      <ModeHeaderActionsHost mode="tree" />
-    </div>
+      }
+      right={
+        isProject ? null : (
+          <RailMenu
+            label="Compare against"
+            variant="text"
+            text={effectiveTreeScope === "branch" ? `vs ${baseBranch}` : "vs HEAD"}
+            itemCount={2}
+          >
+            {(close) => (
+              <>
+                {(
+                  [
+                    ["local", "vs HEAD"],
+                    ["branch", `vs ${baseBranch}`],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={effectiveTreeScope === value}
+                    className="rail-menu__item"
+                    onClick={() => {
+                      handleTreeScopeChipChange(value);
+                      close(true);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </>
+            )}
+          </RailMenu>
+        )
+      }
+    />
   );
 }
