@@ -54,10 +54,6 @@
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
-.artifacts-agent-picker__chevron {
-  flex: none;
-  color: var(--fg-muted);
-}
 
 /* An agent's mode icon + name (filter, row writer, preview strip). */
 .artifacts-agent {
@@ -391,9 +387,6 @@
 @media (max-width: 768px) {
   .artifacts-group__head--button {
     min-height: 44px;
-  }
-  .artifacts-agent-picker {
-    height: 44px;
   }
 }
 

@@ -83,6 +83,42 @@ describe("useLongPress", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("swallows the lift click even when it lands outside the container (a portaled sheet's backdrop)", () => {
+    const onClick = vi.fn();
+    render(<Harness enabled onLongPress={() => true} onClick={onClick} />);
+    const row = screen.getByText("row");
+    const outside = document.createElement("div");
+    const outsideClick = vi.fn();
+    outside.addEventListener("click", outsideClick);
+    document.body.appendChild(outside);
+    try {
+      fireEvent.pointerDown(row, touch);
+      act(() => { vi.advanceTimersByTime(600); });
+      fireEvent.pointerUp(row, touch);
+      const first = createEvent.click(outside, { bubbles: true, cancelable: true });
+      fireEvent(outside, first);
+      expect(first.defaultPrevented).toBe(true);
+      expect(outsideClick).not.toHaveBeenCalled();
+      fireEvent.click(outside);
+      expect(outsideClick).toHaveBeenCalledTimes(1);
+      expect(onClick).not.toHaveBeenCalled();
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it("swallows the lift click of a hold longer than the suppress window", () => {
+    const onClick = vi.fn();
+    render(<Harness enabled onLongPress={() => true} onClick={onClick} />);
+    const row = screen.getByText("row");
+    fireEvent.pointerDown(row, touch);
+    act(() => { vi.advanceTimersByTime(600); });
+    act(() => { vi.advanceTimersByTime(1000); });
+    fireEvent.pointerUp(row, touch);
+    fireEvent.click(row);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   it("a normal tap clicks through", () => {
     const onClick = vi.fn();
     const onLong = vi.fn();

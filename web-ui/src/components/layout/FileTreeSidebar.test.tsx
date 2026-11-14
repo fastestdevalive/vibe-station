@@ -184,6 +184,12 @@ describe("FileTreeSidebar", () => {
       expect(scopeTrigger()).toHaveTextContent("vs HEAD");
     });
 
+    it("the dropdown's tooltip names the current compare base, since only the chevron and label-less text show", async () => {
+      render(<FileTreeSidebar api={api} />);
+      await screen.findByText("README.md");
+      expect(scopeTrigger()).toHaveAttribute("title", "Compare against: vs HEAD");
+    });
+
     it("keeps rendering the dropdown after switching to the flat Changes list", async () => {
       const user = userEvent.setup();
       render(<FileTreeSidebar api={api} />);

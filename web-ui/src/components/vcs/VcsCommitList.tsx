@@ -247,7 +247,14 @@ export function VcsCommitList({
 
   let body;
   if (status === "error") {
-    body = <div className="empty-state">Failed to load commits: {error}</div>;
+    body = (
+      <div className="empty-state">
+        <div>Failed to load commits: {error}</div>
+        <button type="button" className="vcs-refresh-bar__retry" onClick={refresh}>
+          Retry
+        </button>
+      </div>
+    );
   } else if (status !== "ready") {
     // Cold: skeleton rows in the real row shape, no count.
     body = (

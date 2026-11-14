@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
 import type { CommitLogEntry } from "@/api/types";
@@ -92,6 +92,22 @@ describe("VcsCommitList", () => {
     const active = container.querySelector(".vcs-row--active");
     expect(active).toHaveTextContent("subject 2");
     expect(active?.querySelector("button")).toHaveAttribute("aria-current", "true");
+  });
+
+  it("a cold load failure shows the error with a Retry that asks the API again", async () => {
+    const api = {
+      listCommits: vi.fn(async () => {
+        throw new Error("Failed to fetch");
+      }),
+      focusWorktree: vi.fn(async () => {}),
+      getPr: vi.fn(async () => null),
+    } as unknown as ApiInstance;
+    renderList({ api });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText(/Failed to load commits: Failed to fetch/)).toBeInTheDocument();
+    const callsBefore = vi.mocked(api.listCommits).mock.calls.length;
+    fireEvent.click(retry);
+    await waitFor(() => expect(vi.mocked(api.listCommits).mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
   it("the row shows subject, 'Author · 2h · sha' and the totals", () => {

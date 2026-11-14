@@ -82,6 +82,21 @@ describe("useRowContextMenu (tools-pane-rework B7.1)", () => {
     expect(document.querySelector(".artifacts-menu--sheet")).not.toBeNull();
   });
 
+  it("on phones a long-press sheet stays open when the finger-lift click lands on its backdrop", () => {
+    vi.useFakeTimers();
+    mobile.value = true;
+    render(<Harness onPick={vi.fn()} />);
+    const row = screen.getByText("A");
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 5, clientY: 6, isPrimary: true });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 5, clientY: 6, isPrimary: true });
+    fireEvent.click(screen.getByTestId("bottom-sheet-backdrop"));
+    expect(document.querySelector(".artifacts-menu--sheet")).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Pick a" })).toBeInTheDocument();
+  });
+
   it("Esc closes the menu and returns focus to the row", () => {
     render(<Harness onPick={vi.fn()} />);
     const row = screen.getByText("A");
