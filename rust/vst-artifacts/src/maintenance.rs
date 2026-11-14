@@ -19,7 +19,8 @@ use vst_types::artifacts::{ArtifactRemoveReason, ScopeKey};
 use crate::hashing::{find_move_target, sha256_file};
 use crate::pipeline::{mtime_ms_of, ScopeCtx};
 use crate::reader::{
-    open_artifact, outcome_for_error, read_opened, unreadable_internal, ReadError, ReadOutcome,
+    open_artifact, outcome_for_error, read_opened, unreadable_internal, ArtifactStatOutcome,
+    ReadError, ReadOutcome,
 };
 use crate::{
     ArtifactChange, ArtifactError, ArtifactId, ArtifactsHandle, Inner, ListResult,
@@ -333,6 +334,51 @@ impl ArtifactsHandle {
     /// order image -> binary -> text, move detection on ENOENT.
     pub async fn read_content(&self, id: &str) -> ReadOutcome {
         self.0.read_by_id(id, true).await
+    }
+
+    /// Metadata of an artifact's file through the SAME hardened open as
+    /// `read_content` (denylist, O_NOFOLLOW, path equality, hard-link rule);
+    /// never reads bytes. The row must be a live row of `scope`.
+    pub async fn stat_content(&self, scope: &ScopeKey, id: &str) -> ArtifactStatOutcome {
+        let inner = &self.0;
+        let rec = match inner.store.get_artifact(id).await {
+            Ok(Some(r)) if !r.hidden && r.scope == *scope => r,
+            Ok(_) => return ArtifactStatOutcome::NotFound,
+            Err(e) => {
+                tracing::warn!(error = %e, "artifact store read failed (stat)");
+                return ArtifactStatOutcome::Unreadable;
+            }
+        };
+        let deny = inner.deny_ctx().await;
+        let stored = PathBuf::from(&rec.path);
+        let allow_hardlink = rec.in_repo;
+        let opened = tokio::task::spawn_blocking(move || {
+            open_artifact(&stored, allow_hardlink, &deny).map(|(_file, meta)| meta)
+        })
+        .await;
+        match opened {
+            Ok(Ok(meta)) => ArtifactStatOutcome::Found {
+                size: meta.len(),
+                modified_ms: meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_millis() as i64),
+                path: rec.path.clone(),
+                in_repo: rec.in_repo,
+            },
+            Ok(Err(ReadError::NotFound)) => ArtifactStatOutcome::Missing,
+            Ok(Err(ReadError::PathChanged | ReadError::Denied)) => ArtifactStatOutcome::Denied,
+            Ok(Err(ReadError::Unreadable(_))) => ArtifactStatOutcome::Unreadable,
+            Ok(Err(ReadError::Io(e))) => {
+                tracing::warn!(error = %e, "artifact stat io error");
+                ArtifactStatOutcome::Unreadable
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "artifact stat task failed");
+                ArtifactStatOutcome::Unreadable
+            }
+        }
     }
 
     /// Is `canonical` a live (non-hidden) artifact of `scope`? Returns its id.

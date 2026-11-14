@@ -808,6 +808,11 @@ pub fn router_from_state(state: AppState) -> Router {
         .route("/projects/:id/file-search", get(handle_project_file_search))
         .route("/projects/:id/search", get(handle_project_search))
         .route("/projects/:id/files/*path", get(handle_project_get_file))
+        .route("/projects/:id/stat/*path", get(handle_project_stat))
+        .route(
+            "/projects/:id/artifacts/:artifact_id/stat",
+            get(handle_project_artifact_stat),
+        )
         .route(
             "/projects/:id/changed-paths",
             get(handle_project_changed_paths),
@@ -872,6 +877,11 @@ pub fn router_from_state(state: AppState) -> Router {
             get(handle_worktree_file_search),
         )
         .route("/worktrees/:id/files/*path", get(handle_worktree_get_file))
+        .route("/worktrees/:id/stat/*path", get(handle_worktree_stat))
+        .route(
+            "/worktrees/:id/artifacts/:artifact_id/stat",
+            get(handle_worktree_artifact_stat),
+        )
         .route("/worktrees/:id/gutter/*path", get(handle_worktree_gutter))
         .route("/worktrees/:id/diff/*path", get(handle_worktree_diff))
         .route(
@@ -2170,6 +2180,32 @@ async fn handle_project_search(
         .map_err(project_err_to_response)
 }
 
+/// `GET /projects/:id/stat/*path` — in-root only (absolute/escaping = 403).
+async fn handle_project_stat(
+    State(state): State<AppState>,
+    axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::FileStat>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .stat_file(&id, &file_path)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+/// `GET /projects/:id/artifacts/:artifact_id/stat` — the artifact gate only.
+async fn handle_project_artifact_stat(
+    State(state): State<AppState>,
+    axum::extract::Path((id, artifact_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::FileStat>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .stat_artifact(&id, &artifact_id)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
 async fn handle_project_get_file(
     State(state): State<AppState>,
     axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
@@ -2618,6 +2654,32 @@ async fn handle_worktree_file_search(
     state
         .worktree_routes
         .file_search(&id, q, query.limit)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+/// `GET /worktrees/:id/stat/*path` — in-root only (absolute/escaping = 403).
+async fn handle_worktree_stat(
+    State(state): State<AppState>,
+    axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::FileStat>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .stat_file(&id, &file_path)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+/// `GET /worktrees/:id/artifacts/:artifact_id/stat` — the artifact gate only.
+async fn handle_worktree_artifact_stat(
+    State(state): State<AppState>,
+    axum::extract::Path((id, artifact_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::FileStat>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .stat_artifact(&id, &artifact_id)
         .await
         .map(Json)
         .map_err(worktree_err_to_response)

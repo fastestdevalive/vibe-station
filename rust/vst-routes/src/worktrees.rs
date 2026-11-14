@@ -69,7 +69,7 @@ use vst_types::rest::projects::TreeEntry;
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiffStatsSnapshot,
-    DiskDevice, DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody,
+    DiskDevice, DiskUsage, FileListResult, FileSearchResult, FileStat, GutterResult, OpenFileBody,
     OpenFilesBody, OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens,
     PrErrorReason, PrInfo, PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult,
     ReorderWorktreeBody, ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus,
@@ -85,6 +85,7 @@ use vst_ws::services::tree_list::list_tree_dir;
 use crate::artifact_gate::{
     artifact_open_path, confine_only, gate_read, lexical_or_absolute, GateError, Gated,
 };
+use crate::file_stat::{self, StatError};
 use crate::modes::{
     find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode,
 };
@@ -1696,6 +1697,39 @@ impl WorktreeRoutes {
         Ok(self.file_search.search(&key, &wt_path, q, limit).await)
     }
 
+    // --- GET /worktrees/:id/stat/* (in-root only; absolute/escaping = 403) ---
+    pub async fn stat_file(
+        &self,
+        wt_id: &str,
+        file_path: &str,
+    ) -> Result<FileStat, WorktreeRouteError> {
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let lexical = lexical_or_absolute(resolve_inside_worktree(&wt_path, file_path), file_path)?;
+        file_stat::stat_in_root(&wt_path, file_path, lexical)
+            .await
+            .map_err(|e| match e {
+                StatError::NotFound(m) => WorktreeRouteError::NotFound(m),
+                StatError::Denied(m) => WorktreeRouteError::AccessDenied(m),
+            })
+    }
+
+    // --- GET /worktrees/:id/artifacts/:artifactId/stat (artifact gate only) ---
+    pub async fn stat_artifact(
+        &self,
+        wt_id: &str,
+        artifact_id: &str,
+    ) -> Result<FileStat, WorktreeRouteError> {
+        let _ = self.find_project_for_worktree(wt_id).await?;
+        let scope = ScopeKey::worktree(wt_id);
+        file_stat::stat_artifact(self.artifacts.as_ref(), &scope, artifact_id)
+            .await
+            .map_err(|e| match e {
+                StatError::NotFound(m) => WorktreeRouteError::NotFound(m),
+                StatError::Denied(m) => WorktreeRouteError::AccessDenied(m),
+            })
+    }
+
     // --- 12. GET /worktrees/:id/files/* ---
     pub async fn get_file(
         &self,
@@ -2099,8 +2133,9 @@ impl WorktreeRoutes {
         let wt_str = wt_path.to_string_lossy().to_string();
 
         // A `submodule` param lists commits of that submodule's checkout rather
-        // than the worktree root. `fetch_origin` on the main repo is pointless
-        // (and slow) for a submodule request, so it is skipped.
+        // than the worktree root. This request never touches the network: it
+        // answers from local refs, and `origin/<base>` is refreshed in the
+        // background by `vst-diffstat` (announced as `worktree:head`).
         let is_submodule = submodule.is_some();
         let git_dir = match resolve_submodule_dir_route(&wt_path, submodule).await {
             Ok(Some(dir)) => dir,
@@ -2127,11 +2162,6 @@ impl WorktreeRoutes {
                 None => None,
             }
         } else {
-            if !worktree.base_branch.is_empty() {
-                let _ = self
-                    .fetch_origin(&project.absolute_path, &worktree.base_branch)
-                    .await;
-            }
             resolve_base_sha(
                 &wt_str,
                 Some(&worktree.base_branch),

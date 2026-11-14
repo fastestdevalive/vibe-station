@@ -26,6 +26,7 @@
 //! routes.
 
 pub mod compute;
+pub mod head;
 
 pub use compute::{
     git_file_stamp, ComputeInput, ComputeOutcome, DiffStatComputer, GitFileStamp, BROKEN_HINT,
@@ -124,6 +125,8 @@ impl CachedEntry {
 #[derive(Clone, Debug)]
 struct WorktreeMeta {
     project_id: String,
+    /// The owning project's main repo path (the background base fetch runs there).
+    repo_path: String,
     branch: String,
     base_branch: String,
     base_sha: String,
@@ -161,6 +164,10 @@ pub struct DiffStatPollerHandle {
     tracked: Arc<Mutex<HashSet<String>>>,
     client_count: ClientCountFn,
     compute: ComputeFn,
+    /// Background `origin/<base>` refresh seam (production: bounded `git fetch`).
+    fetch: head::FetchFn,
+    /// Per-worktree head/base tracker (`worktree:head` single writer).
+    heads: Arc<Mutex<HashMap<String, head::HeadState>>>,
     /// The production computer, kept so eviction can reach its per-worktree
     /// choice cache. `None` when the compute seam was replaced.
     computer: Option<Arc<DiffStatComputer>>,
@@ -199,6 +206,8 @@ impl DiffStatPollerHandle {
             // the hub wires the live connection count.
             client_count: Arc::new(|| 0),
             compute,
+            fetch: head::production_fetch(),
+            heads: Arc::new(Mutex::new(HashMap::new())),
             computer: Some(computer),
             compute_permits: Arc::new(Semaphore::new(DIFFSTAT_IN_FLIGHT)),
             sweep_cursor: Arc::new(Mutex::new(0)),
@@ -219,11 +228,21 @@ impl DiffStatPollerHandle {
         self
     }
 
-    /// Replace the compute seam (tests).
+    /// Replace the compute seam (tests). The background base fetch is also
+    /// replaced by an inert seam so a test never spawns `git`; chain
+    /// [`Self::with_fetch`] after this to script the fetch.
     #[must_use]
     pub fn with_compute(mut self, compute: ComputeFn) -> Self {
         self.compute = compute;
         self.computer = None;
+        self.fetch = head::inert_fetch();
+        self
+    }
+
+    /// Replace the background base-fetch seam (tests).
+    #[must_use]
+    pub fn with_fetch(mut self, fetch: head::FetchFn) -> Self {
+        self.fetch = fetch;
         self
     }
 
@@ -297,6 +316,11 @@ impl DiffStatPollerHandle {
         }
         if let Ok(mut tracked) = self.tracked.lock() {
             tracked.remove(worktree_id);
+        }
+        // After the index removal: `observe_head` checks the index under the
+        // heads lock, so it cannot re-create this entry afterwards.
+        if let Ok(mut heads) = self.heads.lock() {
+            heads.remove(worktree_id);
         }
         if let Some(computer) = &self.computer {
             computer.forget(worktree_id);
@@ -608,13 +632,14 @@ impl DiffStatPollerHandle {
             }
             let input = ComputeInput {
                 worktree_id: worktree_id.clone(),
-                path,
-                base_branch: meta.base_branch,
+                path: path.clone(),
+                base_branch: meta.base_branch.clone(),
                 base_sha: meta.base_sha,
             };
             let outcome = (this.compute)(input).await;
             drop(permit);
             this.apply(&worktree_id, outcome);
+            this.observe_head(&worktree_id, &path, &meta.base_branch, &meta.repo_path);
         });
     }
 
@@ -712,6 +737,7 @@ impl DiffStatPollerHandle {
                         worktree.id.clone(),
                         WorktreeMeta {
                             project_id: project.id.clone(),
+                            repo_path: project.absolute_path.clone(),
                             branch: worktree.branch.clone(),
                             base_branch: worktree.base_branch.clone(),
                             base_sha: worktree.base_sha.clone(),

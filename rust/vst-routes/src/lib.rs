@@ -12,6 +12,7 @@ pub mod artifact_response;
 pub mod attachments;
 pub mod auth;
 pub mod file_serving;
+pub mod file_stat;
 pub mod fs;
 pub mod health;
 pub mod limits;

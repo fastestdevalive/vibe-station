@@ -1383,14 +1383,31 @@ impl GitService {
     /// Fetch a ref from origin (best-effort, swallows errors). Uses the default
     /// production timeout.
     pub async fn fetch_origin(&self, repo_path: &str, r#ref: &str) {
-        self.fetch_origin_with_timeout(repo_path, r#ref, FETCH_ORIGIN_TIMEOUT_MS)
-            .await;
+        let _ = self.fetch_origin_ok(repo_path, r#ref).await;
     }
 
     /// Fetch a ref from origin with an explicit timeout. Best-effort — a
     /// failed fetch (no remote, network error, timeout) never blocks a
     /// subsequent real attempt.
     pub async fn fetch_origin_with_timeout(&self, repo_path: &str, r#ref: &str, timeout_ms: u64) {
+        let _ = self
+            .fetch_origin_with_timeout_ok(repo_path, r#ref, timeout_ms)
+            .await;
+    }
+
+    /// [`Self::fetch_origin_with_timeout_ok`] with the production timeout.
+    pub async fn fetch_origin_ok(&self, repo_path: &str, r#ref: &str) -> bool {
+        self.fetch_origin_with_timeout_ok(repo_path, r#ref, FETCH_ORIGIN_TIMEOUT_MS)
+            .await
+    }
+
+    /// `true` when origin is known fresh after this call (fetched, cooled down, or shared-fetched).
+    pub async fn fetch_origin_with_timeout_ok(
+        &self,
+        repo_path: &str,
+        r#ref: &str,
+        timeout_ms: u64,
+    ) -> bool {
         let key = format!("{repo_path}::{ref}");
 
         // Cooldown: resolve immediately if a successful fetch completed recently.
@@ -1398,7 +1415,7 @@ impl GitService {
             let state = self.0.state.lock().unwrap();
             if let Some(until) = state.cooldown_until.get(&key) {
                 if *until > (self.0.now)() {
-                    return;
+                    return true;
                 }
             }
         }
@@ -1424,7 +1441,9 @@ impl GitService {
         let notify = match decision {
             Decision::Wait(notify) => {
                 notify.notified().await;
-                return;
+                let state = self.0.state.lock().unwrap();
+                let now = (self.0.now)();
+                return state.cooldown_until.get(&key).is_some_and(|u| *u > now);
             }
             Decision::Run(notify) => notify,
         };
@@ -1442,6 +1461,7 @@ impl GitService {
                 .insert(key, now + Duration::from_millis(FETCH_ORIGIN_COOLDOWN_MS));
         }
         notify.notify_waiters();
+        success
     }
 
     async fn run_fetch(&self, repo_path: &str, r#ref: &str, timeout_ms: u64) -> bool {
