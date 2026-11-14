@@ -5,7 +5,6 @@ import { SessionModeIcon } from "@/components/agent/SessionModeIcon";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { sessionStatus } from "@/lib/worktreeStatus";
-import { AgentLabel } from "./AgentLabel";
 import { ArtifactPopover } from "./ArtifactPopover";
 import { artifactCount } from "./artifactSessions";
 
@@ -25,6 +24,8 @@ interface AgentFilterPickerProps {
   /** ≤768 px: a bottom sheet instead of a popover. */
   mobile: boolean;
   onChange: (value: string) => void;
+  /** Quiet line at the top of the menu (e.g. "14 of 200"). */
+  meta?: string;
 }
 
 const MENU_WIDTH = 260;
@@ -32,7 +33,7 @@ const ITEM_H = 30;
 const MAX_H = 320;
 
 /** The agent filter: a trigger showing the current agent and a menu of agent rows (mode icon, name, live status, count). */
-export function AgentFilterPicker({ value, options, total, sessionStates, mobile, onChange }: AgentFilterPickerProps) {
+export function AgentFilterPicker({ value, options, total, sessionStates, mobile, onChange, meta }: AgentFilterPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.session.id === value) ?? null;
@@ -85,7 +86,8 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
       <button
         ref={triggerRef}
         type="button"
-        className="artifacts-agent-picker"
+        className="rail-header__txt artifacts-agent-picker"
+        data-active={selected ? "" : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Filter by agent: ${currentLabel}`}
@@ -93,17 +95,11 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
         onClick={() => (open ? close(false) : setOpen(true))}
         onKeyDown={onTriggerKeyDown}
       >
-        {selected ? (
-          <AgentLabel session={selected.session} size={11} />
-        ) : (
-          <span className="artifacts-agent">
-            <Users size={13} aria-hidden="true" className="artifacts-agent__all-icon" />
-            <span className="artifacts-agent__name">All agents</span>
-          </span>
-        )}
+        {selected ? <SessionModeIcon session={selected.session} size={13} className="artifacts-agent__icon" /> : null}
+        <span className="rail-header__txt-label">{currentLabel}</span>
         {/* "All agents" drops its count: the tools row's "N of 500" already says it. */}
         {selected ? <span className="artifacts-agent-picker__count">{selected.count}</span> : null}
-        <ChevronDown size={12} aria-hidden="true" className="artifacts-agent-picker__chevron" />
+        <ChevronDown size={12} aria-hidden="true" className="rail-header__chev" />
       </button>
       {open ? (
         <ArtifactPopover
@@ -118,6 +114,7 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
           watchRef={triggerRef}
           onClose={close}
         >
+          {meta ? <div className="artifacts-agent-menu__meta">{meta}</div> : null}
           {item("all", "All agents", <Users size={14} aria-hidden="true" />, total, null)}
           {options.map(({ session, count }) =>
             item(session.id, sessionLabel(session), <SessionModeIcon session={session} size={13} className="artifacts-agent__icon" />, count, sessionStates[session.id] ?? session.state),

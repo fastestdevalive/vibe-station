@@ -16,7 +16,7 @@ interface AgentLabelProps {
 
 /**
  * An agent as the sidebar shows it: its mode icon (terminal frame for tmux agents) and its name. The owning surface
- * (`ArtifactsList`, `ArtifactStripItems`) loads the modes once via `useModesSync`.
+ * (`ArtifactsList`) loads the modes once via `useModesSync`.
  */
 export function AgentLabel({ session, size = 12, className, title }: AgentLabelProps) {
   const classes = ["artifacts-agent", session ? null : "artifacts-agent--deleted", className].filter(Boolean).join(" ");

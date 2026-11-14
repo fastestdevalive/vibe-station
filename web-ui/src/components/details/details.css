@@ -1,0 +1,130 @@
+/* Details popup (tools-pane-rework board 6). Tokens only. */
+.file-details-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--bg-overlay);
+}
+.file-details-popup {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg-primary);
+  font-size: var(--fs-ui);
+}
+.file-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.file-details__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+.file-details__icon {
+  flex: none;
+  color: var(--fg-muted);
+}
+.file-details__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.file-details__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.file-details__close:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+.file-details__list {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  column-gap: var(--space-3);
+  row-gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+.file-details__row {
+  display: contents;
+}
+.file-details__label {
+  margin: 0;
+  color: var(--fg-muted);
+}
+.file-details__value-cell {
+  margin: 0;
+  min-width: 0;
+  color: var(--fg-primary);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.file-details__path-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.file-details__path {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  word-break: break-all;
+  user-select: text;
+}
+.file-details__copy {
+  flex: none;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.file-details__copy:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+/* Phone: the BottomSheet already pads; rows keep the same grid, the copy button is a 44px target. */
+.bottom-sheet .file-details__head {
+  padding: 0 0 var(--space-2);
+}
+.bottom-sheet .file-details__list {
+  padding: var(--space-3) 0 0;
+}
+.bottom-sheet .file-details__copy {
+  min-width: 44px;
+  height: 44px;
+}

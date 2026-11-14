@@ -1,4 +1,4 @@
-import { Copy, Pin, PinOff, Trash2 } from "lucide-react";
+import { Copy, Info, Pin, PinOff, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import type { ArtifactRow } from "@/api/types";
 import { ArtifactPopover } from "./ArtifactPopover";
@@ -19,14 +19,16 @@ interface ArtifactMenuProps {
   onClose: () => void;
   onTogglePin: (row: ArtifactRow) => void;
   onCopyPath: (row: ArtifactRow) => void;
+  /** Opens the Details popup for this artifact (tools-pane-rework B6.3). */
+  onDetails: (row: ArtifactRow) => void;
   onRemove: (row: ArtifactRow) => void;
 }
 
 const MENU_WIDTH = 190;
-const MENU_HEIGHT = 112;
+const MENU_HEIGHT = 140;
 
 /** Row actions: Pin/Unpin, Copy path, Remove from artifacts (`ArtifactStates.dc.html` frame 5, `Mobile.dc.html` sheet). */
-export function ArtifactMenu({ row, anchor, mobile, paneRef, onClose, onTogglePin, onCopyPath, onRemove }: ArtifactMenuProps) {
+export function ArtifactMenu({ row, anchor, mobile, paneRef, onClose, onTogglePin, onCopyPath, onDetails, onRemove }: ArtifactMenuProps) {
   const opener = useRef<HTMLElement | null>(null);
 
   const act = (fn: (r: ArtifactRow) => void) => () => {
@@ -60,6 +62,10 @@ export function ArtifactMenu({ row, anchor, mobile, paneRef, onClose, onTogglePi
       <button type="button" role="menuitem" className={itemClass} onClick={act(onCopyPath)}>
         <Copy size={14} aria-hidden="true" />
         Copy path
+      </button>
+      <button type="button" role="menuitem" className={itemClass} onClick={act(onDetails)}>
+        <Info size={14} aria-hidden="true" />
+        Details
       </button>
       <div className="artifacts-menu__sep" role="separator" />
       <button type="button" role="menuitem" className={itemClass} onClick={act(onRemove)}>

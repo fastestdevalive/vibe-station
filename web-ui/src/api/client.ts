@@ -9,6 +9,7 @@ import type {
   CancelResetResult,
   CliId,
   CommitLogEntry,
+  FileStat,
   GutterResult,
   LocalQrResponse,
   LspLanguageSurveyResponse,
@@ -1040,6 +1041,20 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+
+    /** `GET .../stat/*path` (in-root, relative only) or `GET .../artifacts/:artifactId/stat` (outside or inside root).
+     *  An absolute path without `artifactId` is refused locally: the in-root route would 403 it anyway. */
+    async statPath(scopeId: string, filePath: string, scope: FileScope = "worktree", artifactId?: string): Promise<FileStat> {
+      if (artifactId !== undefined) {
+        const url = `${fileBase(scope, scopeId)}/artifacts/${encodeURIComponent(artifactId)}/stat`;
+        const res = await apiFetch(url);
+        return parseJson<FileStat>(res);
+      }
+      if (filePath.startsWith("/")) throw new ApiError("Absolute path", 403);
+      const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+      const res = await apiFetch(`${fileBase(scope, scopeId)}/stat/${encoded}`);
+      return parseJson<FileStat>(res);
+    },
 
     async getFileBlob(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<Blob> {
       const path = filePath.replace(/^\/+/, "");

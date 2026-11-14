@@ -4,6 +4,7 @@ import { memo } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, Mode, Session, SessionState } from "@/api/types";
 import { ApiError } from "@/api/errors";
+import { useDetailsStore } from "@/components/details/detailsStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { __resetForDemo, useModesStore } from "@/store/modesStore";
@@ -53,10 +54,10 @@ function makeApi() {
   };
 }
 
-function seed(rows: ArtifactRow[], opts: { total?: number; sessions?: Session[]; states?: Record<string, SessionState> } = {}) {
+function seed(rows: ArtifactRow[], opts: { total?: number; cap?: number; sessions?: Session[]; states?: Record<string, SessionState> } = {}) {
   useServerStore.setState({ projects: [], worktrees: [], sessions: opts.sessions ?? [session("s-run")], loaded: true });
   useWorkspaceStore.setState({ sessionStates: opts.states ?? {} });
-  useArtifactsStore.getState().replace(S, "worktree", { rev: 1, cap: 500, total: opts.total ?? rows.length, items: rows });
+  useArtifactsStore.getState().replace(S, "worktree", { rev: 1, cap: opts.cap ?? 500, total: opts.total ?? rows.length, items: rows });
 }
 
 function renderList(api = makeApi(), props: Partial<React.ComponentProps<typeof ArtifactsList>> = {}) {
@@ -90,7 +91,8 @@ describe("ArtifactsList groups (7.T1)", () => {
 
     const earlier = screen.getByRole("button", { name: "Earlier, 2 artifacts" });
     expect(earlier).toHaveAttribute("aria-expanded", "false");
-    expect(earlier).toHaveTextContent("Earlier· 2");
+    // The "· N" count is gone from the group header; the count lives in the aria-label.
+    expect(earlier).toHaveTextContent(/^Earlier$/);
     await userEvent.click(earlier);
     expect(earlier).toHaveAttribute("aria-expanded", "true");
     expect(names()).toEqual(["pin.md", "run.md", "old.md", "gone.md"]);
@@ -132,11 +134,18 @@ describe("ArtifactsList groups (7.T1)", () => {
     expect(screen.getByRole("button", { name: "Earlier, 1 artifact" })).toBeInTheDocument();
   });
 
-  it("header count chip shows the number of rows and the meta shows total of cap", () => {
+  it("header count shows the number of rows; the 'n of cap' meta is not shown unless the list is near its cap", () => {
     seed(rows, { sessions, total: 7 });
     renderList();
     expect(screen.getByLabelText("4 artifacts")).toHaveTextContent("4");
-    expect(screen.getByText("7 of 500")).toBeInTheDocument();
+    expect(screen.queryByText("7 of 500")).toBeNull();
+    expect(document.querySelector(".artifacts-foot")).toBeNull();
+  });
+
+  it("near the cap (within 10 rows) the 'n of cap' footer line shows", () => {
+    seed(rows, { sessions, total: 5, cap: 5 });
+    renderList();
+    expect(document.querySelector(".artifacts-foot")).toHaveTextContent("5 of 5");
   });
 });
 
@@ -298,10 +307,12 @@ describe("ArtifactsList agent filter (7.T2)", () => {
     expect(api.on).toHaveBeenCalledWith("mode:updated", expect.any(Function));
   });
 
-  it("the picker is used for many agents too and the N of 500 meta stays", () => {
+  it("the picker is used for many agents too and the 'N of 500' meta sits in the menu header", () => {
     seed(rows, { sessions: [...three, session("d", { name: "Agent D" }), session("e", { name: "Agent E" })] });
     renderList();
     expect(trigger()).toBeInTheDocument();
+    expect(screen.queryByText(/of 500$/)).toBeNull();
+    fireEvent.click(trigger());
     expect(screen.getByText(/of 500$/)).toBeInTheDocument();
   });
 });
@@ -383,10 +394,11 @@ describe("ArtifactsList row render (7.T4)", () => {
     seed([makeRow({ id: "t", writers: ["s-run"], path: "/tmp/deep/dir/t.md", displayPath: "/tmp/deep/dir/t.md", inRepo: false })]);
     renderList();
     expect(document.querySelector(".artifacts-row__name")).toHaveAttribute("title", "/tmp/deep/dir/t.md");
-    expect(document.querySelector(".artifacts-row__path")).toHaveAttribute("title", "/tmp/deep/dir/");
+    // The folder is no longer a path line: it appears only as a hint for same-named files.
+    expect(document.querySelector(".artifacts-row__path")).toBeNull();
   });
 
-  it("outside-repo chip, missing chip + strike-through, N edits, deleted agent, relative time, selected", () => {
+  it("one line per row: no outside-repo chip, path, agent or edits; missing is struck through; deleted agent goes to Earlier; selected", () => {
     const now = Date.now();
     seed(
       [
@@ -398,29 +410,19 @@ describe("ArtifactsList row render (7.T4)", () => {
     );
     renderList(makeApi(), { selectedPath: "docs/old.md" });
     const out = screen.getAllByRole("option")[0]!;
-    expect(within(out).getByText("outside repo")).toHaveClass("chip", "chip--warn", "chip--sm");
-    expect(within(out).getByText("~/.claude/plans/")).toBeInTheDocument();
-    const by = out.querySelector(".artifacts-row__by")!;
-    expect(by).toHaveTextContent("main");
-    expect(by).toHaveAttribute("title", "main");
-    expect(by.querySelector(".mode-icon")).not.toBeNull();
-    expect(out.querySelector(".artifacts-row__edits")).toHaveTextContent("· 3 edits");
-    expect(within(out).getByText("2m")).toBeInTheDocument();
+    expect(out).toHaveTextContent(/^x\.md2m$/);
+    expect(out.querySelector(".chip, .artifacts-row__by, .artifacts-row__edits, .artifacts-row__path")).toBeNull();
     expect(out).toHaveAttribute("aria-selected", "false");
 
     const miss = screen.getAllByRole("option")[1]!;
-    expect(within(miss).getByText("missing")).toHaveClass("chip--neutral");
+    expect(within(miss).getByText("missing")).toHaveClass("artifacts-row__missing");
     expect(miss).toHaveClass("artifacts-row--missing", "artifacts-row--selected");
     expect(miss).toHaveAttribute("aria-selected", "true");
-    // a missing row's sub-line is the chip plus the path only
     expect(miss).not.toHaveTextContent("edits");
-    expect(miss).toHaveTextContent("docs/old.md");
 
     // deleted writer goes to Earlier
     fireEvent.click(screen.getByRole("button", { name: /^Earlier/ }));
-    const ghost = screen.getByRole("option", { name: /ghost\.md/ });
-    expect(ghost.querySelector(".artifacts-agent--deleted")).toHaveTextContent("deleted agent");
-    expect(ghost.querySelector(".artifacts-agent--deleted svg")).not.toBeNull();
+    expect(screen.getByRole("option", { name: /ghost\.md/ })).toBeInTheDocument();
   });
 
   it("no outside-repo chip for an in-repo row; no edits text for a single edit", () => {
@@ -493,7 +495,7 @@ describe("ArtifactsList menu and keyboard (7.T6)", () => {
     seed(rows, { sessions });
     const { api } = renderList();
     const menu = await openMenu(/r2\.md/);
-    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Pin", "Copy path", "Remove from artifacts"]);
+    expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Pin", "Copy path", "Details", "Remove from artifacts"]);
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Pin" }));
     expect(api.pinArtifact).toHaveBeenCalledWith("r2", true);
     await waitFor(() => expect(screen.getByRole("group", { name: "Pinned, 2 artifacts" })).toBeInTheDocument());
@@ -737,50 +739,59 @@ describe("artifactSessions and multi-writer rows (R2F-25)", () => {
     expect(otherWriterNames(rowMulti, byId, agent2)).toBe("main");
   });
 
-  it("a row with writers [main, agent-2] shows main +1 unfiltered and agent-2 +1 when filtered to agent-2", async () => {
+  it("a row with writers [main, agent-2] stays in both agents' filters; a single-writer row only in its own", async () => {
     seed([rowMulti, rowSingle], { sessions });
     renderList();
+    const present = (id: string) => document.querySelector(`[data-artifact-id="${id}"]`) !== null;
+    expect(present("doc-multi")).toBe(true);
+    expect(present("doc-single")).toBe(true);
 
-    const findOption = (id: string) => document.querySelector(`[data-artifact-id="${id}"]`)!;
-
-    // Unfiltered: shows main +1
-    const optUnfiltered = findOption("doc-multi");
-    expect(optUnfiltered.querySelector(".artifacts-row__by")).toHaveTextContent("main");
-    expect(optUnfiltered.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
-    expect(optUnfiltered.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "agent-2");
-
-    // Single-writer row shows no +N
-    const optSingle = findOption("doc-single");
-    expect(optSingle.querySelector(".artifacts-row__by")).toHaveTextContent("main");
-    expect(optSingle.querySelector(".artifacts-row__more-writers")).toBeNull();
-
-    // Filter to agent-2
+    // Writers are shown in Details (tools-pane-rework B6), so the filter's membership is what the list shows.
     const trigger = screen.getByRole("button", { name: /^Filter by agent:/ });
     await userEvent.click(trigger);
     await userEvent.click(screen.getByRole("menuitemradio", { name: /^agent-2,/ }));
-
-    // When filtered to agent-2: doc-multi shows agent-2 +1
-    const optFiltered = findOption("doc-multi");
-    expect(optFiltered.querySelector(".artifacts-row__by")).toHaveTextContent("agent-2");
-    expect(optFiltered.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
-    expect(optFiltered.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "main");
+    expect(present("doc-multi")).toBe(true);
+    expect(present("doc-single")).toBe(false);
   });
 
   it("a subagent writer resolves to its parent's filter", async () => {
     seed([rowSub], { sessions });
     renderList();
-
-    const findOption = (id: string) => document.querySelector(`[data-artifact-id="${id}"]`)!;
-
-    // Filter to main (parent of sub-1)
     const trigger = screen.getByRole("button", { name: /^Filter by agent:/ });
     await userEvent.click(trigger);
     await userEvent.click(screen.getByRole("menuitemradio", { name: /^main,/ }));
+    // rowSub matches because sub-1's rootSessionId is main.
+    expect(document.querySelector('[data-artifact-id="doc-sub"]')).not.toBeNull();
+  });
+});
 
-    // rowSub matches because sub-1's rootSessionId is main; writerOf returns sub-1
-    const opt = findOption("doc-sub");
-    expect(opt.querySelector(".artifacts-row__by")).toHaveTextContent("sub-1");
-    expect(opt.querySelector(".artifacts-row__more-writers")).toHaveTextContent("+1");
-    expect(opt.querySelector(".artifacts-row__more-writers")).toHaveAttribute("title", "agent-2");
+describe("ArtifactsList one-line rows and Details (tools-pane-rework B6.2-B6.3)", () => {
+  it("same-named files show their nearest differing folder as a hint; unique names show none", () => {
+    seed(
+      [
+        makeRow({ id: "r1", displayPath: "web-ui/README.md", path: "/repo/web-ui/README.md", writers: ["s-run"] }),
+        makeRow({ id: "r2", displayPath: "rust/vst-git/README.md", path: "/repo/rust/vst-git/README.md", writers: ["s-run"] }),
+        makeRow({ id: "u", displayPath: "docs/plan.md", writers: ["s-run"] }),
+      ],
+      { sessions: [session("s-run")] },
+    );
+    renderList();
+    expect(document.querySelector('[data-artifact-id="r1"] .artifacts-row__hint')).toHaveTextContent("web-ui");
+    expect(document.querySelector('[data-artifact-id="r2"] .artifacts-row__hint')).toHaveTextContent("vst-git");
+    expect(document.querySelector('[data-artifact-id="u"] .artifacts-row__hint')).toBeNull();
+  });
+
+  it("the row menu's Details opens the Details store with the artifact row", async () => {
+    const pinned = makeRow({ id: "pin", pinned: true, displayPath: "docs/pin.md", path: "/repo/docs/pin.md", writers: ["s-run"] });
+    seed([pinned], { sessions: [session("s-run")] });
+    renderList();
+    const row = screen.getByRole("option", { name: /pin\.md/ });
+    await userEvent.click(within(row.parentElement!).getByRole("button", { name: "Row actions" }));
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "Details" }));
+    const target = useDetailsStore.getState().target;
+    expect(target?.artifact?.id).toBe("pin");
+    expect(target?.name).toBe("pin.md");
+    expect(target?.path).toBe("/repo/docs/pin.md");
+    useDetailsStore.setState({ target: null });
   });
 });

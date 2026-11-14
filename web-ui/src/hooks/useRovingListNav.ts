@@ -73,7 +73,7 @@ export function useRovingListNav(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, opts.initialCursor]);
 
-  // Reset cursor when rows replace entirely (e.g. sha change in VcsCommitView)
+  // Reset cursor when rows replace entirely (e.g. sha change in the VCS sidebar)
   // — the stale path would make isTabbable return false for every row.
   // Guard on rows.length > 0 so loading flickers don't clear a valid cursor.
   useEffect(() => {

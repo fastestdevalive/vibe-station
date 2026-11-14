@@ -38,7 +38,7 @@ use vst_types::artifacts::{
 use vst_types::Broadcaster;
 
 pub use paths::{CanonKey, ConfineError, PathKeyer, VolumeProbe};
-pub use reader::{DenyCtx, ReadOutcome};
+pub use reader::{ArtifactStatOutcome, DenyCtx, ReadOutcome};
 pub use resolver::{ScopeResolver, SessionScope, StoreResolver};
 
 use batcher::Batcher;

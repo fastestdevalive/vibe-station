@@ -1,5 +1,4 @@
-import { Minus, Plus, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
@@ -8,7 +7,7 @@ import { copyText } from "@/lib/copyText";
 import { removeArtifactRow } from "@/components/artifacts/artifactActions";
 import { fetchArtifactScope, useArtifactScope } from "@/components/artifacts/useArtifactsSync";
 import { useArtifactRow, useArtifactSource } from "@/components/artifacts/useArtifactSource";
-import { ArtifactStripItems } from "@/components/artifacts/ArtifactStrip";
+import { toggleArtifactPin } from "@/components/artifacts/artifactActions";
 import {
   ArtifactStatePanel,
   TruncatedBanner,
@@ -17,8 +16,10 @@ import {
 } from "@/components/artifacts/ArtifactStatePanels";
 import { segmentMarkdownWithLines } from "@/preview/mdSegments";
 import { CommentSurfaceProvider } from "@/components/comments/CommentSurfaceProvider";
-import { CommentStripButton } from "@/components/comments/CommentStripButton";
 import { Banner } from "@/components/ui/Banner";
+import { FileStrip, baseNameOf, type FileStripProps } from "@/components/layout/FileStrip";
+import { DiffLayoutSwitch } from "@/components/layout/DiffLayoutSwitch";
+import type { DetailsTarget } from "@/components/details/detailsStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -37,7 +38,7 @@ import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
 import { previewDiffHunks, summarizeDiffLines } from "@/preview/diffParser";
 import { PreviewScrollMap } from "@/components/preview/scrollmap/PreviewScrollMap";
-import { ScrollMapToggle } from "@/components/preview/scrollmap/ScrollMapToggle";
+import { getShaDiff, setShaDiff, vcsKey } from "@/components/vcs/vcsCacheStore";
 import type { EffectiveScrollMap } from "@/components/preview/scrollmap/effectiveScrollMapMode";
 
 /** Decision 6 — bypasses the global store's `activeFilePath`/`diffScopeByWorktree`
@@ -55,8 +56,14 @@ interface FilePreviewPaneProps {
   worktreeId: string | null;
   scope?: FileScope;
   /** When set, `path`/`scope` come from here instead of the global store
-   *  (Decision 6) — used by `VcsCommitView`. */
+   *  (Decision 6) — used by `VcsPanel`. */
   controlled?: FilePreviewControlled;
+}
+
+/** Directory part of a path (`/` or `\\` separated); "" when there is none. */
+function dirOfPath(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i > 0 ? p.slice(0, i) : "";
 }
 
 export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
@@ -306,7 +313,11 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           // scope === "commit" — a single commit's diff against its parent
           // (or the empty tree for a root commit). No plain file content:
           // the commit view is diff-only, same as branch scope used to be.
-          const d = await api.getDiff(worktreeId, path, "commit", commitSha, fileScope, submodule);
+          // A full-length commit SHA is immutable: its per-file diff is reused from the per-sha cache.
+          const shaKey = vcsKey(fileScope, worktreeId, submodule);
+          const cachedDiff = commitSha ? getShaDiff(shaKey, commitSha, path) : undefined;
+          const d = cachedDiff ?? (await api.getDiff(worktreeId, path, "commit", commitSha, fileScope, submodule));
+          if (commitSha && cachedDiff === undefined) setShaDiff(shaKey, commitSha, path, d);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
         if (!cancelled) {
@@ -818,30 +829,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // panes read the same `diffScopeByWorktree` store slice, so a change made
   // there is reflected here automatically without this pane owning any UI
   // for it. File name + panel controls live on the Files bar above.
-  const previewNav = (
-      <div className="preview-nav" role="navigation" aria-label="Preview navigation">
-        <button
-          type="button"
-          className="preview-nav__btn"
-          aria-label="Back"
-          title="Back (Alt+Shift+←)"
-          disabled={!canGoBack}
-          onClick={() => navigateBack(layoutKey)}
-        >
-          ◀
-        </button>
-        <button
-          type="button"
-          className="preview-nav__btn"
-          aria-label="Forward"
-          title="Forward (Alt+Shift+→)"
-          disabled={!canGoForward}
-          onClick={() => navigateForward(layoutKey)}
-        >
-          ▶
-        </button>
-      </div>
-  );
   const htmlToggle = isHtml ? (
         <HtmlModeToggle
           mode={htmlTooLarge || htmlForcedSource ? "source" : htmlMode}
@@ -872,83 +859,62 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
     else bumpPreviewFont(delta);
   };
-  const fontOverlay = (
-    <div className="preview-font-overlay">
-      <button type="button" className="preview-font-overlay__btn" aria-label="Decrease preview font" onClick={() => bump(-0.05)}>
-        <Minus size={11} />
-      </button>
-      <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
-        <Plus size={11} />
-      </button>
-      <button
-        type="button"
-        className="preview-font-overlay__btn"
-        aria-label="Reset preview font size"
-        title="Reset font size"
-        disabled={previewFontScale === 1}
-        onClick={() => (worktreeId ? resetPreviewFontForWorktree(worktreeId) : resetPreviewFont())}
-      >
-        <RotateCcw size={11} />
-      </button>
-    </div>
-  );
-
-  // Artifact strip (`Main.dc.html` `.vstrip`): mono display path, writer chip, `outside repo` chip, pin. Shown for
-  // artifact-sourced paths (no diff stats: there is no git baseline) — an in-repo file that is also an artifact
-  // keeps its diff strip and gains the same tail.
-  const scopeLabel =
+  // One strip for Files, commit files and artifacts (tools-pane-rework board 2). Counts are measured against the
+  // scope the list header names; the directory is the muted part; the view switch and the one menu sit at the end.
+  const shownPath = path ?? "";
+  const stripVariant: FileStripProps["variant"] = viewScope === "commit" ? "commit" : artifactSourced ? "artifact" : "file";
+  const statsTitle =
     viewScope === "branch" ? "Compared to fork base" : viewScope === "commit" ? "Commit diff" : "Compared to HEAD";
-  const diffInfoWith = (tail: ReactNode) => artifactSourced ? (
-    <div className="preview-diffinfo artifact-strip">
-      {previewNav}
-      <span className="artifact-strip__path" title={path}>
-        {artifactRow?.displayPath ?? path}
-      </span>
-      {artifactRow ? (
-        <ArtifactStripItems api={api} scopeId={worktreeId} row={artifactRow} />
-      ) : (
-        <span className="artifact-strip__spacer" />
-      )}
-      {artifactPanel ? null : htmlToggle}
-      {artifactPanel ? null : <ScrollMapToggle display={scrollMapDisplay} />}
-      {artifactPanel ? null : <CommentStripButton disabledReason={commentDisabledReason} />}
-      {tail}
-    </div>
-  ) : (
-    <div className="preview-diffinfo">
-      {previewNav}
-      {diffStats ? (
-        <span className="preview-diffinfo__stats" aria-label="Diff line counts">
-          <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
-          <span className="preview-diffinfo__stats-minus">−{diffStats.deletions}</span>
-        </span>
-      ) : null}
-      <span className="preview-diffinfo__scope" title={scopeLabel}>
-        {scopeLabel}
-      </span>
-      {scope === "commit" && path && worktreeId && !submodule && !controlled?.deleted ? (
-        // A commit's diff is not a tab. Open the same file as a normal Files
-        // tab in plain (non-diff) view — the working-tree copy, which may have
-        // moved on since this commit.
-        <button
-          type="button"
-          className="preview-diffinfo__view-source"
-          title="Open this file in the Files tab (plain view)"
-          onClick={() => {
-            setDiffScopeForWorktree(worktreeId, "none");
-            openFileTabNew(worktreeId, path);
-            setToolPanelTab("files");
-          }}
-        >
-          View source
-        </button>
-      ) : null}
-      {htmlToggle}
-      {stripRow ? <ArtifactStripItems api={api} scopeId={worktreeId} row={stripRow} /> : null}
-      <ScrollMapToggle display={scrollMapDisplay} />
-      <CommentStripButton disabledReason={commentDisabledReason} />
-      {tail}
-    </div>
+  const pinRow = artifactRow ?? stripRow ?? null;
+  const detailsTarget: DetailsTarget | null = path
+    ? {
+        scope: fileScope,
+        scopeId: worktreeId,
+        path: artifactRow ? artifactRow.path : path,
+        name: baseNameOf(artifactRow?.displayPath ?? path),
+        artifact: artifactRow,
+      }
+    : null;
+  const openInFiles = () => {
+    setDiffScopeForWorktree(worktreeId, "none");
+    openFileTabNew(worktreeId, shownPath);
+    setToolPanelTab("files");
+  };
+  const diffLayoutSwitch =
+    !artifactPanel && previewHunks.length > 0 && !isImagePath(shownPath) && (viewScope === "local" || viewScope === "branch" || viewScope === "commit") ? (
+      <DiffLayoutSwitch />
+    ) : null;
+  const strip = (
+    <FileStrip
+      variant={stripVariant}
+      path={artifactRow?.displayPath ?? shownPath}
+      displayDir={dirOfPath(artifactRow?.displayPath ?? shownPath)}
+      copyValue={artifactRow?.path ?? shownPath}
+      stats={artifactSourced ? null : diffStats}
+      statsTitle={statsTitle}
+      nav={
+        stripVariant === "commit"
+          ? null
+          : { canGoBack, canGoForward, onBack: () => navigateBack(layoutKey), onForward: () => navigateForward(layoutKey) }
+      }
+      view={artifactPanel ? null : isHtml ? htmlToggle : diffLayoutSwitch}
+      menu={{
+        api,
+        target: detailsTarget,
+        variant: stripVariant,
+        onOpenInFiles: stripVariant === "commit" && shownPath && !submodule && !controlled?.deleted ? openInFiles : undefined,
+        pin:
+          pinRow && !artifactPanel
+            ? { pinned: pinRow.pinned, onToggle: () => toggleArtifactPin(api, worktreeId, pinRow) }
+            : null,
+        font: {
+          scale: previewFontScale,
+          bump,
+          reset: () => (worktreeId ? resetPreviewFontForWorktree(worktreeId) : resetPreviewFont()),
+        },
+        scrollMap: artifactPanel ? null : scrollMapDisplay,
+      }}
+    />
   );
 
   if (artifactSourced && artifactPanel) {
@@ -966,7 +932,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     };
     return (
       <div className="pane pane-stack">
-        {diffInfoWith(null)}
+        {strip}
         {artifactRemoveError?.path === path ? (
           <Banner tone="error">
             {artifactRemoveError.text}
@@ -980,7 +946,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   if (tooLarge) {
     return (
       <div className="pane pane-stack">
-        {diffInfoWith(null)}
+        {strip}
         <div className="empty-state">File too large to preview</div>
       </div>
     );
@@ -989,7 +955,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   if (error) {
     return (
       <div className="pane pane-stack">
-        {diffInfoWith(null)}
+        {strip}
         <div className="empty-state">{error}</div>
       </div>
     );
@@ -1076,7 +1042,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const useCodeChrome = viewScope === "local" || viewScope === "branch" || viewScope === "commit" || (!isMd && !isImage && viewScope === "none");
 
-  const showFontOverlay = !showHtmlRendered;
 
   return (
     <CommentSurfaceProvider
@@ -1092,12 +1057,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       fileText={fileBody}
     >
     <div
-      className={`pane pane-stack preview-pane${showFontOverlay ? " preview-pane--font-overlay" : ""}`}
+      className="pane pane-stack preview-pane"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{ position: "relative" }}
     >
-      {diffInfoWith(showFontOverlay ? fontOverlay : null)}
+      {strip}
       {showHtmlRendered && !commentDisabledReason ? (
         <Banner
           tone="info"

@@ -102,13 +102,14 @@ describe("FilesPanel (post docked-list extraction)", () => {
       activeFileTabIdxByWorktree: { "wt-1": 0 },
     });
     render(<FilesPanel api={api} worktreeId="wt-1" />);
-    expect(await screen.findByText("App.tsx")).toBeInTheDocument();
+    // The name shows in the tab and in the strip; the tab is the identity this test cares about.
+    expect(await screen.findByRole("tab", { name: /App\.tsx/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Close App.tsx" }));
     expect(useWorkspaceStore.getState().activeFilePath).toBeNull();
   });
 
-  it("zoom controls bump previewFontScale", async () => {
+  it("the File menu text size bumps previewFontScale", async () => {
     const user = userEvent.setup();
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
@@ -117,13 +118,15 @@ describe("FilesPanel (post docked-list extraction)", () => {
       activeFileTabIdxByWorktree: { "wt-1": 0 },
     });
     render(<FilesPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("App.tsx");
+    await screen.findByRole("tab", { name: /App\.tsx/ });
 
     const before = useWorkspaceStore.getState().previewFontScaleByWorktree["wt-1"] ?? useWorkspaceStore.getState().previewFontScale;
-    await user.click(screen.getByRole("button", { name: "Increase preview font" }));
+    // Text size lives in the strip's File menu (tools-pane-rework B4.2); the menu stays open for repeated steps.
+    await user.click(screen.getByRole("button", { name: "File menu" }));
+    await user.click(screen.getByRole("button", { name: "Increase text size" }));
     expect(useWorkspaceStore.getState().previewFontScaleByWorktree["wt-1"]).toBeGreaterThan(before);
 
-    await user.click(screen.getByRole("button", { name: "Decrease preview font" }));
+    await user.click(screen.getByRole("button", { name: "Decrease text size" }));
     expect(useWorkspaceStore.getState().previewFontScaleByWorktree["wt-1"]).toBeCloseTo(before, 5);
   });
 
@@ -235,7 +238,7 @@ describe("FilesPanel (post docked-list extraction)", () => {
         fileTreeVisible: true,
       });
       render(<FilesPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("App.tsx");
+      await screen.findByRole("tab", { name: /App\.tsx/ });
 
       // Set the peek AFTER SearchPanel's empty-query mount effect has run (it
       // clears peek on mount, same race the 3.T3 test above avoids).
@@ -267,7 +270,7 @@ describe("FilesPanel (post docked-list extraction)", () => {
         peekFile: null,
       });
       render(<FilesPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("App.tsx");
+      await screen.findByRole("tab", { name: /App\.tsx/ });
       expect(screen.queryByRole("button", { name: "Close search preview" })).not.toBeInTheDocument();
     });
 
@@ -283,7 +286,7 @@ describe("FilesPanel (post docked-list extraction)", () => {
         fileTreeVisible: true,
       });
       render(<FilesPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("App.tsx");
+      await screen.findByRole("tab", { name: /App\.tsx/ });
 
       act(() => {
         useWorkspaceStore.setState({
@@ -340,7 +343,7 @@ describe("FilesPanel (post docked-list extraction)", () => {
         fileTreeVisible: true,
       });
       render(<FilesPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("App.tsx");
+      await screen.findByRole("tab", { name: /App\.tsx/ });
 
       act(() => {
         useWorkspaceStore.setState({

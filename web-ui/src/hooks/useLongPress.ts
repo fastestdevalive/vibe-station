@@ -7,6 +7,8 @@ export const LONG_PRESS_MS = 500;
 export const LONG_PRESS_SLOP_PX = 8;
 /** How long after a fired long-press the trailing click is swallowed. */
 const CLICK_SUPPRESS_MS = 800;
+/** Once the hold has fired, how long after a lift the trailing click is still swallowed (a hold longer than the suppress window). */
+const LIFT_GRACE_MS = 400;
 
 export interface LongPressOptions {
   /** When false (mouse-primary devices) every handler is inert. */
@@ -33,6 +35,7 @@ export function useLongPress({ enabled, onLongPress, delay = LONG_PRESS_MS, slop
   const timer = useRef<number | null>(null);
   const origin = useRef<{ x: number; y: number } | null>(null);
   const suppressUntil = useRef(0);
+  const docSwallow = useRef<((e: Event) => void) | null>(null);
   const cb = useRef(onLongPress);
   cb.current = onLongPress;
 
@@ -42,11 +45,34 @@ export function useLongPress({ enabled, onLongPress, delay = LONG_PRESS_MS, slop
     origin.current = null;
   }, []);
 
-  useEffect(() => cancel, [cancel]);
+  const disarmDoc = useCallback(() => {
+    if (docSwallow.current) document.removeEventListener("click", docSwallow.current, true);
+    docSwallow.current = null;
+  }, []);
+  // The lift click can land outside the container (a portaled sheet's backdrop): swallow it at the document too.
+  const armDoc = useCallback(() => {
+    disarmDoc();
+    const fn = (e: Event) => {
+      disarmDoc();
+      if (suppressUntil.current === 0) return;
+      const live = performance.now() < suppressUntil.current;
+      suppressUntil.current = 0;
+      if (live) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    docSwallow.current = fn;
+    document.addEventListener("click", fn, true);
+  }, [disarmDoc]);
+
+  useEffect(() => () => { cancel(); disarmDoc(); }, [cancel, disarmDoc]);
 
   const onPointerDown = useCallback(
     (e: PointerEvent<HTMLElement>) => {
       cancel();
+      disarmDoc();
+      suppressUntil.current = 0;
       if (!enabled || e.pointerType === "mouse" || e.isPrimary === false) return;
       const point = { x: e.clientX, y: e.clientY };
       const target = e.target as HTMLElement;
@@ -56,10 +82,11 @@ export function useLongPress({ enabled, onLongPress, delay = LONG_PRESS_MS, slop
         origin.current = null;
         if (cb.current(target, point) !== false) {
           suppressUntil.current = performance.now() + CLICK_SUPPRESS_MS;
+          armDoc();
         }
       }, delay);
     },
-    [enabled, delay, cancel],
+    [enabled, delay, cancel, disarmDoc, armDoc],
   );
 
   const onPointerMove = useCallback(
@@ -70,6 +97,12 @@ export function useLongPress({ enabled, onLongPress, delay = LONG_PRESS_MS, slop
     },
     [slop, cancel],
   );
+
+  // The finger lifts after the hold: the click it produces is still swallowed, even past the suppress window.
+  const lift = useCallback(() => {
+    if (suppressUntil.current !== 0) suppressUntil.current = performance.now() + LIFT_GRACE_MS;
+    cancel();
+  }, [cancel]);
 
   const onClickCapture = useCallback((e: MouseEvent<HTMLElement>) => {
     if (suppressUntil.current === 0) return;
@@ -95,8 +128,8 @@ export function useLongPress({ enabled, onLongPress, delay = LONG_PRESS_MS, slop
   return {
     onPointerDown,
     onPointerMove,
-    onPointerUp: cancel,
-    onPointerCancel: cancel,
+    onPointerUp: lift,
+    onPointerCancel: lift,
     onScrollCapture: cancel,
     onClickCapture,
     onContextMenu,

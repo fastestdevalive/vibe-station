@@ -134,6 +134,27 @@ pub fn open_artifact(
     Ok((file, post))
 }
 
+/// Result of statting an artifact's file (metadata only, never bytes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArtifactStatOutcome {
+    /// The file opened through the hardened path; `size`/`modified_ms` from
+    /// its open descriptor, `path` is the row's stored canonical path.
+    Found {
+        size: u64,
+        modified_ms: i64,
+        path: String,
+        in_repo: bool,
+    },
+    /// Row absent, hidden, or not a row of the requested scope.
+    NotFound,
+    /// The file was deleted or moved away.
+    Missing,
+    /// Denylist, path changed, hard link, device/inode mismatch.
+    Denied,
+    /// Any other read failure (permissions, store or I/O error).
+    Unreadable,
+}
+
 /// Result of reading an artifact's bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReadOutcome {

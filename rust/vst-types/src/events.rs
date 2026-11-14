@@ -147,6 +147,15 @@ pub enum ServerEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         hint: Option<String>,
     },
+    /// A worktree's checked-out head or its base-branch tip changed
+    /// (`vst-diffstat` `HeadTracker`). Worktree scope only; `rev` is monotonic.
+    #[serde(rename = "worktree:head", rename_all = "camelCase")]
+    WorktreeHead {
+        worktree_id: String,
+        head_sha: Option<String>,
+        base_sha: Option<String>,
+        rev: u64,
+    },
     /// An ordered list was updated.
     #[serde(rename = "orderedList:updated", rename_all = "camelCase")]
     OrderedListUpdated {
