@@ -5,7 +5,6 @@ import { SessionModeIcon } from "@/components/agent/SessionModeIcon";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { sessionStatus } from "@/lib/worktreeStatus";
-import { AgentLabel } from "./AgentLabel";
 import { ArtifactPopover } from "./ArtifactPopover";
 import { artifactCount } from "./artifactSessions";
 
@@ -87,7 +86,7 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
       <button
         ref={triggerRef}
         type="button"
-        className="artifacts-agent-picker"
+        className="rail-header__txt artifacts-agent-picker"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Filter by agent: ${currentLabel}`}
@@ -95,17 +94,11 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
         onClick={() => (open ? close(false) : setOpen(true))}
         onKeyDown={onTriggerKeyDown}
       >
-        {selected ? (
-          <AgentLabel session={selected.session} size={11} />
-        ) : (
-          <span className="artifacts-agent">
-            <Users size={13} aria-hidden="true" className="artifacts-agent__all-icon" />
-            <span className="artifacts-agent__name">All agents</span>
-          </span>
-        )}
+        {selected ? <SessionModeIcon session={selected.session} size={13} className="artifacts-agent__icon" /> : null}
+        <span className="rail-header__txt-label">{currentLabel}</span>
         {/* "All agents" drops its count: the tools row's "N of 500" already says it. */}
         {selected ? <span className="artifacts-agent-picker__count">{selected.count}</span> : null}
-        <ChevronDown size={12} aria-hidden="true" className="artifacts-agent-picker__chevron" />
+        <ChevronDown size={12} aria-hidden="true" className="rail-header__chev" />
       </button>
       {open ? (
         <ArtifactPopover

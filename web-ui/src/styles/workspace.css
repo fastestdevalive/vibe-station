@@ -142,7 +142,7 @@
 .rail-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 0;
   flex: none;
   height: var(--pane-row-h);
   box-sizing: border-box;
@@ -158,15 +158,18 @@
   overflow: hidden;
 }
 .rail-header__sp {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: var(--space-1);
 }
+/* The right zone's controls are flex items of the header itself, so the text dropdown can give way before the title. */
 .rail-header__right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: none;
-  min-width: 0;
+  display: contents;
+}
+.rail-header__right > * + * {
+  margin-left: var(--space-1);
+}
+.rail-header__right > :last-child {
+  margin-right: var(--space-1);
 }
 .rail-header__title {
   min-width: 0;
@@ -219,7 +222,9 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  min-width: 0;
+  min-width: 22px;
+  flex: 0 1000 auto;
+  overflow: hidden;
   height: 22px;
   padding: 0 var(--space-1);
   border: none;
@@ -236,9 +241,11 @@
   background: var(--bg-hover);
 }
 .rail-header__txt-label {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .rail-header__chev {
   flex: none;
@@ -268,13 +275,15 @@
 .rail-menu__item {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
   width: 100%;
   min-height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 10px;
   border: none;
   background: transparent;
   color: var(--fg-primary);
-  font-size: var(--font-size-xs);
+  font-size: var(--fs-ui);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -286,10 +295,116 @@
 .rail-menu__item[aria-checked="true"] {
   background: var(--bg-active);
 }
+.rail-menu__sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-default);
+}
+.rail-menu__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 0 10px;
+}
+.rail-menu__label {
+  color: var(--fg-primary);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+}
+.rail-menu__sp {
+  flex: 1 1 auto;
+}
+.rail-menu__step,
+.rail-menu__pct {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 22px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.rail-menu__step {
+  width: 22px;
+}
+.rail-menu__pct {
+  min-width: 44px;
+  padding: 0 var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+.rail-menu__step:hover,
+.rail-menu__pct:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+.rail-menu__pct:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+/* Phone bottom sheet (ArtifactPopover renders `.artifacts-menu--sheet`): 44px rows. */
+.artifacts-menu--sheet .rail-menu__item {
+  min-height: 44px;
+  padding: 0;
+  font-size: var(--fs-body);
+}
+.artifacts-menu--sheet .rail-menu__row {
+  min-height: 44px;
+  padding: 0;
+}
+.artifacts-menu--sheet .rail-menu__step {
+  width: 44px;
+  height: 36px;
+}
+.artifacts-menu--sheet .rail-menu__pct {
+  height: 36px;
+}
 
 @container rail-header (max-width: 260px) {
   .rail-header__txt-label {
     display: none;
+  }
+  .artifacts-agent-picker__count {
+    display: none;
+  }
+  .rail-seg__btn {
+    padding: 0 6px;
+    font-size: var(--font-size-sm);
+  }
+}
+/* A list this narrow (phones: 160-200px, two pane controls ride the row) keeps identity only. */
+@container rail-header (max-width: 200px) {
+  .file-tree-sidebar-header .rail-seg__btn:first-child {
+    display: none;
+  }
+  .file-tree-sidebar-header .rail-header__right,
+  .vcs-commit-detail__head .rail-header__right {
+    display: none;
+  }
+  .artifacts-head .rail-header__count {
+    display: none;
+  }
+  .vcs-commit-detail__up {
+    font-size: var(--font-size-sm);
+  }
+}
+/* Phones: header controls use the full row height as their touch target (pane controls are 36x35 there). */
+@media (max-width: 768px) {
+  .rail-seg__btn,
+  .rail-header__txt,
+  .rail-header__ib,
+  .vcs-commit-detail__up {
+    height: var(--pane-row-h);
+  }
+  .rail-header__ib {
+    width: 36px;
   }
 }
 
@@ -7826,6 +7941,7 @@ button.dashboard-card {
   min-width: 0;
 }
 .vcs-commit-detail__up {
+  flex: none;
   padding: 0 var(--space-1);
   border: none;
   background: transparent;

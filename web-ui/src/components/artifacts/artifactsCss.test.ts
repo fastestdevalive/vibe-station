@@ -33,6 +33,10 @@ describe("artifacts.css narrow list", () => {
     expect(picker).toContain("min-width: 0");
   });
 
+  it("the agent picker is a borderless text dropdown in the rail header (R1F-03)", () => {
+    expect(rule(".artifacts-agent-picker")).not.toContain("border:");
+  });
+
   it("the row is one line: a fixed height and the name ellipsizes (no sub line)", () => {
     expect(rule(".artifacts-row")).toContain("height: 28px");
     expect(rule(".artifacts-row__sub")).toBe("");

@@ -15,7 +15,6 @@
 .artifacts-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
   flex: none;
   height: var(--pane-row-h);
   --actions-row-pad: 10px; /* gutter used by .actions-row (workspace.css) */
@@ -38,30 +37,13 @@
   flex-direction: column;
 }
 
-/* Agent filter trigger: an agent row in a quiet control box (mode icon, name, count, chevron). */
+/* Agent filter trigger: the rail header's text dropdown (label + chevron); the agent's mode icon shows when one is picked. */
 .artifacts-agent-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 1 auto;
+  gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: 24px;
-  box-sizing: border-box;
-  padding: 0 6px 0 8px;
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
-  color: var(--fg-primary);
-  font-size: var(--fs-meta);
-  cursor: pointer;
-}
-.artifacts-agent-picker:hover,
-.artifacts-agent-picker[aria-expanded="true"] {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
 }
 .artifacts-agent-picker:focus-visible {
   outline: none;

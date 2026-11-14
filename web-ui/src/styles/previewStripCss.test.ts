@@ -38,6 +38,29 @@ describe("workspace.css rail header (R1F-03, retargeted to the rail header)", ()
     expect(css).not.toContain(".file-tree-scope-slot");
     expect(css).not.toContain(".file-tree-diff-toggle");
   });
+  it("the right zone is flex items of the header, so the text dropdown gives way before the title (R1F-03)", () => {
+    expect(css).toMatch(/\.rail-header__right \{\s*display: contents;/);
+    expect(css).toMatch(/\.rail-header__txt \{[^}]*flex: 0 1000 auto;/);
+  });
+});
+
+describe("workspace.css narrow rail header (R1F-04, R1F-05, R1F-07)", () => {
+  it("the 200px container block comes after the 260px block", () => {
+    const narrow = css.indexOf("@container rail-header (max-width: 200px)");
+    expect(narrow).toBeGreaterThan(-1);
+    expect(narrow).toBeGreaterThan(css.indexOf("@container rail-header (max-width: 260px)"));
+  });
+});
+
+describe("workspace.css rail menu (R1F-12)", () => {
+  it("the menu row, separator and label have rules", () => {
+    expect(css).toContain(".rail-menu__row {");
+    expect(css).toContain(".rail-menu__sep {");
+  });
+  it("the phone bottom sheet uses 44px rows and the menu items use the 13px UI size", () => {
+    expect(css).toMatch(/\.artifacts-menu--sheet \.rail-menu__item \{\s*min-height: 44px;/);
+    expect(css).toMatch(/\.rail-menu__item \{[^}]*font-size: var\(--fs-ui\);/);
+  });
 });
 
 describe("workspace.css tools-pane tap targets (R1F-05)", () => {
