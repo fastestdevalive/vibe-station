@@ -53,8 +53,8 @@ use vst_types::rest::projects::{
 };
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
-    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, FileSearchResult, GutterResult,
-    SearchResult, SubmodulesResult,
+    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, FileSearchResult, FileStat,
+    GutterResult, SearchResult, SubmodulesResult,
 };
 use vst_types::ws::WatchScope;
 use vst_ws::services::file_list::FileList;
@@ -66,6 +66,7 @@ use crate::artifact_gate::{
     artifact_open_path, confine_only, gate_read, lexical_or_absolute, GateError, Gated,
 };
 use crate::file_serving::{read_file_response, FileServingError};
+use crate::file_stat::{self, StatError};
 use crate::modes::{
     find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
 };
@@ -1693,6 +1694,45 @@ impl ProjectRoutes {
     }
 
     // ── 9. GET /projects/:projectId/files/* ───────────────────────────────
+    // GET /projects/:id/stat/* (in-root only; absolute/escaping = 403)
+    pub async fn stat_file(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<FileStat, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+        let root = Path::new(&project.absolute_path);
+        let lexical = lexical_or_absolute(resolve_inside_dir(root, file_path), file_path)?;
+        file_stat::stat_in_root(root, file_path, lexical)
+            .await
+            .map_err(|e| match e {
+                StatError::NotFound(m) => ProjectRouteError::NotFound(m),
+                StatError::Denied(m) => ProjectRouteError::AccessDenied(m),
+            })
+    }
+
+    // GET /projects/:id/artifacts/:artifactId/stat (artifact gate only)
+    pub async fn stat_artifact(
+        &self,
+        project_id: &str,
+        artifact_id: &str,
+    ) -> Result<FileStat, ProjectRouteError> {
+        if self.store.get_project(project_id).await.is_none() {
+            return Err(ProjectRouteError::NotFound(format!(
+                "Project '{project_id}' not found"
+            )));
+        }
+        let scope = ScopeKey::project(project_id);
+        file_stat::stat_artifact(self.artifacts.as_ref(), &scope, artifact_id)
+            .await
+            .map_err(|e| match e {
+                StatError::NotFound(m) => ProjectRouteError::NotFound(m),
+                StatError::Denied(m) => ProjectRouteError::AccessDenied(m),
+            })
+    }
+
     pub async fn get_file(
         &self,
         project_id: &str,

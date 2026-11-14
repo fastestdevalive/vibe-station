@@ -178,12 +178,12 @@ enum Candidate {
 }
 
 /// The resolved git directories of a worktree.
-struct GitDirs {
+pub(crate) struct GitDirs {
     /// The worktree's private gitdir (`<common>/worktrees/<id>`), whose `HEAD`
     /// points at the worktree's own branch.
-    gitdir: PathBuf,
+    pub(crate) gitdir: PathBuf,
     /// The repository's shared gitdir (`<repo>/.git`) — holds `refs/`.
-    common_dir: PathBuf,
+    pub(crate) common_dir: PathBuf,
 }
 
 /// Per-worktree ref-choice cache + compute.
@@ -747,7 +747,7 @@ async fn merge_base(repo: &str, a: &str, b: &str) -> Result<Option<String>, ()> 
 /// Resolve a worktree's gitdir + the repository's common gitdir from `.git`
 /// alone (no exec). `None` when `.git` is missing or points at a missing
 /// gitdir — a `broken` worktree (Decision 5).
-fn git_dirs(worktree: &Path) -> Option<GitDirs> {
+pub(crate) fn git_dirs(worktree: &Path) -> Option<GitDirs> {
     let dot_git = worktree.join(".git");
     let meta = std::fs::metadata(&dot_git).ok()?;
     if meta.is_dir() {
@@ -786,12 +786,12 @@ fn git_dirs(worktree: &Path) -> Option<GitDirs> {
     Some(GitDirs { gitdir, common_dir })
 }
 
-fn is_sha(text: &str) -> bool {
+pub(crate) fn is_sha(text: &str) -> bool {
     text.len() >= 7 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Outcome of reading one ref straight from the ref files.
-enum RefLookup {
+pub(crate) enum RefLookup {
     Found(String),
     /// Definitely not there (no loose file, no `packed-refs` entry).
     Absent,
@@ -801,7 +801,7 @@ enum RefLookup {
 }
 
 /// Read one ref from `<common>/<name>`, then `<common>/packed-refs`.
-fn read_ref_file(common_dir: &Path, name: &str) -> RefLookup {
+pub(crate) fn read_ref_file(common_dir: &Path, name: &str) -> RefLookup {
     if common_dir.join("reftable").exists() {
         return RefLookup::Unreadable;
     }
@@ -842,7 +842,7 @@ fn read_ref_file(common_dir: &Path, name: &str) -> RefLookup {
 }
 
 /// Read `<gitdir>/HEAD` (a symbolic ref into the common dir, or a raw SHA).
-fn read_head_file(gitdir: &Path, common_dir: &Path) -> Option<String> {
+pub(crate) fn read_head_file(gitdir: &Path, common_dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
     let text = text.trim();
     if let Some(refname) = text.strip_prefix("ref:") {

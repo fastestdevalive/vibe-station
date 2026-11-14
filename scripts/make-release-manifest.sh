@@ -36,7 +36,7 @@ names="$(
   for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [ -f "$f" ] || continue
     n="${f##*/}"
-    case "$n" in *.sha256|SHA256SUMS*) continue ;; esac
+    case "$n" in (*.sha256|SHA256SUMS*) continue ;; esac
     printf '%s\n' "$n"
   done | LC_ALL=C sort
 )"

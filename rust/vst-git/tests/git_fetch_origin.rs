@@ -226,3 +226,59 @@ async fn clear_state_for_test_restores_real_fetch_behavior_after_a_primed_cooldo
     assert_eq!(count_invocations(&counter).await, 2);
     rm_git_fixture(&fx).await;
 }
+
+#[tokio::test]
+async fn fetch_origin_ok_reports_success_and_cooldown_as_true() {
+    let fx = git_fixture("vst-git-fetchorigin-test").await;
+    let counter = fx.dir.join("counter.txt");
+    let fake = counting_fake(&counter);
+    let svc = GitService::with_deps(fake.script.to_string_lossy().into_owned(), real_clock());
+    let repo = fx.dir.to_str().unwrap().to_string();
+    assert!(svc.fetch_origin_ok(&repo, "main").await, "fresh success");
+    assert!(
+        svc.fetch_origin_ok(&repo, "main").await,
+        "success still in cooldown is still fresh"
+    );
+    assert_eq!(count_invocations(&counter).await, 1);
+    rm_git_fixture(&fx).await;
+}
+
+#[tokio::test]
+async fn fetch_origin_ok_reports_failure_as_false_and_is_not_cooled() {
+    let fx = git_fixture("vst-git-fetchorigin-test").await;
+    let counter = fx.dir.join("counter.txt");
+    let fake = failing_fake(&counter);
+    let svc = GitService::with_deps(fake.script.to_string_lossy().into_owned(), real_clock());
+    let repo = fx.dir.to_str().unwrap().to_string();
+    assert!(!svc.fetch_origin_ok(&repo, "main").await, "failed fetch");
+    assert!(!svc.fetch_origin_ok(&repo, "main").await, "failed again");
+    assert_eq!(
+        count_invocations(&counter).await,
+        2,
+        "a failure never starts a cooldown, so the retry runs git again"
+    );
+    rm_git_fixture(&fx).await;
+}
+
+#[tokio::test]
+async fn concurrent_waiter_reports_the_shared_fetch_outcome() {
+    let fx = git_fixture("vst-git-fetchorigin-test").await;
+    let counter = fx.dir.join("counter.txt");
+    let fake = failing_fake(&counter);
+    let svc = GitService::with_deps(fake.script.to_string_lossy().into_owned(), real_clock());
+    let repo = fx.dir.to_str().unwrap().to_string();
+    let (a, b) = tokio::join!(
+        svc.fetch_origin_ok(&repo, "main"),
+        svc.fetch_origin_ok(&repo, "main")
+    );
+    assert!(
+        !a && !b,
+        "the waiter must not report success for a failed shared fetch"
+    );
+    assert_eq!(
+        count_invocations(&counter).await,
+        1,
+        "one shared subprocess"
+    );
+    rm_git_fixture(&fx).await;
+}

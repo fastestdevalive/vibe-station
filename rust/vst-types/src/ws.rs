@@ -233,6 +233,14 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         hint: Option<String>,
     },
+    /// Worktree head/base moved — see `ServerEvent::WorktreeHead`.
+    #[serde(rename = "worktree:head", rename_all = "camelCase")]
+    WorktreeHead {
+        worktree_id: String,
+        head_sha: Option<String>,
+        base_sha: Option<String>,
+        rev: u64,
+    },
     #[serde(rename = "orderedList:updated", rename_all = "camelCase")]
     OrderedListUpdated {
         scope_key: String,
@@ -661,5 +669,28 @@ mod tests {
             }
             other => panic!("expected TreeWatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn worktree_head_serializes_camel_case_with_nulls() {
+        let msg = ServerMessage::WorktreeHead {
+            worktree_id: "w".into(),
+            head_sha: Some("a".repeat(40)),
+            base_sha: None,
+            rev: 5,
+        };
+        let json = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "worktree:head",
+                "worktreeId": "w",
+                "headSha": "a".repeat(40),
+                "baseSha": null,
+                "rev": 5
+            })
+        );
+        let back: ServerMessage = serde_json::from_value(json).expect("round-trip");
+        assert_eq!(back, msg);
     }
 }

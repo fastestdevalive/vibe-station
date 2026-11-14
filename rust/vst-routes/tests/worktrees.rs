@@ -2625,3 +2625,88 @@ fn test_open_files_body_wire_defaults() {
     let b: OpenFilesBody = serde_json::from_str(r#"{"all":true}"#).unwrap();
     assert!(b.all && b.path.is_empty());
 }
+
+/// `git` in `dir`, trimmed stdout (test helper).
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git command failed");
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[tokio::test]
+async fn commits_request_never_fetches_origin() {
+    // A4.T3: origin has a commit the clone's `refs/remotes/origin/main` does
+    // not. The commits request must answer from local refs and leave that
+    // remote-tracking ref alone (the background refresh lives in vst-diffstat).
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let origin = tempdir().unwrap();
+    init_git_repo(origin.path());
+
+    let clone_root = tempdir().unwrap();
+    let clone_path = clone_root.path().join("repo");
+    let status = Command::new("git")
+        .args(["clone", "-q"])
+        .arg(origin.path())
+        .arg(&clone_path)
+        .status()
+        .expect("git clone");
+    assert!(status.success());
+
+    // Origin moves ahead; the clone's remote-tracking main stays behind.
+    std::fs::write(origin.path().join("ahead.txt"), "ahead\n").unwrap();
+    git_out(origin.path(), &["add", "."]);
+    git_out(origin.path(), &["commit", "-q", "-m", "origin ahead"]);
+    let origin_tip = git_out(origin.path(), &["rev-parse", "main"]);
+    let before = git_out(&clone_path, &["rev-parse", "refs/remotes/origin/main"]);
+    assert_ne!(before, origin_tip, "precondition: origin is ahead");
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    store
+        .add_project(ProjectRecord {
+            id: "proj-no-fetch".into(),
+            absolute_path: clone_path.to_string_lossy().to_string(),
+            prefix: "vs".into(),
+            is_git: true,
+            default_branch: Some("main".into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            hidden: None,
+            direct_sessions: vec![],
+            direct_session_seq: Some(1),
+            worktrees: vec![],
+            next_worktree_num: Some(1),
+            lsp_enabled: None,
+            open_files: vec![],
+        })
+        .await
+        .unwrap();
+    let wt = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-no-fetch".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/no-fetch".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let commits = routes.commits(&wt.id, Some(50), None).await.unwrap();
+    assert!(!commits.commits.is_empty());
+
+    let after = git_out(&clone_path, &["rev-parse", "refs/remotes/origin/main"]);
+    assert_eq!(after, before, "commits() must not run git fetch");
+}
