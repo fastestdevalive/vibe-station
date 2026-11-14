@@ -1,8 +1,7 @@
-import { ChevronDown, ChevronRight, PackageOpen, Pin } from "lucide-react";
+import { ChevronDown, ChevronRight, PackageOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ApiInstance } from "@/api";
 import type { ArtifactRow as Row, ArtifactScopeKind } from "@/api/types";
-import { Chip } from "@/components/ui/Chip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Toast } from "@/components/ui/Toast";
@@ -14,7 +13,7 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { copyText } from "@/lib/copyText";
 import { useModesSync, type ModesApi } from "@/store/modesStore";
-import { ModeHeaderActionsHost } from "@/components/layout/TopActionsSlot";
+import { RailHeader } from "@/components/layout/RailHeader";
 import { AgentFilterPicker } from "./AgentFilterPicker";
 import { ArtifactMenu, type MenuAnchor } from "./ArtifactMenu";
 import { ArtifactRow } from "./ArtifactRow";
@@ -23,14 +22,14 @@ import {
   filterSessions,
   groupOf,
   matchesSession,
-  otherWriterCount,
-  otherWriterNames,
+  baseName,
+  dirOf,
   scopeSessions,
   writerLabel,
-  writerOf,
   type ArtifactGroupId,
 } from "./artifactSessions";
 import { removeArtifactRow, toggleArtifactPin } from "./artifactActions";
+import { useDetailsStore } from "@/components/details/detailsStore";
 import { ARTIFACT_CAP_DEFAULT, NO_ROWS, rowMatchesPath, useArtifactsStore } from "./artifactsStore";
 import { fetchArtifactScope, useArtifactScope } from "./useArtifactsSync";
 import "./artifacts.css";
@@ -56,6 +55,40 @@ const GROUP_LABEL: Record<ArtifactGroupId, string> = { pinned: "Pinned", run: "T
 type LocalNotice = { seq: number; text: string };
 
 /** The Artifacts list-panel body (`Main.dc.html` board 1, `ArtifactStates.dc.html`, `Mobile.dc.html`). */
+/**
+ * Folder hints for same-named rows (tools-pane-rework B6): each row whose base name is shared gets the shortest run of
+ * its own folders that no other same-named row shares (`web-ui` vs `rust/vst-git`). Unique names get none.
+ */
+export function folderHints(rows: Row[]): Map<string, string> {
+  const byName = new Map<string, Row[]>();
+  for (const r of rows) {
+    const name = baseName(r.displayPath);
+    byName.set(name, [...(byName.get(name) ?? []), r]);
+  }
+  const hints = new Map<string, string>();
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const folders = group.map((r) => dirOf(r.displayPath).split("/").filter(Boolean));
+    group.forEach((r, i) => {
+      const mine = folders[i]!;
+      if (mine.length === 0) return;
+      for (let depth = 1; depth <= mine.length; depth++) {
+        const suffix = mine.slice(-depth).join("/");
+        const shared = folders.some((f, j) => j !== i && f.slice(-depth).join("/") === suffix);
+        if (!shared) {
+          hints.set(r.id, suffix);
+          return;
+        }
+      }
+      hints.set(r.id, mine.join("/"));
+    });
+  }
+  return hints;
+}
+
+/** The "n of cap" footer line shows once the list is within this many rows of its cap. */
+const CAP_NEAR_MARGIN = 10;
+
 export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = null, onOpen, enabled = true }: ArtifactsListProps) {
   useArtifactScope(api, scope, enabled ? scopeId : null);
   // Rows, picker options and their chips render mode icons without an api: the modes load once here, on first need.
@@ -67,6 +100,7 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
   const touch = useIsTouch();
 
   const rows = entry?.rows ?? NO_ROWS;
+  const hints = useMemo(() => folderHints(rows), [rows]);
   const status = entry?.status ?? "idle";
 
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
@@ -199,6 +233,7 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
     }
   };
 
+  // The "n of cap" meta lives in the picker's menu; the footer line shows it once the list is near its cap.
   const filterUi =
     options.length === 0 ? null : (
       <AgentFilterPicker
@@ -208,6 +243,7 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
         sessionStates={sessionStates}
         mobile={mobile}
         onChange={setFilter}
+        meta={`${entry?.total ?? rows.length} of ${entry?.cap ?? ARTIFACT_CAP_DEFAULT}`}
       />
     );
 
@@ -285,7 +321,6 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
   } else if (visible.length === 0) {
     body = <div className="artifacts-nomatch">No artifacts from this agent.</div>;
   } else {
-    const selectedId = activeFilter === "all" ? undefined : activeFilter;
     body = (
       <div ref={listRef} role="listbox" aria-label="Artifacts" className={`artifacts-listbox${mobile ? " artifacts-listbox--mobile" : ""}`} onKeyDown={onKeyDown} {...longPress}>
         {(["pinned", "run", "earlier"] as const).map((g) => {
@@ -297,7 +332,6 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
             <div key={g} role="group" aria-labelledby={headId} className="artifacts-group">
               {g === "pinned" ? (
                 <div id={headId} className="artifacts-group__head artifacts-cap" aria-label={`Pinned, ${artifactCount(list.length)}`}>
-                  <Pin size={12} aria-hidden="true" className="artifacts-group__pin" />
                   Pinned
                 </div>
               ) : (
@@ -311,20 +345,15 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
                 >
                   {expanded ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
                   {GROUP_LABEL[g]}
-                  <span className="artifacts-group__count">· {list.length}</span>
                 </button>
               )}
               {expanded &&
                 list.map((r) => {
-                  const writer = writerOf(r, byId, selectedId);
-                  const moreWriters = otherWriterCount(r);
                   return (
                     <ArtifactRow
                       key={r.id}
                       row={r}
-                      writer={writer}
-                      moreWriters={moreWriters}
-                      otherWriters={moreWriters > 0 ? otherWriterNames(r, byId, writer) : undefined}
+                      folderHint={hints.get(r.id)}
                       selected={rowMatchesPath(r, selectedPath)}
                       tabbable={isTabbable(r.id)}
                       mobile={mobile}
@@ -345,26 +374,28 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
 
   return (
     <div ref={paneRef} className="artifacts-pane" aria-busy={status === "loading" || status === "idle"}>
-      <div className="artifacts-head actions-row">
-        <PackageOpen size={14} aria-hidden="true" className="artifacts-head__icon" />
-        <span className="artifacts-head__title">Artifacts</span>
-        {status === "ready" && (
-          <Chip size="sm" aria-label={artifactCount(rows.length)}>
-            {rows.length}
-          </Chip>
-        )}
-        <ModeHeaderActionsHost mode="artifacts" />
-      </div>
+      <RailHeader
+        mode="artifacts"
+        className="artifacts-head"
+        left={
+          <>
+            <span className="artifacts-head__title">Artifacts</span>
+            {status === "ready" ? (
+              <span className="rail-header__count" aria-label={artifactCount(rows.length)}>
+                {rows.length}
+              </span>
+            ) : null}
+          </>
+        }
+        right={filterUi}
+      />
       <div className="artifacts-col">
-        {status === "ready" && rows.length > 0 && (
-          <div className="artifacts-tools">
-            {filterUi}
-            <span className="artifacts-tools__meta">
-              {entry?.total ?? rows.length} of {entry?.cap ?? ARTIFACT_CAP_DEFAULT}
-            </span>
-          </div>
-        )}
         <div className="artifacts-list">{body}</div>
+        {status === "ready" && rows.length > 0 && rows.length >= (entry?.cap ?? ARTIFACT_CAP_DEFAULT) - CAP_NEAR_MARGIN ? (
+          <div className="artifacts-foot">
+            {entry?.total ?? rows.length} of {entry?.cap ?? ARTIFACT_CAP_DEFAULT}
+          </div>
+        ) : null}
         {hasNotice && <div className="artifacts-notice">{notices}</div>}
       </div>
       {menu && (
@@ -376,6 +407,7 @@ export function ArtifactsList({ api, worktreeId: scopeId, scope, selectedPath = 
           onClose={closeMenu}
           onTogglePin={(r) => void togglePin(r)}
           onCopyPath={copyPath}
+          onDetails={(r) => useDetailsStore.getState().open({ scope, scopeId, path: r.path, name: baseName(r.displayPath), artifact: r })}
           onRemove={(r) => void removeRow(r)}
         />
       )}

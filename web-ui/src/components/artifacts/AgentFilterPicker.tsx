@@ -25,6 +25,8 @@ interface AgentFilterPickerProps {
   /** ≤768 px: a bottom sheet instead of a popover. */
   mobile: boolean;
   onChange: (value: string) => void;
+  /** Quiet line at the top of the menu (e.g. "14 of 200"). */
+  meta?: string;
 }
 
 const MENU_WIDTH = 260;
@@ -32,7 +34,7 @@ const ITEM_H = 30;
 const MAX_H = 320;
 
 /** The agent filter: a trigger showing the current agent and a menu of agent rows (mode icon, name, live status, count). */
-export function AgentFilterPicker({ value, options, total, sessionStates, mobile, onChange }: AgentFilterPickerProps) {
+export function AgentFilterPicker({ value, options, total, sessionStates, mobile, onChange, meta }: AgentFilterPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const selected = options.find((o) => o.session.id === value) ?? null;
@@ -118,6 +120,7 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
           watchRef={triggerRef}
           onClose={close}
         >
+          {meta ? <div className="artifacts-agent-menu__meta">{meta}</div> : null}
           {item("all", "All agents", <Users size={14} aria-hidden="true" />, total, null)}
           {options.map(({ session, count }) =>
             item(session.id, sessionLabel(session), <SessionModeIcon session={session} size={13} className="artifacts-agent__icon" />, count, sessionStates[session.id] ?? session.state),

@@ -115,6 +115,7 @@ describe("actions chip", () => {
     expect(css.px(".tool-panel__bar", "height")).toBe(PANE_ROW_H);
     expect(css.px(".tool-panel__bar", "min-height")).toBe(PANE_ROW_H);
     expect(css.px(".artifacts-head", "height")).toBe(PANE_ROW_H);
+    expect(css.px(".rail-header", "height")).toBe(PANE_ROW_H);
     expect(css.px(".top-bar-floating-actions", "height")).toBe(PANE_ROW_H);
   });
 
@@ -128,7 +129,7 @@ describe("actions chip", () => {
   });
 
   it("no per-row selector sets the reserve-row right padding (one class owns it)", () => {
-    for (const sel of [".tool-panel__bar", ".references-panel__header", ".outline-panel__header", ".search-panel__bar", ".file-tree-sidebar-header", ".artifacts-head"]) {
+    for (const sel of [".tool-panel__bar", ".references-panel__header", ".outline-panel__header", ".search-panel__bar", ".file-tree-sidebar-header", ".artifacts-head", ".rail-header"]) {
       for (const phone of [false, true]) {
         expect(css.decls(sel, { phone })["padding-right"], `${sel} phone=${phone}`).toBeUndefined();
         expect(css.decls(sel, { phone })["padding"], `${sel} phone=${phone}`).toBeUndefined();

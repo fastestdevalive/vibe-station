@@ -1,467 +1,300 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
+import { FileText } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { CommitLogEntry, FileScope, PrInfo, PrStatus, SubmoduleInfo } from "@/api/types";
-import { CommitRow, splitOwnCommits } from "@/components/tools/VcsCommitRow";
-import { VcsCommitView } from "@/components/tools/VcsCommitView";
+import type { ChangedPathEntry, CommitLogEntry, FileScope, PrStatus, SubmoduleInfo } from "@/api/types";
+import { DockedListLayout } from "@/components/layout/DockedListLayout";
+import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
+import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
+import { splitOwnCommits } from "@/components/tools/VcsCommitRow";
 import { VcsSubmodules } from "@/components/tools/VcsSubmodules";
+import { VcsCommitList } from "@/components/vcs/VcsCommitList";
+import { VcsSidebar } from "@/components/vcs/VcsSidebar";
+import { getShaFiles, setShaFiles, useVcsCacheStore, vcsKey } from "@/components/vcs/vcsCacheStore";
+import { VCS_PAGE_SIZE, useVcsCommits } from "@/components/vcs/useVcsCommits";
+import { HOST_PRIORITY } from "@/context/TopActionsContext";
+import { useToolsInset } from "@/context/ToolsInsetContext";
 import { useSubmoduleCommits } from "@/hooks/useSubmoduleCommits";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
+
+export { prStatusMessage } from "@/components/vcs/VcsPrSlot";
+
+/**
+ * Keeps the open commit's list in the cache while the sidebar is docked (no commit list is mounted then, and the
+ * sidebar's subject, older/newer and `]`/`[` read that cache). Renders nothing; `useVcsCommits` is the owner.
+ */
+function VcsCommitNavSource({ api, id, scope, submodule }: { api: ApiInstance; id: string; scope: FileScope; submodule?: string }) {
+  useVcsCommits({ api, id, scope, submodule });
+  return null;
+}
 
 interface VcsPanelProps {
   api: ApiInstance;
   worktreeId: string;
-  /** Worktree's base branch (e.g. "main"), used to label the collapsed upstream-commits group. */
+  /** Worktree's base branch (e.g. "main"): the `since <base>` label and the `from <base>` divider. */
   baseBranch?: string;
-  /** Worktree's own branch name, rendered as a chip next to the title. Omitted for
-   *  project-scope/no-git callers (see ToolPanel/Workspace). */
+  /** Worktree's own branch (kept for callers; the branch chip is gone, the worktree bar names the branch). */
   branch?: string;
-  /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId` indexes
-   *  into. Under project scope the branch diff toggle is hidden and PR
-   *  lookups (worktree-only concepts) never fire. */
+  /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId` indexes into. Project scope has no
+   *  base-branch filter and no PR lookups. */
   scope?: FileScope;
-  /** PR status from the session store (branch-guarded). Used for the error row
-   *  when `api.getPr` hasn't returned a PR yet or returned null. */
+  /** PR status from the session store (branch-guarded), for the PR slot's message row. */
   prStatus?: PrStatus | null;
 }
 
-/** Icon + label + modifier class for a PR's current status. */
-function prStatus(pr: PrInfo): { Icon: typeof GitPullRequest; label: string; modifier: string } {
-  if (pr.merged) return { Icon: GitMerge, label: "Merged", modifier: "merged" };
-  if (pr.state === "closed") return { Icon: GitPullRequestClosed, label: "Closed", modifier: "closed" };
-  if (pr.draft) return { Icon: GitPullRequestDraft, label: "Draft", modifier: "draft" };
-  return { Icon: GitPullRequest, label: "Open", modifier: "open" };
+type Level = "commit" | "list";
+
+interface CommitFiles {
+  /** `${sha}|${submodule}`: the files belong to this commit only. */
+  key: string;
+  entries: ChangedPathEntry[];
+  loading: boolean;
+  error: string | null;
+}
+
+const NO_FILES: CommitFiles = { key: "", entries: [], loading: true, error: null };
+
+function baseName(path: string): string {
+  return path.split("/").pop() ?? path;
 }
 
 /**
- * PR banner shown above the commit list when the worktree's branch has a
- * GitHub pull request (any state — open/draft/merged/closed). Renders
- * nothing while loading or when there's no PR/no GitHub remote, so it never
- * shows a "no PR" placeholder — the commit list is the primary content.
+ * The VCS tab (tools-pane-rework B5). Nothing selected: the commit list fills the pane (its own header, the PR slot,
+ * then the rows; submodules below). A commit selected: the list docks on the right as a two-level sidebar
+ * (`commit` = details + files, `list` = the compact list with the open commit marked), the file preview stays in
+ * the content column. Commit selection lives in the workspace store (`vcsSelectedCommitByWorktree`); the sidebar level
+ * is local UI state here (Decision 7). Commit lists come from `vcsCacheStore`; per-sha file lists are cached there too.
  */
-function PrBanner({ pr }: { pr: PrInfo }) {
-  const { Icon, label, modifier } = prStatus(pr);
-  return (
-    <a
-      className={`vcs-pr vcs-pr--${modifier}`}
-      href={pr.url}
-      target="_blank"
-      rel="noreferrer noopener"
-      title={`Open PR #${pr.number} on GitHub`}
-    >
-      <Icon size={14} aria-hidden className="vcs-pr__icon" />
-      <span className="vcs-pr__title" title={pr.title}>
-        {pr.title}
-      </span>
-      <span className="vcs-pr__number">#{pr.number}</span>
-      <span className={`vcs-pr__badge vcs-pr__badge--${modifier}`}>{label}</span>
-      {pr.author ? <span className="vcs-pr__author">by {pr.author}</span> : null}
-      <ExternalLink size={12} aria-hidden className="vcs-pr__external" />
-    </a>
-  );
-}
-
-const PAGE_SIZE = 50;
-
-/**
- * The PR-status row's copy for a worktree with no PR banner.
- *
- * Distinct text per failure kind (Decision 3's states), and a stale marker
- * for a held last-known value: `staleSince` means the poller failed
- * transiently and kept the previous answer rather than blanking it.
- * Colours/buckets never change here — these rows are informational only.
- */
-export function prStatusMessage(
-  prStatus: PrStatus | null | undefined,
-): { text: string; title?: string } | null {
-  if (!prStatus) return null;
-  if (prStatus.staleSince) {
-    return {
-      text: "PR status may be stale — the last lookup failed",
-      title: `Last checked ${prStatus.checkedAt}`,
-    };
-  }
-  switch (prStatus.errorKind) {
-    case "no_credentials":
-      return { text: "No GitHub credentials — run gh auth login" };
-    case "auth":
-      return { text: "GitHub token can't access this repo" };
-    case "not_found":
-      return { text: "Repo not visible to configured accounts" };
-    case "transient":
-      return { text: "PR lookup failed, retrying…" };
-    case "unsupported":
-      return { text: "Unsupported GitHub host — PR status unavailable" };
-    default:
-      return null;
-  }
-}
-
-/** Mirrors the `limit` clamp `GET /worktrees/:id/commits` applies server-side (`daemon/src/routes/worktrees.ts`). */
-const SERVER_MAX_LIMIT = 1000;
-
-/**
- * VCS tool — a vertical commit graph for the current worktree's branch, most
- * recent commit on top, plus a PR banner (linking out to GitHub) when the
- * branch has one. Each commit row shows the subject, author, relative time,
- * short SHA, and a +/- diffstat badge. Fetches `GET /worktrees/:id/commits`
- * and `GET /worktrees/:id/pr` on mount / worktree change and on manual
- * refresh (both reset back to one page of `PAGE_SIZE` commits), plus again
- * for each additional page on "Load more"; no live updates yet (commits/PR
- * state changes aren't push-notified to the UI today).
- */
-export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktree", prStatus = null }: VcsPanelProps) {
+export function VcsPanel({ api, worktreeId, baseBranch, scope = "worktree", prStatus = null }: VcsPanelProps) {
   const isProject = scope === "project";
-  // `commits` holds at most `pageLimit + 1` entries — the lookahead extra
-  // entry (never rendered) is how `hasMore` is known for certain instead of
-  // guessed from `commits.length === pageLimit`, which can't tell "exactly
-  // that many commits total" apart from "more are available".
-  const [commits, setCommits] = useState<CommitLogEntry[] | null>(null);
-  const [pr, setPr] = useState<PrInfo | null>(null);
+  const selected = useWorkspaceStore((s) => s.vcsSelectedCommitByWorktree[worktreeId] ?? null);
+  const setSelectedCommitStore = useWorkspaceStore((s) => s.setVcsSelectedCommit);
+  const sidebarVisible = useWorkspaceStore((s) => s.vcsSidebarVisibleByWorktree[worktreeId] ?? true);
+  const { listHostsGlobal, listHostsPane } = useToolsInset();
+
+  const sha = selected?.sha ?? null;
+  const sub = selected?.submodule;
+
+  const [level, setLevel] = useState<Level>("commit");
+  // "since <base>" (true) / "all history" (false): the list's view option, owned here so the sidebar's older/newer
+  // steps through the same list the user sees. Project scope never filters (see `VcsCommitList`).
+  const [sinceMain, setSinceMain] = useState(true);
   const [submodules, setSubmodules] = useState<SubmoduleInfo[]>([]);
-  // Initial-load/refresh failure — blocks the whole panel, since there's
-  // nothing else to show yet (or the refresh is presumed stale/distrusted).
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  // "Load more" failure — shown inline near the button instead, so a blip
-  // fetching page 2 doesn't blank out the page of commits already on screen.
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  // How many commits the user has asked to see (starts at one page, grows by
-  // PAGE_SIZE per "Load more" click). Resets to PAGE_SIZE on worktree change
-  // and on manual refresh — a stale "load more" position from a previous
-  // worktree/session would be confusing carried over.
-  const [pageLimit, setPageLimit] = useState(PAGE_SIZE);
-  // Shas whose full message is expanded. A Set rather than a single
-  // "expandedSha" so multiple commits can be open at once (mirrors how e.g.
-  // GitHub's PR commit list behaves) — tapping a row toggles just that row.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  // The PR-status row (no banner case): one row per PR poll state, stale first.
-  // Informational only — it never affects dot colour or dashboard bucket.
-  const prMessage = pr ? null : prStatusMessage(prStatus);
-  // ON by default — the branch's own commits are the point of this view;
-  // flipping it OFF reveals the full unfiltered log inline (Requirement 1a-1c).
-  const [diffFromMain, setDiffFromMain] = useState(true);
-  // Decision 5: scope-aware read of the diff toggle. Under project scope every
-  // commit is `isOnBranch: true` (no base branch to diff against), so the toggle
-  // is both hidden AND its reads must not filter — this collapses to `false` for
-  // `isProject`, making `displayedCommits` show everything and the count/label
-  // read the full page. Using this (not raw `diffFromMain`) at every read site
-  // keeps the three call sites (display, load-more, count label) scope-consistent.
-  const diffFromMainEff = !isProject && diffFromMain;
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [files, setFiles] = useState<CommitFiles>(NO_FILES);
+  const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // Item 9 — which commit's `VcsCommitView` is open, if any. Held in the
-  // Zustand store (non-persisted) rather than local state so it survives the
-  // tool panel unmounting when toggled off.
-  const vcsSelectedCommitByWorktree = useWorkspaceStore((s) => s.vcsSelectedCommitByWorktree);
-  const setVcsSelectedCommitStore = useWorkspaceStore((s) => s.setVcsSelectedCommit);
-  const selectedCommit = vcsSelectedCommitByWorktree[worktreeId] ?? null;
-  const setSelectedCommitSha = useCallback(
-    (sha: string | null, submodule?: string) => setVcsSelectedCommitStore(worktreeId, sha, submodule),
-    [setVcsSelectedCommitStore, worktreeId],
-  );
-
-  const toggleExpanded = (sha: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(sha)) next.delete(sha);
-      else next.add(sha);
-      return next;
-    });
-  };
-
-  const hasMore = commits != null && commits.length > pageLimit && pageLimit < SERVER_MAX_LIMIT;
-  // The daemon's `GET /worktrees/:id/commits` clamps `limit` to 1000 (see
-  // `daemon/src/routes/worktrees.ts`) — once a page hits that ceiling with a
-  // full page of commits, "no more available" and "1000+ commits, server
-  // won't return past its clamp" are indistinguishable from the response
-  // alone. Rather than silently hiding "Load more" either way (which reads
-  // as "that's the whole history" even when it isn't), this is surfaced
-  // explicitly below instead.
-  const reachedServerCap = pageLimit >= SERVER_MAX_LIMIT && commits != null && commits.length >= SERVER_MAX_LIMIT;
-  // The page currently on screen — trims off the lookahead entry `hasMore`
-  // uses, so it never gets to leak into the split below or the rendered list.
-  const pageCommits = useMemo(
-    () => (commits == null ? null : commits.slice(0, pageLimit)),
-    [commits, pageLimit],
-  );
-
-  // Commits come back most-recent-first with `isOnBranch` already computed
-  // server-side against the worktree's `baseSha`. In the common case (no
-  // merges back from the base branch mid-history) the branch's own commits
-  // form a contiguous prefix, so splitting at the first `isOnBranch: false`
-  // is enough — everything from there down is base-branch/upstream history
-  // and gets grouped under the collapsed section below. A branch that merged
-  // main back into itself partway through can interleave `isOnBranch: true`
-  // commits after that point; those still get bucketed as upstream here,
-  // which is an acceptable simplification for this view (they're still
-  // visible, just under "from <base>" instead of inline).
-  const ownCommits = useMemo(
-    () => (pageCommits ? splitOwnCommits(pageCommits) : []),
-    [pageCommits],
-  );
-
-  // Commits actually rendered: `ownCommits` when the toggle is ON, the full
-  // unfiltered page when OFF (Requirements 1b/1c).
-  const displayedCommits = diffFromMainEff ? ownCommits : (pageCommits ?? []);
-
-  // Expandable submodule commit lists (Requirement 3f→). An uninitialized
-  // submodule's row is expandable but fires no request (Requirement 6) — the
-  // hook needs to know which paths those are so it can skip the fetch.
+  const sinceMainEff = !isProject && sinceMain;
   const uninitializedPaths = useMemo(
     () => new Set(submodules.filter((s) => s.status === "uninitialized").map((s) => s.path)),
     [submodules],
   );
   const submoduleCommits = useSubmoduleCommits(api, worktreeId, scope, uninitializedPaths);
+  const { reset: resetSubmodules } = submoduleCommits;
 
-  // The controller for whichever fetch is currently in flight. Centralizing
-  // cancellation here (rather than only aborting on effect cleanup) is what
-  // makes it safe to fire a "Load more" or "Refresh" from an event handler,
-  // not just from the effect: every `load()` call aborts whatever it's
-  // superseding before starting, so a `loadMore` for the *old* worktree that
-  // was still in flight when the user switched worktrees can never resolve
-  // into the new worktree's state — the worktree-change effect's own `load()`
-  // call aborts it as its very first step.
-  const activeLoad = useRef<AbortController | null>(null);
-
-  // Shared loader for the initial fetch, "Load more", and manual refresh —
-  // `limit` is how many commits the caller wants to end up displaying;
-  // `limit + 1` is what's actually requested from the API so `hasMore` above
-  // has a definite answer rather than a guess. `loadMoreCheck`, when
-  // supplied for a `mode === "more"` call, carries the own-commit count from
-  // just before this specific "Load more" click — Requirement 1f's
-  // auto-toggle-off check is done synchronously right here in the success
-  // path (not via a ref/effect keyed on `ownCommits`), so a failed or
-  // aborted "Load more" never leaves any stale armed state to misfire on a
-  // later, unrelated commits update.
-  const load = (
-    limit: number,
-    mode: "initial" | "more" = "initial",
-    loadMoreCheck?: { prevOwnCount: number },
-  ) => {
-    activeLoad.current?.abort();
-    const controller = new AbortController();
-    activeLoad.current = controller;
-    const { signal } = controller;
-
-    if (mode === "initial") {
-      setLoading(true);
-      setError(null);
-      setSubmodules([]);
-      // A prior page's "Load more" failure is no longer relevant once we're
-      // re-fetching from scratch (refresh, or a worktree switch) — leaving
-      // it set would show a stale failure next to a button that hasn't
-      // actually failed since this fetch started.
-      setLoadMoreError(null);
-    } else {
-      setLoadingMore(true);
-      setLoadMoreError(null);
-    }
-    return Promise.all([
-      api.listCommits(worktreeId, limit + 1, scope),
-      // PR lookup is best-effort — a failure here shouldn't blank out the
-      // commit list, so it's swallowed to null rather than propagated. Only
-      // refetched on "initial" (mount/worktree-change/refresh) — a "Load
-      // more" page is more commits of the same worktree, so the PR banner
-      // can't have changed as a side effect of it. Project scope has no PR
-      // concept, so it must not fire at all.
-      mode === "initial" && !isProject ? api.getPr(worktreeId).catch(() => null) : Promise.resolve(undefined),
-      // Submodules are also best-effort and initial-only, same reasoning as
-      // the PR lookup above — a "Load more" page can't change the worktree's
-      // submodule set. Unlike the PR, project scope (direct sessions) has
-      // submodules too — they live in the project's own checkout.
-      mode === "initial" ? api.listSubmodules(worktreeId, scope).catch(() => []) : Promise.resolve(undefined),
-    ])
-      .then(([list, prInfo, submoduleList]) => {
-        if (signal.aborted) return;
-        setCommits(list);
-        if (prInfo !== undefined) setPr(prInfo);
-        if (submoduleList !== undefined) setSubmodules(submoduleList);
-        setPageLimit(limit);
-        if (mode === "more" && loadMoreCheck) {
-          // Recompute the own-commit prefix for the newly loaded page the
-          // same way `ownCommits` does, and compare against the count from
-          // just before this click — if "Load more" added zero additional
-          // own-branch commits, the click was a no-visible-op with the
-          // toggle ON, so turn it OFF to reveal the new page.
-          const newPageCommits = list.slice(0, limit);
-          const newOwnCount = splitOwnCommits(newPageCommits).length;
-          if (newOwnCount === loadMoreCheck.prevOwnCount) {
-            setDiffFromMain(false);
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        if (signal.aborted) return;
-        const message = err instanceof Error ? err.message : String(err);
-        // Route the error so a failed "load more" only annotates the button
-        // rather than replacing the page of commits already on screen (see
-        // the `error` vs `loadMoreError` state comments above).
-        if (mode === "initial") setError(message);
-        else setLoadMoreError(message);
-      })
-      .finally(() => {
-        if (signal.aborted) return;
-        if (mode === "initial") setLoading(false);
-        else setLoadingMore(false);
-      });
-  };
-
+  // A worktree switch starts from the list level, the default view option and no open submodule rows.
   useEffect(() => {
-    // Requirement 1a: the toggle is checked by default for every worktree —
-    // reset it here so an auto-toggle-off (Requirement 1f) or a manual flip
-    // on a previous worktree doesn't carry over to this one.
-    setDiffFromMain(true);
-    // Requirement 3: a worktree switch must fall back to the "Loading
-    // commits…" empty state, not briefly show the PREVIOUS worktree's stale
-    // commits under a "Syncing…" label (which reads as "these are your
-    // commits, just refreshing" instead of "wrong worktree, please wait").
-    // Deliberately scoped to this effect only — manual `refresh()` of the
-    // SAME worktree should keep showing old data while it reloads.
-    setCommits(null);
-    // A worktree switch must also collapse every expanded submodule row — their
-    // commits belong to the previous worktree's checkout.
-    submoduleCommits.reset();
-    void load(PAGE_SIZE, "initial");
-    return () => activeLoad.current?.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render (reads current api/worktreeId via closure); depending on worktreeId/api alone matches the pre-existing effect's deps.
-  }, [api, worktreeId]);
+    setSinceMain(true);
+    setLevel("commit");
+    resetSubmodules();
+  }, [worktreeId, scope, resetSubmodules]);
 
-  const refresh = () => {
-    void load(PAGE_SIZE, "initial");
-    // Refresh the submodule commit lists that are currently expanded too.
-    submoduleCommits.refresh();
+  // Submodules: best-effort, never gate the commit list.
+  useEffect(() => {
+    let live = true;
+    api
+      .listSubmodules(worktreeId, scope)
+      .catch(() => [] as SubmoduleInfo[])
+      .then((list) => {
+        if (live) setSubmodules(list);
+      });
+    return () => {
+      live = false;
+    };
+  }, [api, worktreeId, scope]);
+
+  // The open commit's changed files: per-sha cache first, else one fetch (then cached forever).
+  useEffect(() => {
+    if (sha === null) return;
+    const shaKey = vcsKey(scope, worktreeId, sub);
+    const fileKey = `${sha}|${sub ?? ""}`;
+    const cached = getShaFiles(shaKey, sha);
+    if (cached) {
+      setFiles({ key: fileKey, entries: cached, loading: false, error: null });
+      setSelectedPath(cached[0]?.path ?? null);
+      return;
+    }
+    let live = true;
+    setFiles({ key: fileKey, entries: [], loading: true, error: null });
+    setSelectedPath(null);
+    api.listChangedPaths(worktreeId, "commit", sha, scope, sub).then(
+      (list) => {
+        if (!live) return;
+        setShaFiles(shaKey, sha, list);
+        setFiles({ key: fileKey, entries: list, loading: false, error: null });
+        setSelectedPath(list[0]?.path ?? null);
+      },
+      (e: unknown) => {
+        if (!live) return;
+        setFiles({
+          key: fileKey,
+          entries: [],
+          loading: false,
+          error: e instanceof Error ? e.message : "Could not resolve commit sha",
+        });
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, worktreeId, scope, sha, sub]);
+
+  // Focus the first row of the sidebar when it opens or a commit is picked (the old commit view's rule).
+  useEffect(() => {
+    if (!sidebarVisible || sha === null) return;
+    const id = requestAnimationFrame(() => {
+      const el = sidebarRef.current;
+      (el?.querySelector<HTMLElement>("[tabindex='0']") ?? el?.querySelector<HTMLElement>("[tabindex]"))?.focus({
+        preventScroll: true,
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sidebarVisible, sha]);
+
+  const currentFiles = files.key === `${sha}|${sub ?? ""}` ? files : NO_FILES;
+  const entries = currentFiles.entries;
+
+  // The list the sidebar's older/newer steps through: the cached page in the open commit's scope.
+  const navKey = vcsKey(scope, worktreeId, sub);
+  const cachedEntry = useVcsCacheStore((s) => s.entries[navKey]);
+  const pageCommits = useMemo<CommitLogEntry[]>(
+    () =>
+      cachedEntry ? cachedEntry.commits.slice(0, cachedEntry.pageLimit > 0 ? cachedEntry.pageLimit : VCS_PAGE_SIZE) : [],
+    [cachedEntry],
+  );
+  const navList = useMemo(() => (sinceMainEff ? splitOwnCommits(pageCommits) : pageCommits), [pageCommits, sinceMainEff]);
+  const idx = sha === null ? -1 : navList.findIndex((c) => c.sha === sha);
+  const canOlder = idx >= 0 && idx < navList.length - 1;
+  const canNewer = idx > 0;
+  const commitMeta = sha === null ? null : (pageCommits.find((c) => c.sha === sha) ?? null);
+
+  const openCommit = (nextSha: string, nextSub?: string) => {
+    setLevel("commit");
+    setSelectedCommitStore(worktreeId, nextSha, nextSub);
+  };
+  const step = (delta: 1 | -1) => {
+    const next = navList[idx + delta];
+    if (next) setSelectedCommitStore(worktreeId, next.sha, sub);
   };
 
-  const loadMore = () => {
-    // For a typical worktree, page 1 already contains the whole own-commit
-    // prefix — every subsequent page is entirely upstream history. Without
-    // Requirement 1f's auto-toggle-off, clicking "Load more" while the
-    // toggle is ON would be a no-visible-op in that case (the new page loads
-    // but nothing new renders). Only arm the check when the toggle is
-    // actually ON — if it's already OFF, the newly loaded page renders
-    // regardless, so there's nothing to detect.
-    const loadMoreCheck = diffFromMainEff ? { prevOwnCount: ownCommits.length } : undefined;
-    void load(Math.min(pageLimit + PAGE_SIZE, SERVER_MAX_LIMIT), "more", loadMoreCheck);
-  };
+  const submodulesBlock = (
+    <VcsSubmodules
+      submodules={submodules}
+      states={submoduleCommits.byPath}
+      onToggle={submoduleCommits.toggle}
+      onLoadMore={submoduleCommits.loadMore}
+      onOpenDiff={(nextSha, nextSub) => openCommit(nextSha, nextSub)}
+      diffFromMainEff={sinceMainEff}
+    />
+  );
 
-  if (selectedCommit) {
+  if (sha === null) {
     return (
-      <VcsCommitView
-        api={api}
-        worktreeId={worktreeId}
-        sha={selectedCommit.sha}
-        submodule={selectedCommit.submodule}
-        onBack={() => setSelectedCommitSha(null)}
-        scope={scope}
-      />
+      <div className="vcs-panel">
+        <VcsCommitList
+          key={`${scope}:${worktreeId}`}
+          api={api}
+          id={worktreeId}
+          scope={scope}
+          baseBranch={baseBranch}
+          prStatus={prStatus}
+          onOpen={(nextSha) => openCommit(nextSha)}
+          sinceMain={sinceMain}
+          onSinceMainChange={setSinceMain}
+          fullPane
+        />
+        {submodulesBlock}
+      </div>
     );
   }
 
-  return (
-    <div className="vcs-panel">
-      {/* Same top bar as the commit view (`VcsCommitView`): `.files-topbar.vcs-topbar`
-          with the breadcrumb-style title on the left, refresh on the right. The
-          branch chip + "Diff from" toggle live in a row below, out of the bar. */}
-      <div className="files-topbar vcs-topbar" data-tauri-drag-region="deep">
-        <div className="files-topbar__breadcrumb">
-          <span className="diff-scope-selector__breadcrumb">
-            Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
-          </span>
-          <button
-            type="button"
-            className="tab tab--icon tool-bar-btn vcs-topbar__refresh"
-            aria-label="Refresh commits"
-            title="Refresh commits"
-            onClick={refresh}
-            disabled={loading}
-          >
-            <RefreshCw size={13} className={loading ? "vcs-panel__spin" : undefined} />
-          </button>
-        </div>
-        <ToolActionsHost />
-      </div>
-      {branch || !isProject ? (
-        <div className="vcs-panel__meta">
-          {branch ? (
-            <span className="vcs-panel__branch-chip" title={branch}>
-              {branch}
+  const fileIndex = selectedPath ? entries.findIndex((e) => e.path === selectedPath) : -1;
+  const topbar = (
+    <>
+      <div className="files-topbar__tabs vcs-topbar__tabs">
+        <span className="files-topbar__tab vcs-topbar__file">
+          <FileText size={13} aria-hidden />
+          <span className="files-topbar__tab-name">{selectedPath ? baseName(selectedPath) : ""}</span>
+          {fileIndex >= 0 ? (
+            <span className="vcs-topbar__pos">
+              {fileIndex + 1} of {entries.length}
             </span>
           ) : null}
-          {!isProject ? (
-            <label className="vcs-panel__diff-toggle">
-              <input
-                type="checkbox"
-                checked={diffFromMainEff}
-                onChange={(e) => setDiffFromMain(e.target.checked)}
-              />
-              Diff from {baseBranch || "main"}
-            </label>
-          ) : null}
-        </div>
-      ) : null}
-      {pr ? <PrBanner pr={pr} /> : null}
-      {prMessage ? (
-        <div className="vcs-pr-error error-text" title={prMessage.title}>
-          {prMessage.text}
-        </div>
-      ) : null}
-      <div className="vcs-panel__body">
-        {error ? (
-          <div className="empty-state">Failed to load commits: {error}</div>
-        ) : pageCommits == null ? (
-          <div className="empty-state">Loading commits…</div>
-        ) : (
-          <>
-            {displayedCommits.length === 0 ? (
-              <div className="empty-state">No commits on this branch yet</div>
-            ) : (
-              <ol className="vcs-graph">
-                {displayedCommits.map((c) => (
-                  <CommitRow
-                    key={c.sha}
-                    c={c}
-                    isOpen={expanded.has(c.sha)}
-                    onToggle={() => toggleExpanded(c.sha)}
-                    onOpenDiff={setSelectedCommitSha}
-                  />
-                ))}
-              </ol>
-            )}
-            {/* Keyed on `pageCommits` (the underlying, unfiltered page), not on
-                `displayedCommits` — a worktree with 0 own commits but plenty of
-                upstream history (toggle ON, fresh branch) still needs the pager
-                so there's a way to reach more history or discover the toggle. */}
-            {hasMore ? (
-              <div className="vcs-load-more-row">
-                <button type="button" className="vcs-load-more" onClick={loadMore} disabled={loadingMore}>
-                  {loadingMore ? "Loading…" : `Load ${PAGE_SIZE} more`}
-                </button>
-                {loadMoreError ? (
-                  <span className="vcs-load-more-error">Failed to load more: {loadMoreError}</span>
-                ) : null}
-              </div>
-            ) : reachedServerCap ? (
-              <div className="vcs-load-more-row">
-                <span className="vcs-load-more-cap">
-                  Showing the most recent {SERVER_MAX_LIMIT} commits — older history isn't loaded here.
-                </span>
-              </div>
-            ) : null}
-          </>
-        )}
-        {!error && pageCommits != null ? (
-          <VcsSubmodules
-            submodules={submodules}
-            states={submoduleCommits.byPath}
-            onToggle={submoduleCommits.toggle}
-            onLoadMore={submoduleCommits.loadMore}
-            onOpenDiff={(sha, sub) => setSelectedCommitSha(sha, sub)}
-            diffFromMainEff={diffFromMainEff}
-          />
-        ) : null}
+        </span>
       </div>
-    </div>
+      {/* Same hosting rule as the Files bar: pane controls here unless the open list's header carries them. */}
+      <ToolActionsHost
+        when={!listHostsPane}
+        priority={listHostsGlobal ? HOST_PRIORITY.filesBarFallback : HOST_PRIORITY.default}
+      />
+    </>
+  );
+
+  return (
+    <DockedListLayout
+      wt={worktreeId}
+      open={sidebarVisible}
+      handleLabel="commits"
+      topbarClassName="vcs-topbar"
+      topbar={topbar}
+      list={
+        <div ref={sidebarRef} className="vcs-sidebar">
+          <VcsCommitNavSource api={api} id={worktreeId} scope={scope} submodule={sub} />
+          <VcsSidebar
+            level={level}
+            activeSha={sha}
+            list={{
+              api,
+              id: worktreeId,
+              scope,
+              baseBranch,
+              prStatus,
+              onOpen: (nextSha) => openCommit(nextSha),
+              sinceMain,
+              onSinceMainChange: setSinceMain,
+            }}
+            detail={{
+              api,
+              scopeId: worktreeId,
+              scope,
+              commit: commitMeta,
+              sha,
+              entries,
+              filesLoading: currentFiles.loading,
+              filesError: currentFiles.error,
+              selectedPath,
+              onSelectPath: setSelectedPath,
+              canOlder,
+              canNewer,
+              onOlder: () => step(1),
+              onNewer: () => step(-1),
+              onUp: () => setLevel("list"),
+            }}
+          />
+        </div>
+      }
+    >
+      <FilePreviewPane
+        api={api}
+        worktreeId={worktreeId}
+        scope={scope}
+        controlled={{
+          path: selectedPath,
+          scope: "commit",
+          commitSha: sha,
+          submodule: sub,
+          deleted: entries.find((e) => e.path === selectedPath)?.status === "D",
+        }}
+      />
+    </DockedListLayout>
   );
 }

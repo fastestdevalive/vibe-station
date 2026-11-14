@@ -1,6 +1,10 @@
 import { File, FileText, MessageSquare } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import type { ChangedPathEntry, GitStatusChar } from "@/api/types";
+import type { ApiInstance } from "@/api";
+import type { ChangedPathEntry, FileScope, GitStatusChar } from "@/api/types";
+import { FileContextItems } from "@/components/details/FileContextMenu";
+import type { DetailsTarget } from "@/components/details/detailsStore";
+import { useRowContextMenu } from "@/components/details/useRowContextMenu";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useRovingListNav } from "@/hooks/useRovingListNav";
 import { countsByPath } from "@/components/comments/commentSelectors";
@@ -69,6 +73,13 @@ function textLike(name: string): boolean {
 /** Decision 6 — bypasses the global `activeFilePath` store slice so a caller
  *  outside the Files tab (the VCS commit view) doesn't steal focus from /
  *  clobber whatever file the Files tab has open. */
+/** Where Details for these rows point (the list's own scope; `baseLabel` is what the counts are against). */
+export interface ChangedFileDetailsScope {
+  scope: FileScope;
+  scopeId: string;
+  baseLabel?: string;
+}
+
 export interface ChangedFileListControlled {
   activePath: string | null;
   onSelect: (path: string) => void;
@@ -83,9 +94,12 @@ interface ChangedFileListProps {
   /** When set, clicking/keying a row calls `onSelect` instead of
    *  `setActiveFile`/`setToolPanelTab` (Decision 6). */
   controlled?: ChangedFileListControlled;
+  /** The row menu's stat calls and Details target (rows open the menu only when both are set). */
+  api?: Pick<ApiInstance, "statPath">;
+  detailsScope?: ChangedFileDetailsScope;
 }
 
-export function ChangedFileList({ scopeId, entries, loading, error, controlled }: ChangedFileListProps) {
+export function ChangedFileList({ scopeId, entries, loading, error, controlled, api, detailsScope }: ChangedFileListProps) {
   const activePathFromStore = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
@@ -133,13 +147,48 @@ export function ChangedFileList({ scopeId, entries, loading, error, controlled }
     initialCursor: activePath,
   });
 
+  // Row menu (tools-pane-rework B7.4): Copy path / Copy relative path / Details, with the git counts this list knows.
+  const rowMenu = useRowContextMenu<DetailsTarget>({
+    resolve: (el) => {
+      const row = el.closest<HTMLElement>("[data-file-path]");
+      const path = row?.dataset.filePath;
+      if (!row || !path || !api || !detailsScope) return null;
+      const ins = Number(row.dataset.fileIns);
+      const del = Number(row.dataset.fileDel);
+      return {
+        row,
+        t: {
+          scope: detailsScope.scope,
+          scopeId: detailsScope.scopeId,
+          path,
+          name: path.split("/").pop() ?? path,
+          git: {
+            status: row.dataset.fileStatus as GitStatusChar,
+            insertions: ins || undefined,
+            deletions: del || undefined,
+            baseLabel: detailsScope.baseLabel,
+          },
+        },
+      };
+    },
+    items: (t, close) => (api ? <FileContextItems api={api} target={t} close={close} /> : null),
+    itemCount: 3,
+    label: "Changed file actions",
+  });
+
   return (
     <div
       className="changed-file-list"
       role="tree"
       aria-label="Changed files"
       tabIndex={-1}
+      onContextMenu={rowMenu.rowProps.onContextMenu}
+      onKeyDown={(e) => {
+        rowMenu.rowProps.onKeyDown(e);
+      }}
+      {...rowMenu.longPressProps}
     >
+      {rowMenu.menu}
       {error ? (
         <div className="changed-file-list-empty">Error: {error}</div>
       ) : loading && flatFiles.length === 0 ? (
@@ -182,6 +231,10 @@ export function ChangedFileList({ scopeId, entries, loading, error, controlled }
                       onClick={() => selectFile(file.path)}
                       onFocus={() => setCursorPath(file.path)}
                       onKeyDown={handleKeyDown}
+                      data-file-path={file.path}
+                      data-file-status={file.status}
+                      data-file-ins={file.insertions ?? undefined}
+                      data-file-del={file.deletions ?? undefined}
                     >
                       <span className="changed-file-list-file-icon" aria-hidden>
                         {textLike(file.name) ? (

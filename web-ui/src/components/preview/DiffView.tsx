@@ -376,28 +376,6 @@ export function DiffView({
     </div>
   ) : null;
 
-  const layoutToggle =
-    interactive && hunks.length > 0 ? (
-      <div className="preview-diff-layout-toggle" role="group" aria-label="Diff layout">
-        <button
-          type="button"
-          className={`preview-diff-layout-toggle__btn${diffLayoutMode === "inline" ? " preview-diff-layout-toggle__btn--active" : ""}`}
-          aria-pressed={diffLayoutMode === "inline"}
-          onClick={() => setDiffLayoutMode("inline")}
-        >
-          Inline
-        </button>
-        <button
-          type="button"
-          className={`preview-diff-layout-toggle__btn${diffLayoutMode === "side-by-side" ? " preview-diff-layout-toggle__btn--active" : ""}`}
-          aria-pressed={diffLayoutMode === "side-by-side"}
-          onClick={() => setDiffLayoutMode("side-by-side")}
-        >
-          Side-by-side
-        </button>
-      </div>
-    ) : null;
-
   let content: ReactNode;
 
   const gapEnd = gaps.find((g) => g.id === "gap-end");
@@ -490,7 +468,6 @@ export function DiffView({
     content = (
       <>
         {toggle}
-        {layoutToggle}
         <DiffSideBySide
           hunks={hunks}
           collapsedHunks={collapsedHunks}
@@ -513,7 +490,6 @@ export function DiffView({
     content = (
       <>
         {toggle}
-        {layoutToggle}
         <pre className="preview-diff-root">
           {hunks.map((hunk, i) => {
             const collapsed = collapsedHunks.has(i);

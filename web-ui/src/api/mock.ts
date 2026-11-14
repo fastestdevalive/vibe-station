@@ -9,6 +9,7 @@ import type {
   CarryOver,
   CliId,
   CommitLogEntry,
+  FileStat,
   LocalQrResponse,
   LspLanguageSurveyResponse,
   MarkdownStyle,
@@ -1435,6 +1436,19 @@ export function createMockApi(seed: MockSeed = {}) {
 
     // Diagnostic channel (mobile double-text investigation) — no-op in the mock.
     async sendDebug(): Promise<void> {},
+
+    async statPath(_scopeId: string, filePath: string, scope: FileScope = "worktree", artifactId?: string): Promise<FileStat> {
+      if (artifactId === undefined && filePath.startsWith("/")) throw new ApiError("Absolute path", 403);
+      return {
+        path: filePath,
+        absolutePath: `/mock/${scope === "project" ? "project/" : ""}${filePath.replace(/^\/+/, "")}`,
+        kind: "file",
+        size: 12_700,
+        modifiedMs: Date.now() - 7_200_000,
+        lineCount: artifactId ? null : 313,
+        inRoot: !artifactId,
+      };
+    },
 
     async getFileBlob(_worktreeId: string, _filePath: string, _scope: FileScope = "worktree"): Promise<Blob> {
       return new Blob([], { type: "image/png" });

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -6,6 +6,7 @@ import { FileTreeSidebar } from "./FileTreeSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { makeComment } from "@/components/comments/testFixtures";
 import { useCommentStore } from "@/components/comments/useCommentStore";
+import { useDetailsStore } from "@/components/details/detailsStore";
 
 describe("FileTreeSidebar", () => {
   const api = createMockApi();
@@ -170,42 +171,48 @@ describe("FileTreeSidebar", () => {
   });
 
   describe("single scope selector — always visible in the Files header", () => {
-    it("renders the local/branch chips while browsing the plain tree (diff mode off)", async () => {
+    // The header's compare-base dropdown (tools-pane-rework B3.3): "vs HEAD" (local) / "vs main" (branch).
+    const scopeTrigger = () => screen.getByRole("button", { name: "Compare against" });
+    async function pickScope(user: ReturnType<typeof userEvent.setup>, name: "vs HEAD" | "vs main") {
+      await user.click(scopeTrigger());
+      await user.click(screen.getByRole("menuitemradio", { name }));
+    }
+
+    it("renders the compare-base dropdown while browsing the plain tree (diff mode off)", async () => {
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
-      expect(screen.getByRole("button", { name: "local" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "branch" })).toBeInTheDocument();
+      expect(scopeTrigger()).toHaveTextContent("vs HEAD");
     });
 
-    it("keeps rendering the same chips after switching to the flat Changes list", async () => {
+    it("keeps rendering the dropdown after switching to the flat Changes list", async () => {
       const user = userEvent.setup();
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
 
       await user.click(screen.getByRole("button", { name: "Changes view off" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Changes view on" })).toBeInTheDocument());
-      expect(screen.getByRole("button", { name: "local" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "branch" })).toBeInTheDocument();
+      expect(scopeTrigger()).toHaveTextContent("vs HEAD");
     });
 
-    it("selecting 'branch' while browsing the plain tree does NOT switch to the Changes list", async () => {
+    it("choosing 'vs main' while browsing the plain tree does NOT switch to the Changes list", async () => {
       const user = userEvent.setup();
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
 
-      await user.click(screen.getByRole("button", { name: "branch" }));
+      await pickScope(user, "vs main");
       // Still the plain tree, never flipped to the "Changes" list.
       expect(screen.getByRole("button", { name: "Changes view off" })).toBeInTheDocument();
       expect(screen.getByRole("treeitem", { name: "README.md" })).toBeInTheDocument();
+      expect(scopeTrigger()).toHaveTextContent("vs main");
     });
 
-    it("plain-tree badges reflect branch scope's changed-paths fetch when 'branch' is selected", async () => {
+    it("plain-tree badges reflect branch scope's changed-paths fetch when 'vs main' is selected", async () => {
       const spy = vi.spyOn(api, "listChangedPaths");
       const user = userEvent.setup();
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
 
-      await user.click(screen.getByRole("button", { name: "branch" }));
+      await pickScope(user, "vs main");
       await waitFor(() => {
         expect(spy).toHaveBeenCalledWith("wt-1", "branch", undefined, "worktree");
       });
@@ -216,22 +223,22 @@ describe("FileTreeSidebar", () => {
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
 
-      // Select "branch" while browsing the plain tree.
-      await user.click(screen.getByRole("button", { name: "branch" }));
+      // Select "vs main" while browsing the plain tree.
+      await pickScope(user, "vs main");
       expect(useWorkspaceStore.getState().treeScopeByWorktree["wt-1"]).toBe("branch");
 
-      // Toggle diff mode ON — the Changes list must open showing "branch",
-      // not silently revert to "local".
+      // Toggle diff mode ON — the Changes list must open showing "vs main",
+      // not silently revert to "vs HEAD".
       await user.click(screen.getByRole("button", { name: "Changes view off" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Changes view on" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().diffScopeByWorktree["wt-1"]).toBe("branch");
-      expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
+      expect(scopeTrigger()).toHaveTextContent("vs main");
 
-      // Toggle diff mode OFF — the plain tree must still show "branch".
+      // Toggle diff mode OFF — the plain tree must still show "vs main".
       await user.click(screen.getByRole("button", { name: "Changes view on" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "Changes view off" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().treeScopeByWorktree["wt-1"]).toBe("branch");
-      expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
+      expect(scopeTrigger()).toHaveTextContent("vs main");
     });
   });
 
@@ -257,10 +264,9 @@ describe("FileTreeSidebar", () => {
       render(<FileTreeSidebar api={api} contextId="proj-1" scope="project" />);
       await screen.findByRole("button", { name: "Changes view off" });
 
-      // Project scope is always local — no local/branch chip selector.
-      expect(screen.queryByRole("group", { name: "Diff scope" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "local" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
+      // Project scope is always local — no compare-base dropdown (the Files | Changes switch stays).
+      expect(screen.queryByRole("button", { name: "Compare against" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "true");
 
       await user.click(screen.getByRole("button", { name: "Changes view off" }));
       await screen.findByRole("button", { name: "Changes view on" });
@@ -321,5 +327,35 @@ describe("FileTreeSidebar", () => {
     await act(async () => {});
     expect(screen.getByText("App.tsx")).toBeInTheDocument();
     treeSpy.mockRestore();
+  });
+});
+
+describe("FileTreeSidebar row Details (tools-pane-rework B7.4)", () => {
+  const api = createMockApi();
+
+  beforeEach(() => {
+    useWorkspaceStore.setState({ activeWorktreeId: "wt-1", activeFilePath: null, peekFile: null, diffScopeByWorktree: {}, treeScopeByWorktree: {} });
+    useDetailsStore.setState({ target: null });
+  });
+
+  it("right-click on a file row offers Copy path, Copy relative path and Details; Details targets that row", async () => {
+    render(<FileTreeSidebar api={api} />);
+    const row = await screen.findByRole("treeitem", { name: "README.md" });
+    fireEvent.contextMenu(row, { clientX: 1, clientY: 1 });
+    expect(screen.getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy relative path" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
+    expect(useDetailsStore.getState().target).toMatchObject({ scope: "worktree", scopeId: "wt-1", path: "README.md", name: "README.md" });
+    expect(useDetailsStore.getState().target?.isDir).toBeFalsy();
+  });
+
+  it("right-click on a folder row offers the same items; its Details is a folder", async () => {
+    render(<FileTreeSidebar api={api} />);
+    const row = await screen.findByRole("treeitem", { name: "src" });
+    fireEvent.contextMenu(row, { clientX: 1, clientY: 1 });
+    expect(screen.getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy relative path" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
+    expect(useDetailsStore.getState().target).toMatchObject({ path: "src", name: "src", isDir: true });
   });
 });

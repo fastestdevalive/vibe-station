@@ -4,6 +4,8 @@
  * must therefore be returned to its freshly-imported state before the next mount.
  */
 import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import { useDetailsStore } from "@/components/details/detailsStore";
+import { useVcsCacheStore } from "@/components/vcs/vcsCacheStore";
 import { useCommentStore } from "@/components/comments/useCommentStore";
 import { useWorkspaceStore, __resetForDemo as resetWorkspaceModule } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -46,6 +48,8 @@ export const APP_STORES = [
   useArtifactsStore,
   useCommentStore,
   useUpdateStore,
+  useDetailsStore,
+  useVcsCacheStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

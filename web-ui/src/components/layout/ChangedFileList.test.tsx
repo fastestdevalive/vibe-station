@@ -1,8 +1,10 @@
-import { render, screen, act } from "@testing-library/react";
+import { fireEvent, render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach } from "vitest";
 import { ChangedFileList } from "./ChangedFileList";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useDetailsStore } from "@/components/details/detailsStore";
+import { vi } from "vitest";
 import type { ChangedPathEntry } from "@/api/types";
 
 const ENTRIES: ChangedPathEntry[] = [
@@ -116,5 +118,36 @@ describe("ChangedFileList — per-file +N -N LOC indicator", () => {
     const row = screen.getByText("App.tsx").closest('[role="treeitem"]')!;
     expect(row).toHaveTextContent("+2");
     expect(row.querySelector(".vcs-graph__del")).not.toBeInTheDocument();
+  });
+});
+
+describe("ChangedFileList Details (tools-pane-rework B7.4)", () => {
+  it("Details carries the row's git facts and the list's base; a controlled (commit) list opens it too", () => {
+    useDetailsStore.setState({ target: null });
+    const api = { statPath: vi.fn(async () => ({ path: "", absolutePath: null, kind: "file" as const, size: null, modifiedMs: null, lineCount: null, inRoot: true })) };
+    render(
+      <ChangedFileList
+        entries={[{ path: "src/App.tsx", status: "M", insertions: 4, deletions: 1 }]}
+        controlled={{ activePath: null, onSelect: vi.fn() }}
+        api={api}
+        detailsScope={{ scope: "worktree", scopeId: "wt-1", baseLabel: "commit" }}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByRole("treeitem", { name: "src/App.tsx" }), { clientX: 1, clientY: 1 });
+    expect(screen.getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
+    expect(useDetailsStore.getState().target).toMatchObject({
+      scope: "worktree",
+      scopeId: "wt-1",
+      path: "src/App.tsx",
+      name: "App.tsx",
+      git: { status: "M", insertions: 4, deletions: 1, baseLabel: "commit" },
+    });
+  });
+
+  it("without the api and scope the rows open no menu", () => {
+    render(<ChangedFileList entries={[{ path: "a.ts", status: "A" }]} />);
+    fireEvent.contextMenu(screen.getByRole("treeitem", { name: "a.ts" }), { clientX: 1, clientY: 1 });
+    expect(screen.queryByRole("menuitem", { name: "Details" })).toBeNull();
   });
 });

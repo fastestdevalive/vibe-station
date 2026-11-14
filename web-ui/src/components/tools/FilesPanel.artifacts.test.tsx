@@ -81,7 +81,7 @@ describe("FilesPanel artifacts", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Plan" })).toBeInTheDocument());
   });
 
-  it.each([null, 390])("(width %s) an absolute-path tab shows the 'Outside project' tag, an in-repo artifact tab does not", (width) => {
+  it.each([null, 390])("(width %s) an absolute-path artifact tab has no 'Outside project' tag and keeps the plain file icon", (width) => {
     useWorkspaceStore.setState({
       fileTreeVisible: false,
       activeFilePath: OUT,
@@ -91,15 +91,13 @@ describe("FilesPanel artifacts", () => {
     renderPanel(width);
     const tabs = within(screen.getByRole("tablist", { name: "Open files" })).getAllByRole("tab");
     expect(within(tabs[0]!).queryByLabelText("Outside project")).toBeNull();
-    const tag = within(tabs[1]!).getByLabelText("Outside project");
-    expect(tag).toHaveAttribute("role", "img");
-    expect(tag).toHaveAttribute("title", `Outside project: ${OUT}`);
-    expect(tag).toHaveClass("chip--warn", "files-topbar__tab-tag");
-    // The tag replaces the leading file icon: tag, then the ellipsising name span, then the close button.
+    // The outside-repo state no longer marks the tab (tools-pane-rework B4.4): a plain file icon, then the name.
+    expect(within(tabs[1]!).queryByLabelText("Outside project")).toBeNull();
+    expect(tabs[1]!.querySelector(".files-topbar__tab-tag")).toBeNull();
+    expect(tabs[1]!.querySelector("svg")).not.toBeNull();
     const name = tabs[1]!.querySelector(".files-topbar__tab-name") as HTMLElement;
     expect(name.textContent).toBe("plan.md");
-    expect(tag.nextElementSibling).toBe(name);
-    expect(tabs[1]!.firstElementChild).toBe(tag);
+    expect(tabs[1]!.firstElementChild?.tagName.toLowerCase()).toBe("svg");
     expect(name.nextElementSibling).toHaveClass("files-topbar__tab-close");
     // An in-repo tab keeps the file icon first.
     expect(tabs[0]!.firstElementChild?.tagName.toLowerCase()).toBe("svg");
@@ -210,7 +208,7 @@ describe("FilesPanel artifacts", () => {
     expect(screen.queryByLabelText("Outside project")).toBeNull();
   });
 
-  it("mobile: an evicted absolute tab keeps the tab bar (with the tag) and shows the evicted state", () => {
+  it("mobile: an evicted absolute tab keeps the tab bar and shows the evicted state", () => {
     useArtifactsStore.getState().replace(WT, "worktree", { rev: 2, cap: 500, total: 0, items: [] });
     useWorkspaceStore.setState({
       fileTreeVisible: false,
@@ -220,7 +218,7 @@ describe("FilesPanel artifacts", () => {
     });
     renderPanel(390);
     expect(screen.queryByRole("button", { name: "Back to artifacts" })).not.toBeInTheDocument();
-    expect(within(screen.getByRole("tablist", { name: "Open files" })).getByLabelText("Outside project")).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Open files" })).toBeInTheDocument();
     expect(screen.getByText("No longer an artifact")).toBeInTheDocument();
   });
 });

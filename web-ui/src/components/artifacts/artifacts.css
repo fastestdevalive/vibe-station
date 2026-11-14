@@ -23,9 +23,6 @@
   background: var(--bg-primary);
   border-bottom: var(--border-width) solid var(--border-default);
 }
-.artifacts-head__icon {
-  color: var(--fg-muted);
-}
 .artifacts-head__title {
   font-weight: 500;
   min-width: 0;
@@ -41,14 +38,6 @@
   flex-direction: column;
 }
 
-.artifacts-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px var(--space-2);
-  flex: none;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-}
 /* Agent filter trigger: an agent row in a quiet control box (mode icon, name, count, chevron). */
 .artifacts-agent-picker {
   display: inline-flex;
@@ -57,6 +46,8 @@
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   height: 24px;
   box-sizing: border-box;
   padding: 0 6px 0 8px;
@@ -150,17 +141,6 @@
 .artifacts-agent-option[aria-checked="true"] {
   background: var(--bg-active);
 }
-.artifacts-tools__meta {
-  margin-left: auto;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-meta);
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-}
 
 .artifacts-list {
   flex: 1;
@@ -196,15 +176,6 @@
   background: transparent;
   color: var(--fg-secondary);
 }
-.artifacts-group__pin {
-  fill: var(--fg-muted);
-}
-.artifacts-group__count {
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
 /* ── rows ── */
 .artifacts-row-wrap {
   position: relative;
@@ -216,7 +187,7 @@
   grid-template-columns: 16px minmax(0, 1fr) auto;
   column-gap: var(--space-2);
   align-items: center;
-  min-height: 32px;
+  height: 28px;
   box-sizing: border-box;
   padding: 4px 12px;
   border-left: 2px solid transparent;
@@ -251,41 +222,14 @@
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
-.artifacts-row__sub {
-  grid-column: 2 / 4;
-  margin-top: -2px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 6px;
-  min-width: 0;
+/* Same-named files: the nearest differing folder, muted, after the name (inside the name's ellipsis). */
+.artifacts-row__hint {
   font-size: var(--fs-meta);
   color: var(--fg-muted);
 }
-.artifacts-row__path {
-  flex: 0 1 auto;
-  min-width: 6ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-}
-.artifacts-row__by {
-  flex: 0 1 auto;
-  max-width: 100%;
-  color: var(--fg-secondary);
-}
-.artifacts-row__more-writers {
-  flex: none;
+.artifacts-row__missing {
   color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
-.artifacts-row__edits {
-  flex: none;
-  white-space: nowrap;
-}
-
 /* The ⋯ button replaces the time on hover/focus; keyboard users open the menu with the Menu key / Shift+F10. */
 .artifacts-row__more {
   position: absolute;
@@ -322,24 +266,12 @@
 .artifacts-row--mobile {
   grid-template-columns: 20px minmax(0, 1fr) auto;
   column-gap: 10px;
-  min-height: 52px;
+  height: 44px;
   padding: 6px 14px;
   border-bottom: var(--border-width) solid var(--border-subtle);
   font-size: 14px;
 }
-.artifacts-row--mobile .artifacts-row__sub {
-  margin-top: -6px;
-  flex-wrap: nowrap;
-  font-size: 12px;
-}
 /* One sub-line on phones: the path gives way first, then the agent name ellipsizes beside its icon. */
-.artifacts-row--mobile .artifacts-row__path {
-  min-width: 0;
-}
-.artifacts-row--mobile .artifacts-row__by {
-  flex: 0 0 auto;
-  max-width: 60%;
-}
 .artifacts-listbox--mobile .artifacts-row__more {
   display: none !important;
 }
@@ -444,61 +376,7 @@
 }
 
 /* ── Preview strip (Main.dc.html `.vstrip`; Rendered.dc.html states A/B) ── */
-.artifact-strip {
-  height: 30px;
-  box-sizing: border-box;
-  gap: 10px;
-  padding: 0 var(--space-3);
-  font-size: var(--fs-meta);
-  color: var(--fg-muted);
-  background: var(--bg-primary);
-  border-bottom: var(--border-width) solid var(--border-subtle);
-}
 /* Beat `.preview-diffinfo`'s block padding regardless of stylesheet order (`.vstrip` is 30px). */
-.preview-diffinfo.artifact-strip {
-  height: 30px;
-  padding-block: 0;
-}
-.artifact-strip__path {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-}
-.artifact-strip__spacer {
-  flex: 1;
-}
-.artifact-strip__note {
-  font-size: var(--fs-meta);
-  color: var(--fg-warning);
-}
-.artifact-strip__pin {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-.artifact-strip__pin:hover {
-  background: var(--bg-hover);
-  color: var(--fg-primary);
-}
-.artifact-strip__pin:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--fg-muted);
-  outline: none;
-}
-.artifact-strip__pin-icon--on {
-  color: var(--comment);
-  fill: var(--comment);
-}
 
 /* Preview state panels fill the pane (ArtifactStates.dc.html frame 7 `.empty`). */
 .artifact-state {
@@ -535,11 +413,20 @@
   .artifacts-agent-picker {
     height: 44px;
   }
-  .preview-diffinfo.artifact-strip {
-    height: 44px;
-  }
-  .artifact-strip__pin {
-    width: 44px;
-    height: 44px;
-  }
+}
+
+/* "n of cap" footer: shown only once the list is within 10 rows of its cap (quiet, muted). */
+.artifacts-foot {
+  flex: none;
+  padding: 4px 10px;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  text-align: right;
+}
+/* The picker menu's header line: the "n of cap" meta. */
+.artifacts-agent-menu__meta {
+  padding: 6px 10px 4px;
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+  border-bottom: var(--border-width) solid var(--border-default);
 }

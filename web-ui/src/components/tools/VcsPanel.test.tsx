@@ -1,10 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
 import { VcsPanel, prStatusMessage } from "./VcsPanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import type { CommitLogEntry, PrErrorKind, PrStatus, SubmoduleInfo } from "@/api/types";
+import { resetVcsCacheForTests } from "@/components/vcs/vcsCacheStore";
+import { resetVcsRevalidationForTests } from "@/components/vcs/useVcsCommits";
+import { copyText } from "@/lib/copyText";
+import type { CommitLogEntry, PrErrorKind, PrInfo, PrStatus, SubmoduleInfo } from "@/api/types";
+
+vi.mock("@/lib/copyText", () => ({ copyText: vi.fn(async () => true) }));
 
 /** Builds `count` synthetic commits, newest first, all on-branch unless overridden. */
 function makeCommits(count: number, opts: { isOnBranch?: (i: number) => boolean } = {}): CommitLogEntry[] {
@@ -96,833 +102,402 @@ describe("prStatusMessage", () => {
   });
 });
 
-describe("VcsPanel", () => {
-  beforeEach(() => {
-    useWorkspaceStore.setState({
-      vcsSelectedCommitByWorktree: {},
-    });
+describe("prStatusMessage", () => {
+  it("renders a distinct row per PR poll state", () => {
+    const cases: Array<[PrErrorKind | undefined, string]> = [
+      ["no_credentials", "No GitHub credentials — run gh auth login"],
+      ["auth", "GitHub token can't access this repo"],
+      ["not_found", "Repo not visible to configured accounts"],
+      ["transient", "PR lookup failed, retrying…"],
+      ["unsupported", "Unsupported GitHub host — PR status unavailable"],
+    ];
+    for (const [kind, text] of cases) {
+      expect(prStatusMessage(prStatusFixture({ errorKind: kind }))?.text).toBe(text);
+    }
   });
 
-  it("Requirement 1 — fewer than a page of commits: no Load more button, header count matches", async () => {
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(5) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-
-    await screen.findByText("Commits (5)");
-    expect(screen.queryByRole("button", { name: /load 50 more/i })).not.toBeInTheDocument();
+  it("has no row for a healthy status", () => {
+    expect(prStatusMessage(prStatusFixture())).toBeNull();
+    expect(prStatusMessage(null)).toBeNull();
   });
 
-  it("Requirement 2 — more than a page of commits: shows exactly PAGE_SIZE (50) and a Load more button", async () => {
-    const api = createMockApi();
-    const spy = vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(80) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-
-    await screen.findByText("Commits (50)");
-    expect(screen.getByRole("button", { name: /load 50 more/i })).toBeInTheDocument();
-    // The initial fetch requests one lookahead commit beyond the page size,
-    // so "exactly 50 vs. more available" is known for certain rather than
-    // guessed from the page being full.
-    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree");
-  });
-
-  it("Requirement 3 — clicking Load more fetches the next page and appends it", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(80) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-
-    await screen.findByText("Commits (80)");
-    expect(spy).toHaveBeenLastCalledWith("wt-1", 101, "worktree");
-    // The pool only has 80, so the 101-commit request genuinely returns
-    // fewer than asked — the lookahead entry never came back, so there's no
-    // more and the button is gone (not just "the mock ran out").
-    expect(screen.queryByRole("button", { name: /load 50 more/i })).not.toBeInTheDocument();
-  });
-
-  it("Requirement 4 — a failed Load more keeps the already-loaded commits on screen and shows an inline error, not a full-panel error", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(80) }))
-      .mockRejectedValueOnce(new Error("network blip"));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-
-    await screen.findByText(/failed to load more: network blip/i);
-    // The 50 commits already on screen are untouched — this is not the
-    // full-panel "Failed to load commits" error state.
-    expect(screen.getByText("Commits (50)")).toBeInTheDocument();
-    expect(screen.queryByText(/^failed to load commits/i)).not.toBeInTheDocument();
-    expect(spy).toHaveBeenCalledTimes(2);
-  });
-
-  it("Requirement 4b — a Refresh after a failed Load more clears the stale load-more error", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits")
-      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(80) }))
-      .mockRejectedValueOnce(new Error("network blip"))
-      .mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(80) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-    await screen.findByText(/failed to load more: network blip/i);
-
-    await user.click(screen.getByRole("button", { name: /refresh commits/i }));
-    await waitFor(() => expect(screen.queryByText(/failed to load more/i)).not.toBeInTheDocument());
-    expect(screen.getByText("Commits (50)")).toBeInTheDocument();
-  });
-
-  it("Requirement 1a-1e — diff-from-main toggle: ON by default shows own commits only, header count follows, OFF shows the full unfiltered list", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    // 3 own commits (newest), then 4 upstream commits.
-    vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(7, { isOnBranch: (i) => i < 3 }) }),
+  it("flags a held last-known value as stale, with the last check in the tooltip", () => {
+    const message = prStatusMessage(
+      prStatusFixture({
+        state: "open",
+        number: 7,
+        url: "https://github.com/acme/repo/pull/7",
+        staleSince: "2026-01-02T00:00:00.000Z",
+      }),
     );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("Commits (3)");
-
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-    expect(toggle).toBeChecked();
-    expect(screen.getByText("commit #0")).toBeInTheDocument();
-    expect(screen.getByText("commit #2")).toBeInTheDocument();
-    expect(screen.queryByText("commit #3")).not.toBeInTheDocument();
-
-    await user.click(toggle);
-    expect(toggle).not.toBeChecked();
-    await waitFor(() => expect(screen.getByText("commit #3")).toBeInTheDocument());
-    expect(screen.getByText("commit #6")).toBeInTheDocument();
-    expect(screen.getByText("Commits (7)")).toBeInTheDocument();
+    expect(message?.text).toContain("stale");
+    expect(message?.title).toContain("2026-01-01T00:00:00.000Z");
   });
 
-  it("Requirement 1g — toggle label falls back to 'Diff from main' when baseBranch is unset", async () => {
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(5) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
+  it("shows the stale marker even when a failure kind is also held", () => {
+    const message = prStatusMessage(
+      prStatusFixture({ errorKind: "not_found", staleSince: "2026-01-02T00:00:00.000Z" }),
+    );
+    expect(message?.text).toContain("stale");
+  });
+});
 
+/** Rows currently rendered in the commit list (not the submodules section). */
+const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".vcs-list > li.vcs-row"));
+
+/** The api spies this file needs; `listCommits` answers from a per-worktree pool, honouring `limit`. */
+function apiFor(pools: Record<string, CommitLogEntry[]>, extra: { submodules?: SubmoduleInfo[]; pr?: PrInfo | null } = {}) {
+  const api = createMockApi();
+  const listCommits = vi
+    .spyOn(api, "listCommits")
+    .mockImplementation(limitAwareListCommits(pools) as unknown as ApiInstance["listCommits"]);
+  const getPr = vi.spyOn(api, "getPr").mockResolvedValue(extra.pr ?? null);
+  const listSubmodules = vi.spyOn(api, "listSubmodules").mockResolvedValue(extra.submodules ?? []);
+  const listChangedPaths = vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
+  const getDiff = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/src/App.tsx b/src/App.tsx\n");
+  return { api, listCommits, getPr, listSubmodules, listChangedPaths, getDiff };
+}
+
+/** Selects a commit in the store, as a row click does (the docked sidebar opens on it). */
+function selectCommit(worktreeId: string, sha: string, submodule?: string) {
+  useWorkspaceStore.getState().setVcsSelectedCommit(worktreeId, sha, submodule);
+}
+
+beforeEach(() => {
+  resetVcsCacheForTests();
+  resetVcsRevalidationForTests();
+  useWorkspaceStore.setState({ vcsSelectedCommitByWorktree: {}, vcsSidebarVisibleByWorktree: {} });
+});
+
+describe("VcsPanel — full-pane commit list", () => {
+  it("Requirement 1 — fewer than a page of commits: no Load button, header count matches, no Refresh button in the header", async () => {
+    const { api } = apiFor({ "wt-1": makeCommits(12) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(12));
+    expect(screen.getByText("Commits").parentElement?.querySelector(".rail-header__count")).toHaveTextContent("12");
+    expect(screen.queryByRole("button", { name: /Load 50 more/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh commits" })).toBeNull();
+  });
+
+  it("no commit selected: the list fills the pane and no docked sidebar is mounted", async () => {
+    const { api } = apiFor({ "wt-1": makeCommits(3) });
+    const { container } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(container.querySelector(".vcs-sidebar")).toBeNull();
+    expect(container.querySelector(".vcs-list-pane > .rail-header")).not.toBeNull();
+  });
+
+  it("Requirement 2 — more than a page of commits: exactly 50 rows and a Load 50 more button", async () => {
+    const { api } = apiFor({ "wt-1": makeCommits(120, { isOnBranch: () => true }) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    expect(screen.getByRole("button", { name: "Load 50 more" })).toBeInTheDocument();
+  });
+
+  it("Requirement 3 — Load 50 more fetches the next page (limit + 1 lookahead) and appends it", async () => {
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(120, { isOnBranch: () => true }) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await waitFor(() => expect(rows()).toHaveLength(100));
+    expect(listCommits).toHaveBeenLastCalledWith("wt-1", 101, "worktree", undefined);
+  });
+
+  it("Requirement 4 — a failed Load more keeps the rows on screen and shows the refresh bar with Retry, not a full-pane error", async () => {
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(120, { isOnBranch: () => true }) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    listCommits.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await screen.findByText(/Couldn’t refresh/);
+    expect(rows()).toHaveLength(50);
+    expect(screen.queryByText(/Failed to load commits/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("Requirement 4b — Retry after a failed refresh clears the bar and refetches", async () => {
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(12) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(12));
+    listCommits.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "View options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh now" }));
+    await screen.findByText(/Couldn’t refresh/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn’t refresh/)).toBeNull());
+    expect(rows()).toHaveLength(12);
+  });
+
+  it("Requirement 1a-1e — 'since main' is the default: only the branch's own commits; 'all history' shows the upstream with a 'from main' divider", async () => {
+    const { api } = apiFor({ "wt-1": makeCommits(10, { isOnBranch: (i) => i < 4 }) });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    expect(screen.getByRole("button", { name: "Commit range" })).toHaveTextContent("since main");
+    expect(document.querySelector(".vcs-list__divider")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit range" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "all history" }));
+    await waitFor(() => expect(rows()).toHaveLength(10));
+    expect(document.querySelector(".vcs-list__divider")).toHaveTextContent("from main");
+  });
+
+  it("Requirement 1g — the dropdown falls back to 'main' when baseBranch is unset", async () => {
+    const { api } = apiFor({ "wt-1": makeCommits(3) });
     render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (5)");
-
-    expect(screen.getByRole("checkbox", { name: /diff from main/i })).toBeInTheDocument();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(screen.getByRole("button", { name: "Commit range" })).toHaveTextContent("since main");
   });
 
   it("Requirement 6 — switching worktreeId resets pagination back to one page, even after Load more advanced it", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(80), "wt-2": makeCommits(3) }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-    await screen.findByText("Commits (80)");
-
-    rerender(<VcsPanel api={api} worktreeId="wt-2" />);
-    // Resets to one page (limit 51), not a continuation of wt-1's advanced
-    // pageLimit (which would have requested 101).
-    await waitFor(() => expect(spy).toHaveBeenLastCalledWith("wt-2", 51, "worktree"));
-    await screen.findByText("Commits (3)");
-  });
-
-  it("Requirement 1f — Load more auto-turns the toggle OFF when the newly loaded page adds no own commits", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    // Page 1 (50 commits): all own. Page 2 adds 10 more, all upstream — the
-    // common "everything past page 1 is base-branch history" shape.
-    vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(60, { isOnBranch: (i) => i < 50 }) }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("Commits (50)");
-    expect(screen.queryByText("commit #55")).not.toBeInTheDocument();
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-    expect(toggle).toBeChecked();
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-
-    // Without the auto-toggle-off, this commit would be loaded but still
-    // filtered out by the ON toggle — clicking "Load more" would be a
-    // no-visible-op.
-    await screen.findByText("commit #55");
-    expect(toggle).not.toBeChecked();
-    expect(screen.getByText("Commits (60)")).toBeInTheDocument();
-  });
-
-  it("Requirement 1f (negative) — Load more that DOES add own commits leaves the toggle ON", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    // Page 1 (50 commits): all own. Page 2 adds 10 more, still all own.
-    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(60) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("Commits (50)");
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-
-    await screen.findByText("commit #55");
-    expect(toggle).toBeChecked();
-    expect(screen.getByText("Commits (60)")).toBeInTheDocument();
-  });
-
-  it("Requirement 8 — a stale in-flight Load more for the previous worktree never overwrites the new worktree's state", async () => {
-    const api = createMockApi();
-    const wt1First = deferred<CommitLogEntry[]>();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementationOnce(() => Promise.resolve(makeCommits(80).slice(0, 51))) // wt-1 initial load
-      .mockImplementationOnce(() => wt1First.promise) // wt-1 "Load more" — held open
-      .mockImplementation(limitAwareListCommits({ "wt-2": makeCommits(3) })); // wt-2 initial load
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    const user = userEvent.setup();
-    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-    // wt-1's "Load more" is now in flight and held open by `wt1First`.
-
-    rerender(<VcsPanel api={api} worktreeId="wt-2" />);
-    await screen.findByText("Commits (3)");
-
-    // Now let the stale wt-1 response resolve — it must be discarded, not
-    // clobber wt-2's already-rendered state.
-    wt1First.resolve(makeCommits(80).slice(0, 101));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(screen.getByText("Commits (3)")).toBeInTheDocument();
-    expect(spy).toHaveBeenCalledTimes(3);
-  });
-
-  it("Regression — a failed Load more (toggle ON) doesn't leave stale armed state that flips the toggle OFF on a later unrelated Refresh", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits")
-      // Initial load: 3 own commits, then 60 upstream — more than a page, so
-      // "Load more" is available.
-      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(63, { isOnBranch: (i) => i < 3 }) }))
-      // "Load more" fails outright.
-      .mockRejectedValueOnce(new Error("network blip"))
-      // Refresh after the failure: same 3 own commits as before the failed
-      // "Load more" — previously, the still-armed `pendingLoadMoreRef` would
-      // treat this unrelated refresh as "the load-more's own-count didn't
-      // grow" and spuriously flip the toggle OFF.
-      .mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(63, { isOnBranch: (i) => i < 3 }) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("Commits (3)");
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-    expect(toggle).toBeChecked();
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-    await screen.findByText(/failed to load more/i);
-    expect(toggle).toBeChecked();
-
-    await user.click(screen.getByRole("button", { name: /refresh commits/i }));
-    await waitFor(() => expect(screen.queryByText(/failed to load more/i)).not.toBeInTheDocument());
-    expect(screen.getByText("Commits (3)")).toBeInTheDocument();
-    expect(toggle).toBeChecked();
-  });
-
-  it("Regression — Load more / server-cap footer still shows when the toggle (ON) filters the page down to zero own commits", async () => {
-    const api = createMockApi();
-    // 200 upstream commits, zero own commits — a fresh branch off a large
-    // base. Toggle defaults ON, so `displayedCommits` is empty even though
-    // there's a full page (and more) of underlying commits.
-    vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(200, { isOnBranch: () => false }) }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-
-    await screen.findByText("No commits on this branch yet");
-    // The pager must still render alongside the empty state — otherwise
-    // there's no way to reach more history or discover the toggle.
-    expect(screen.getByRole("button", { name: /load 50 more/i })).toBeInTheDocument();
-  });
-
-  it("Regression — submodules from the previous worktree are cleared immediately on worktree switch, not left stale until the new fetch resolves", async () => {
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(2), "wt-2": makeCommits(2) }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    const wt1Submodules: SubmoduleInfo[] = [
-      {
-        path: "vendor/old",
-        sha: "a1b2c3d4e5f6789012345678901234567890abcd",
-        shortSha: "a1b2c3d",
-        branch: null,
-        subject: null,
-        status: "clean",
-      },
-    ];
-    const wt2Deferred = deferred<SubmoduleInfo[]>();
-    const submoduleSpy = vi
-      .spyOn(api, "listSubmodules")
-      .mockResolvedValueOnce(wt1Submodules)
-      .mockImplementationOnce(() => wt2Deferred.promise);
-
-    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("vendor/old");
-
-    rerender(<VcsPanel api={api} worktreeId="wt-2" />);
-    // wt-2's submodules fetch is still in flight — the stale wt-1 row must
-    // already be gone, not lingering until it resolves.
-    await waitFor(() => expect(screen.queryByText("vendor/old")).not.toBeInTheDocument());
-
-    wt2Deferred.resolve([]);
-    await waitFor(() => expect(submoduleSpy).toHaveBeenCalledTimes(2));
-  });
-
-  it("Regression — the diff-from-main toggle resets to ON when switching worktrees, even after being turned OFF on the previous one", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(
-      limitAwareListCommits({ "wt-1": makeCommits(3), "wt-2": makeCommits(3) }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
+    const { api, listCommits } = apiFor({
+      "wt-1": makeCommits(120, { isOnBranch: () => true }),
+      "wt-2": makeCommits(120, { isOnBranch: () => true }),
+    });
     const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("Commits (3)");
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-    await user.click(toggle);
-    expect(toggle).not.toBeChecked();
-
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await waitFor(() => expect(rows()).toHaveLength(100));
     rerender(<VcsPanel api={api} worktreeId="wt-2" baseBranch="main" />);
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: /diff from main/i })).toBeChecked());
+    await waitFor(() => expect(listCommits).toHaveBeenLastCalledWith("wt-2", 51, "worktree", undefined));
+    await waitFor(() => expect(rows()).toHaveLength(50));
   });
 
-  it("Requirement 3f — a non-empty submodules list renders a Submodules section; an empty one renders nothing", async () => {
+  it("Requirement 1f — Load more turns 'since main' OFF when the new page adds no branch commits", async () => {
+    // 50 own commits, then 10 upstream: the first page is all own, so "Load more" adds only upstream.
+    const pool = makeCommits(60, { isOnBranch: (i) => i < 50 });
+    const { api } = apiFor({ "wt-1": pool });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await waitFor(() => expect(rows()).toHaveLength(60));
+    expect(screen.getByRole("button", { name: "Commit range" })).toHaveTextContent("all history");
+  });
+
+  it("Requirement 1f (negative) — Load more that adds own commits leaves 'since main' ON", async () => {
+    const pool = makeCommits(120, { isOnBranch: (i) => i < 70 });
+    const { api } = apiFor({ "wt-1": pool });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await waitFor(() => expect(rows()).toHaveLength(70));
+    expect(screen.getByRole("button", { name: "Commit range" })).toHaveTextContent("since main");
+  });
+
+  it("a stale in-flight Load more for the previous worktree never overwrites the new worktree's rows", async () => {
+    const pool2 = makeCommits(3).map((c) => ({ ...c, subject: `wt2 ${c.subject}`, sha: `${c.sha}b` }));
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(120, { isOnBranch: () => true }), "wt-2": pool2 });
+    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    const slow = deferred<CommitLogEntry[]>();
+    listCommits.mockImplementationOnce(() => slow.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    rerender(<VcsPanel api={api} worktreeId="wt-2" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    await act(async () => {
+      slow.resolve(makeCommits(101, { isOnBranch: () => true }));
+      await slow.promise;
+    });
+    expect(rows()).toHaveLength(3);
+    expect(screen.getByTitle("wt2 commit #0")).toBeInTheDocument();
+  });
+
+  it("a failed Load more with 'since main' on does not leave an armed check that flips it OFF on a later refresh", async () => {
+    const pool = makeCommits(120, { isOnBranch: (i) => i < 70 });
+    const { api, listCommits } = apiFor({ "wt-1": pool });
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(50));
+    listCommits.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Load 50 more" }));
+    await screen.findByText(/Couldn’t refresh/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn’t refresh/)).toBeNull());
+    expect(screen.getByRole("button", { name: "Commit range" })).toHaveTextContent("since main");
+  });
+
+  it("cold open: skeleton rows in the row shape, no count and no 'Loading commits…' text", async () => {
+    const pending = deferred<CommitLogEntry[]>();
     const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(2) }));
+    vi.spyOn(api, "listCommits").mockReturnValue(pending.promise);
     vi.spyOn(api, "getPr").mockResolvedValue(null);
-    const submodules: SubmoduleInfo[] = [
-      {
-        path: "vendor/widget",
-        sha: "a1b2c3d4e5f6789012345678901234567890abcd",
-        shortSha: "a1b2c3d",
-        branch: "main",
-        subject: "Bump widget renderer",
-        status: "clean",
-      },
-      {
-        path: "vendor/legacy",
-        sha: "0011223344556677889900112233445566778899",
-        shortSha: "0011223",
-        branch: null,
-        subject: null,
-        status: "uninitialized",
-      },
-    ];
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submodules);
-
-    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Submodules");
-    expect(screen.getByText("vendor/widget")).toBeInTheDocument();
-    expect(screen.getByText("Bump widget renderer")).toBeInTheDocument();
-    expect(screen.getByText("vendor/legacy")).toBeInTheDocument();
-    expect(screen.getByText("—")).toBeInTheDocument();
-
     vi.spyOn(api, "listSubmodules").mockResolvedValue([]);
-    rerender(<VcsPanel api={api} worktreeId="wt-2" />);
-    await waitFor(() => expect(screen.queryByText("Submodules")).not.toBeInTheDocument());
-  });
-
-  it("Requirement 2c — the true first load (commits === null) shows the full 'Loading commits…' empty state, no syncing indicator", async () => {
-    const api = createMockApi();
-    const listCommitsDeferred = deferred<CommitLogEntry[]>();
-    vi.spyOn(api, "listCommits").mockImplementation(() => listCommitsDeferred.promise);
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-
-    await screen.findByText("Loading commits…");
-    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
-
-    listCommitsDeferred.resolve(makeCommits(3));
-    await screen.findByText("Commits (3)");
-  });
-
-  it("Requirement 2a/2b — a manual refresh keeps the previous commit list visible and shows a syncing indicator, which clears on completion", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const refreshDeferred = deferred<CommitLogEntry[]>();
-    vi.spyOn(api, "listCommits")
-      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(5) })) // initial load
-      .mockImplementationOnce(() => refreshDeferred.promise); // refresh, held open
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (5)");
-    expect(screen.getByText("commit #0")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /refresh commits/i }));
-
-    // Requirement 2a: the previous list stays rendered, not blanked to
-    // "Loading commits…", while the refresh is in flight.
-    expect(screen.getByText("commit #0")).toBeInTheDocument();
-    expect(screen.queryByText("Loading commits…")).not.toBeInTheDocument();
-    // Requirement 2b: the only in-flight cue is the refresh icon spinning in
-    // place — no separate "Syncing…" text.
-    const refreshBtn = screen.getByRole("button", { name: /refresh commits/i });
-    expect(refreshBtn.querySelector(".vcs-panel__spin")).not.toBeNull();
-    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
-
-    refreshDeferred.resolve(makeCommits(5));
-    await waitFor(() => expect(screen.getByRole("button", { name: /refresh commits/i }).querySelector(".vcs-panel__spin")).toBeNull());
-    expect(screen.getByText("commit #0")).toBeInTheDocument();
-  });
-
-  it("Regression — clicking Load more does NOT show the Syncing… indicator (loadingMore is distinct from loading)", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const loadMoreDeferred = deferred<CommitLogEntry[]>();
-    vi.spyOn(api, "listCommits")
-      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(80) })) // initial load
-      .mockImplementationOnce(() => loadMoreDeferred.promise); // "Load more", held open
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("Commits (50)");
-
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-
-    // The "Load more" button shows its own "Loading…" label, but the
-    // top-bar "Syncing…" indicator is reserved for `loading` (initial
-    // load/refresh) — `loadingMore` must not trigger it, pinning down that
-    // the two states stay separate.
-    expect(screen.getByRole("button", { name: /loading/i })).toBeInTheDocument();
-    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
-
-    loadMoreDeferred.resolve(makeCommits(80).slice(0, 101));
-    await screen.findByText("Commits (80)");
-  });
-
-  it("Phase 6 — renders the branch chip when `branch` is set, omits it when absent", async () => {
-    const api = createMockApi();
-    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" branch="feature/my-branch" />);
-    await screen.findByText("Commits (3)");
-    expect(screen.getByText("feature/my-branch")).toBeInTheDocument();
-
-    rerender(<VcsPanel api={api} worktreeId="wt-1" />);
-    expect(screen.queryByText("feature/my-branch")).not.toBeInTheDocument();
-  });
-
-  describe("Phase 3 — project scope (direct sessions)", () => {
-    it("3.T1 — under scope='project', listCommits/listSubmodules are called with the project id and getPr never fires", async () => {
-      const api = createMockApi();
-      const listCommitsSpy = vi
-        .spyOn(api, "listCommits")
-        .mockResolvedValue(makeCommits(3));
-      const getPrSpy = vi.spyOn(api, "getPr");
-      const listSubmodulesSpy = vi.spyOn(api, "listSubmodules");
-
-      render(<VcsPanel api={api} worktreeId="proj-1" scope="project" />);
-      await screen.findByText("Commits (3)");
-
-      expect(listCommitsSpy).toHaveBeenCalledWith("proj-1", 51, "project");
-      expect(getPrSpy).not.toHaveBeenCalled();
-      expect(listSubmodulesSpy).toHaveBeenCalledWith("proj-1", "project");
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    expect(document.querySelectorAll(".vcs-list--skeleton .vcs-row--skeleton")).toHaveLength(6);
+    expect(screen.queryByText("Loading commits…")).toBeNull();
+    expect(screen.getByText("Commits").parentElement?.querySelector(".rail-header__count")).toBeNull();
+    await act(async () => {
+      pending.resolve(makeCommits(2));
+      await pending.promise;
     });
-
-    it("3.T2 — under scope='project', the Diff-from-base toggle is hidden and every fetched commit is shown (no isOnBranch filtering)", async () => {
-      const api = createMockApi();
-      // Mixed isOnBranch values — under project scope every commit should still
-      // be shown regardless, since there's no base branch to filter against.
-      vi.spyOn(api, "listCommits").mockResolvedValue(
-        makeCommits(3, { isOnBranch: (i) => i !== 1 }),
-      );
-
-      render(<VcsPanel api={api} worktreeId="proj-1" scope="project" baseBranch="main" />);
-      await screen.findByText("Commits (3)");
-
-      expect(screen.queryByRole("checkbox", { name: /diff from main/i })).not.toBeInTheDocument();
-      expect(screen.queryByLabelText(/diff from main/i)).not.toBeInTheDocument();
-      expect(screen.getByText("commit #0")).toBeInTheDocument();
-      expect(screen.getByText("commit #1")).toBeInTheDocument();
-      expect(screen.getByText("commit #2")).toBeInTheDocument();
-    });
+    await waitFor(() => expect(rows()).toHaveLength(2));
   });
 
-  describe("Phase 10 — commit quick-diff view (10.T2)", () => {
-    it("clicking a CommitRow's dot opens VcsCommitView; 'Commits' breadcrumb returns to the graph", async () => {
-      const user = userEvent.setup();
-      const api = createMockApi();
-      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
-      vi.spyOn(api, "getPr").mockResolvedValue(null);
-      const changedPathsSpy = vi
-        .spyOn(api, "listChangedPaths")
-        .mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
-
-      render(<VcsPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("Commits (3)");
-
-      const dot = screen.getByRole("button", { name: /view diff for commit sha-0/i });
-      await user.click(dot);
-
-      // VcsCommitView takes over — the commit graph is gone, replaced by the
-      // breadcrumb + the commit's changed file list.
-      await waitFor(() => {
-        expect(changedPathsSpy).toHaveBeenCalledWith(
-          "wt-1",
-          "commit",
-          expect.stringMatching(/^sha-0-/),
-          "worktree",
-          undefined,
-        );
-      });
-      expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
-      await screen.findByText("App.tsx");
-      expect(screen.getByRole("button", { name: "Commits" })).toBeInTheDocument();
-
-      // Clicking the breadcrumb "Commits" button returns to the commit graph.
-      await user.click(screen.getByRole("button", { name: "Commits" }));
-      await screen.findByText("Commits (3)");
-    });
-
-    it("the dot responds to Enter and Space keydown, opening the diff view", async () => {
-      const api = createMockApi();
-      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
-      vi.spyOn(api, "getPr").mockResolvedValue(null);
-      const changedPathsSpy = vi
-        .spyOn(api, "listChangedPaths")
-        .mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
-
-      render(<VcsPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("Commits (3)");
-
-      const dot = screen.getByRole("button", { name: /view diff for commit sha-0/i });
-      fireEvent.keyDown(dot, { key: "Enter" });
-      await waitFor(() => {
-        expect(changedPathsSpy).toHaveBeenCalledWith(
-          "wt-1",
-          "commit",
-          expect.stringMatching(/^sha-0-/),
-          "worktree",
-          undefined,
-        );
-      });
-      await screen.findByText("App.tsx");
-
-      // Back to the graph, then confirm Space also opens it.
-      const user = userEvent.setup();
-      await user.click(screen.getByRole("button", { name: "Commits" }));
-      await screen.findByText("Commits (3)");
-      changedPathsSpy.mockClear();
-      const dot2 = screen.getByRole("button", { name: /view diff for commit sha-0/i });
-      fireEvent.keyDown(dot2, { key: " " });
-      await waitFor(() => {
-        expect(changedPathsSpy).toHaveBeenCalledWith(
-          "wt-1",
-          "commit",
-          expect.stringMatching(/^sha-0-/),
-          "worktree",
-          undefined,
-        );
-      });
-    });
-
-    it("the diffstat text is plain, non-interactive text — no button role, no click handler", async () => {
-      const api = createMockApi();
-      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
-      vi.spyOn(api, "getPr").mockResolvedValue(null);
-
-      render(<VcsPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("Commits (3)");
-
-      const row = screen.getByText("commit #0").closest(".vcs-graph__card")!;
-      const stats = row.querySelector(".vcs-graph__stats")!;
-      expect(stats.tagName).toBe("SPAN");
-      expect(stats).not.toHaveAttribute("role");
-      expect(stats).not.toHaveAttribute("onclick");
-      // Only the dot carries this commit's diff-view aria-label now.
-      expect(screen.getAllByLabelText(/view diff for commit sha-0/i)).toHaveLength(1);
-    });
-
-    it("clicking the dot does not toggle the card's own body expand/collapse (independent click targets)", async () => {
-      const user = userEvent.setup();
-      const api = createMockApi();
-      vi.spyOn(api, "listCommits").mockImplementation(
-        limitAwareListCommits({
-          "wt-1": [
-            {
-              sha: "sha-body-".padEnd(40, "x"),
-              shortSha: "sha-bod",
-              authorName: "Ada Lovelace",
-              authorEmail: "ada@example.com",
-              date: new Date(2026, 0, 1, 12, 0, 0).toISOString(),
-              subject: "subject line",
-              body: "subject line\n\nmore detail in the body",
-              insertions: 1,
-              deletions: 0,
-              hasBinaryChanges: false,
-              isOnBranch: true,
-            },
-          ],
-        }),
-      );
-      vi.spyOn(api, "getPr").mockResolvedValue(null);
-      vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
-
-      render(<VcsPanel api={api} worktreeId="wt-1" />);
-      await screen.findByText("Commits (1)");
-
-      const dot = screen.getByRole("button", { name: /view diff for commit sha-bod/i });
-      await user.click(dot);
-      // The dot click opened the diff view, not the body — the graph is gone
-      // and the body text was never revealed inline.
-      await waitFor(() => expect(api.listChangedPaths).toHaveBeenCalled());
-      expect(screen.queryByText(/more detail in the body/)).not.toBeInTheDocument();
-
-      // Back to the graph — clicking the card body still toggles it normally.
-      await user.click(screen.getByRole("button", { name: "Commits" }));
-      await screen.findByText("Commits (1)");
-      const card = screen.getByText("subject line").closest(".vcs-graph__card")!;
-      await user.click(card);
-      expect(screen.getByText(/more detail in the body/)).toBeInTheDocument();
-    });
+  it("warm reopen: the cached rows paint synchronously on remount, then the list revalidates", async () => {
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(5) });
+    const first = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(5));
+    first.unmount();
+    listCommits.mockClear();
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    expect(rows()).toHaveLength(5);
+    expect(document.querySelector(".vcs-list--skeleton")).toBeNull();
+    await waitFor(() => expect(listCommits).toHaveBeenCalledTimes(1));
   });
 
-  // ── Expandable submodule commit lists ──────────────────────────────────
+  it("the PR slot renders the PR banner when getPr resolves, and the list never waits for it", async () => {
+    const pendingPr = deferred<PrInfo | null>();
+    const { api } = apiFor({ "wt-1": makeCommits(3) });
+    vi.spyOn(api, "getPr").mockReturnValue(pendingPr.promise);
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(document.querySelector(".vcs-pr")).toBeNull();
+    await act(async () => {
+      pendingPr.resolve({ number: 7, title: "Tools pane", url: "https://example.com/pr/7", state: "open", draft: false, merged: false, author: "gb" } as PrInfo);
+      await pendingPr.promise;
+    });
+    await waitFor(() => expect(document.querySelector(".vcs-pr")).toHaveTextContent("Tools pane"));
+  });
 
-  /** Two submodules: an initialized `vendor/widget` and an uninitialized `vendor/legacy`. */
-  function submoduleFixture(): SubmoduleInfo[] {
-    return [
-      {
-        path: "vendor/widget",
-        sha: "a1b2c3d4e5f6789012345678901234567890abcd",
-        shortSha: "a1b2c3d",
-        branch: "main",
-        subject: "Bump widget renderer",
-        status: "clean",
-      },
-      {
-        path: "vendor/legacy",
-        sha: "0011223344556677889900112233445566778899",
-        shortSha: "0011223",
-        branch: null,
-        subject: null,
-        status: "uninitialized",
-      },
-    ];
-  }
+  it("project scope: the commit list shows every commit (no since-main dropdown) and never asks for a PR", async () => {
+    const { api, listCommits, getPr } = apiFor({ "proj-1": makeCommits(4, { isOnBranch: (i) => i < 1 }) });
+    render(<VcsPanel api={api} worktreeId="proj-1" scope="project" />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    expect(listCommits).toHaveBeenCalledWith("proj-1", 51, "project", undefined);
+    expect(screen.queryByRole("button", { name: "Commit range" })).toBeNull();
+    expect(getPr).not.toHaveBeenCalled();
+  });
 
-  /**
-   * A `listCommits` stub that serves the main pool when `submodule` is absent
-   * and a per-submodule pool when a submodule path is passed (the 4th arg), so
-   * the submodule expand flow can be asserted on without the real API.
-   */
-  function submoduleAwareListCommits(
-    main: CommitLogEntry[],
-    bySub: Record<string, CommitLogEntry[]>,
-  ) {
-    return vi.fn(async (_wt: string, limit = 200, _scope?: string, sub?: string) =>
-      ((sub ? bySub[sub] : main) ?? []).slice(0, limit),
-    );
-  }
-
-  it("submodules are collapsed by default — no submodule commit fetch fires until expanded", async () => {
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(2), { "vendor/widget": makeCommits(3) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
+  it("submodules: a non-empty list renders a Submodules section, an empty one renders nothing", async () => {
+    const sub: SubmoduleInfo = { path: "vendor/x", status: "clean", shortSha: "abc1234", subject: "init", sha: "abc1234" } as unknown as SubmoduleInfo;
+    const withSub = apiFor({ "wt-1": makeCommits(2) }, { submodules: [sub] });
+    const { unmount } = render(<VcsPanel api={withSub.api} worktreeId="wt-1" baseBranch="main" />);
     await screen.findByText("Submodules");
-
-    // The main commit list was fetched, but no submodule-scoped fetch yet.
-    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree");
-    expect(spy.mock.calls.every((c) => c[3] === undefined)).toBe(true);
-    expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
+    unmount();
+    const none = apiFor({ "wt-1": makeCommits(2) }, { submodules: [] });
+    render(<VcsPanel api={none.api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(screen.queryByText("Submodules")).toBeNull();
   });
 
-  it("expanding a submodule lazily fetches its log with the submodule arg", async () => {
+  it("submodule commit lists are lazy: nothing is fetched until a submodule row is expanded", async () => {
+    const sub = { path: "vendor/x", status: "clean", shortSha: "abc1234", subject: "init", sha: "abc1234" } as unknown as SubmoduleInfo;
+    const { api, listCommits } = apiFor({ "wt-1": makeCommits(2) }, { submodules: [sub] });
+    const { container } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await screen.findByText("Submodules");
+    expect(listCommits.mock.calls.some((c) => c[3] === "vendor/x")).toBe(false);
+    fireEvent.click(container.querySelector<HTMLElement>(".vcs-submodules__toggle")!);
+    await waitFor(() => expect(listCommits.mock.calls.some((c) => c[3] === "vendor/x")).toBe(true));
+  });
+});
+
+describe("VcsPanel — docked two-level sidebar", () => {
+  /** The docked sidebar's own DOM: the tab, the strip and the tree also show file names, so scope every lookup. */
+  const sidebar = () => document.querySelector<HTMLElement>(".vcs-sidebar") ?? document.body;
+  const SHA = "a".repeat(40);
+  const SHA2 = "b".repeat(40);
+  const commitsWithShas = (): CommitLogEntry[] => {
+    const base = makeCommits(4, { isOnBranch: () => true });
+    return base.map((c, i) => ({ ...c, sha: i === 0 ? SHA : i === 1 ? SHA2 : c.sha, subject: i === 0 ? "first commit" : c.subject }));
+  };
+
+  it("10.T1 — picking a commit docks the list as the sidebar; its changed files come from GET /changed-paths with scope=commit and the sha, and a file's diff uses that sha", async () => {
+    const { api, listChangedPaths, getDiff } = apiFor({ "wt-1": commitsWithShas() });
+    listChangedPaths.mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
     const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(2), { "vendor/widget": makeCommits(3) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("vendor/widget");
-
-    const toggle = screen.getByRole("button", { name: /vendor\/widget/i });
-    await user.click(toggle);
-
-    await screen.findByText("Commits (3)");
-    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree", "vendor/widget");
+    const { container } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(rows()).toHaveLength(4));
+    await user.click(screen.getByTitle("first commit"));
+    await waitFor(() => expect(listChangedPaths).toHaveBeenCalledWith("wt-1", "commit", SHA, "worktree", undefined));
+    expect(container.querySelector(".vcs-sidebar")).toBeInTheDocument();
+    await waitFor(() => expect(within(sidebar()).getByText("App.tsx")).toBeInTheDocument());
+    await user.click(within(sidebar()).getByText("App.tsx"));
+    await waitFor(() => expect(getDiff).toHaveBeenCalledWith("wt-1", "src/App.tsx", "commit", SHA, "worktree", undefined));
   });
 
-  it("diffFromMain filters a submodule's list — ON shows own commits only, OFF shows all", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    // Two on-branch commits then one upstream — the ON state must hide the last.
-    const mixed = makeCommits(3, { isOnBranch: (i) => i < 2 });
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": mixed }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
+  it("the sidebar detail shows subject, author, the short sha and totals; the sha click copies the full sha", async () => {
+    const { api } = apiFor({ "wt-1": commitsWithShas() });
+    selectCommit("wt-1", SHA);
     render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("vendor/widget");
-    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
-
-    // Toggle ON (default): only the two own commits.
-    await screen.findByText("Commits (2)");
-
-    // Toggle OFF: all three.
-    const checkbox = screen.getByRole("checkbox", { name: /diff from main/i });
-    await user.click(checkbox);
-    await screen.findByText("Commits (3)");
-    void spy;
+    await waitFor(() => expect(within(sidebar()).getByText("first commit")).toBeInTheDocument());
+    expect(within(sidebar()).getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "aaaaaaa" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "aaaaaaa" }));
+    expect(vi.mocked(copyText)).toHaveBeenCalledWith(SHA);
   });
 
-  it("project scope hides the diff toggle and shows the full submodule log (no base to pin against)", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const mixed = makeCommits(3, { isOnBranch: (i) => i < 2 });
-    vi.spyOn(api, "listCommits").mockImplementation(
-      submoduleAwareListCommits(makeCommits(1), { "vendor/widget": mixed }),
-    );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
-    render(<VcsPanel api={api} worktreeId="wt-1" scope="project" />);
-    await screen.findByText("vendor/widget");
-    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
-
-    // All three commits shown (no filtering), and no diff-from-main toggle.
-    await screen.findByText("Commits (3)");
-    expect(screen.queryByRole("checkbox", { name: /diff from main/i })).not.toBeInTheDocument();
-  });
-
-  it("clicking a submodule commit's dot opens the commit view with the submodule; back keeps the row expanded without refetch", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(3) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-    const changedSpy = vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("vendor/widget");
-    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
-    await screen.findByText("Commits (3)");
-
-    // Use sha-1 (not sha-0): the main repo's single commit is also sha-0, so
-    // the submodule-only sha-1 dot is unambiguous.
-    await user.click(screen.getByRole("button", { name: /view diff for commit sha-1/i }));
-    await waitFor(() =>
-      expect(changedSpy).toHaveBeenCalledWith("wt-1", "commit", expect.stringMatching(/^sha-1-/), "worktree", "vendor/widget"),
-    );
-    expect(screen.getByText(/vendor\/widget · commit #sha-1/i)).toBeInTheDocument();
-
-    // Back to the list — the row is still expanded and NOT refetched.
-    await user.click(screen.getByRole("button", { name: "Commits" }));
-    await screen.findByText("Commits (3)");
-    const subCalls = spy.mock.calls.filter((c) => c[3] === "vendor/widget");
-    expect(subCalls).toHaveLength(1);
-  });
-
-  it("an uninitialized submodule expands to 'Not initialized' with no request fired", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(1), {}));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("vendor/legacy");
-
-    await user.click(screen.getByRole("button", { name: /vendor\/legacy/i }));
-
-    expect(screen.getByText("Not initialized")).toBeInTheDocument();
-    expect(spy.mock.calls.every((c) => c[3] === undefined)).toBe(true);
-  });
-
-  it("refresh refetches only the expanded submodules' logs", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(3) }));
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
-    render(<VcsPanel api={api} worktreeId="wt-1" />);
-    await screen.findByText("vendor/widget");
-    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
-    await screen.findByText("Commits (3)");
-
-    await user.click(screen.getByRole("button", { name: "Refresh commits" }));
-
-    await waitFor(() => {
-      const subCalls = spy.mock.calls.filter((c) => c[3] === "vendor/widget");
-      expect(subCalls.length).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  it("a submodule 'Load more' fetches more commits but leaves the shared diff-from-main toggle untouched", async () => {
-    const user = userEvent.setup();
-    const api = createMockApi();
-    const spy = vi
-      .spyOn(api, "listCommits")
-      .mockImplementation(
-        submoduleAwareListCommits(makeCommits(1), { "vendor/widget": makeCommits(60) }),
-      );
-    vi.spyOn(api, "getPr").mockResolvedValue(null);
-    vi.spyOn(api, "listSubmodules").mockResolvedValue(submoduleFixture());
-
+  it("'‹ Commits' goes up one level: the compact list stays docked, the open commit is marked, the diff stays", async () => {
+    const { api } = apiFor({ "wt-1": commitsWithShas() });
+    selectCommit("wt-1", SHA);
     render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
-    await screen.findByText("vendor/widget");
-    await user.click(screen.getByRole("button", { name: /vendor\/widget/i }));
-    await screen.findByText("Commits (50)");
+    await waitFor(() => expect(within(sidebar()).getByText("first commit")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Commits$/ }));
+    await waitFor(() => expect(document.querySelector(".vcs-row--active")).toBeTruthy());
+    expect(document.querySelector(".vcs-row--active button")).toHaveAttribute("aria-current", "true");
+    expect(document.querySelector(".vcs-row--active")).toHaveTextContent("first commit");
+    expect(useWorkspaceStore.getState().vcsSelectedCommitByWorktree["wt-1"]?.sha).toBe(SHA);
+  });
 
-    const toggle = screen.getByRole("checkbox", { name: /diff from main/i });
-    expect(toggle).toBeChecked();
+  it("Esc in the files list goes up one level", async () => {
+    const { api, listChangedPaths } = apiFor({ "wt-1": commitsWithShas() });
+    listChangedPaths.mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+    selectCommit("wt-1", SHA);
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(within(sidebar()).getByText("App.tsx")).toBeInTheDocument());
+    fireEvent.keyDown(within(sidebar()).getByText("App.tsx"), { key: "Escape" });
+    await waitFor(() => expect(document.querySelector(".vcs-row--active")).toBeTruthy());
+  });
 
-    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
-    await screen.findByText("Commits (60)");
+  it("older / newer step through the list order, disable at the ends, and ] / [ do the same", async () => {
+    const { api } = apiFor({ "wt-1": commitsWithShas() });
+    selectCommit("wt-1", SHA2);
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(within(sidebar()).getByText("commit #1")).toBeInTheDocument());
+    const older = screen.getByRole("button", { name: "Older commit" });
+    const newer = screen.getByRole("button", { name: "Newer commit" });
+    expect(newer).not.toBeDisabled();
+    expect(older).not.toBeDisabled();
+    fireEvent.click(newer);
+    await waitFor(() => expect(useWorkspaceStore.getState().vcsSelectedCommitByWorktree["wt-1"]?.sha).toBe(SHA));
+    expect(screen.getByRole("button", { name: "Newer commit" })).toBeDisabled();
+    fireEvent.keyDown(document.querySelector(".vcs-commit-detail")!, { key: "]" });
+    await waitFor(() => expect(useWorkspaceStore.getState().vcsSelectedCommitByWorktree["wt-1"]?.sha).toBe(SHA2));
+    fireEvent.keyDown(document.querySelector(".vcs-commit-detail")!, { key: "[" });
+    await waitFor(() => expect(useWorkspaceStore.getState().vcsSelectedCommitByWorktree["wt-1"]?.sha).toBe(SHA));
+  });
 
-    // The shared toggle is still ON — the submodule's load-more never flips it.
-    expect(screen.getByRole("checkbox", { name: /diff from main/i })).toBeChecked();
-    expect(spy).toHaveBeenCalledWith("wt-1", 101, "worktree", "vendor/widget");
+  it("a second visit to the same commit does not refetch its changed files (per-sha cache)", async () => {
+    const { api, listChangedPaths } = apiFor({ "wt-1": commitsWithShas() });
+    listChangedPaths.mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+    selectCommit("wt-1", SHA);
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(within(sidebar()).getByText("App.tsx")).toBeInTheDocument());
+    selectCommit("wt-1", SHA2);
+    await waitFor(() => expect(listChangedPaths).toHaveBeenCalledTimes(2));
+    selectCommit("wt-1", SHA);
+    await waitFor(() => expect(within(sidebar()).getByText("App.tsx")).toBeInTheDocument());
+    expect(listChangedPaths).toHaveBeenCalledTimes(2);
+  });
+
+  it("toggling the sidebar (VCS rail icon) keeps the diff preview column mounted", async () => {
+    const { api, listChangedPaths } = apiFor({ "wt-1": commitsWithShas() });
+    listChangedPaths.mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+    selectCommit("wt-1", SHA);
+    const { container } = render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(within(sidebar()).getByText("App.tsx")).toBeInTheDocument());
+    const preview = container.querySelector(".preview-pane");
+    useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: { "wt-1": false } });
+    useWorkspaceStore.setState({ vcsSidebarVisibleByWorktree: { "wt-1": true } });
+    expect(container.querySelector(".preview-pane")).toBe(preview);
+  });
+
+  it("the commit's files list shows inside the sidebar header 'Files N' count", async () => {
+    const { api, listChangedPaths } = apiFor({ "wt-1": commitsWithShas() });
+    listChangedPaths.mockResolvedValue([
+      { path: "src/App.tsx", status: "M" },
+      { path: "src/B.tsx", status: "A" },
+    ]);
+    selectCommit("wt-1", SHA);
+    render(<VcsPanel api={api} worktreeId="wt-1" baseBranch="main" />);
+    await waitFor(() => expect(within(sidebar()).getByText("src/B.tsx".split("/").pop()!)).toBeInTheDocument());
+    expect(within(document.querySelector(".vcs-commit-detail")!).getByText("Files 2")).toBeInTheDocument();
   });
 });

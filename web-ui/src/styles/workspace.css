@@ -137,47 +137,60 @@
   line-height: 1.3;
 }
 
-.file-tree-sidebar-header {
+/* Rail header (tools-pane-rework board 1): one 35px row. Identity left, at most two controls right, the chip's
+   reserve last (`actions-row` + the host, see RailHeader.tsx). Only the gap stretches; the title truncates last. */
+.rail-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
-  container: file-tree-header / inline-size;
+  flex: none;
+  height: var(--pane-row-h);
+  box-sizing: border-box;
+  min-width: 0;
+  container: rail-header / inline-size;
 }
-
-/* Narrow phone list: the trim lives with its desktop twin at the end of this file (`@container file-tree-header`):
-   it must come AFTER the base `.file-tree-scope-slot` / tail rules below, or their min-width / flex values win. */
-
-.file-tree-sidebar-header__tail {
-  margin-left: auto;
+.rail-header__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.rail-header__sp {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rail-header__right {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  flex-shrink: 0;
+  flex: none;
+  min-width: 0;
+}
+.rail-header__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--fg-primary);
+}
+.rail-header__count {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
 }
 
-/* Keeps diff toggle aligned when chips are hidden */
-.file-tree-scope-slot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-width: 108px;
-  height: 28px;
-}
-
-/* Δ marker left of the local/branch chips: signals the chips choose what the
-   git delta is shown against. */
-.file-tree-scope-delta {
-  display: inline-flex;
-  margin-right: var(--space-1);
-  color: var(--fg-secondary);
-  user-select: none;
-}
-
-.file-tree-diff-toggle {
+/* Files | Changes: the two halves of one view switch that replaces the title. */
+.rail-seg {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+.rail-seg__btn {
   height: 22px;
   padding: 0 var(--space-2);
   border: none;
@@ -187,23 +200,97 @@
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
+  white-space: nowrap;
   transition:
     color var(--transition-fast),
     background var(--transition-fast);
 }
-
-.file-tree-diff-toggle:hover {
+.rail-seg__btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+.rail-seg__btn[aria-pressed="true"] {
   color: var(--fg-primary);
   background: var(--bg-hover);
 }
 
-.file-tree-diff-toggle--on {
-  color: var(--fg-primary);
+/* Text dropdown (right zone): a label and a chevron; the label gives way first under 260px. */
+.rail-header__txt {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rail-header__txt:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+.rail-header__txt-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-header__chev {
+  flex: none;
+  color: var(--fg-muted);
 }
 
-.file-tree-diff-toggle--on:hover {
+/* Icon control (View options): the sliders glyph, never "...". */
+.rail-header__ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.rail-header__ib:hover {
+  color: var(--fg-primary);
   background: var(--bg-hover);
+}
+
+.rail-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-menu__item:hover,
+.rail-menu__item:focus-visible {
+  background: var(--bg-hover);
+}
+.rail-menu__item[aria-checked="true"] {
+  background: var(--bg-active);
+}
+
+@container rail-header (max-width: 260px) {
+  .rail-header__txt-label {
+    display: none;
+  }
 }
 
 .files-left-pane-overlay [tabindex="-1"]:focus {
@@ -7460,36 +7547,6 @@ button.dashboard-card {
   background: var(--bg-primary);
 }
 
-.vcs-panel__branch-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--fg-secondary);
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-full, 999px);
-  padding: 1px var(--space-2);
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.vcs-panel__diff-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.vcs-panel__diff-toggle input {
-  cursor: pointer;
-}
-
 .vcs-panel__spin {
   animation: vcs-spin 0.8s linear infinite;
 }
@@ -7597,173 +7654,265 @@ button.dashboard-card {
   margin-left: auto;
 }
 
-.vcs-panel__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-2) var(--space-3);
-}
-
-.vcs-graph {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.vcs-graph__item {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.vcs-graph__rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 20px;
-  flex-shrink: 0;
-}
-
-.vcs-graph__dot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  border: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  flex-shrink: 0;
-}
-
 /* The dot is the click target that opens the commit's quick-diff view
  * (replaces a previously-rejected separate diffstat button / hover-reveal
  * button — see VcsPanel.tsx CommitRow). Hover/focus treatment mirrors the
  * icon-button convention used by `.project-plus-menu .menu-pop__item`. */
-.vcs-graph__dot--clickable {
-  cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.vcs-graph__dot--clickable:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-}
-
-.vcs-graph__dot--clickable:focus-visible {
-  outline: 2px solid var(--accent-color, var(--accent));
-  outline-offset: 2px;
-}
-
-.vcs-graph__line {
-  flex: 1;
-  width: 1px;
-  min-height: var(--space-3);
-  background: var(--border-default);
-}
-
-.vcs-graph__item:last-child .vcs-graph__line {
-  display: none;
-}
-
-.vcs-graph__card {
-  flex: 1;
-  min-width: 0;
-  padding-bottom: var(--space-4);
-}
-
-.vcs-graph__card--expandable {
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1) 0;
-  padding: var(--space-1) var(--space-2) 0;
-}
-
-.vcs-graph__card--expandable:hover {
-  background: var(--bg-secondary);
-}
-
-.vcs-graph__subject-row {
+/* VCS list (tools-pane-rework B5): whole-row buttons, the PR slot, skeleton, refresh bar. Tokens only. */
+.vcs-list-pane {
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }
-
-.vcs-graph__chevron {
-  flex-shrink: 0;
-  color: var(--fg-muted);
-  transition: transform 0.12s ease;
-}
-
-.vcs-graph__chevron--open {
-  transform: rotate(90deg);
-}
-
-.vcs-graph__subject {
+.vcs-list-pane__body {
   flex: 1;
-  font-size: var(--fs-body);
+  min-height: 0;
+  overflow-y: auto;
+}
+.vcs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.vcs-row {
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+.vcs-row__btn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
   color: var(--fg-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.vcs-row__btn:hover {
+  background: var(--bg-hover);
+}
+.vcs-row__btn:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+}
+.vcs-row--active > .vcs-row__btn {
+  background: var(--bg-active);
+}
+.vcs-row__subject {
+  grid-column: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  font-size: var(--fs-ui);
 }
-
-.vcs-graph__body {
-  margin: var(--space-2) 0 0;
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-sm);
+.vcs-row__meta {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.vcs-row__author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vcs-row__sha {
+  font-family: var(--font-mono);
+}
+.vcs-row__stats {
+  grid-column: 2;
+  grid-row: 1;
+  display: inline-flex;
+  gap: var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  color: var(--fg-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: nowrap;
 }
-
-.vcs-graph__meta {
+.vcs-row__add {
+  color: var(--fg-success);
+}
+.vcs-row__del {
+  color: var(--fg-danger);
+}
+/* A commit that appeared since the last paint: a brief tint that fades (no animation under reduced motion). */
+.vcs-row--new {
+  animation: vcs-row-in 1.2s ease-out;
+}
+@keyframes vcs-row-in {
+  from {
+    background: var(--bg-active);
+  }
+  to {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vcs-row--new {
+    animation: none;
+  }
+}
+.vcs-list__divider {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+.vcs-row--skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+}
+.vcs-skeleton__bar {
+  display: block;
+  height: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.vcs-skeleton__bar--meta {
+  width: 40%;
+  height: 8px;
+}
+.vcs-refresh-bar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-  flex-wrap: wrap;
+  border-bottom: var(--border-width) solid var(--border-subtle);
 }
-
-.vcs-graph__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: 9px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.vcs-graph__dot-sep {
-  color: var(--fg-muted);
-}
-
-.vcs-graph__sha {
-  font-family: var(--font-mono, monospace);
-  background: var(--bg-secondary);
+.vcs-refresh-bar__retry {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  height: 22px;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-sm);
-  padding: 0 var(--space-1);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.vcs-refresh-bar__retry:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
 }
 
-.vcs-graph__stats {
+/* Docked two-level sidebar (level "commit": details + files; level "list": compact rows). */
+.vcs-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-sidebar-secondary);
+}
+.vcs-commit-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.vcs-commit-detail__up {
+  padding: 0 var(--space-1);
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vcs-commit-detail__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+}
+.vcs-commit-detail__subject {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  color: var(--fg-primary);
+  overflow-wrap: anywhere;
+}
+.vcs-commit-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.vcs-commit-detail__sha {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+.vcs-commit-detail__totals {
+  display: inline-flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+.vcs-commit-detail__message-toggle {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.vcs-commit-detail__message {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+}
+.vcs-commit-detail__files-head {
+  padding-top: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.vcs-commit-detail__files {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 120px;
+  min-width: 0;
+}
+.vcs-topbar__tabs {
+  display: flex;
+  min-width: 0;
+}
+.vcs-topbar__file {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-family: var(--font-mono, monospace);
+  min-width: 0;
+}
+.vcs-topbar__pos {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
 }
 
 .vcs-graph__add {
@@ -7772,10 +7921,6 @@ button.dashboard-card {
 
 .vcs-graph__del {
   color: #f87171;
-}
-
-.vcs-graph__nochange {
-  font-style: italic;
 }
 
 .vcs-load-more-row {
@@ -8166,27 +8311,6 @@ button.dashboard-card {
   flex-shrink: 0;
 }
 
-/* Row under the VCS home top bar: branch chip + "Diff from <base>" toggle. */
-.vcs-panel__meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-1) var(--space-3);
-  border-bottom: var(--border-width) solid var(--border-default);
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-/* Item 9 — "Commits › commit #x" breadcrumb, `VcsCommitView`'s `topbarExtra`. */
-.files-topbar__breadcrumb {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  padding: 0 var(--space-3);
-}
-
 .files-topbar__add svg,
 .files-topbar__close-all svg {
   flex-shrink: 0;
@@ -8339,74 +8463,6 @@ button.dashboard-card {
   cursor: default;
 }
 
-/* Font size controls — last item of the preview strip (in flow, right-aligned). */
-.preview-font-overlay {
-  flex: none;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.preview-font-overlay__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: var(--bg-elevated);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  opacity: 0.85;
-}
-.preview-font-overlay__btn:hover:not(:disabled) {
-  color: var(--fg-primary);
-  border-color: var(--fg-secondary);
-  opacity: 1;
-}
-.preview-font-overlay__btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Back / Forward navigation controls in preview header. */
-.preview-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.preview-nav__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  user-select: none;
-}
-
-.preview-nav__btn:hover:not(:disabled) {
-  color: var(--fg-primary);
-  background: var(--bg-hover);
-  border-color: var(--border-default);
-}
-
-.preview-nav__btn:disabled {
-  color: var(--fg-muted);
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .preview-pane:focus {
   outline: none;
 }
@@ -8424,18 +8480,95 @@ button.dashboard-card {
   container-name: preview-diffinfo;
 }
 
-/* Hide the scope chips on a narrow preview pane — the diff-stat + scope
- * label still fit; the chips are the first thing to go (9.T5). */
+/* File strip (tools-pane-rework board 2): back/forward, name (never truncated), counts, directory (muted, the only
+ * part that truncates: from the START, so the file's own folder stays visible), spacer, view switch, one menu. */
+.file-strip__nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.file-strip__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+.file-strip__btn:hover:not(:disabled) {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+.file-strip__btn:disabled {
+  color: var(--fg-muted);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.file-strip__name {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.file-strip__stats {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.file-strip__dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  cursor: pointer;
+}
+.file-strip__dir bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.file-strip__sp {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.file-strip__note {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.file-strip > .preview-diff-layout-toggle {
+  flex: none;
+}
+
+/* Narrow strip: the directory goes first, then back/forward; name and counts always stay. */
 @container preview-diffinfo (max-width: 260px) {
-  .preview-diffinfo .file-tree-scope-chips {
+  .preview-diffinfo .file-strip__dir {
     display: none;
   }
 }
-
-/* Very narrow strip (phone list open): drop back/forward so stats, Comment and
- * the font group fit instead of overlapping. */
 @container preview-diffinfo (max-width: 160px) {
-  .preview-diffinfo .preview-nav {
+  .preview-diffinfo .file-strip__nav {
     display: none;
   }
 }
@@ -8448,31 +8581,6 @@ button.dashboard-card {
 
 /* Decision 3 — commit-mode breadcrumb rendered by `DiffScopeSelector`
  * instead of clickable local/branch chips. */
-.diff-scope-selector__breadcrumb {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-}
-
-.diff-scope-selector__back {
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  font-family: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.diff-scope-selector__back:hover {
-  color: var(--fg-primary);
-}
-
 /* Item 8 — Source/Rendered segmented control for `.md` files in DiffView. */
 .preview-diff-mode-toggle {
   display: inline-flex;
@@ -8522,26 +8630,16 @@ button.dashboard-card {
   color: #ef4444;
 }
 
-.preview-diffinfo__scope {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
 .preview-diffinfo > * {
   min-width: 0;
 }
-.preview-diffinfo .preview-nav,
+.preview-diffinfo .file-strip__nav,
 .preview-diffinfo .html-mode-toggle,
 .preview-diffinfo .preview-diffinfo__stats {
   flex: none;
 }
-.preview-diffinfo__stats,
-.preview-diffinfo__scope {
+.preview-diffinfo__stats {
   white-space: nowrap;
-}
-.preview-diffinfo__scope {
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .preview-diffinfo .chip {
   flex: 0 1 auto;
@@ -8549,27 +8647,6 @@ button.dashboard-card {
   overflow: hidden;
   white-space: nowrap;
 }
-@container preview-diffinfo (max-width: 300px) {
-  .comment-btn--strip .comment-btn__label {
-    display: none;
-  }
-}
-
-.preview-diffinfo__view-source {
-  margin-left: auto;
-  padding: 1px var(--space-2);
-  font-size: var(--font-size-xs);
-  color: var(--fg-secondary);
-  background: transparent;
-  border: var(--border-width) solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.preview-diffinfo__view-source:hover {
-  background: var(--bg-hover);
-  color: var(--fg-primary);
-}
-
 /* Creation-time "initial context" dropzone (New worktree / New agent) */
 .initial-artifacts {
   display: flex;
@@ -8877,7 +8954,6 @@ body[data-tauri-os="macos"] .sidebar-header {
 .outline-panel__content,
 .search-panel__results-list,
 .quick-open-list,
-.vcs-panel__body,
 .artifacts-list,
 .dashboard-panel,
 .project-home-scroll,
@@ -9223,62 +9299,3 @@ body[data-tauri-os="macos"] .sidebar-header {
   }
 }
 
-/* Desktop twin of the "Narrow phone list" trim near `.file-tree-sidebar-header` (same rules, wider threshold; keep both).
-   The side-by-side list header's right end is reserved for the actions chip (~69px), so the same trim
-   applies up to a wider list; phones use the 200/260px blocks right below. */
-@media (min-width: 769px) {
-  @container file-tree-header (max-width: 320px) {
-    .file-tree-scope-delta { display: none; }
-    .file-tree-scope-slot { min-width: 0; flex: 0 1 auto; overflow: hidden; }
-    .file-tree-scope-chips { gap: 0; }
-    .file-tree-scope-chip { padding: 2px var(--space-1); }
-    .file-tree-diff-toggle { padding: 0 var(--space-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .file-tree-sidebar-header__tail { flex-shrink: 1; min-width: 0; }
-  }
-}
-/* Phones: the open list's header also carries the pane controls (layout toggle + Fullscreen, ~72px), so the same trim
-   applies up to 260px; at the default phone list widths (<=200px) the scope chips give way entirely so the controls
-   and "Changes" stay whole (widen the list and they return). */
-@media (max-width: 768px) {
-  @container file-tree-header (max-width: 200px) {
-    .file-tree-scope-slot { display: none; }
-  }
-  @container file-tree-header (max-width: 260px) {
-    .file-tree-scope-delta { display: none; }
-    .file-tree-scope-slot { min-width: 0; flex: 0 1 auto; overflow: hidden; }
-    .file-tree-scope-chips { gap: 0; }
-    .file-tree-scope-chip { padding: 2px var(--space-1); }
-    .file-tree-diff-toggle { padding: 0 var(--space-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .file-tree-sidebar-header__tail { flex-shrink: 1; min-width: 0; }
-  }
-}
-
-/* VCS commit view: the docked changed-file list (header row mirrors .artifacts-head). */
-.commit-files {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  background: var(--bg-sidebar-secondary);
-}
-.commit-files__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
-  height: var(--pane-row-h);
-  box-sizing: border-box;
-  background: var(--bg-primary);
-  border-bottom: var(--border-width) solid var(--border-default);
-  --actions-row-pad: 10px;
-}
-.commit-files__title {
-  font-weight: 500;
-  font-size: var(--fs-ui);
-  color: var(--fg-primary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}

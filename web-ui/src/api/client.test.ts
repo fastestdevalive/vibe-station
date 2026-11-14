@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createClientApi } from "./client";
+import { ApiError } from "./errors";
 /** Creates a fake WebSocket class that auto-opens and records sent messages. */
 function makeFakeWsFactory() {
   const sent: string[] = [];
@@ -938,4 +939,78 @@ describe("OOBE client methods (3.T1)", () => {
       ]);
     },
   );
+});
+
+/**
+ * `statPath` (Details popup): in-root relative paths hit `/stat/*path`, project scope its twin,
+ * artifacts their own route even for absolute paths, and absolute in-root paths never reach the network.
+ */
+describe("statPath", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const statJson = {
+    path: "web-ui/a.ts",
+    absolutePath: "/repo/web-ui/a.ts",
+    kind: "file",
+    size: 10,
+    modifiedMs: 1,
+    lineCount: 3,
+    inRoot: true,
+  };
+
+  it("worktree scope requests /api/worktrees/<id>/stat/<relative path>", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(statJson), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createClientApi();
+    const stat = await api.statPath("wt1", "web-ui/a.ts");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/stat/web-ui/a.ts");
+    expect(stat.inRoot).toBe(true);
+  });
+
+  it("project scope requests /api/projects/<id>/stat/...", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(statJson), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createClientApi();
+    await api.statPath("p1", "web-ui/a.ts", "project");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/projects/p1/stat/web-ui/a.ts");
+  });
+
+  it("with artifactId requests the artifact stat route even for an absolute path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...statJson, inRoot: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createClientApi();
+    await api.statPath("wt1", "/Users/x/a.html", "worktree", "a1");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/artifacts/a1/stat");
+  });
+
+  it("an absolute path without artifactId rejects locally with 403 and makes no request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createClientApi();
+    await expect(api.statPath("wt1", "/etc/passwd")).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a 403 response rejects with ApiError.status 403", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "denied" }), { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createClientApi();
+    const err = await api.statPath("wt1", "../secret").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(403);
+  });
 });

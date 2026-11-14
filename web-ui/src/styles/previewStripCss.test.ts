@@ -5,27 +5,31 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(resolve(__dirname, "workspace.css"), "utf8");
 
 describe("workspace.css preview strip (R1F-01)", () => {
-  it("no longer reserves padding for an absolute font overlay", () => {
+  it("the absolute font overlay is gone (text size lives in the one File menu) and the strip name never truncates", () => {
     expect(css).not.toContain("--preview-font-overlay-w");
-    expect(css).toMatch(/\.preview-font-overlay \{\s*flex: none;\s*margin-left: auto;/);
+    expect(css).not.toContain(".preview-font-overlay");
+    expect(css).toMatch(/\.file-strip__name \{\s*flex: none;/);
   });
   it("phones scroll leftover strip items instead of overlapping them", () => {
     expect(css).toMatch(/@media \(max-width: 768px\) \{\s*\.preview-diffinfo \{ overflow-x: auto/);
   });
 });
 
-describe("workspace.css tree header (R1F-03)", () => {
+describe("workspace.css rail header (R1F-03, retargeted to the rail header)", () => {
   it("the header is a query container that trims itself when narrow", () => {
-    expect(css).toContain("container: file-tree-header / inline-size");
-    // Phones trim up to 260px and drop the scope chips at <=200px (the header also carries the pane controls).
-    expect(css).toMatch(/@media \(max-width: 768px\) \{\s*@container file-tree-header \(max-width: 200px\) \{\s*\.file-tree-scope-slot \{ display: none; \}/);
-    expect(css).toMatch(/@container file-tree-header \(max-width: 260px\) \{[\s\S]*\.file-tree-scope-delta \{ display: none; \}/);
+    expect(css).toContain("container: rail-header / inline-size");
+    // Under 260px the text dropdown drops its label and keeps the chevron; the title truncates last.
+    expect(css).toMatch(/@container rail-header \(max-width: 260px\) \{\s*\.rail-header__txt-label \{\s*display: none;/);
   });
-  it("the trims come AFTER the base slot/tail rules, or those win the cascade (the phone trim silently did nothing once)", () => {
-    const base = css.indexOf(".file-tree-scope-slot {\n  display: flex;");
+  it("the trim comes AFTER the base label rule, or that rule wins the cascade", () => {
+    const base = css.indexOf(".rail-header__txt-label {");
     expect(base).toBeGreaterThan(0);
-    expect(css.indexOf("@container file-tree-header (max-width: 260px)")).toBeGreaterThan(base);
-    expect(css.indexOf("@container file-tree-header (max-width: 320px)")).toBeGreaterThan(base);
+    expect(css.indexOf("@container rail-header (max-width: 260px)")).toBeGreaterThan(base);
+  });
+  it("the old tree-header scope slot / delta / diff-toggle rules are gone with the triangle and the chips", () => {
+    expect(css).not.toContain(".file-tree-scope-delta");
+    expect(css).not.toContain(".file-tree-scope-slot");
+    expect(css).not.toContain(".file-tree-diff-toggle");
   });
 });
 
