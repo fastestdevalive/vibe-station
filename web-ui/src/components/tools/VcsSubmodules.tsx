@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { SubmoduleInfo } from "@/api/types";
-import { CommitRow, splitOwnCommits } from "@/components/tools/VcsCommitRow";
+import { splitOwnCommits } from "@/components/tools/VcsCommitRow";
+import { VcsCommitRow } from "@/components/vcs/VcsCommitList";
 import type { SubmoduleCommitState } from "@/hooks/useSubmoduleCommits";
 
 /** Label + modifier class for a submodule's `git submodule status` state. */
@@ -34,7 +35,7 @@ interface VcsSubmodulesProps {
  * Top-level `.gitmodules` submodules section, shown below the commit list when
  * the worktree has any. Each row collapses to its one-line summary (exactly as
  * before) and expands inline into the same commit-graph UI the main repo gets:
- * a "Commits (N)" header + `<ol className="vcs-graph">` of `CommitRow`, with
+ * a "Commits (N)" header + `<ol className="vcs-list">` of `VcsCommitRow`, with
  * load-more, inline error, and a "Not initialized" state for uninitialized
  * submodules (no request fired). Purely presentational — commit state and
  * fetching live in `useSubmoduleCommits` (owned by VcsPanel).
@@ -134,9 +135,9 @@ function SubmoduleCommitList({
       {displayedCommits.length === 0 ? (
         <div className="vcs-submodules__empty">No commits on this branch yet</div>
       ) : (
-        <ol className="vcs-graph">
+        <ol className="vcs-list">
           {displayedCommits.map((c) => (
-            <CommitRow key={c.sha} c={c} isOpen={false} onToggle={() => {}} onOpenDiff={(sha) => onOpenDiff(sha, path)} />
+            <VcsCommitRow key={c.sha} c={c} onOpen={(sha) => onOpenDiff(sha, path)} />
           ))}
         </ol>
       )}

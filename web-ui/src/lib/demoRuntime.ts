@@ -4,6 +4,9 @@
  * must therefore be returned to its freshly-imported state before the next mount.
  */
 import { useArtifactsStore } from "@/components/artifacts/artifactsStore";
+import { useDetailsStore } from "@/components/details/detailsStore";
+import { useVcsCacheStore, resetVcsCache } from "@/components/vcs/vcsCacheStore";
+import { resetVcsRevalidation } from "@/components/vcs/useVcsCommits";
 import { useCommentStore } from "@/components/comments/useCommentStore";
 import { useWorkspaceStore, __resetForDemo as resetWorkspaceModule } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -46,6 +49,8 @@ export const APP_STORES = [
   useArtifactsStore,
   useCommentStore,
   useUpdateStore,
+  useDetailsStore,
+  useVcsCacheStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */
@@ -61,6 +66,8 @@ export function resetAppSingletons(): void {
   resetBulkRunner();
   resetWorkspaceModule();
   chatSnapshotCache.clear();
+  resetVcsRevalidation();
+  resetVcsCache();
   // zustand `persist` writes through on every `setState` — resetting would overwrite the freshly seeded
   // storage with the initial state. Snapshot the persisted keys first and put them back before rehydrating.
   const persistedKeys = [useWorkspaceStore, useGlobalDraftStore].map((st) => st.persist.getOptions().name as string);

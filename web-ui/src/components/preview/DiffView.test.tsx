@@ -80,29 +80,20 @@ describe("diff-view-shortcuts: DiffView interactive layout/collapse/registry", (
     useWorkspaceStore.setState({ diffLayoutMode: "inline" });
   });
 
-  it("1.T3 — interactive renders the layout toggle whenever hunks exist; non-interactive never does", async () => {
-    render(<DiffView diffText={multiHunkDiff} interactive />);
-    expect(screen.getByRole("button", { name: "Inline" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Side-by-side" })).toBeInTheDocument();
-
-    const { container } = render(<DiffView diffText={multiHunkDiff} />);
-    expect(container.querySelector(".preview-diff-layout-toggle")).not.toBeInTheDocument();
-    await act(async () => {});
-  });
-
-  it("Side-by-side is never disabled — no minimum pane-width gate (superseded 1.T7-1.T9: user feedback after live testing found the width gate made the toggle unusable at normal pane sizes; both columns now just fill available space and wrap instead)", async () => {
-    render(<DiffView diffText={multiHunkDiff} interactive />);
-    const btn = screen.getByRole("button", { name: "Side-by-side" }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(false);
-    expect(btn.title).toBeFalsy();
-    await act(async () => {});
-  });
-
-  it("1.T4 — clicking Side-by-side renders a two-column container with old lines left, new lines right", async () => {
-    const user = userEvent.setup();
+  it("1.T3 — DiffView renders no layout toggle: the Inline / Side-by-side switch lives in the file strip (tools-pane-rework B4)", async () => {
     const { container } = render(<DiffView diffText={multiHunkDiff} interactive />);
+    expect(screen.queryByRole("button", { name: "Inline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Side-by-side" })).not.toBeInTheDocument();
+    expect(container.querySelector(".preview-diff-layout-toggle")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Side-by-side" }));
+    const { container: plain } = render(<DiffView diffText={multiHunkDiff} />);
+    expect(plain.querySelector(".preview-diff-layout-toggle")).not.toBeInTheDocument();
+    await act(async () => {});
+  });
+
+  it("1.T4 — the store's side-by-side mode renders a two-column container with old lines left, new lines right", async () => {
+    useWorkspaceStore.setState({ diffLayoutMode: "side-by-side" });
+    const { container } = render(<DiffView diffText={multiHunkDiff} interactive />);
 
     const sbs = container.querySelector(".preview-diff-side-by-side");
     expect(sbs).toBeInTheDocument();
@@ -286,10 +277,10 @@ describe("diff-view-shortcuts-expand-context: inline gap affordance", () => {
 
   it("2.T1 — side-by-side renders gap rows spanning both columns and expands identically", async () => {
     const user = userEvent.setup();
+    useWorkspaceStore.setState({ diffLayoutMode: "side-by-side" });
     const { container } = render(
       <DiffView diffText={gapDiff} fileContentFallback={gapFile} interactive />,
     );
-    await user.click(screen.getByRole("button", { name: "Side-by-side" }));
 
     const sbs = container.querySelector(".preview-diff-side-by-side");
     expect(sbs).toBeInTheDocument();

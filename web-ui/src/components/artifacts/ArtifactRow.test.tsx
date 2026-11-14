@@ -1,104 +1,61 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { Session } from "@/api/types";
 import { ArtifactRow } from "./ArtifactRow";
 import { makeRow } from "./testFixtures";
 
-const planner: Session = {
-  id: "a",
-  worktreeId: "wt1",
-  projectId: "p1",
-  modeId: null,
-  type: "agent",
-  name: "Planner",
-  isMain: false,
-  state: "working",
-  lifecycleState: "drafting",
-  tmuxName: "a",
-  createdAt: "2026-10-27T09:00:00.000Z",
-  modeIcon: "claude",
-};
+type RowProps = Partial<Parameters<typeof ArtifactRow>[0]>;
 
-function renderRow(row: ReturnType<typeof makeRow>, writer: Session | null | undefined) {
+function renderRow(row: ReturnType<typeof makeRow>, over: RowProps = {}) {
   const { container } = render(
     <ArtifactRow
       row={row}
-      writer={writer}
       selected={false}
       tabbable
-      mobile
+      mobile={false}
       menuOpen={false}
       onOpen={vi.fn()}
       onFocusRow={vi.fn()}
       onMenu={vi.fn()}
       setRef={vi.fn()}
+      {...over}
     />,
   );
-  return container.querySelector(".artifacts-row__sub")!;
+  return container.querySelector<HTMLElement>('[role="option"]')!;
 }
 
-describe("ArtifactRow sub-line (phone layout)", () => {
-  it("the sub-line is a plain path line, then the writer chip with its mode icon, then the edits", () => {
-    const sub = renderRow(makeRow({ id: "x", displayPath: "~/.claude/plans/x.md", inRepo: false, writers: ["a"], editCount: 3 }), planner);
-    expect(sub.querySelector(".artifacts-row__path")).toHaveTextContent("outside repo · ~/.claude/plans/");
-    expect(sub.querySelector(".chip")).toBeNull();
-    const by = sub.querySelector(".artifacts-row__by")!;
-    expect(by).toHaveTextContent("Planner");
-    expect(by.querySelector(".mode-icon")).not.toBeNull();
-    expect(sub.querySelector(".artifacts-row__edits")).toHaveTextContent("· 3 edits");
-    expect(Array.from(sub.children).map((c) => c.className)).toEqual(["artifacts-row__path", "artifacts-agent artifacts-row__by", "artifacts-row__edits"]);
+describe("ArtifactRow — one line (tools-pane-rework B6.1)", () => {
+  it("in-repo row: the text is exactly the name and the short age", () => {
+    const row = makeRow({ id: "a", displayPath: "docs/plan.md", inRepo: true, lastWrittenAt: new Date(Date.now() - 2 * 60_000).toISOString() });
+    const el = renderRow(row);
+    expect(el.querySelector(".artifacts-row__name")).toHaveTextContent("plan.md");
+    expect(el.querySelector(".artifacts-row__time")).toHaveTextContent("2m");
+    expect(el.textContent).toBe("plan.md2m");
   });
 
-  it("a row without a recorded writer shows no writer chip", () => {
-    const sub = renderRow(makeRow({ id: "y", writers: [] }), undefined);
-    expect(sub.querySelector(".artifacts-row__path")).toHaveTextContent("docs/");
-    expect(sub.querySelector(".artifacts-row__by")).toBeNull();
-    expect(sub.querySelector(".artifacts-agent")).toBeNull();
+  it("outside-repo, phone and writer-bearing rows show no chip, path, agent or edits", () => {
+    const row = makeRow({ id: "b", displayPath: "/Users/x/out/report.html", inRepo: false, editCount: 4, writers: ["s1"] });
+    const desktop = renderRow(row, { mobile: false });
+    const phone = renderRow(row, { mobile: true });
+    for (const el of [desktop, phone]) {
+      expect(el.textContent).not.toMatch(/outside repo|edits|\/Users|out\//);
+      expect(el.querySelector(".artifacts-row__by, .artifacts-row__path, .artifacts-row__edits, .chip, .artifacts-row__sub")).toBeNull();
+    }
+    expect(phone).toHaveClass("artifacts-row--mobile");
   });
 
-});
-
-describe("ArtifactRow more-writers badge (desktop)", () => {
-  it("renders the +N element with the other writers' names as title when moreWriters > 0", () => {
-    const { container } = render(
-      <ArtifactRow
-        row={makeRow({ id: "x", writers: ["a", "b"] })}
-        writer={planner}
-        moreWriters={1}
-        otherWriters="Agent B"
-        selected={false}
-        tabbable
-        mobile={false}
-        menuOpen={false}
-        onOpen={vi.fn()}
-        onFocusRow={vi.fn()}
-        onMenu={vi.fn()}
-        setRef={vi.fn()}
-      />,
-    );
-    const more = container.querySelector(".artifacts-row__more-writers");
-    expect(more).not.toBeNull();
-    expect(more).toHaveTextContent("+1");
-    expect(more).toHaveAttribute("title", "Agent B");
-    expect(more).toHaveAttribute("aria-label", "and 1 more: Agent B");
+  it("a missing row is struck through and its age reads 'missing'", () => {
+    const row = makeRow({ id: "c", state: "missing", displayPath: "docs/gone.md", inRepo: true });
+    const el = renderRow(row);
+    expect(el).toHaveClass("artifacts-row--missing");
+    expect(el.querySelector(".artifacts-row__time")).toHaveTextContent("missing");
+    expect(el.querySelector(".artifacts-row__missing")).not.toBeNull();
   });
 
-  it("renders no +N element when moreWriters is 0", () => {
-    const { container } = render(
-      <ArtifactRow
-        row={makeRow({ id: "x", writers: ["a"] })}
-        writer={planner}
-        moreWriters={0}
-        selected={false}
-        tabbable
-        mobile={false}
-        menuOpen={false}
-        onOpen={vi.fn()}
-        onFocusRow={vi.fn()}
-        onMenu={vi.fn()}
-        setRef={vi.fn()}
-      />,
-    );
-    expect(container.querySelector(".artifacts-row__more-writers")).toBeNull();
+  it("a folder hint is rendered muted inside the name, after it", () => {
+    const row = makeRow({ id: "d", displayPath: "web-ui/README.md", inRepo: true });
+    const el = renderRow(row, { folderHint: "web-ui" });
+    const name = el.querySelector(".artifacts-row__name")!;
+    expect(name.querySelector(".artifacts-row__hint")).toHaveTextContent("web-ui");
+    expect(name.textContent).toBe("README.md web-ui");
   });
 });

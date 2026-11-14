@@ -1,4 +1,4 @@
-import { ArrowUpRight, FileText, FolderOutput, List, ListTree, ListX, Plus, Search, X } from "lucide-react";
+import { ArrowUpRight, FileText, List, ListTree, ListX, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -8,8 +8,6 @@ import { FilesLeftPane, type FilesLeftPaneHandle } from "@/components/layout/Fil
 import { DockedListLayout } from "@/components/layout/DockedListLayout";
 import { usePendingFileOpens } from "@/hooks/usePendingFileOpens";
 import { HOST_PRIORITY } from "@/context/TopActionsContext";
-import { isArtifactTabPath } from "@/lib/artifactTabPath";
-import { Chip } from "@/components/ui/Chip";
 import { useToolsInset } from "@/context/ToolsInsetContext";
 import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 
@@ -163,20 +161,7 @@ export function FilesPanel({
                 }
               }}
             >
-              {isArtifactTabPath(path) ? (
-                <Chip
-                  tone="warn"
-                  size="sm"
-                  className="files-topbar__tab-tag"
-                  role="img"
-                  aria-label="Outside project"
-                  title={`Outside project: ${path}`}
-                >
-                  <FolderOutput size={10} aria-hidden />
-                </Chip>
-              ) : (
-                <FileText size={13} aria-hidden />
-              )}
+              <FileText size={13} aria-hidden />
               <span className="files-topbar__tab-name">{baseName(path)}</span>
               <button
                 type="button"

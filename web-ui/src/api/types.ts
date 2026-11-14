@@ -1371,6 +1371,14 @@ export type WSEvent =
       hint?: string;
     }
   | {
+      /** Head/base tip changed for a worktree (`vst-diffstat` HeadTracker). Lossy: clients also revalidate. */
+      type: "worktree:head";
+      worktreeId: string;
+      headSha: string | null;
+      baseSha: string | null;
+      rev: number;
+    }
+  | {
       /** Broadcast after PUT /user/ordered-lists/:scopeKey (pinned-order-sync).
        *  `scopeKey` is generic even though only "pinned-all" is wired up today. */
       type: "orderedList:updated";
@@ -1889,6 +1897,24 @@ export interface ChangedPathEntry {
   /** File mtime (ms since epoch). Only for `scope=local` entries that still
    *  exist on disk; absent for deleted files and other scopes. */
   mtimeMs?: number;
+}
+
+/** `GET /worktrees/:id/stat/*path` (in-root) and `GET .../artifacts/:artifactId/stat` (artifacts). */
+export type FileStatKind = "file" | "dir" | "other";
+
+export interface FileStat {
+  /** Echo of the requested path (artifact route: the row's canonical absolute path). */
+  path: string;
+  /** Canonical absolute path; null when it could not be resolved. */
+  absolutePath: string | null;
+  kind: FileStatKind;
+  /** Bytes; null for dir/other. */
+  size: number | null;
+  /** Unix ms mtime. */
+  modifiedMs: number | null;
+  /** In-root regular text file <= 2 MiB; null otherwise (always null for artifacts). */
+  lineCount: number | null;
+  inRoot: boolean;
 }
 
 export interface CommitLogEntry {

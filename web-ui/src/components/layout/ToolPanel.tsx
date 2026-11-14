@@ -17,6 +17,7 @@ import { useActionsHost } from "@/context/TopActionsContext";
 import { ToolActionsHost } from "@/components/layout/TopActionsSlot";
 import { handleToolsEsc } from "@/lib/toolsEsc";
 import { CommentsTray } from "@/components/comments/CommentsTray";
+import { FileDetailsHost } from "@/components/details/FileDetailsHost";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 interface ToolPanelProps {
@@ -298,6 +299,8 @@ export function ToolPanel({
         {worktreeId != null ? (
           <CommentsTray api={api} scopeId={worktreeId} scopeKind={scope === "project" ? "project" : "worktree"} />
         ) : null}
+        {/* One Details popup for the whole tools pane: a sibling of the content, so the agent panel never moves. */}
+        <FileDetailsHost api={api} />
         </div>
 
         {/* In-pane rail on the right edge: canvas tiles (board C) and phones (no window rail at

@@ -34,15 +34,15 @@ beforeEach(() => {
 });
 
 describe("FilePreviewPane comments — diff (5.T2, 5.T9)", () => {
-  it("marks the body as a comment surface and shows the toolbar hint while the file has 0 comments", async () => {
+  it("marks the body as a comment surface; the strip has no Comment button or hint (selection pill, gutter + and C stay)", async () => {
     seedScope();
     const api = createMockApi();
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => expect(document.querySelectorAll(".diff-line").length).toBeGreaterThan(0));
     expect(container.querySelector(".preview-body")!.hasAttribute("data-comment-surface")).toBe(true);
-    expect(screen.getByText(/Select text and press/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Comment" })).toHaveAttribute("title", "Select text, then press C");
+    // The strip's Comment button and its hint were removed (tools-pane-rework B4.5); the entry points remain.
+    expect(screen.queryByText(/Select text and press/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Comment" })).not.toBeInTheDocument();
   });
 
   it("the hint goes away once the file has a comment", async () => {
@@ -52,15 +52,14 @@ describe("FilePreviewPane comments — diff (5.T2, 5.T9)", () => {
     expect(screen.queryByText(/Select text and press/)).not.toBeInTheDocument();
   });
 
-  it("commit scope: no gutter +, no surface attribute, Comment disabled with the reason", async () => {
+  it("commit scope: no gutter +, no surface attribute, no Comment button", async () => {
     const api = createMockApi();
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc" }} />);
     await waitFor(() => expect(document.querySelectorAll(".diff-line").length).toBeGreaterThan(0));
     expect(document.querySelectorAll("[data-comment-plus]")).toHaveLength(0);
     expect(container.querySelector(".preview-body")!.hasAttribute("data-comment-surface")).toBe(false);
-    const btn = screen.getByRole("button", { name: "Comment" });
-    expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute("title", "Comments aren’t available on commits");
+    // No Comment button in the commit strip either (comments are not offered on commits at all).
+    expect(screen.queryByRole("button", { name: "Comment" })).not.toBeInTheDocument();
   });
 
   it("jumping to a comment inside a collapsed hunk expands it first", async () => {
