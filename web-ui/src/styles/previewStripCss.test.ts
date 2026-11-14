@@ -86,4 +86,14 @@ describe("workspace.css tools-pane tap targets (R1F-05)", () => {
       /@media \(max-width: 768px\) \{\s*\.tool-panel \.tab\.tab--icon\.tool-bar-btn \{\s*width: 44px;[\s\S]*?height: 35px;/,
     );
   });
+
+  it("list counts use the per-theme tokens (R3F-01)", () => {
+    expect(css).toMatch(
+      /\.changed-file-list-file__loc \.vcs-graph__add,\s*\.tree-row__loc \.vcs-graph__add \{\s*color: var\(--fg-success\);/,
+    );
+    expect(css).toMatch(
+      /\.changed-file-list-file__loc \.vcs-graph__del,\s*\.tree-row__loc \.vcs-graph__del \{\s*color: var\(--fg-danger\);/,
+    );
+    expect(css).toMatch(/\.vcs-graph__add \{\s*color: #4ade80;/);
+  });
 });

@@ -8048,6 +8048,17 @@ button.dashboard-card {
   color: #f87171;
 }
 
+/* Tools-pane lists (Changes list, commit sidebar file rows, Files tree): the same per-theme tokens as the commit
+   rows (.vcs-row__add / .vcs-row__del), so the counts stay readable in light themes. */
+.changed-file-list-file__loc .vcs-graph__add,
+.tree-row__loc .vcs-graph__add {
+  color: var(--fg-success);
+}
+.changed-file-list-file__loc .vcs-graph__del,
+.tree-row__loc .vcs-graph__del {
+  color: var(--fg-danger);
+}
+
 .vcs-load-more-row {
   display: flex;
   flex-direction: column;
