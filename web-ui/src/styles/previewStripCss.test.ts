@@ -17,6 +17,11 @@ describe("workspace.css preview strip (R1F-01)", () => {
     expect(css).toMatch(/\.file-strip > \.file-strip__main \{[^}]*overflow-x: auto;/);
     expect(css).not.toContain(".file-strip__sp");
   });
+  it("a long name scrolls in its own box with a fade; counts stay pinned (R1F-02b)", () => {
+    expect(css).toMatch(/\.file-strip__namewrap \{[^}]*overflow-x: auto;/);
+    expect(css).toMatch(/\.file-strip__namewrap \{[^}]*mask-image: linear-gradient\(/);
+    expect(css).toMatch(/\.file-strip__dir \{[^}]*flex: 0 1000 auto;/);
+  });
   it("the view switch sits in the strip with no rule under it (R1F-13)", () => {
     expect(css).toMatch(/\.file-strip > \.preview-diff-layout-toggle \{[^}]*border-bottom: 0;/);
   });
@@ -50,6 +55,15 @@ describe("workspace.css narrow rail header (R1F-04, R1F-05, R1F-07)", () => {
     expect(narrow).toBeGreaterThan(-1);
     expect(narrow).toBeGreaterThan(css.indexOf("@container rail-header (max-width: 260px)"));
   });
+  it("a phone docked commit list keeps its title: the 200px block hides the count and the pane controls (R2F-06)", () => {
+    const narrow = css.slice(css.indexOf("@container rail-header (max-width: 200px)"));
+    expect(narrow).toContain(".vcs-list__head .rail-header__right");
+    expect(narrow).toContain(".vcs-list__head .rail-header__count");
+  });
+  it("a picked agent keeps its picker in the 200px header; no filter drops it so the title wins (R2F-01)", () => {
+    const narrow = css.slice(css.indexOf("@container rail-header (max-width: 200px)"));
+    expect(narrow).toContain(".artifacts-head .artifacts-agent-picker:not([data-active])");
+  });
 });
 
 describe("workspace.css rail menu (R1F-12)", () => {
@@ -60,6 +74,9 @@ describe("workspace.css rail menu (R1F-12)", () => {
   it("the phone bottom sheet uses 44px rows and the menu items use the 13px UI size", () => {
     expect(css).toMatch(/\.artifacts-menu--sheet \.rail-menu__item \{\s*min-height: 44px;/);
     expect(css).toMatch(/\.rail-menu__item \{[^}]*font-size: var\(--fs-ui\);/);
+  });
+  it("the phone sheet's text-size steps are 44px touch targets (R2F-02)", () => {
+    expect(css).toMatch(/\.artifacts-menu--sheet \.rail-menu__step \{\s*width: 44px;\s*height: 44px;/);
   });
 });
 

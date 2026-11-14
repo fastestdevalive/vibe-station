@@ -54,7 +54,9 @@ describe("FileStrip", () => {
     expect(kids[2]).toHaveAttribute("aria-label", "File menu");
     const main = Array.from(kids[0]?.children ?? []);
     expect(main[0]).toHaveClass("file-strip__nav");
-    expect(main[1]).toHaveClass("file-strip__name");
+    expect(main[1]).toHaveClass("file-strip__namewrap");
+    expect(main[1]?.children).toHaveLength(1);
+    expect(main[1]?.children[0]).toHaveClass("file-strip__name");
     expect(main[2]).toHaveClass("file-strip__stats");
     expect(main[3]).toHaveClass("file-strip__dir");
     expect(main).toHaveLength(4);

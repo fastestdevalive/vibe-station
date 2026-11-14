@@ -27,6 +27,10 @@ describe("artifacts.css narrow list", () => {
     expect(title).toContain("text-overflow: ellipsis");
   });
 
+  it("the title uses the rail title size, the same as the Commits title (R2F-05)", () => {
+    expect(rule(".artifacts-head__title")).toContain("font-size: var(--fs-ui)");
+  });
+
   it("the agent picker never grows past the tools row", () => {
     const picker = rule(".artifacts-agent-picker");
     expect(picker).toContain("max-width: 100%");

@@ -106,9 +106,11 @@ export function FileStrip({ variant, path, displayDir, copyValue, stats, statsTi
             </button>
           </div>
         ) : null}
-        <button type="button" className="file-strip__name" title={path} onClick={copy}>
-          {name}
-        </button>
+        <span className="file-strip__namewrap">
+          <button type="button" className="file-strip__name" title={path} onClick={copy}>
+            {name}
+          </button>
+        </span>
         {stats ? (
           <span className="file-strip__stats" aria-label="Diff line counts" title={statsTitle}>
             <span className="preview-diffinfo__stats-plus">+{stats.additions}</span>{" "}

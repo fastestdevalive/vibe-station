@@ -23,6 +23,8 @@
   border-bottom: var(--border-width) solid var(--border-default);
 }
 .artifacts-head__title {
+  font-size: var(--fs-ui);
+  color: var(--fg-primary);
   font-weight: 500;
   min-width: 0;
   overflow: hidden;

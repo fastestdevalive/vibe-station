@@ -356,15 +356,15 @@
   font-size: var(--fs-body);
 }
 .artifacts-menu--sheet .rail-menu__row {
-  min-height: 44px;
+  min-height: 52px;
   padding: 0;
 }
 .artifacts-menu--sheet .rail-menu__step {
   width: 44px;
-  height: 36px;
+  height: 44px;
 }
 .artifacts-menu--sheet .rail-menu__pct {
-  height: 36px;
+  height: 44px;
 }
 
 @container rail-header (max-width: 260px) {
@@ -385,13 +385,22 @@
     display: none;
   }
   .file-tree-sidebar-header .rail-header__right,
-  .vcs-commit-detail__head .rail-header__right {
+  .vcs-commit-detail__head .rail-header__right,
+  .vcs-list__head .rail-header__right {
     display: none;
   }
-  .artifacts-head .rail-header__count {
+  .artifacts-head .rail-header__count,
+  .vcs-list__head .rail-header__count {
     display: none;
   }
   .vcs-commit-detail__up {
+    font-size: var(--font-size-sm);
+  }
+  /* No filter picked: the title wins the row. A picked agent keeps its icon and chevron. */
+  .artifacts-head .artifacts-agent-picker:not([data-active]) {
+    display: none;
+  }
+  .artifacts-head .artifacts-head__title {
     font-size: var(--font-size-sm);
   }
 }
@@ -8644,7 +8653,7 @@ button.dashboard-card {
   white-space: nowrap;
 }
 .file-strip__dir {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   padding: 0;
@@ -8668,7 +8677,7 @@ button.dashboard-card {
 .file-strip > .file-strip__main {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--file-strip-gap, var(--space-3));
   flex: 1 1 0;
   min-width: 6em;
   overflow-x: auto;
@@ -8677,6 +8686,26 @@ button.dashboard-card {
 }
 .file-strip > .file-strip__main::-webkit-scrollbar {
   display: none;
+}
+/* The name's own scroller: a name wider than the pane scrolls here (never an ellipsis). The counts stay outside it,
+   pinned beside the name. The button's right padding is the gap to the counts, and the fade covers exactly that
+   padding, so a name that fits is untouched and a cut name fades out. */
+.file-strip__namewrap {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 3em;
+  margin-right: calc(-1 * var(--file-strip-gap, var(--space-3)));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - var(--file-strip-gap, var(--space-3))), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - var(--file-strip-gap, var(--space-3))), transparent);
+}
+.file-strip__namewrap::-webkit-scrollbar {
+  display: none;
+}
+.file-strip__namewrap > .file-strip__name {
+  padding-right: var(--file-strip-gap, var(--space-3));
 }
 .file-strip {
   overflow-x: auto;
@@ -8712,6 +8741,9 @@ button.dashboard-card {
   .file-strip > .preview-diff-layout-toggle {
     display: none;
   }
+  .file-strip > .file-strip__main {
+    --file-strip-gap: var(--space-2);
+  }
 }
 @container preview-diffinfo (max-width: 160px) {
   .preview-diffinfo .file-strip__nav {
@@ -8723,6 +8755,15 @@ button.dashboard-card {
 @media (max-width: 768px) {
   .preview-diffinfo { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
   .preview-diffinfo::-webkit-scrollbar { display: none; }
+}
+
+/* Phones: a 160-200px strip keeps the name and both counts by giving up padding. */
+@media (max-width: 768px) {
+  .preview-diffinfo.file-strip {
+    gap: var(--space-2);
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
 }
 
 /* Decision 3 — commit-mode breadcrumb rendered by `DiffScopeSelector`

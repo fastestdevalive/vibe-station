@@ -23,6 +23,17 @@ function agent(id: string, over: Partial<Session> = {}): Session {
 }
 
 describe("AgentFilterPicker", () => {
+  it("the trigger carries data-active only once an agent is picked (R2F-01)", () => {
+    const options = [{ session: agent("a", { name: "Planner" }), count: 2 }];
+    const { rerender } = render(
+      <AgentFilterPicker value="all" options={options} total={2} sessionStates={{}} mobile={false} onChange={vi.fn()} />,
+    );
+    const trigger = screen.getByRole("button", { name: "Filter by agent: All agents" });
+    expect(trigger).not.toHaveAttribute("data-active");
+    rerender(<AgentFilterPicker value="a" options={options} total={2} sessionStates={{}} mobile={false} onChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Filter by agent: Planner" })).toHaveAttribute("data-active");
+  });
+
   it("on phones the options open in a bottom sheet; picking one closes it and returns focus", async () => {
     const onChange = vi.fn();
     render(

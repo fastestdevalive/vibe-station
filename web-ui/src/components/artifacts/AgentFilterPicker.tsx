@@ -87,6 +87,7 @@ export function AgentFilterPicker({ value, options, total, sessionStates, mobile
         ref={triggerRef}
         type="button"
         className="rail-header__txt artifacts-agent-picker"
+        data-active={selected ? "" : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Filter by agent: ${currentLabel}`}
