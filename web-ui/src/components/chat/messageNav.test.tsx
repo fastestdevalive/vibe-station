@@ -286,6 +286,68 @@ describe("messageNav", () => {
     });
   });
 
+  describe("align: center (turn chain jumps)", () => {
+    const items: RenderItem[] = [userItem("t1"), { type: "assistant", id: "a1", text: "x" }];
+
+    /** A 600px scroller over 10,000px of content, with `a:a1` 100px tall at content offset 5000. */
+    function layout() {
+      const scroller = document.querySelector<HTMLElement>(".scroller")!;
+      const row = document.querySelector<HTMLElement>('[data-find-anchor="a:a1"]')!;
+      Object.defineProperty(scroller, "clientHeight", { value: 600 });
+      Object.defineProperty(scroller, "scrollHeight", { value: 10_000 });
+      scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+      row.getBoundingClientRect = () => ({ top: 5000 - scroller.scrollTop, height: 100 }) as DOMRect;
+      return scroller;
+    }
+    const rows = (
+      <>
+        <div data-row-index={0} data-find-anchor="u:t1" />
+        <div data-row-index={1} data-find-anchor="a:a1" />
+      </>
+    );
+
+    it("centres the row in the scroller instead of scrolling it to the top", async () => {
+      const navOut: { current: MessageNav | null } = { current: null };
+      const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+      const { unmount } = render(
+        <Harness items={items} seqIndex={new Map()} navOut={navOut}>
+          {rows}
+        </Harness>,
+      );
+      const scroller = layout();
+
+      expect(await navOut.current!.scrollToAnchor("a:a1", { align: "center" })).toBeNull();
+      expect(scroller.scrollTop).toBe(4750);
+      expect(scrollSpy).not.toHaveBeenCalled();
+
+      // Other callers keep the top alignment.
+      await navOut.current!.scrollToAnchor("a:a1");
+      expect(scrollSpy.mock.instances).toContain(document.querySelector('[data-find-anchor="a:a1"]'));
+      unmount();
+    });
+
+    it("virtualized: asks for a centred index, then lands through the virtualizer's own offset", async () => {
+      const scrollToOffset = vi.fn();
+      const virtualizer = {
+        getVirtualItems: () => [],
+        scrollToIndex: vi.fn(),
+        scrollToOffset,
+      } as unknown as Virtualizer<HTMLElement, Element>;
+      const navOut: { current: MessageNav | null } = { current: null };
+      const { unmount } = render(
+        <Harness items={items} seqIndex={new Map()} navOut={navOut} virtualizer={virtualizer}>
+          {rows}
+        </Harness>,
+      );
+      layout();
+
+      await navOut.current!.scrollToAnchor("a:a1", { align: "center" });
+      expect(virtualizer.scrollToIndex).toHaveBeenCalledWith(1, { align: "center" });
+      expect(scrollToOffset).toHaveBeenCalledWith(4750);
+      unmount();
+    });
+  });
+
   describe("messageNav: itemAnchorKey and matchItemAnchor", () => {
     it("itemAnchorKey returns i:<id> for error, status, system_event, session_break", () => {
       const errorItem: RenderItem = { type: "error", id: "err1", text: "Some error" };

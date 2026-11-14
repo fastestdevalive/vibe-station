@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import type { RenderItem } from "./MessageList";
 import type { RowUiStore } from "./rowUiState";
 import { createJumpFlash } from "./jumpFlash";
 import { groupAnchorMarks } from "./find/anchorMarks";
+import { keepRowCentered } from "./jumpAlign";
 
 /** Animation frames to wait for a virtualized row to mount after `scrollToIndex`. */
 const NAV_MOUNT_FRAMES = 10;
@@ -15,17 +16,22 @@ export interface MessageNav {
   anchorWhere(anchor: string): "in-view" | "above" | "below";
   /** Scrolls to the `ordinal`-th distinct find mark inside `anchor` and returns
    *  its key, or scrolls the row and returns null when that mark is missing or
-   *  the row renders a different number of marks than `expectedMarks`. */
-  scrollToAnchor(
-    anchor: string,
-    opts?: { ordinal?: number; expectedMarks?: number },
-  ): Promise<string | null>;
+   *  the row renders a different number of marks than `expectedMarks`.
+   *  `align: "center"` (the turn chain's jumps) puts the row in the middle of
+   *  the viewport instead of at its top (`jumpAlign.ts`) and returns null. */
+  scrollToAnchor(anchor: string, opts?: ScrollToAnchorOpts): Promise<string | null>;
   visibleItemRange(): [number, number];
   /** This pane's row holding `anchor`, or null. Never another pane's row. */
   rowFor(anchor: string): HTMLElement | null;
   jumpTurn(direction: -1 | 1): void;
   /** Tints the row holding `anchor` for a moment after a jump (one flash at a time). */
   flashAnchor(anchor: string): void;
+}
+
+export interface ScrollToAnchorOpts {
+  ordinal?: number;
+  expectedMarks?: number;
+  align?: "start" | "center";
 }
 
 export function itemAnchorKey(item: RenderItem): string | undefined {
@@ -83,6 +89,9 @@ export function useMessageNav({
 }: UseMessageNavParams): MessageNav {
   const [jumpFlash] = useState(createJumpFlash);
   useEffect(() => () => jumpFlash.clear(), [jumpFlash]);
+  // The running centred-jump settle; a newer jump or unmount ends it.
+  const settleRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => settleRef.current?.(), []);
 
   return useMemo<MessageNav>(() => {
     /**
@@ -184,16 +193,26 @@ export function useMessageNav({
         return "below";
       },
 
-      async scrollToAnchor(
-        anchor: string,
-        opts: { ordinal?: number; expectedMarks?: number } = {},
-      ): Promise<string | null> {
+      async scrollToAnchor(anchor: string, opts: ScrollToAnchorOpts = {}): Promise<string | null> {
+        settleRef.current?.();
+        settleRef.current = null;
         const itemIndex = items.findIndex((it) => matchItemAnchor(it, anchor));
         if (itemIndex === -1) return null;
 
         revealAnchor(anchor);
 
         const findKeyInElement = (el: HTMLElement): string | null => {
+          const scroller = listRef.current?.parentElement;
+          if (opts.align === "center" && scroller) {
+            // Through the virtualizer when there is one, so its own
+            // scroll-to-index reconcile ends instead of pulling the row back.
+            settleRef.current = keepRowCentered(
+              scroller,
+              () => rowFor(anchor),
+              virtualized ? (top) => virtualizer.scrollToOffset(top) : (top) => (scroller.scrollTop = top),
+            );
+            return null;
+          }
           const { distinctKeys, keyFirstMark } = groupAnchorMarks(el, anchor);
 
           // A row whose rendered marks do not line up with the indexed
@@ -218,7 +237,7 @@ export function useMessageNav({
           return null;
         }
 
-        virtualizer.scrollToIndex(itemIndex, { align: "start" });
+        virtualizer.scrollToIndex(itemIndex, { align: opts.align ?? "start" });
 
         return new Promise<string | null>((resolve) => {
           let framesLeft = NAV_MOUNT_FRAMES;

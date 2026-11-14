@@ -259,7 +259,7 @@ export function useChatOutline({
       const n = latestNavRef.current;
       // A step anchor missing from the loaded window falls back to the turn's row.
       const dest = n.hasAnchor?.(target) === false && fallback ? (fallback() ?? target) : target;
-      void n.scrollToAnchor(dest).then(() => n.flashAnchor(dest));
+      void n.scrollToAnchor(dest, { align: "center" }).then(() => n.flashAnchor(dest));
     };
     const src = sourceRef.current;
     const idx = src ? unloadedOwnerOf(anchor, nodesRef.current) : null;
