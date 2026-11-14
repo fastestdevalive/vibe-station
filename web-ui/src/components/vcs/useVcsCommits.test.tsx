@@ -1,3 +1,4 @@
+import { StrictMode, type ReactNode } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { ApiInstance } from "@/api";
@@ -115,6 +116,51 @@ describe("useVcsCommits", () => {
     });
     expect(result.current.status).toBe("error");
     expect(result.current.error).toBe("nope");
+  });
+
+  it("a StrictMode mount on an empty store issues exactly one /commits request (R2F-03)", () => {
+    const d = deferred<CommitLogEntry[]>();
+    const listCommits = vi.fn().mockReturnValue(d.promise);
+    const { api } = makeApi(listCommits as unknown as ApiInstance["listCommits"]);
+    const StrictWrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    renderHook(() => useVcsCommits({ api, id: "wt1", scope: "worktree" }), { wrapper: StrictWrapper });
+    expect(listCommits).toHaveBeenCalledTimes(1);
+    expect(listCommits).toHaveBeenCalledWith("wt1", 51, "worktree", undefined);
+  });
+
+  it("a stale entry at mount revalidates once: the stale effect joins the mount request (R2F-03)", () => {
+    useVcsCacheStore.getState().replace(KEY, [commit(1)], 50);
+    useVcsCacheStore.getState().markStale(KEY);
+    const d = deferred<CommitLogEntry[]>();
+    const listCommits = vi.fn().mockReturnValue(d.promise);
+    const { api } = makeApi(listCommits as unknown as ApiInstance["listCommits"]);
+    renderHook(() => useVcsCommits({ api, id: "wt1", scope: "worktree" }));
+    expect(listCommits).toHaveBeenCalledTimes(1);
+    expect(listCommits).toHaveBeenCalledWith("wt1", 51, "worktree", undefined);
+  });
+
+  it("a head change while a request is in flight starts a fresh request whose result wins (R2F-03)", async () => {
+    const first = deferred<CommitLogEntry[]>();
+    const second = deferred<CommitLogEntry[]>();
+    const listCommits = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { api } = makeApi(listCommits as unknown as ApiInstance["listCommits"]);
+    const { result } = renderHook(() => useVcsCommits({ api, id: "wt1", scope: "worktree" }));
+    expect(listCommits).toHaveBeenCalledTimes(1);
+    act(() => {
+      useVcsCacheStore.getState().markStale(KEY);
+    });
+    expect(listCommits).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      first.resolve([commit(1)]);
+      await first.promise;
+      second.resolve([commit(2)]);
+      await second.promise;
+    });
+    expect(useVcsCacheStore.getState().entries[KEY]?.commits.map((c) => c.sha)).toEqual([FULL(2)]);
+    expect(result.current.commits.map((c) => c.sha)).toEqual([FULL(2)]);
   });
 
   it("focusWorktree runs once on the first mount per worktree, not on remount, and on every refresh()", () => {

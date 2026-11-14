@@ -79,6 +79,20 @@ describe("FileDetailsDialog (tools-pane-rework B7.3)", () => {
     expect(rowValue("Path")).toBe("web-ui/src/a.ts");
   });
 
+  it("the size row pluralises the line count: 1 line, 21 lines, 0 lines (R2F-07)", async () => {
+    const cases: Array<[number, string]> = [
+      [1, "12.7 KB · 1 line"],
+      [21, "12.7 KB · 21 lines"],
+      [0, "12.7 KB · 0 lines"],
+    ];
+    for (const [lineCount, expected] of cases) {
+      const api = apiWith(async () => ({ ...stat, lineCount }));
+      const { unmount } = render(<FileDetailsDialog api={api} target={fileTarget} onClose={vi.fn()} />);
+      await waitFor(() => expect(rowValue("Size")).toBe(expected));
+      unmount();
+    }
+  });
+
   it("a folder shows Folder and no line count", async () => {
     const api = apiWith(async () => ({ ...stat, kind: "dir", size: null, lineCount: null }));
     render(<FileDetailsDialog api={api} target={{ ...fileTarget, path: "web-ui/src", name: "src", isDir: true }} onClose={vi.fn()} />);

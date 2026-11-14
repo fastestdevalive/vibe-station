@@ -48,3 +48,9 @@ describe("artifacts.css narrow list", () => {
     expect(name).toContain("text-overflow: ellipsis");
   });
 });
+
+describe("artifacts.css phone row age", () => {
+  it("a focused or menu-open row keeps its age on phones (no row button there)", () => {
+    expect(css).toContain(".artifacts-listbox--mobile .artifacts-row-wrap:focus-within .artifacts-row__time");
+  });
+});

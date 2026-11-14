@@ -9,8 +9,14 @@ export const VCS_SERVER_MAX_LIMIT = 1000;
 /** A revalidation shows its spinner only after this delay: a fast refresh never flickers. */
 const REFRESHING_DELAY_MS = 300;
 
-/** One in-flight revalidation per cache key. Starting a new one aborts the old one's result (it is ignored). */
-const inflight = new Map<string, AbortController>();
+interface Inflight {
+  controller: AbortController;
+  limit: number;
+  /** The entry was already stale when this request started, so its result covers that staleness. */
+  staleAtStart: boolean;
+}
+/** One in-flight revalidation per cache key. */
+const inflight = new Map<string, Inflight>();
 /** Worktrees already focused this page session (their `origin/<base>` refresh is then driven by the daemon). */
 const focusedWorktrees = new Set<string>();
 
@@ -42,12 +48,17 @@ export interface UseVcsCommitsResult {
  * Starts one revalidation for a cache key. It fills the module-level store even after the list unmounts, so a
  * warm reopen paints from the cache. A cold entry (no ready rows) starts in `loading`.
  */
-function revalidate(api: ApiInstance, key: string, id: string, scope: FileScope, submodule: string | undefined, limit: number): void {
-  inflight.get(key)?.abort();
-  const controller = new AbortController();
-  inflight.set(key, controller);
+function revalidate(api: ApiInstance, key: string, id: string, scope: FileScope, submodule: string | undefined, limit: number, join = false): void {
   const store = useVcsCacheStore.getState();
   const cur = store.entries[key];
+  const staleNow = cur?.stale ?? false;
+  const running = inflight.get(key);
+  // A mount, or the stale effect of the same commit, joins the request already running for this key when it has the
+  // same page size and already covers the entry's staleness. refresh() and loadMore() always start a new one.
+  if (join && running && running.limit === limit && (running.staleAtStart || !staleNow)) return;
+  running?.controller.abort();
+  const controller = new AbortController();
+  inflight.set(key, { controller, limit, staleAtStart: staleNow });
   store.beginLoad(key, { cold: cur?.status !== "ready", pageLimit: limit });
   api
     .listCommits(id, limit + 1, scope, submodule)
@@ -65,7 +76,7 @@ function revalidate(api: ApiInstance, key: string, id: string, scope: FileScope,
 
 /** Test seam: forget in-flight requests and the per-session focus set. */
 export function resetVcsRevalidationForTests(): void {
-  for (const c of inflight.values()) c.abort();
+  for (const c of inflight.values()) c.controller.abort();
   inflight.clear();
   focusedWorktrees.clear();
 }
@@ -90,7 +101,7 @@ export function useVcsCommits({ api, id, scope, submodule, pageLimit = VCS_PAGE_
       void api.focusWorktree(id).catch(() => undefined);
     }
     const e = useVcsCacheStore.getState().entries[key];
-    revalidate(api, key, id, scope, submodule, e && e.pageLimit > 0 ? e.pageLimit : pageLimit);
+    revalidate(api, key, id, scope, submodule, e && e.pageLimit > 0 ? e.pageLimit : pageLimit, true);
     // The cache fill is intentionally not aborted on unmount: a warm reopen paints from it.
   }, [api, key]);
 
@@ -98,7 +109,7 @@ export function useVcsCommits({ api, id, scope, submodule, pageLimit = VCS_PAGE_
   useEffect(() => {
     if (!stale) return;
     const e = useVcsCacheStore.getState().entries[key];
-    revalidate(api, key, id, scope, submodule, e && e.pageLimit > 0 ? e.pageLimit : pageLimit);
+    revalidate(api, key, id, scope, submodule, e && e.pageLimit > 0 ? e.pageLimit : pageLimit, true);
   }, [stale]);
 
   // Spinner delay: visible only after REFRESHING_DELAY_MS of a revalidation.

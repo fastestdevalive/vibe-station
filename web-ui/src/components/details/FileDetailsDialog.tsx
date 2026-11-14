@@ -107,7 +107,7 @@ export function FileDetailsDialog({ api, target, onClose }: FileDetailsDialogPro
       : status === "error"
         ? UNAVAILABLE
         : stat?.size != null
-          ? `${formatBytes(stat.size)}${stat.lineCount != null ? ` · ${stat.lineCount} lines` : ""}`
+          ? `${formatBytes(stat.size)}${stat.lineCount != null ? ` · ${stat.lineCount} ${stat.lineCount === 1 ? "line" : "lines"}` : ""}`
           : "—";
   const modifiedText =
     status === "loading" ? LOADING : status === "error" ? UNAVAILABLE : stat?.modifiedMs != null ? modifiedWithAge(stat.modifiedMs) : "—";

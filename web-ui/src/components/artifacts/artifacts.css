@@ -255,7 +255,9 @@
 .artifacts-listbox--mobile .artifacts-row__more {
   display: none !important;
 }
-.artifacts-listbox--mobile .artifacts-row-wrap:hover .artifacts-row__time {
+.artifacts-listbox--mobile .artifacts-row-wrap:hover .artifacts-row__time,
+.artifacts-listbox--mobile .artifacts-row-wrap:focus-within .artifacts-row__time,
+.artifacts-listbox--mobile .artifacts-row-wrap:has(.artifacts-row__more[aria-expanded="true"]) .artifacts-row__time {
   visibility: visible;
 }
 
