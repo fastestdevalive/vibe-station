@@ -209,6 +209,35 @@ pub struct CommitsResult {
     pub commits: Vec<CommitLogEntry>,
 }
 
+/// Kind of a stat target (`GET .../stat/*path`, `GET .../artifacts/:id/stat`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileStatKind {
+    File,
+    Dir,
+    Other,
+}
+
+/// `GET .../stat/*path` and `GET .../artifacts/:artifactId/stat` response.
+/// Nullable fields serialize as `null` (never omitted): the web client relies on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStat {
+    /// Echo of the requested path (artifact route: the row's canonical absolute path).
+    pub path: String,
+    /// Canonical absolute path; `None` when it could not be resolved.
+    pub absolute_path: Option<String>,
+    pub kind: FileStatKind,
+    /// Bytes; `None` for dir/other.
+    pub size: Option<u64>,
+    /// Unix ms mtime.
+    pub modified_ms: Option<i64>,
+    /// Lines of an in-root regular text file <= 2 MiB; `None` otherwise (always `None` for artifacts).
+    pub line_count: Option<u64>,
+    /// `true` for the in-root route, `false` for the artifact route.
+    pub in_root: bool,
+}
+
 /// `GET /worktrees/:id/commits` entry (`CommitLogEntry` in git.ts).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -404,4 +433,37 @@ pub struct GutterResult {
     pub added: Vec<u32>,
     pub deleted: Vec<u32>,
     pub modified: Vec<u32>,
+}
+
+#[cfg(test)]
+mod file_stat_tests {
+    use super::*;
+
+    #[test]
+    fn file_stat_serializes_camel_case_with_explicit_nulls() {
+        let stat = FileStat {
+            path: "/r/a".into(),
+            absolute_path: Some("/r/a".into()),
+            kind: FileStatKind::Dir,
+            size: None,
+            modified_ms: Some(123),
+            line_count: None,
+            in_root: true,
+        };
+        let json = serde_json::to_value(&stat).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "path": "/r/a",
+                "absolutePath": "/r/a",
+                "kind": "dir",
+                "size": null,
+                "modifiedMs": 123,
+                "lineCount": null,
+                "inRoot": true
+            })
+        );
+        let back: FileStat = serde_json::from_value(json).expect("round-trip");
+        assert_eq!(back, stat);
+    }
 }

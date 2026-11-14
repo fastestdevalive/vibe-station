@@ -297,6 +297,17 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             rev,
             hint,
         },
+        ServerEvent::WorktreeHead {
+            worktree_id,
+            head_sha,
+            base_sha,
+            rev,
+        } => ServerMessage::WorktreeHead {
+            worktree_id,
+            head_sha,
+            base_sha,
+            rev,
+        },
         ServerEvent::OrderedListUpdated {
             scope_key,
             item_ids,
@@ -596,6 +607,31 @@ mod tests {
                 assert_eq!(hint.as_deref(), Some("git worktree repair"));
             }
             other => panic!("expected WorktreeDiffStat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn worktree_head_event_maps_to_server_message() {
+        let event = ServerEvent::WorktreeHead {
+            worktree_id: "wt-1".into(),
+            head_sha: Some("a".repeat(40)),
+            base_sha: None,
+            rev: 5,
+        };
+        let msg = server_event_to_message(event);
+        match msg {
+            vst_types::ws::ServerMessage::WorktreeHead {
+                worktree_id,
+                head_sha,
+                base_sha,
+                rev,
+            } => {
+                assert_eq!(worktree_id, "wt-1");
+                assert_eq!(head_sha, Some("a".repeat(40)));
+                assert_eq!(base_sha, None);
+                assert_eq!(rev, 5);
+            }
+            other => panic!("expected WorktreeHead, got {other:?}"),
         }
     }
 
