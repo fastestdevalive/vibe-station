@@ -4,7 +4,7 @@ import type { ApiInstance } from "@/api";
 import { ApiError } from "@/api/errors";
 import type { ArtifactRow, FileStat, Session } from "@/api/types";
 import { useServerStore } from "@/hooks/useServerStore";
-import { FileDetailsDialog } from "./FileDetailsDialog";
+import { FileDetailsDialog, typeLabel } from "./FileDetailsDialog";
 import type { DetailsTarget } from "./detailsStore";
 
 const mobile = { value: false };
@@ -44,7 +44,7 @@ describe("FileDetailsDialog (tools-pane-rework B7.3)", () => {
     render(<FileDetailsDialog api={api} target={fileTarget} onClose={vi.fn()} />);
     await waitFor(() => expect(rowValue("Size")).toBe("12.7 KB · 313 lines"));
     expect(rowValue("Path")).toBe("/repo/web-ui/src/a.ts");
-    expect(rowValue("Type")).toBe("Typescript");
+    expect(rowValue("Type")).toBe("TypeScript");
     expect(rowValue("Modified")).toMatch(/\(2h ago\)$/);
     expect(api.statPath).toHaveBeenCalledWith("wt1", "web-ui/src/a.ts", "worktree", undefined);
   });
@@ -124,6 +124,24 @@ describe("FileDetailsDialog (tools-pane-rework B7.3)", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("dialog", { name: "Details" })).toBeInTheDocument();
+  });
+
+  it("desktop: the Close button calls onClose", async () => {
+    const onClose = vi.fn();
+    const api = apiWith(async () => stat);
+    render(<FileDetailsDialog api={api} target={fileTarget} onClose={onClose} />);
+    await waitFor(() => expect(rowValue("Size")).not.toBe("…"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("typeLabel: known extensions get their label, folders and unknown extensions fall through", () => {
+    const file = (name: string) => ({ scope: "worktree", scopeId: "wt1", path: name, name }) as DetailsTarget;
+    expect(typeLabel(file("a.html"), null)).toBe("HTML");
+    expect(typeLabel(file("a.tsx"), null)).toBe("TypeScript (TSX)");
+    expect(typeLabel(file("a.md"), null)).toBe("Markdown");
+    expect(typeLabel({ ...file("src"), isDir: true }, null)).toBe("Folder");
+    expect(typeLabel(file("a.xyz"), null)).toBe("XYZ");
   });
 
   it("on phones the same facts render in the bottom sheet, not the desktop popup", async () => {

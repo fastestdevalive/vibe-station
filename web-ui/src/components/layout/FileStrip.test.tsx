@@ -44,18 +44,21 @@ describe("FileStrip", () => {
     vi.mocked(copyText).mockClear();
   });
 
-  it("orders its children: nav, name, counts, directory, spacer, view, one menu", () => {
+  it("root children: the scrolling main row, the view switch, one menu; main holds nav, name, counts, directory", () => {
     const { container } = render(<FileStrip {...props()} />);
     const root = container.querySelector(".preview-diffinfo") as HTMLElement;
     const kids = Array.from(root.children);
-    expect(kids[0]).toHaveClass("file-strip__nav");
-    expect(kids[1]).toHaveClass("file-strip__name");
-    expect(kids[2]).toHaveClass("file-strip__stats");
-    expect(kids[3]).toHaveClass("file-strip__dir");
-    expect(kids[4]).toHaveClass("file-strip__sp");
-    expect(kids[5]).toBe(screen.getByTestId("view"));
-    expect(kids[6]).toHaveAttribute("aria-label", "File menu");
-    expect(kids).toHaveLength(7);
+    expect(kids).toHaveLength(3);
+    expect(kids[0]).toHaveClass("file-strip__main");
+    expect(kids[1]).toBe(screen.getByTestId("view"));
+    expect(kids[2]).toHaveAttribute("aria-label", "File menu");
+    const main = Array.from(kids[0]?.children ?? []);
+    expect(main[0]).toHaveClass("file-strip__nav");
+    expect(main[1]).toHaveClass("file-strip__name");
+    expect(main[2]).toHaveClass("file-strip__stats");
+    expect(main[3]).toHaveClass("file-strip__dir");
+    expect(main).toHaveLength(4);
+    expect(root.querySelector(".file-strip__sp")).toBeNull();
     expect(root.querySelectorAll("[aria-label='File menu']")).toHaveLength(1);
   });
 

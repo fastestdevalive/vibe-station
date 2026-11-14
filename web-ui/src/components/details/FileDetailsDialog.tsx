@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { FileText, Folder, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { ArtifactRow, FileStat, GitStatusChar, Session } from "@/api/types";
 import { formatBytes } from "@/components/artifacts/formatBytes";
@@ -13,6 +14,7 @@ import { copyText } from "@/lib/copyText";
 import { createPortal } from "react-dom";
 import { resolveCopyPath } from "./copyPath";
 import type { DetailsTarget } from "./detailsStore";
+import "./details.css";
 
 const GIT_LABEL: Record<GitStatusChar, string> = {
   M: "Modified",
@@ -29,9 +31,20 @@ function editsText(n: number): string {
   return n === 1 ? "1 edit" : `${n} edits`;
 }
 
-/** Type column: a folder, the language of a known text file, else the extension, else "File". */
+const TYPE_BY_EXT: Record<string, string> = {
+  html: "HTML", htm: "HTML", css: "CSS", json: "JSON", md: "Markdown",
+  ts: "TypeScript", tsx: "TypeScript (TSX)", js: "JavaScript", jsx: "JavaScript (JSX)",
+  rs: "Rust", py: "Python", sh: "Shell", yml: "YAML", yaml: "YAML", toml: "TOML",
+  svg: "SVG", png: "PNG image", jpg: "JPEG image", jpeg: "JPEG image", gif: "GIF image",
+  webp: "WebP image", pdf: "PDF", txt: "Text",
+};
+
+/** Type column: a folder, a known extension's label, the language of a known text file, else the extension, else "File". */
 export function typeLabel(target: DetailsTarget, stat: FileStat | null): string {
   if (target.isDir || stat?.kind === "dir") return "Folder";
+  const dot0 = target.name.lastIndexOf(".");
+  const known = dot0 > 0 ? TYPE_BY_EXT[target.name.slice(dot0 + 1).toLowerCase()] : undefined;
+  if (known) return known;
   const lang = languageForFilePath(target.name);
   if (lang) return lang.charAt(0).toUpperCase() + lang.slice(1);
   const dot = target.name.lastIndexOf(".");
@@ -131,7 +144,19 @@ export function FileDetailsDialog({ api, target, onClose }: FileDetailsDialogPro
 
   const content = (
     <div className="file-details">
-      <div className="file-details__title">{target.name}</div>
+      <div className="file-details__head">
+        {typeLabel(target, stat) === "Folder" ? (
+          <Folder size={14} aria-hidden="true" className="file-details__icon" />
+        ) : (
+          <FileText size={14} aria-hidden="true" className="file-details__icon" />
+        )}
+        <span className="file-details__title">{target.name}</span>
+        {mobile ? null : (
+          <button type="button" className="file-details__close" aria-label="Close" autoFocus onClick={onClose}>
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
+      </div>
       <dl className="file-details__list">
         {rows.map(([label, value]) => (
           <div className="file-details__row" key={label}>

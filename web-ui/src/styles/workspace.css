@@ -8547,9 +8547,32 @@ button.dashboard-card {
   direction: ltr;
   unicode-bidi: isolate;
 }
-.file-strip__sp {
-  flex: 1 1 auto;
-  min-width: 0;
+/* Nav, name, counts and directory: the only part that scrolls when the bare name is wider than the pane. The view
+   switch and the menu stay outside it, so they are always reachable. */
+.file-strip > .file-strip__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 0;
+  min-width: 6em;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.file-strip > .file-strip__main::-webkit-scrollbar {
+  display: none;
+}
+.file-strip {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.file-strip::-webkit-scrollbar {
+  display: none;
+}
+.file-strip > .file-menu-trigger,
+.file-strip > .rail-header__ib {
+  flex: none;
 }
 .file-strip__note {
   flex: none;
@@ -8559,11 +8582,18 @@ button.dashboard-card {
 }
 .file-strip > .preview-diff-layout-toggle {
   flex: none;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
 }
 
 /* Narrow strip: the directory goes first, then back/forward; name and counts always stay. */
 @container preview-diffinfo (max-width: 260px) {
   .preview-diffinfo .file-strip__dir {
+    display: none;
+  }
+  /* Side-by-side is unusable in a pane this narrow; hiding the switch keeps the menu pinned on phones. */
+  .file-strip > .preview-diff-layout-toggle {
     display: none;
   }
 }

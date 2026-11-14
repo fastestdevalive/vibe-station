@@ -13,6 +13,13 @@ describe("workspace.css preview strip (R1F-01)", () => {
   it("phones scroll leftover strip items instead of overlapping them", () => {
     expect(css).toMatch(/@media \(max-width: 768px\) \{\s*\.preview-diffinfo \{ overflow-x: auto/);
   });
+  it("the strip's main row scrolls sideways; the spacer is gone (R1F-02)", () => {
+    expect(css).toMatch(/\.file-strip > \.file-strip__main \{[^}]*overflow-x: auto;/);
+    expect(css).not.toContain(".file-strip__sp");
+  });
+  it("the view switch sits in the strip with no rule under it (R1F-13)", () => {
+    expect(css).toMatch(/\.file-strip > \.preview-diff-layout-toggle \{[^}]*border-bottom: 0;/);
+  });
 });
 
 describe("workspace.css rail header (R1F-03, retargeted to the rail header)", () => {

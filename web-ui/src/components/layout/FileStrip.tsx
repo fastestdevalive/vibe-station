@@ -38,7 +38,7 @@ export function baseNameOf(path: string): string {
 
 /**
  * The file subheader (board 2): back / forward, file name (never truncated), line counts, the directory (muted,
- * truncated from the start, click copies), a spacer, the view switch, then the ONE menu.
+ * truncated from the start, click copies), then the view switch and the ONE menu, pinned outside the scrolling row.
  */
 export function FileStrip({ variant, path, displayDir, copyValue, stats, statsTitle, nav, view, menu }: FileStripProps) {
   const name = baseNameOf(path);
@@ -81,45 +81,46 @@ export function FileStrip({ variant, path, displayDir, copyValue, stats, statsTi
 
   return (
     <div className={`preview-diffinfo file-strip file-strip--${variant}`}>
-      {nav ? (
-        <div className="file-strip__nav" role="navigation" aria-label="Preview navigation">
-          <button
-            type="button"
-            className="file-strip__btn"
-            aria-label="Back"
-            title="Back (Alt+Shift+←)"
-            disabled={!nav.canGoBack}
-            onClick={nav.onBack}
-          >
-            <ChevronLeft size={14} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="file-strip__btn"
-            aria-label="Forward"
-            title="Forward (Alt+Shift+→)"
-            disabled={!nav.canGoForward}
-            onClick={nav.onForward}
-          >
-            <ChevronRight size={14} aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
-      <button type="button" className="file-strip__name" title={path} onClick={copy}>
-        {name}
-      </button>
-      {stats ? (
-        <span className="file-strip__stats" aria-label="Diff line counts" title={statsTitle}>
-          <span className="preview-diffinfo__stats-plus">+{stats.additions}</span>{" "}
-          <span className="preview-diffinfo__stats-minus">−{stats.deletions}</span>
-        </span>
-      ) : null}
-      {displayDir ? (
-        <button type="button" className="file-strip__dir" title={displayDir} onClick={copy}>
-          <bdi>{displayDir}</bdi>
+      <div className="file-strip__main">
+        {nav ? (
+          <div className="file-strip__nav" role="navigation" aria-label="Preview navigation">
+            <button
+              type="button"
+              className="file-strip__btn"
+              aria-label="Back"
+              title="Back (Alt+Shift+←)"
+              disabled={!nav.canGoBack}
+              onClick={nav.onBack}
+            >
+              <ChevronLeft size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="file-strip__btn"
+              aria-label="Forward"
+              title="Forward (Alt+Shift+→)"
+              disabled={!nav.canGoForward}
+              onClick={nav.onForward}
+            >
+              <ChevronRight size={14} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+        <button type="button" className="file-strip__name" title={path} onClick={copy}>
+          {name}
         </button>
-      ) : null}
-      <span className="file-strip__sp" />
+        {stats ? (
+          <span className="file-strip__stats" aria-label="Diff line counts" title={statsTitle}>
+            <span className="preview-diffinfo__stats-plus">+{stats.additions}</span>{" "}
+            <span className="preview-diffinfo__stats-minus">−{stats.deletions}</span>
+          </span>
+        ) : null}
+        {displayDir ? (
+          <button type="button" className="file-strip__dir" title={displayDir} onClick={copy}>
+            <bdi>{displayDir}</bdi>
+          </button>
+        ) : null}
+      </div>
       {note ? (
         <span className="file-strip__note" role="status">
           {note}
