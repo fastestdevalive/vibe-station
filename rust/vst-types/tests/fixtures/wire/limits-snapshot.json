@@ -28,6 +28,27 @@
           "resetsAt": "2026-10-14T18:00:00.386Z",
           "asOf": "2026-10-11T00:41:50.000Z",
           "status": "ok"
+        },
+        {
+          "harness": "claude",
+          "windowId": "seven_day:model:fable",
+          "cadenceMinutes": 10080,
+          "usedPct": 83.0,
+          "resetsAt": "2026-10-14T18:00:00.386Z",
+          "asOf": "2026-10-11T00:41:50.000Z",
+          "status": "ok",
+          "label": "Fable"
+        },
+        {
+          "harness": "claude",
+          "windowId": "iguana_necktie",
+          "cadenceMinutes": null,
+          "usedPct": 0.5,
+          "resetsAt": null,
+          "asOf": "2026-10-11T00:41:50.000Z",
+          "status": "ok",
+          "label": "Iguana necktie",
+          "dollars": { "limit": 250.0, "used": null, "remaining": null }
         }
       ]
     },

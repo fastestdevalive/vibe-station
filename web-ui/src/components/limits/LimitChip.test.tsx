@@ -99,6 +99,27 @@ describe("LimitChip", () => {
     expect(btn.className).toContain("limit-chip--dim");
     expect(btn.getAttribute("title") ?? "").toContain("as of");
   });
+
+  it("names a scoped meter and shows dollars for a dollar bucket in the tooltip and aria label", () => {
+    const fable = win({ windowId: "seven_day:model:fable", cadenceMinutes: 10080, usedPct: 83, label: "Fable" });
+    const { unmount } = render(<LimitChip harness="claude" window={fable} nowMs={NOW} variant="bar" />);
+    const btn = screen.getByRole("button");
+    expect(btn.getAttribute("title")).toContain("Fable");
+    expect(btn.getAttribute("aria-label")).toContain("Fable limit");
+    unmount();
+
+    const dollar = win({
+      windowId: "iguana_necktie",
+      cadenceMinutes: null,
+      usedPct: 0.5,
+      label: "Iguana necktie",
+      dollars: { limit: 250, used: null, remaining: null },
+    });
+    render(<LimitChip harness="claude" window={dollar} nowMs={NOW} variant="bar" />);
+    const title = screen.getByRole("button").getAttribute("title") ?? "";
+    expect(title).toContain("Iguana necktie");
+    expect(title).toContain("$250 cap");
+  });
 });
 
 const WORK_ACCOUNT: AccountSummary = {

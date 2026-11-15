@@ -944,6 +944,8 @@ fn limits_with(
                 resets_at: Some("2999-01-01T00:00:00Z".to_string()),
                 as_of: "2026-10-11T00:00:00.000Z".to_string(),
                 status,
+                label: None,
+                dollars: None,
             }],
         }],
     }

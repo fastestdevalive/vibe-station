@@ -35,6 +35,30 @@ pub struct LimitWindow {
     pub resets_at: Option<String>,
     pub as_of: String,
     pub status: LimitStatus,
+    /// Human label for a window the UI can't name from `window_id` alone
+    /// (a model-scoped meter such as "Fable", or a prettified vendor
+    /// codename). `None` for the stable claude/codex ids, whose cadence ring
+    /// already conveys them. Omitted from the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Present only for a dollar-denominated bucket (the vendor sent a numeric
+    /// `limit_dollars`); `used_pct` is still that bucket's percent of the cap.
+    /// Omitted from the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dollars: Option<LimitDollars>,
+}
+
+/// Dollar amounts of a dollar-based bucket. Every field is independently
+/// optional: vendors have been seen sending only the cap.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitDollars {
+    #[serde(default)]
+    pub limit: Option<f64>,
+    #[serde(default)]
+    pub used: Option<f64>,
+    #[serde(default)]
+    pub remaining: Option<f64>,
 }
 
 /// One probed harness and all of its windows.
@@ -107,6 +131,8 @@ impl LimitWindow {
             resets_at: None,
             as_of: as_of.into(),
             status,
+            label: None,
+            dollars: None,
         }
     }
 }

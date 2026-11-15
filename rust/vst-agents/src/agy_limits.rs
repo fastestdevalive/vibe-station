@@ -120,6 +120,8 @@ pub fn interpret_agy_usage(msg: &serde_json::Value, as_of: &str) -> LimitsResult
                     resets_at,
                     as_of: as_of.into(),
                     status: LimitStatus::Ok,
+                    label: None,
+                    dollars: None,
                 });
             }
         }
