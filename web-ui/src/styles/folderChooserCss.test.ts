@@ -7,7 +7,9 @@ const css = readFileSync(resolve(__dirname, "workspace.css"), "utf8");
 // jsdom has no layout, so assert the declaration that keeps phone targets at 44px.
 describe("folder chooser phone targets", () => {
   it("gives rows, Up, close and footer buttons the touch height", () => {
-    const start = css.indexOf(".folder-chooser__item,\n  .folder-chooser__nav .btn,");
+    const start = css.indexOf(
+      ".folder-chooser__item,\n  .folder-chooser__path-input,\n  .folder-chooser__nav .btn,",
+    );
     expect(start).toBeGreaterThan(0);
     const rule = css.slice(start, css.indexOf("}", start));
     expect(rule).toMatch(/\.dialog-card--folder-chooser \.dialog-card__header \.icon-btn/);
