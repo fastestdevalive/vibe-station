@@ -33,12 +33,16 @@ mod claude_parser {
     const AS_OF: &str = "2026-10-11T00:41:50.000Z";
 
     #[test]
-    fn ok_fixture_two_windows() {
+    fn ok_fixture_plan_windows_plus_dollar_bucket() {
         let msg = fixture("claude-usage-ok.json");
         let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
         assert_eq!(res.harness, "claude");
         assert_eq!(res.status, LimitStatus::Ok);
-        assert_eq!(res.windows.len(), 2);
+        // five_hour + seven_day + the `iguana_necktie` dollar bucket; the
+        // `limits: [{kind: session}]` entry only restates five_hour.
+        assert_eq!(res.windows.len(), 3);
+        assert_eq!(res.windows[0].window_id, "five_hour");
+        assert_eq!(res.windows[1].window_id, "seven_day");
 
         let fh = window(&res, "five_hour");
         assert_eq!(fh.cadence_minutes, Some(300));
@@ -58,6 +62,14 @@ mod claude_parser {
         let msg = fixture("claude-usage-signed-out.json");
         let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
         assert_eq!(res.status, LimitStatus::NoPlanLimits);
+        // Also what a `claude setup-token` login returns (subscription_type
+        // null, rate_limits_available false): the text must not claim the
+        // user is signed out, and must name the setup-token case.
+        let m = res.message.as_deref().unwrap();
+        assert!(
+            m.contains("setup-token") && m.contains("API key") && m.contains("signed out"),
+            "{m}"
+        );
         assert_eq!(res.windows.len(), 2);
         assert!(res.windows.iter().all(|w| w.used_pct.is_none()));
         assert!(res
@@ -86,12 +98,146 @@ mod claude_parser {
     }
 
     #[test]
-    fn unknown_extra_keys_ignored() {
+    fn unknown_codename_dollar_bucket_is_a_labelled_dollar_window() {
         let msg = fixture("claude-usage-ok.json");
         let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
-        // iguana_necktie and limits[] must not be turned into windows.
-        assert_eq!(res.windows.len(), 2);
         assert_eq!(window(&res, "five_hour").used_pct, Some(21.0));
+        // Plan windows are percent buckets: no dollars, no label.
+        assert!(window(&res, "five_hour").dollars.is_none());
+        assert!(window(&res, "five_hour").label.is_none());
+
+        let ig = window(&res, "iguana_necktie");
+        assert_eq!(ig.label.as_deref(), Some("Iguana necktie"));
+        assert!((ig.used_pct.unwrap() - 0.4669).abs() < 0.001);
+        assert_eq!(ig.cadence_minutes, None);
+        assert_eq!(ig.status, LimitStatus::Ok);
+        let d = ig.dollars.as_ref().expect("limit_dollars => dollar bucket");
+        assert_eq!(d.limit, Some(250.0));
+        assert_eq!(d.used, None);
+        assert_eq!(d.remaining, None);
+    }
+
+    #[test]
+    fn fable_weekly_scoped_and_null_five_hour_real_capture() {
+        // Redacted real `get_usage` capture (claude 2.1.325, Max): five_hour is
+        // null, seven_day is 89%, Fable is a weekly_scoped limit (also echoed
+        // in model_scoped[]), every codename bucket is null.
+        let msg = fixture("claude-usage-fable-scoped.json");
+        let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
+        assert_eq!(res.status, LimitStatus::Ok);
+        assert_eq!(res.windows.len(), 3, "{:?}", res.windows);
+
+        // null five_hour: placeholder, never a fake 0.
+        let fh = window(&res, "five_hour");
+        assert_eq!(fh.used_pct, None);
+        assert_eq!(fh.status, LimitStatus::NoData);
+        assert_eq!(fh.cadence_minutes, Some(300));
+
+        // seven_day keeps its stable id/cadence; `weekly_all` is not duplicated.
+        let sd = window(&res, "seven_day");
+        assert_eq!(sd.used_pct, Some(89.0));
+        assert_eq!(sd.cadence_minutes, Some(10080));
+        assert_eq!(
+            res.windows
+                .iter()
+                .filter(|w| w.used_pct == Some(89.0))
+                .count(),
+            1
+        );
+
+        // Fable: derived from limits[] and NOT doubled by model_scoped[].
+        let f = window(&res, "seven_day:model:fable");
+        assert_eq!(f.label.as_deref(), Some("Fable"));
+        assert_eq!(f.used_pct, Some(83.0));
+        assert_eq!(f.cadence_minutes, Some(10080));
+        assert_eq!(f.status, LimitStatus::Ok);
+        assert!(f.dollars.is_none());
+        assert!(f.resets_at.as_deref().unwrap().ends_with('Z'));
+
+        // No window for null codename buckets or the non-window blocks.
+        for id in [
+            "extra_usage",
+            "spend",
+            "seven_day_breakdown",
+            "tangelo",
+            "pace",
+        ] {
+            assert!(res.windows.iter().all(|w| w.window_id != id), "{id}");
+        }
+    }
+
+    #[test]
+    fn extra_windows_are_stamped_per_account_and_keep_slot_keys() {
+        // The scheduler stamps each probe result with its account; the generic
+        // buckets must carry that account too and round-trip as pinned slots.
+        let msg = fixture("claude-usage-fable-scoped.json");
+        let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF)
+            .with_account(Some("acc_1a2b3c4d".into()));
+        assert!(res
+            .windows
+            .iter()
+            .all(|w| w.account_id.as_deref() == Some("acc_1a2b3c4d")));
+        let f = window(&res, "seven_day:model:fable");
+        let slot = vst_types::LimitSlotRef {
+            harness: f.harness.clone(),
+            window_id: f.window_id.clone(),
+            account_id: f.account_id.clone(),
+        };
+        assert_eq!(slot.to_key(), "claude/seven_day:model:fable@acc_1a2b3c4d");
+        assert_eq!(
+            vst_types::LimitSlotRef::from_key(&slot.to_key()),
+            Some(slot)
+        );
+    }
+
+    #[test]
+    fn model_scoped_alone_still_yields_the_meter() {
+        let msg = serde_json::json!({"type":"control_response","response":{
+        "subtype":"success","request_id":"vst-limits-1","response":{
+        "rate_limits_available":true,
+        "rate_limits":{
+            "five_hour":null,"seven_day":{"utilization":10},
+            "seven_day_opus":{"utilization":40,"resets_at":"2026-11-18T18:00:00+00:00"},
+            "model_scoped":[{"display_name":"Opus","utilization":40}]
+        }}}});
+        let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
+        // model_scoped yields the labelled meter; the legacy seven_day_opus key
+        // restating it is not added a second time.
+        assert_eq!(res.windows.len(), 3, "{:?}", res.windows);
+        assert_eq!(window(&res, "seven_day:model:opus").used_pct, Some(40.0));
+    }
+
+    #[test]
+    fn hostile_labels_are_sanitised_and_ids_have_no_slash() {
+        let msg = serde_json::json!({"type":"control_response","response":{
+        "subtype":"success","request_id":"vst-limits-1","response":{
+        "rate_limits_available":true,
+        "rate_limits":{
+            "five_hour":null,"seven_day":null,
+            "a/b c":{"utilization":5,"limit_dollars":10,"used_dollars":1.5,"remaining_dollars":8.5},
+            "bad":{"utilization":"nope"},
+            "co@dename":{"utilization":3},
+            "limits":[{"kind":"weekly_scoped","group":"weekly","percent":7,
+                "scope":{"model":{"display_name":"Ev\u{7}il/\n  Model"}}}]
+        }}}});
+        let res = vst_agents::claude_limits::interpret_claude_response(&msg, AS_OF);
+        assert_eq!(res.status, LimitStatus::Ok);
+        // Neither '/' nor '@': `LimitSlotRef::to_key` splits on both.
+        for w in &res.windows {
+            assert!(!w.window_id.contains('/'), "{}", w.window_id);
+            assert!(!w.window_id.contains('@'), "{}", w.window_id);
+        }
+        assert_eq!(window(&res, "co_dename").used_pct, Some(3.0));
+        let d = window(&res, "a_b_c");
+        assert_eq!(d.label.as_deref(), Some("A/b c"));
+        let dd = d.dollars.as_ref().unwrap();
+        assert_eq!(
+            (dd.limit, dd.used, dd.remaining),
+            (Some(10.0), Some(1.5), Some(8.5))
+        );
+        assert!(res.windows.iter().all(|w| w.window_id != "bad"));
+        let scoped = window(&res, "seven_day:model:evil_model");
+        assert_eq!(scoped.label.as_deref(), Some("Evil/ Model"));
     }
 }
 

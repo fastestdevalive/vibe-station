@@ -15,6 +15,7 @@ import {
   slotKey,
   statusReason,
   windowLabel,
+  dollarsText,
 } from "./limitsModel";
 
 const SLOTS: [LimitSlotRef, LimitSlotRef] = [
@@ -270,6 +271,7 @@ describe("statusReason", () => {
     expect(statusReason("not_installed", null)).toBe("Not installed");
     expect(statusReason("signed_out", null)).toBe("Signed out. Sign in from Settings.");
     expect(statusReason("no_plan_limits", null)).toContain("No plan limits");
+    expect(statusReason("no_plan_limits", null)).toContain("setup-token");
     expect(statusReason("no_data", null)).toBe("No data yet");
     expect(statusReason("error", "boom")).toBe("boom");
     expect(statusReason("error", null)).toBe("Couldn't read limit");
@@ -297,5 +299,39 @@ describe("ariaLabel", () => {
     expect(label).toContain("Agy");
     expect(label).toContain("Gemini · 5h limit");
     expect(label).not.toContain("gemini 5h limit");
+  });
+});
+
+describe("generic claude buckets", () => {
+  it("prefers the daemon label, then a readable id fallback; plan ids stay unlabelled", () => {
+    expect(windowLabel("claude", "seven_day:model:fable", "Fable")).toBe("Fable");
+    expect(windowLabel("claude", "iguana_necktie")).toBe("iguana necktie");
+    expect(windowLabel("claude", "seven_day:model:fable")).toBe("seven day · model · fable");
+    expect(windowLabel("claude", "five_hour")).toBeNull();
+    expect(windowLabel("claude", "seven_day", null)).toBeNull();
+  });
+
+  it("derives a weekly cadence for scoped seven_day ids", () => {
+    expect(cadenceFromWindowId("seven_day:model:fable")).toBe(10080);
+    expect(cadenceFromWindowId("iguana_necktie")).toBeNull();
+  });
+
+  it("formats dollar buckets distinctly and leaves percent buckets alone", () => {
+    expect(dollarsText(null)).toBeNull();
+    expect(dollarsText(undefined)).toBeNull();
+    expect(dollarsText({ limit: null, used: 3 })).toBeNull();
+    expect(dollarsText({ limit: 250 })).toBe("$250 cap");
+    expect(dollarsText({ limit: 250, used: 1.1673 })).toBe("$1.17 of $250");
+    expect(dollarsText({ limit: 250, remaining: 248.5 })).toBe("$248.50 left of $250");
+  });
+});
+
+describe("chipView tiny values", () => {
+  const base = { harness: "claude", windowId: "x", cadenceMinutes: null, resetsAt: null, asOf: new Date().toISOString(), status: "ok" as const };
+  it("shows <1% for a real value under one percent, 0% only for a true zero", () => {
+    const now = Date.now();
+    expect(chipView({ ...base, usedPct: 0.47 }, now).pctText).toBe("<1%");
+    expect(chipView({ ...base, usedPct: 0 }, now).pctText).toBe("0%");
+    expect(chipView({ ...base, usedPct: 1.4 }, now).pctText).toBe("1%");
   });
 });

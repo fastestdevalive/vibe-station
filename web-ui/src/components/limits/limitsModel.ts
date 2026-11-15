@@ -1,4 +1,4 @@
-import type { LimitSlotRef, LimitStatus, LimitWindow, LimitsResult } from "@/api/types";
+import type { LimitDollars, LimitSlotRef, LimitStatus, LimitWindow, LimitsResult } from "@/api/types";
 
 export type SlotIndex = 0 | 1;
 
@@ -87,6 +87,8 @@ export function nextSlots(
 export function cadenceFromWindowId(windowId: string | undefined): number | null {
   if (windowId === "five_hour") return 300;
   if (windowId === "seven_day") return 10080;
+  if (windowId?.startsWith("seven_day:")) return 10080;
+  if (windowId?.startsWith("five_hour:")) return 300;
   if (windowId?.endsWith("_5h")) return 300;
   if (windowId?.endsWith("_weekly")) return 10080;
   return null;
@@ -102,15 +104,31 @@ const AGY_WINDOW_LABELS: Record<string, string> = {
   gemini_argon_wtu_weekly: "Gemini 4 Argon · weekly",
 };
 
+/** Ids whose cadence ring already names them; they never need a label. */
+const STABLE_PLAN_IDS = new Set(["five_hour", "seven_day", "primary", "secondary"]);
+
 /** Human label for a window row, or `null` when the harness's own cadence ring
- *  already conveys it (claude / codex). For agy, maps known ids to friendly
- *  labels and prettifies unknown ones (`foo_bar_5h` → "foo bar 5h") so rows are
- *  never indistinguishable. */
-export function windowLabel(harness: string, windowId: string): string | null {
-  if (harness !== "agy") return null;
-  const known = AGY_WINDOW_LABELS[windowId];
-  if (known) return known;
-  return windowId.replace(/_/g, " ");
+ *  already conveys it (claude / codex plan windows). Precedence: the daemon's
+ *  `label` (a scoped meter like "Fable", a prettified codename) → agy's known
+ *  ids → a readable fallback from the id (`foo_bar_5h` → "foo bar 5h",
+ *  `seven_day:model:fable` → "seven day · model · fable"), so rows are never
+ *  indistinguishable and an unknown bucket never renders blank. */
+export function windowLabel(harness: string, windowId: string, label?: string | null): string | null {
+  if (label) return label;
+  if (harness === "agy") {
+    return AGY_WINDOW_LABELS[windowId] ?? windowId.replace(/_/g, " ");
+  }
+  if (!windowId || STABLE_PLAN_IDS.has(windowId)) return null;
+  return windowId.replace(/_/g, " ").replace(/:/g, " · ");
+}
+
+/** "$1.17 of $250" / "$250 cap" for a dollar-based bucket; `null` for a percent bucket. */
+export function dollarsText(d: LimitDollars | null | undefined): string | null {
+  if (!d || d.limit == null) return null;
+  const money = (n: number) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+  if (d.used != null) return `${money(d.used)} of ${money(d.limit)}`;
+  if (d.remaining != null) return `${money(d.remaining)} left of ${money(d.limit)}`;
+  return `${money(d.limit)} cap`;
 }
 
 export function cadenceLabel(minutes: number | null): string {
@@ -232,7 +250,7 @@ export function statusReason(status: LimitStatus, message: string | null): strin
     case "signed_out":
       return "Signed out. Sign in from Settings.";
     case "no_plan_limits":
-      return "No plan limits (API key or signed out)";
+      return "No plan limits (signed out, API key or setup-token login)";
     case "no_data":
       return "No data yet";
     case "error":
@@ -280,7 +298,9 @@ export function chipView(win: LimitWindow | undefined, nowMs: number): ChipView 
   if (pct >= 90) {
     return { kind: "warn", pctText: `${Math.round(pct)}%`, pct, dim, asOfLabel, glyph: "!", reason };
   }
-  return { kind: "ok", pctText: `${Math.round(pct)}%`, pct, dim, asOfLabel, glyph: null, reason };
+  // A real but tiny value (e.g. a dollar bucket at 0.47%) must not read as an exact "0%".
+  const pctText = pct > 0 && pct < 1 ? "<1%" : `${Math.round(pct)}%`;
+  return { kind: "ok", pctText, pct, dim, asOfLabel, glyph: null, reason };
 }
 
 function asOfLabelText(asOf: string): string {
@@ -297,7 +317,7 @@ export function ariaLabel(
   nowMs: number,
 ): string {
   const h = harnessLabel(harness);
-  const friendly = win ? windowLabel(harness, win.windowId) : null;
+  const friendly = win ? windowLabel(harness, win.windowId, win.label) : null;
   const windowLabelText = win
     ? friendly !== null
       ? `${friendly} limit`
@@ -310,7 +330,12 @@ export function ariaLabel(
   if (view.kind === "reset") {
     return `${base}, ${view.pctText}`;
   }
-  const pct = view.pct !== null ? `${Math.round(view.pct)} percent used` : "";
+  const pct =
+    view.pct === null
+      ? ""
+      : view.pct > 0 && view.pct < 1
+        ? "less than 1 percent used"
+        : `${Math.round(view.pct)} percent used`;
   const reset = win?.resetsAt ? `, ${resetCountdown(win.resetsAt, nowMs)}` : "";
   if (view.kind === "limit") {
     return `${base}, ${pct}, limit reached`;

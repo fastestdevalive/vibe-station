@@ -107,6 +107,37 @@ describe("LimitsPopup", () => {
     expect(onPick).toHaveBeenCalledWith({ harness: "claude", windowId: "five_hour", accountId: "acc_work" });
   });
 
+  it("shows a generic bucket's label and dollars in an account's row and picks it with the account", () => {
+    const fable = win({
+      accountId: "acc_work",
+      windowId: "seven_day:model:fable",
+      cadenceMinutes: 10080,
+      usedPct: 83,
+      label: "Fable",
+    });
+    const dollar = win({
+      accountId: "acc_work",
+      windowId: "iguana_necktie",
+      cadenceMinutes: null,
+      usedPct: 0.5,
+      label: "Iguana necktie",
+      dollars: { limit: 250 },
+    });
+    const onPick = renderPopup([result(), result({ accountId: "acc_work", windows: [fable, dollar] })]);
+    const rows = screen.getAllByRole("menuitemradio");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]!.textContent).toContain("Fable — ");
+    expect(rows[2]!.textContent).toContain("Iguana necktie — ");
+    expect(rows[2]!.querySelector(".limits-popup__sub")?.textContent).toContain("$250 cap · ");
+    expect(rows[2]!.textContent).toContain("<1%");
+    fireEvent.click(rows[1]!);
+    expect(onPick).toHaveBeenCalledWith({
+      harness: "claude",
+      windowId: "seven_day:model:fable",
+      accountId: "acc_work",
+    });
+  });
+
   it("marks the pinned row checked and shows the other slot's tag", () => {
     renderPopup([
       result(),
@@ -149,7 +180,7 @@ describe("LimitsPopup", () => {
     ]);
     expect(screen.getByText(/Signed out\. Sign in from Settings\./)).toBeInTheDocument();
     expect(screen.getByText(/No data yet/)).toBeInTheDocument();
-    expect(screen.getByText(/No plan limits \(API key or signed out\)/)).toBeInTheDocument();
+    expect(screen.getByText(/No plan limits \(signed out, API key or setup-token login\)/)).toBeInTheDocument();
   });
 
   it("dims an errored window and shows its as-of time", () => {

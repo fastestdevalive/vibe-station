@@ -74,6 +74,8 @@ pub fn interpret_codex_rate_limits(msg: &serde_json::Value, as_of: &str) -> Limi
                 resets_at,
                 as_of: as_of.into(),
                 status: LimitStatus::Ok,
+                label: None,
+                dollars: None,
             });
         }
     }

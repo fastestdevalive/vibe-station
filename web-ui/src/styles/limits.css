@@ -112,11 +112,16 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  padding: var(--space-2) 0;
-  /* One group per account can outgrow a short window: scroll inside. */
+  /* No bottom padding: a sticky footer would sit that far above the edge with rows
+   * showing beneath it. The footer carries the bottom padding instead. */
+  padding: var(--space-2) 0 0;
+  /* One group per account, plus generic buckets (scoped models, vendor
+   * codenames), can outgrow a short window: scroll inside, with the Refresh
+   * footer pinned. */
   max-height: calc(100vh - var(--global-status-bar-h, 24px) - 2 * var(--space-3));
   max-height: calc(100dvh - var(--global-status-bar-h, 24px) - 2 * var(--space-3));
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .limits-popup__group-title {
@@ -151,6 +156,17 @@
  * cursor flips between hand/arrow/text as the mouse crosses the row. */
 .limits-popup__row * {
   cursor: inherit;
+}
+
+/* Rows' label columns line up regardless of "—" / "9% used" / "100% used". */
+.limits-popup__row .limit-chip__pct {
+  min-width: 7ch;
+}
+
+/* Vendor labels are untrusted and unbounded: wrap, never push the row wider. */
+.limits-popup__main,
+.limits-popup__sub {
+  overflow-wrap: anywhere;
 }
 
 .limits-popup__row[aria-checked="true"] {
@@ -190,9 +206,12 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--border-default);
   margin-top: var(--space-2);
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-card);
 }
 
 .limits-popup__reason {
@@ -238,6 +257,7 @@
     max-width: none;
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     min-width: 0;
+    max-height: calc(100dvh - var(--global-status-bar-h, 24px) - var(--space-4));
   }
 
   .limits-popup-backdrop {

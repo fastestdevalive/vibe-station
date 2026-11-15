@@ -11,6 +11,7 @@ import {
   isResetImminent,
   resetCountdown,
   windowLabel,
+  dollarsText,
 } from "./limitsModel";
 
 interface LimitChipProps {
@@ -50,8 +51,10 @@ function tooltipText(
   nowMs: number,
 ): string {
   const parts: string[] = [];
-  const label = windowLabel(harness, windowId ?? "");
+  const label = windowLabel(harness, windowId ?? "", window?.label);
   if (label) parts.push(label);
+  const money = dollarsText(window?.dollars);
+  if (money) parts.push(money);
   if (window?.resetsAt) {
     parts.push(view.kind === "reset" ? "Reset" : capitalize(resetCountdown(window.resetsAt, nowMs)));
   }

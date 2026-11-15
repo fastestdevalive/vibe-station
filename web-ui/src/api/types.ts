@@ -1201,6 +1201,20 @@ export interface LimitWindow {
   /** Account this window belongs to (mirror of `LimitWindow.account_id`).
    *  ABSENT = the CLI's System login (so pre-accounts slots keep working). */
   accountId?: string;
+  /** Human label for a window the UI can't name from `windowId` (a model-scoped
+   *  meter such as "Fable", or a prettified vendor codename). Absent for the
+   *  stable claude/codex ids. */
+  label?: string | null;
+  /** Present only for a dollar-denominated bucket; `usedPct` is still its
+   *  percent of the cap. */
+  dollars?: LimitDollars | null;
+}
+
+/** Dollar amounts of a dollar-based bucket; each field is independently optional. */
+export interface LimitDollars {
+  limit?: number | null;
+  used?: number | null;
+  remaining?: number | null;
 }
 
 export interface LimitsResult {

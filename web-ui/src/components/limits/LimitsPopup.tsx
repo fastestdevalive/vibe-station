@@ -15,6 +15,7 @@ import {
   slotKey,
   statusReason,
   windowLabel,
+  dollarsText,
   type SlotIndex,
 } from "./limitsModel";
 
@@ -67,7 +68,8 @@ function PopupRow({
   onFocusRow: () => void;
   onPick: () => void;
 }) {
-  const label = windowLabel(harness, window.windowId);
+  const label = windowLabel(harness, window.windowId, window.label);
+  const money = dollarsText(window.dollars);
   const countdown = resetCountdown(window.resetsAt, nowMs);
   const exactTime = formatLocalResetTime(window.resetsAt, nowMs);
   return (
@@ -94,7 +96,9 @@ function PopupRow({
             {label ? `${label} — ` : ""}
             {countdown}
           </span>
-          {exactTime ? <span className="limits-popup__sub">{exactTime}</span> : null}
+          {money || exactTime ? (
+            <span className="limits-popup__sub">{[money, exactTime].filter(Boolean).join(" · ")}</span>
+          ) : null}
         </span>
       )}
       {inOtherSlot ? <span>slot {otherSlotNumber}</span> : <span />}

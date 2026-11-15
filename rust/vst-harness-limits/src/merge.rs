@@ -52,6 +52,8 @@ pub fn results_equivalent(a: &LimitsResult, b: &LimitsResult) -> bool {
             && x.used_pct == y.used_pct
             && x.resets_at == y.resets_at
             && x.status == y.status
+            && x.label == y.label
+            && x.dollars == y.dollars
     })
 }
 
@@ -76,6 +78,8 @@ mod tests {
             resets_at: Some("2026-10-11T02:10:00.386Z".into()),
             as_of: as_of.into(),
             status,
+            label: None,
+            dollars: None,
         }
     }
 

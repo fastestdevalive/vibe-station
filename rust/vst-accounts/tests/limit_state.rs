@@ -20,6 +20,8 @@ fn window(id: &str, used: Option<f64>, resets_at: Option<&str>) -> LimitWindow {
         resets_at: resets_at.map(str::to_string),
         as_of: "2026-01-01T00:00:00Z".into(),
         status: LimitStatus::Ok,
+        label: None,
+        dollars: None,
     }
 }
 

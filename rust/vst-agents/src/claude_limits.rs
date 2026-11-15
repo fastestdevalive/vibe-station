@@ -26,22 +26,44 @@ use vst_types::{LimitSignal, LimitStatus, LimitsResult};
 
 /// This harness's plugin id / binary name.
 pub const HARNESS: &str = "claude";
+/// Shown for `rate_limits_available: false` / null `rate_limits`. Claude sends
+/// exactly this for a signed-out CLI, an API key AND a long-lived
+/// `claude setup-token` login (inference-only: no plan attached), so the text
+/// names all three rather than implying the user is signed out.
+pub const NO_PLAN_LIMITS_MESSAGE: &str =
+    "No plan limits: signed out, an API key, or a setup-token login (run `claude login` for plan limits)";
 /// Per-probe wall-clock bound; a hung `claude` cannot wedge the scheduler.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 /// The two plan windows claude reports, with their cadence in minutes.
 pub const WINDOWS: [(&str, u32); 2] = [("five_hour", 300), ("seven_day", 10080)];
 
+/// `rate_limits` keys that carry a `utilization` field (or look like windows)
+/// but are NOT usage windows: the overage-credit feature, the spend block and
+/// the per-surface breakdown. Never turned into windows by the generic scan.
+const NON_WINDOW_KEYS: [&str; 3] = ["extra_usage", "spend", "seven_day_breakdown"];
+/// Cap on any vendor-supplied label / id fragment we put on the wire.
+const MAX_LABEL: usize = 48;
+
 /// Pure. `msg` = one parsed stdout JSON line of type `"control_response"`.
 ///
-/// Tolerant, `Value` navigation only. Rules (see plan § 2.3):
+/// Tolerant, `Value` navigation only. Rules (see plan § 2.3; the wire shape is
+/// summarised in `docs/API-CONTRACT.md` § Harness limits):
 /// - `response.subtype == "error"` → `Error` failure with the error text.
 /// - `rate_limits_available == false` or `rate_limits` null → `NoPlanLimits`
-///   ("No plan limits: signed out or using an API key") with both windows as
+///   ("No plan limits: signed out, an API key, or a setup-token login") with both windows as
 ///   placeholders.
-/// - else each present `five_hour`/`seven_day` object with a numeric
-///   `utilization` yields a real window; missing/non-numeric windows become
-///   `NoData` placeholders. Result `status` is `Ok` if ≥1 window has data,
-///   else `NoData` ("Claude returned no 5-hour or weekly window").
+/// - `five_hour` / `seven_day` keep their ids and cadences; a null / missing /
+///   non-numeric one becomes a `NoData` placeholder (never a fake 0).
+/// - Then every other bucket that carries a numeric value becomes an extra
+///   window, present ONLY when it has data: scoped entries of `limits[]`
+///   (`weekly_scoped` + `scope.model.display_name` → `seven_day:model:fable`),
+///   `model_scoped[]` not already covered, and any other object key with a
+///   numeric `utilization` (id = key, label = prettified key). A numeric
+///   `limit_dollars` marks a dollar bucket (see [`vst_types::LimitDollars`]).
+///   `limits[]` entries that duplicate `five_hour`/`seven_day`
+///   (`session`, `weekly_all`) are skipped.
+/// - `status` is `Ok` if ≥1 window has data, else `NoData`
+///   ("Claude returned no 5-hour or weekly window").
 pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> LimitsResult {
     let resp = msg.get("response");
     if resp.and_then(|r| r.get("subtype")).and_then(|s| s.as_str()) == Some("error") {
@@ -62,11 +84,7 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
         || rate_limits.is_none()
         || rate_limits == Some(&serde_json::Value::Null)
     {
-        return placeholder_result(
-            LimitStatus::NoPlanLimits,
-            "No plan limits: signed out or using an API key",
-            as_of,
-        );
+        return placeholder_result(LimitStatus::NoPlanLimits, NO_PLAN_LIMITS_MESSAGE, as_of);
     }
 
     let mut windows = Vec::with_capacity(WINDOWS.len());
@@ -75,27 +93,12 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
         let slot = rate_limits
             .and_then(|rl| rl.get(id))
             .filter(|v| v.is_object());
-        let utilization = slot
-            .and_then(|s| s.get("utilization"))
-            .and_then(|u| u.as_f64());
-        let window = match (slot, utilization) {
-            (Some(s), Some(util)) => {
+        let window = match slot.and_then(|s| bucket_window(id, None, Some(cadence), s, as_of)) {
+            Some(w) => {
                 any_data = true;
-                vst_types::LimitWindow {
-                    harness: HARNESS.into(),
-                    window_id: id.into(),
-                    account_id: None,
-                    cadence_minutes: Some(cadence),
-                    used_pct: Some(util),
-                    resets_at: s
-                        .get("resets_at")
-                        .and_then(|r| r.as_str())
-                        .map(normalize_iso),
-                    as_of: as_of.into(),
-                    status: LimitStatus::Ok,
-                }
+                w
             }
-            _ => vst_types::LimitWindow::placeholder(
+            None => vst_types::LimitWindow::placeholder(
                 HARNESS,
                 id,
                 Some(cadence),
@@ -104,6 +107,15 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
             ),
         };
         windows.push(window);
+    }
+
+    if let Some(rl) = rate_limits {
+        for w in extra_windows(rl, as_of) {
+            if windows.iter().all(|x| x.window_id != w.window_id) {
+                any_data = true;
+                windows.push(w);
+            }
+        }
     }
 
     if any_data {
@@ -125,6 +137,222 @@ pub fn interpret_claude_response(msg: &serde_json::Value, as_of: &str) -> Limits
             windows,
         }
     }
+}
+
+/// One window from a bucket object `{utilization, resets_at, limit_dollars, ...}`;
+/// `None` unless `utilization` is a finite number.
+fn bucket_window(
+    id: &str,
+    label: Option<String>,
+    cadence: Option<u32>,
+    obj: &serde_json::Value,
+    as_of: &str,
+) -> Option<vst_types::LimitWindow> {
+    let util = finite(obj.get("utilization"))?;
+    Some(make_window(
+        id,
+        label,
+        cadence,
+        util,
+        obj.get("resets_at"),
+        dollars_of(obj),
+        as_of,
+    ))
+}
+
+fn make_window(
+    id: &str,
+    label: Option<String>,
+    cadence: Option<u32>,
+    used_pct: f64,
+    resets_at: Option<&serde_json::Value>,
+    dollars: Option<vst_types::LimitDollars>,
+    as_of: &str,
+) -> vst_types::LimitWindow {
+    vst_types::LimitWindow {
+        harness: HARNESS.into(),
+        window_id: id.into(),
+        account_id: None,
+        cadence_minutes: cadence,
+        used_pct: Some(used_pct),
+        resets_at: resets_at.and_then(|r| r.as_str()).map(normalize_iso),
+        as_of: as_of.into(),
+        status: LimitStatus::Ok,
+        label,
+        dollars,
+    }
+}
+
+fn finite(v: Option<&serde_json::Value>) -> Option<f64> {
+    v.and_then(|u| u.as_f64()).filter(|u| u.is_finite())
+}
+
+/// A dollar bucket iff `limit_dollars` is a number; `used`/`remaining` ride along when sent.
+fn dollars_of(obj: &serde_json::Value) -> Option<vst_types::LimitDollars> {
+    let limit = finite(obj.get("limit_dollars"))?;
+    Some(vst_types::LimitDollars {
+        limit: Some(limit),
+        used: finite(obj.get("used_dollars")),
+        remaining: finite(obj.get("remaining_dollars")),
+    })
+}
+
+/// Windows beyond `five_hour` / `seven_day`, each with data. Order: scoped
+/// `limits[]`, then `model_scoped[]`, then the generic key scan.
+fn extra_windows(rl: &serde_json::Value, as_of: &str) -> Vec<vst_types::LimitWindow> {
+    let mut out: Vec<vst_types::LimitWindow> = Vec::new();
+    fn push(w: vst_types::LimitWindow, out: &mut Vec<vst_types::LimitWindow>) {
+        if !w.window_id.is_empty()
+            && !w.window_id.ends_with(':')
+            && out.iter().all(|x| x.window_id != w.window_id)
+        {
+            out.push(w);
+        }
+    }
+
+    for entry in rl
+        .get("limits")
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let kind = entry.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+        // These two restate `five_hour` / `seven_day`.
+        if matches!(kind, "session" | "weekly_all") {
+            continue;
+        }
+        let Some(pct) = finite(entry.get("percent")) else {
+            continue;
+        };
+        let group = entry.get("group").and_then(|g| g.as_str()).unwrap_or("");
+        let (prefix, cadence) = match group {
+            "session" => ("five_hour", Some(300)),
+            "weekly" => ("seven_day", Some(10080)),
+            _ => ("limit", None),
+        };
+        let scope = entry.get("scope").filter(|s| s.is_object());
+        let (tag, label) = scope_label(scope).unwrap_or_else(|| ("kind", pretty(kind)));
+        if label.is_empty() {
+            continue;
+        }
+        let id = if tag == "kind" {
+            format!("{prefix}:{}", slug(kind))
+        } else {
+            format!("{prefix}:{tag}:{}", slug(&label))
+        };
+        push(
+            make_window(
+                &id,
+                Some(label),
+                cadence,
+                pct,
+                entry.get("resets_at"),
+                None,
+                as_of,
+            ),
+            &mut out,
+        );
+    }
+
+    for entry in rl
+        .get("model_scoped")
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = entry.get("display_name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let label = clean(name);
+        let Some(pct) = finite(entry.get("utilization")) else {
+            continue;
+        };
+        if label.is_empty() {
+            continue;
+        }
+        let id = format!("seven_day:model:{}", slug(&label));
+        push(
+            make_window(
+                &id,
+                Some(label),
+                Some(10080),
+                pct,
+                entry.get("resets_at"),
+                None,
+                as_of,
+            ),
+            &mut out,
+        );
+    }
+
+    if let Some(obj) = rl.as_object() {
+        for (key, v) in obj {
+            if WINDOWS.iter().any(|(id, _)| id == key)
+                || NON_WINDOW_KEYS.contains(&key.as_str())
+                || !v.is_object()
+            {
+                continue;
+            }
+            // `seven_day_opus` & co. restate a model-scoped meter already added above.
+            if let Some(suffix) = key.strip_prefix("seven_day_") {
+                let tail = format!(":{}", slug(suffix));
+                if out.iter().any(|w| w.window_id.ends_with(&tail)) {
+                    continue;
+                }
+            }
+            let cadence = key.starts_with("seven_day").then_some(10080);
+            if let Some(w) = bucket_window(&slug(key), Some(pretty(key)), cadence, v, as_of) {
+                push(w, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// `(tag, label)` of a limit's scope: model first, then surface. `None` = unscoped / unreadable.
+fn scope_label(scope: Option<&serde_json::Value>) -> Option<(&'static str, String)> {
+    let scope = scope?;
+    let named = |v: Option<&serde_json::Value>| {
+        let v = v?;
+        let raw = v
+            .as_str()
+            .or_else(|| v.get("display_name").and_then(|n| n.as_str()))?;
+        let c = clean(raw);
+        (!c.is_empty()).then_some(c)
+    };
+    named(scope.get("model"))
+        .map(|l| ("model", l))
+        .or_else(|| named(scope.get("surface")).map(|l| ("surface", l)))
+}
+
+/// Strip control characters, collapse whitespace, cap length (vendor text is untrusted).
+fn clean(s: &str) -> String {
+    let t: String = s.chars().filter(|c| !c.is_control()).collect();
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    t.chars().take(MAX_LABEL).collect()
+}
+
+/// `iguana_necktie` → "Iguana necktie".
+fn pretty(s: &str) -> String {
+    let c = clean(&s.replace('_', " "));
+    let mut chars = c.chars();
+    match chars.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Lowercase, non-alphanumeric runs → `_`, so the id never contains `/` or `:`.
+fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars().take(MAX_LABEL) {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_matches('_').to_string()
 }
 
 /// A failure result carrying both plan windows as `used_pct: None` placeholders.
