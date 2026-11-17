@@ -349,7 +349,7 @@ jobs:
 
       - name: Upload CLI artifact
         if: runner.os != 'macOS'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cli-${{ matrix.target }}
           path: dist-cli/*
@@ -366,7 +366,7 @@ jobs:
 
       - name: Upload unsigned CLI data (macOS)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-cli-${{ matrix.target }}
           path: dist-unsigned-cli/*
@@ -490,7 +490,7 @@ jobs:
 
       - name: Upload unsigned desktop data (macOS)
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-desktop-${{ matrix.target }}
           path: dist-unsigned-desktop/*
@@ -519,7 +519,7 @@ jobs:
 
       - name: Upload desktop artifact
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.target }}
           path: dist-desktop/*
@@ -740,14 +740,14 @@ jobs:
           ls -la dist-desktop
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cli-${{ matrix.target }}
           path: dist-cli/*
           if-no-files-found: error
 
       - name: Upload desktop artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.target }}
           path: dist-desktop/*
@@ -921,7 +921,7 @@ jobs:
         run: bash scripts/sign-release-manifest.sh release-assets/SHA256SUMS rust/vst-daemon/release-keys/vst-release.pub
 
       - name: Upload signed release assets
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: release-assets/*
