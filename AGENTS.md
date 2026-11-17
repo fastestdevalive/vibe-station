@@ -35,7 +35,9 @@ to refactor it in an unrelated PR.
   `vst-agy-stream-acp` is a leaf crate with no `vst-*` deps, depended on only by
   `vst-daemon` (hidden `agy-stream-acp` subcommand); `vst-accounts` (deps: `vst-types` only) sits beside
   `vst-store` and is depended on by `vst-routes`/`vst-daemon` — `vst-agents` reaches it ONLY through the
-  `AccountPort` trait from `vst-types`; no library crate depends on `vst-routes`/`vst-daemon`.
+  `AccountPort` trait from `vst-types`; no library crate depends on `vst-routes`/`vst-daemon`. `vst-wallpapers`
+  (deps: `vst-types` only) owns the bundled wallpaper catalog, its bounded fetcher and image cache, and is
+  depended on only by `vst-daemon` (`wallpaper_routes.rs`).
 - **One feature, one owner.** A new service/domain gets its own module or crate owning its state,
   scheduling and cache. Don't grow `vst-lifecycle` (already a grab-bag), `vst-agents` or `vst-routes`.
 - **New feature crates stay CLI-agnostic (target):** take per-CLI behaviour by injection (closure/trait
