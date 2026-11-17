@@ -1,0 +1,99 @@
+/* Visibility sliders (Settings › Background). Tokens only: these rows sit on
+   whatever surface the Settings panel paints, wallpaper or not. */
+.bg-vis__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--border-subtle, var(--border-default));
+}
+
+.bg-vis__row:last-child {
+  border-bottom: none;
+}
+
+.bg-vis__main {
+  min-width: 0;
+  flex: 1;
+}
+
+.bg-vis__label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+  margin-bottom: 2px;
+}
+
+.bg-vis__desc {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bg-vis__control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.bg-vis__range {
+  width: 160px;
+  accent-color: var(--accent);
+}
+
+.bg-vis__value {
+  min-width: 4ch;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.bg-vis__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-3);
+}
+
+/* Quiet secondary action: nothing here should compete with the wallpaper choice. */
+.bg-vis__reset {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  background: transparent;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.bg-vis__reset:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.bg-vis__reset:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.bg-vis__reset:disabled {
+  color: var(--fg-muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  .bg-vis__range {
+    width: 120px;
+    /* A phone needs a 44px-tall hit area; the drawn track stays slim
+       (the input's own box grows, the thumb/track stay centred in it). */
+    min-height: 44px;
+  }
+
+  .bg-vis__reset {
+    min-height: 44px;
+  }
+}

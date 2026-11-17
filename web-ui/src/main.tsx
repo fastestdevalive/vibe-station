@@ -12,6 +12,7 @@ import "./components/comments/comments.css";
 import "./components/comments/tray.css";
 import "./components/artifacts/artifacts.css";
 import "./styles/chat.css";
+import "./styles/wallpaper.css";
 import "./components/chat/outline/outline.css";
 import "./components/chat/find/find.css";
 import "./components/preview/scrollmap/scrollmap.css";

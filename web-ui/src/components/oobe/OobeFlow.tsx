@@ -1,16 +1,25 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ApiInstance } from "@/api";
+import { WindowBackground } from "@/components/background/WindowBackground";
+import type { ScreenKind } from "@/components/background/resolveWallpaper";
 import { OobeStep1Location } from "./OobeStep1Location";
 import { OobeStep2Modes } from "./OobeStep2Modes";
+import { OobeStepBackground } from "./OobeStepBackground";
 import { OobeStep3Doctor } from "./OobeStep3Doctor";
 import "./OobeFlow.css";
 
 /** Total OOBE step count. A single source of truth so the step indicator
  *  ("Step N of TOTAL_STEPS") and the "is there a previous step" check stay
- *  correct if a 3rd step is ever added — nothing else in this file hardcodes
- *  "2". */
-const TOTAL_STEPS = 3;
+ *  correct — nothing else in this file hardcodes a number. */
+const TOTAL_STEPS = 4;
+
+/** Step 3 (Background) is client-only; the daemon's 1|2|3 maps 3 → 3, so a
+ *  resumed onboarding lands on the background step instead of skipping it. */
+type Step = 1 | 2 | 3 | 4;
+
+/** Stable identity: `useBackground` re-resolves on every render otherwise. */
+const APP_KIND: ScreenKind = { t: "app" };
 
 interface OobeFlowProps {
   api: ApiInstance;
@@ -31,10 +40,13 @@ export function OobeFlow({
   onStep2Confirmed,
   onCompleted,
 }: OobeFlowProps) {
-  const [step, setStep] = useState<1 | 2 | 3>(currentStep);
+  const [step, setStep] = useState<Step>(currentStep);
 
   return (
     <div className="oobe-screen">
+      {/* The pick from step 3 shows behind this whole screen, the same layer the
+          app mounts — so choosing a wallpaper is immediate, not a preview. */}
+      <WindowBackground kind={APP_KIND} />
       {/* `layout` makes this box itself the thing that animates size —
           whichever direction the user moves (a wider/taller step 2 body vs.
           a narrower/shorter step 1 body), framer-motion interpolates from the
@@ -45,11 +57,7 @@ export function OobeFlow({
         <div className="oobe-step-header">
           <div className="oobe-step-header__slot">
             {step > 1 && (
-              <button
-                type="button"
-                className="oobe-back-link"
-                onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}
-              >
+              <button type="button" className="oobe-back-link" onClick={() => setStep((s) => (s - 1) as Step)}>
                 ← Back
               </button>
             )}
@@ -88,6 +96,8 @@ export function OobeFlow({
                   setStep(3);
                 }}
               />
+            ) : step === 3 ? (
+              <OobeStepBackground onNext={() => setStep(4)} />
             ) : (
               <OobeStep3Doctor api={api} onCompleted={onCompleted} />
             )}

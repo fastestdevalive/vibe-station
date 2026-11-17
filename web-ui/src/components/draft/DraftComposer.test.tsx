@@ -7,6 +7,7 @@ import { createMockApi, type MockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
 import type { AccountSummary, Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
 import { DraftComposer } from "./DraftComposer";
+import { __resetBackgroundStoreForTests, getBackgroundStore, NEW_DRAFT_KEY } from "@/components/background/backgroundStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
@@ -39,10 +40,29 @@ vi.mock("../chat/SkillEditor", () => ({
 }));
 
 vi.mock("./ProjectCombobox", () => ({
-  ProjectCombobox: ({ onAddPath }: { onAddPath: (path: string) => void }) => (
-    <button data-testid="add-path-btn" onClick={() => onAddPath("/tmp/brand-new-dir")}>
-      Add directory
-    </button>
+  ProjectCombobox: ({
+    projects,
+    onAddPath,
+    onSelectExisting,
+  }: {
+    projects: Project[];
+    onAddPath: (path: string) => void;
+    onSelectExisting: (p: Project) => void;
+  }) => (
+    <>
+      <button data-testid="add-path-btn" onClick={() => onAddPath("/tmp/brand-new-dir")}>
+        Add directory
+      </button>
+      <button
+        data-testid="select-project-btn"
+        onClick={() => {
+          const p = projects[0];
+          if (p !== undefined) onSelectExisting(p);
+        }}
+      >
+        Select project
+      </button>
+    </>
   ),
 }));
 
@@ -1133,6 +1153,26 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(body!.firstElementChild).toBe(discard);
   });
 
+  it("the quote line is the last child of `__body`, never inside `__stage-inner` (R2F-04)", async () => {
+    const draft = makeDraftSession({
+      id: "quote-draft",
+      projectId: "p1",
+      draftConfig: { entryPoint: "direct", useWorktree: true, worktreeChoice: "new" },
+    });
+    useServerStore.setState({ projects: [projectFixture("p1")], worktrees: [], sessions: [draft], loaded: true });
+    render(
+      <MemoryRouter initialEntries={["/draft/quote-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="quote-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await findChannelSwitch();
+    const quote = document.querySelector(".draft-quote-line");
+    expect(quote).not.toBeNull();
+    expect(quote!.parentElement!.className).toBe("draft-composer__body");
+    expect(quote!.parentElement!.lastElementChild).toBe(quote);
+    expect(quote!.closest(".draft-composer__stage-inner")).toBeNull();
+  });
+
   it("project tab entry shows the project name and 'runs in the project folder', no worktree copy (R1F-11)", async () => {
     const draft = makeDraftSession({
       id: "ptab-draft",
@@ -1731,5 +1771,180 @@ describe("Phase B3 — draft account picker", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to System login from Settings.");
     expect(startButton()).toBeDisabled();
+  });
+});
+
+describe("Phase 7 — the draft's own wallpaper follows its Start", () => {
+  let api: MockApi;
+  let onStarted: Mock<(...args: unknown[]) => void>;
+
+  beforeEach(() => {
+    api = makeApi();
+    onStarted = vi.fn();
+    useGlobalDraftStore.setState({ draft: null });
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    __resetBackgroundStoreForTests();
+  });
+
+  function project(id = "p1", isGit = true): Project {
+    return {
+      id,
+      name: id,
+      path: `/tmp/${id}`,
+      prefix: id,
+      isGit,
+      defaultBranch: "main",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hidden: false,
+      lspEnabled: false,
+    };
+  }
+
+  function draftSession(over: Partial<Session>): Session {
+    return {
+      id: "t1-draft",
+      worktreeId: null,
+      projectId: "p1",
+      modeId: "claude-mode",
+      type: "agent",
+      isMain: false,
+      state: "drafting",
+      lifecycleState: "drafting",
+      tmuxName: "tmux-t1-draft",
+      channel: "json",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draftPrompt: "build the thing",
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new" },
+      ...over,
+    };
+  }
+
+  function renderTier1(session: Session) {
+    const p = project(session.projectId ?? "p1");
+    useServerStore.setState({ projects: [p], worktrees: [], sessions: [session], loaded: true });
+    return render(
+      <MemoryRouter initialEntries={[`/draft/${session.id}`]}>
+        <DraftComposer api={api as never} draftSessionId={session.id} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  function renderTier2() {
+    return render(
+      <MemoryRouter initialEntries={["/draft/new"]}>
+        <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("new worktree start writes the seed", async () => {
+    getBackgroundStore().draftWallpaperFor(NEW_DRAFT_KEY, ["wp-009"]);
+    renderTier2();
+    await typePrompt("build the thing");
+    await selectNewDirectoryAndStart();
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    const { worktreeId } = onStarted.mock.calls[0]![0] as { worktreeId: string };
+    const state = getBackgroundStore().getState();
+    expect(state.seeds[`worktree:${worktreeId}`]).toBe("wp-009");
+    expect(state.drafts[NEW_DRAFT_KEY]).toBeUndefined();
+  });
+
+  it("choosing a project carries the claimed draft wallpaper to the new draft id", async () => {
+    // CUJ5 / UX-SPEC §2.3: a draft keeps the wallpaper it opened with while
+    // composing; picking a project re-keys the draft and the image must follow.
+    vi.spyOn(api, "listProjects").mockResolvedValue([project("p1")]);
+    getBackgroundStore().draftWallpaperFor(NEW_DRAFT_KEY, ["wp-009"]);
+
+    renderTier2();
+    const select = await screen.findByTestId("select-project-btn");
+    await act(async () => {
+      select.click();
+    });
+
+    await waitFor(() => expect(useServerStore.getState().sessions).toHaveLength(1));
+    const created = useServerStore.getState().sessions[0]!;
+    const state = getBackgroundStore().getState();
+    expect(state.drafts[created.id]).toBe("wp-009");
+    expect(state.drafts[NEW_DRAFT_KEY]).toBeUndefined();
+  });
+
+  it("tab draft start writes nothing", async () => {
+    // A tab draft follows its worktree and claims nothing (mobile UX-SPEC §8);
+    // even a stale claim must not be copied onto the worktree it already lives in.
+    getBackgroundStore().draftWallpaperFor("tab-draft", ["wp-009"]);
+    vi.spyOn(api, "startDraft").mockResolvedValue({ ok: true, worktreeId: "w1" });
+    const session = draftSession({ id: "tab-draft", worktreeId: "w1", draftConfig: { entryPoint: "tab" } });
+    renderTier1(session);
+    await typePrompt("build the thing");
+    await act(async () => {
+      screen.getByTestId("start-btn").click();
+    });
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(getBackgroundStore().getState().seeds).toEqual({});
+  });
+
+  it("existing worktree start writes nothing", async () => {
+    // Joining an existing worktree returns no `worktree` record, so no scope is
+    // created by this Start and nothing is written (first writer wins).
+    getBackgroundStore().draftWallpaperFor("t1-draft", ["wp-009"]);
+    vi.spyOn(api, "startDraft").mockResolvedValue({ ok: true });
+    const session = draftSession({ draftConfig: { entryPoint: "worktree", worktreeChoice: "existing", existingWorktreeId: "w1" } });
+    renderTier1(session);
+    await typePrompt("build the thing");
+    await act(async () => {
+      screen.getByTestId("start-btn").click();
+    });
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(getBackgroundStore().getState().seeds).toEqual({});
+  });
+
+  it("non-git retry new worktree writes the seed", async () => {
+    const p = project("non-git", false);
+    useServerStore.setState({ projects: [p], worktrees: [], sessions: [], loaded: true });
+    getBackgroundStore().draftWallpaperFor("t1-draft", ["wp-009"]);
+
+    const session = draftSession({ projectId: "non-git" });
+    useServerStore.setState({ projects: [p], worktrees: [], sessions: [session], loaded: true });
+
+    const notGitErr = new ApiError(JSON.stringify({ error: "NOT_GIT" }), 422);
+    let startCalls = 0;
+    vi.spyOn(api, "startDraft").mockImplementation(async () => {
+      startCalls += 1;
+      if (startCalls === 1) throw notGitErr;
+      const wt: Worktree = {
+        id: "wt-retry",
+        projectId: "non-git",
+        branch: "wip/wt-retry",
+        baseBranch: "main",
+        baseSha: "sha",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        pinnedAt: null,
+        hiddenAt: null,
+        mainSessionId: "wt-retry-m",
+        lspEnabled: false,
+      };
+      return { ok: true, worktreeId: wt.id, worktree: wt };
+    });
+    vi.spyOn(api, "gitInitProject").mockResolvedValue({ ok: true, isGit: true, defaultBranch: "main" });
+
+    render(
+      <MemoryRouter initialEntries={["/draft/t1-draft"]}>
+        <DraftComposer api={api as never} draftSessionId="t1-draft" onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    await typePrompt("build the thing");
+    await act(async () => {
+      screen.getByTestId("start-btn").click();
+    });
+
+    await act(async () => {
+      (await screen.findByRole("button", { name: /Run git init and continue/i })).click();
+    });
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+    expect(getBackgroundStore().getState().seeds["worktree:wt-retry"]).toBe("wp-009");
   });
 });

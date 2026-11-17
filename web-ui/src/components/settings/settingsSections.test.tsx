@@ -16,6 +16,11 @@ describe("settingsSectionLabelFor", () => {
     expect(settingsSectionLabelFor("nope")).toBe("nope");
   });
 
+  it("labels the Background section (Settings › Background)", () => {
+    expect(SETTINGS_SECTION_LABELS["background"]).toBe("Background");
+    expect(settingsSectionLabelFor("background")).toBe("Background");
+  });
+
   it("mobile TopBar for /settings/updates shows 'Updates', not the raw id", () => {
     const sectionId = "/settings/updates".split("/")[2]!;
     render(

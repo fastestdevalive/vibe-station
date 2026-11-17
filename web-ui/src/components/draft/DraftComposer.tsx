@@ -14,6 +14,7 @@ import { Select } from "../ui/Select";
 import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "../chat/SkillEditor";
 import { ComposerShell, type HintItem } from "../chat/ComposerShell";
 import { DraftHint } from "./DraftHint";
+import { DraftQuoteLine } from "./DraftQuoteLine";
 import { RichChatToggle } from "../chat/RichChatToggle";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import { NewModeDialog } from "../dialogs/NewModeDialog";
@@ -24,6 +25,8 @@ import { ModePopover } from "./ModePopover";
 import { AccountPicker } from "../accounts/AccountPicker";
 import { AddAccountDialog } from "../accounts/AddAccountDialog";
 import { accountOf, draftAccountId, parentSessionFor } from "@/lib/accounts";
+import { NEW_DRAFT_KEY } from "@/components/background/backgroundStore";
+import { carryDraftWallpaper, seedFromDraftStart } from "@/components/background/draftSeed";
 import { isAbsoluteQuery, summarizeFields, type Mode_ } from "./draftComposerHelpers";
 import { useShortPane } from "./useShortPane";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -568,6 +571,7 @@ function DraftComposerInner({
         void api.terminateSession(draftSessionId).catch(() => {});
       }
       clearGlobalDraft();
+      carryDraftWallpaper(draftSessionId ?? NEW_DRAFT_KEY, created.id);
       navigate(`/draft/${created.id}`);
     } catch (err) {
       reportStartError(err, "Failed to create draft.");
@@ -667,6 +671,7 @@ function DraftComposerInner({
       // REST (issue: new-worktree draft sometimes never shows its terminal).
       if (res.worktree) {
         useServerStore.getState().applyWorktreeCreated(res.worktree);
+        seedFromDraftStart({ draftKey: draftSessionId, worktreeId: res.worktree.id });
       }
       // Optimistic channel patch: the session record's `channel` field only
       // flips server-side on start (draftConfig.channel holds the pending
@@ -721,6 +726,7 @@ function DraftComposerInner({
         useServerStore.getState().applySessionCreated(created);
         clearGlobalDraft();
         committedRef.current = true;
+        carryDraftWallpaper(draftSessionId ?? NEW_DRAFT_KEY, created.id);
         navigate(`/draft/${created.id}`);
       } catch (err) {
         reportStartError(err, "Failed to create draft.");
@@ -739,6 +745,8 @@ function DraftComposerInner({
     try {
       let project: Project;
       let warning: string | undefined;
+      // Only a project this Start created (not an added existing directory) is seeded.
+      let createdProjectId: string | undefined;
       if (opts.addPath) {
         // submitAddPath path — register an existing directory as a project.
         const trimmedPath = opts.addPath.trim();
@@ -762,6 +770,7 @@ function DraftComposerInner({
         });
         project = created.project;
         warning = created.warning;
+        createdProjectId = project.id;
       }
 
       if (warning) {
@@ -789,7 +798,7 @@ function DraftComposerInner({
         };
         try {
           const wt = await api.createWorktree(payload);
-          await finishWorktreeStart(wt);
+          await finishWorktreeStart(wt, createdProjectId);
         } catch (err) {
           if (isNotGitError(err)) {
             // Non-git project (422 NOT_GIT): hold the ORIGINAL payload and hand
@@ -817,6 +826,9 @@ function DraftComposerInner({
         // navigating so the /session/:id route doesn't bounce to the dashboard
         // (the redirect effect redirects when the session isn't in the store).
         useServerStore.getState().applySessionCreated(sess);
+        if (createdProjectId !== undefined) {
+          seedFromDraftStart({ draftKey: draftSessionId ?? NEW_DRAFT_KEY, createdProjectId });
+        }
         if (isJson && sessionId) {
           await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
         }
@@ -839,13 +851,20 @@ function DraftComposerInner({
   // `startTier2NewProject` AND the NonGitWorktreeDialog retry. Registers the
   // freshly-created worktree, then runs the same trailing promotion steps a
   // direct session takes (JSON first turn, global-draft cleanup, onStarted).
-  async function finishWorktreeStart(wt: Worktree) {
+  async function finishWorktreeStart(wt: Worktree, createdProjectId?: string) {
     // Register the worktree in the store before navigating so URL sync
     // (and the subsequent `session:created` WS event) can select it. Without
     // this the /worktree/:id read effect found nothing and the write effect
     // rewrote the URL to a bare /worktree, so the UI never landed on the
     // newly created agent (issue: "UI didn't navigate to the new agent").
     useServerStore.getState().applyWorktreeCreated(wt);
+    // The draft's own wallpaper follows into the created worktree (and its project
+    // when this Start created one); write-once, so joining an existing scope changes nothing.
+    seedFromDraftStart({
+      draftKey: draftSessionId ?? NEW_DRAFT_KEY,
+      worktreeId: wt.id,
+      ...(createdProjectId !== undefined ? { createdProjectId } : {}),
+    });
     const sessionId = wt.mainSessionId ?? undefined;
     if (isJson && sessionId) {
       await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
@@ -903,6 +922,7 @@ function DraftComposerInner({
       // first turn, then onStarted — so the pane lands on the agent.
       if (res.worktree) {
         useServerStore.getState().applyWorktreeCreated(res.worktree);
+        seedFromDraftStart({ draftKey: pending.sessionId, worktreeId: res.worktree.id });
       }
       useServerStore.getState().applySessionUpdated(pending.sessionId, {
         channel: pending.draftConfig.channel,
@@ -987,6 +1007,7 @@ function DraftComposerInner({
           throw startErr;
         }
       } else {
+        carryDraftWallpaper(draftSessionId ?? NEW_DRAFT_KEY, sess.id);
         navigate(`/draft/${sess.id}`);
       }
     } catch (e) {
@@ -1445,6 +1466,8 @@ function DraftComposerInner({
             />
           </div>
         </div>
+
+        <DraftQuoteLine draftId={draftSessionId ?? NEW_DRAFT_KEY} />
       </div>
 
       {addAccountCli ? (

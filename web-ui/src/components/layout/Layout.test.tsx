@@ -17,6 +17,12 @@ vi.mock("@/components/layout/PaneFullscreenChrome", () => ({
   ),
 }));
 
+// The wallpaper layer itself needs a router (BackgroundMount guards on it) and
+// is tested in its own suite; here only its POSITION in `.app-shell` matters.
+vi.mock("@/components/background/BackgroundMount", () => ({
+  BackgroundMount: () => <div data-testid="bg-mount" />,
+}));
+
 // Mock react-resizable-panels components to avoid library side effects in DOM.
 // `order` is surfaced as `data-order` so Phase 5's tests can assert on it
 // without depending on the library's own internal panel-ordering behavior.
@@ -888,5 +894,35 @@ describe("Layout: dashboard <-> worktree return keeps paneHostLayer at the same 
     expect(screen.getByTestId("dash")).toBeInTheDocument();
     expect(agentChildMounts).toBe(1);
     expect(agentChildUnmounts).toBe(0);
+  });
+});
+
+describe("Layout wallpaper mount (4.T-layout)", () => {
+  function base(extra: Partial<React.ComponentProps<typeof Layout>>) {
+    return (
+      <Layout
+        topBar={<div data-testid="top-bar" />}
+        leftSidebar={<div />}
+        leftColumnPx={200}
+        isMobile={false}
+        mobileSidebarOpen={false}
+        onMobileSidebarClose={() => {}}
+        {...extra}
+      />
+    );
+  }
+
+  it("BackgroundMount is the last child of .app-shell in both returns", () => {
+    const regions = { agentPane: <AgentChild />, toolPanel: <div />, terminalDock: <div /> };
+    const { container, rerender } = render(base({ dashboardPane: <div data-testid="dash" /> }));
+
+    const shell = container.querySelector(".app-shell") as HTMLElement;
+    expect(shell.children[1]).toBe(container.querySelector("#workspace-layout"));
+    expect(shell.lastElementChild).toBe(screen.getByTestId("bg-mount"));
+
+    rerender(base(regions));
+
+    expect(shell.children[1]).toBe(container.querySelector("#workspace-layout"));
+    expect(shell.lastElementChild).toBe(screen.getByTestId("bg-mount"));
   });
 });

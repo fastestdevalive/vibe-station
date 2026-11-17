@@ -65,6 +65,13 @@ vi.mock("@dnd-kit/sortable", async (importOriginal) => {
   };
 });
 
+/** The wallpaper row reads the daemon catalog; sidebar tests don't mock the
+ *  daemon, so pin the shared hook to its pre-load state (the row then renders
+ *  the bare "Default" value, exactly as it does on a slow first paint). */
+vi.mock("@/components/background/useWallpaperCatalog", () => ({
+  useWallpaperCatalog: () => ({ status: "loading", wallpapers: [], ids: [] }),
+}));
+
 /** In production `useServerSync` is mounted by `Workspace`. Tests render
  *  LeftSidebar in isolation, so this harness wires the same hook above it so
  *  WS events emitted via `api.__test.emit` flow into the central store. */
@@ -1250,6 +1257,43 @@ describe("LeftSidebar", () => {
       expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
       // A different (visible) project remains.
       expect(screen.getByText("Proj B")).toBeInTheDocument();
+    });
+  });
+
+  // ─── Wallpaper row ───────────────────────────────────────────────────────
+  describe("wallpaper row", () => {
+    it("worktree menu contains a Wallpaper row", async () => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      await user.click(screen.getAllByRole("button", { name: /Worktree actions for/i })[0]!);
+
+      const row = await screen.findByRole("menuitem", { name: /Wallpaper/ });
+      expect(row).toHaveTextContent("Default");
+    });
+
+    it("project menu contains a Wallpaper row", async () => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
+
+      const row = await screen.findByRole("menuitem", { name: /Wallpaper/ });
+      expect(row).toHaveTextContent("Default");
     });
   });
 
@@ -2685,7 +2729,6 @@ describe("LeftSidebar - global Workspaces section", () => {
       // role="button" + tabIndex={0}, Enter/Space activates — mirroring the
       // worktree rows. Regression: without it there was no keyboard path to a
       // project's Overview tab.
-      const user = userEvent.setup();
       render(
         <MemoryRouter initialEntries={["/"]}>
           <Harness api={api}>

@@ -5,6 +5,7 @@ import type { ApiInstance } from "@/api";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
+import { BackgroundSetting } from "./BackgroundSetting";
 import { MarkdownStyleSetting } from "./MarkdownStyleSetting";
 import { ProjectsSetting } from "./ProjectsSetting";
 import { SkillsSetting } from "./SkillsSetting";
@@ -37,6 +38,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const sections: Section[] = [
     { id: "modes", label: L["modes"]!, content: <ModesSetting api={api} /> },
     { id: "appearance", label: L["appearance"]!, content: <AppearanceSetting /> },
+    { id: "background", label: L["background"]!, content: <BackgroundSetting /> },
     { id: "markdown", label: L["markdown"]!, content: <MarkdownStyleSetting /> },
     { id: "projects", label: L["projects"]!, content: <ProjectsSetting api={api} /> },
     { id: "skills", label: L["skills"]!, content: <SkillsSetting api={api} /> },
@@ -68,7 +70,10 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     // No section selected → show the vertical list
     if (!sectionId) {
       return (
-        <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div
+          className="settings-content"
+          style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}
+        >
           <div
             style={{
               padding: "var(--space-3) var(--space-4)",
@@ -115,7 +120,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
 
     // Section selected → content only; back button and breadcrumb live in TopBar
     return (
-      <div style={{ height: "100%", overflow: "auto", padding: "var(--space-3)" }}>
+      <div className="settings-content" style={{ height: "100%", overflow: "auto", padding: "var(--space-3)" }}>
         {activeSection.content}
       </div>
     );
@@ -145,7 +150,9 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         style={{
           // Secondary sidebar tone -- same as the Files/VCS/Artifacts tree
           // panels (.pane-fill-host .pane, .artifacts-list, .vcs-panel).
-          background: "var(--bg-sidebar-secondary)",
+          // `--wp-settings-nav-bg` exists only while a wallpaper is drawn
+          // (wallpaper.css), so the fallback keeps today's flat look.
+          background: "var(--wp-settings-nav-bg, var(--bg-sidebar-secondary))",
           borderRight: "var(--border-width) solid var(--border-default)",
           padding: "var(--space-4) var(--space-3)",
           overflow: "auto",
@@ -202,7 +209,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
       </nav>
 
       <div className="settings-content" style={{ overflow: "auto", minHeight: 0, padding: "var(--space-5)" }}>
-        {activeSection.content}
+        <div className="settings-content__inner">{activeSection.content}</div>
       </div>
     </div>
   );

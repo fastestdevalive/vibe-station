@@ -1,0 +1,94 @@
+/*
+ * Live texture layers (Haze, Frost) and the baked wallpaper image. Every colour
+ * here is a token; the numeric strength values arrive as inline custom
+ * properties from HazeLayer/FrostLayer. The wallpaper is decoration, so the
+ * whole effect stack is inert to the pointer.
+ */
+
+.wp-effect {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Haze — a sharp base, two masked blurred copies and a theme wash. */
+.wp-haze {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, black 0 18%, transparent 82%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0 18%, transparent 82%);
+}
+
+.wp-haze__sharp,
+.wp-haze__blur {
+  position: absolute;
+  /* The layer carries the image once, inline; the copies inherit it. */
+  background-image: inherit;
+  background-size: cover;
+  /* The wallpaper's focal point, set inline by WallpaperEffect. */
+  background-position: var(--wp-focal, 50% 50%);
+  background-repeat: no-repeat;
+}
+
+.wp-haze__sharp {
+  inset: 0;
+}
+
+.wp-haze__blur--near {
+  inset: -20px;
+  filter: blur(var(--wp-haze-blur-near, 10px));
+  mask-image: linear-gradient(to bottom, transparent 18%, black 60%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 18%, black 60%);
+}
+
+.wp-haze__blur--far {
+  inset: -40px;
+  filter: blur(var(--wp-haze-blur-far, 26px));
+  mask-image: linear-gradient(to bottom, transparent 28%, black 76%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 28%, black 76%);
+}
+
+.wp-haze__wash {
+  position: absolute;
+  inset: 0;
+  opacity: var(--wp-haze-strength, 1);
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--bg-primary) 36%, transparent) 0 1px,
+      transparent 1px 3px
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 16%,
+      color-mix(in srgb, var(--bg-primary) 26%, transparent) 38%,
+      color-mix(in srgb, var(--bg-primary) 55%, transparent) 55%,
+      color-mix(in srgb, var(--bg-primary) 78%, transparent) 75%
+    );
+}
+
+/* Frost — a live backdrop blur, a theme tint and feTurbulence grain. */
+.wp-frost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  backdrop-filter: blur(var(--wp-frost-blur, 30px)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--wp-frost-blur, 30px)) saturate(1.5);
+}
+
+.wp-frost__tint {
+  position: absolute;
+  inset: 0;
+  opacity: var(--wp-frost-strength, 1);
+  background: color-mix(in srgb, var(--bg-primary) 30%, transparent);
+}
+
+.wp-frost__grain {
+  position: absolute;
+  inset: 0;
+  opacity: calc(0.22 * var(--wp-frost-strength, 1));
+  mix-blend-mode: overlay;
+}

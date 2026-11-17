@@ -6,6 +6,7 @@
 export const SETTINGS_SECTION_LABELS: Record<string, string> = {
   modes: "Harnesses and modes",
   appearance: "Appearance",
+  background: "Background",
   markdown: "Markdown",
   projects: "Projects",
   skills: "Skills",

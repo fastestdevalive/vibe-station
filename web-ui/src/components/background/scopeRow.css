@@ -1,0 +1,66 @@
+/* Wallpaper row in the worktree/project options menus + the scope picker dialog shell.
+   Tokens only (no bare hexes): these surfaces follow the active theme. */
+
+.wp-menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.wp-menu-row__label {
+  flex: none;
+}
+
+.wp-menu-row__value {
+  margin-left: auto;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+}
+
+.wp-menu-row__value--muted {
+  color: var(--fg-muted);
+}
+
+/* The reset row stacks its sub-line UNDER the label (design `ScopePicker.dc.html`
+   `sp-sub`), so the icon column and the two-line block align at the top. The
+   generic `.menu-pop button.menu-pop__item--icon` rule centers its items, so
+   this row needs one class more to win that tie. */
+.menu-pop button.wp-menu-row.wp-menu-row--reset {
+  align-items: flex-start;
+}
+
+.wp-menu-row__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wp-menu-row__sub {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: normal;
+}
+
+.wp-menu-row__caption {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* The desktop scope picker reuses the shared `.dialog-overlay`/`.dialog-card`
+   chrome; it only needs a wider card (a 16:9 grid) and to paint above the
+   sidebar menu it was opened from. */
+.wp-scope-overlay {
+  z-index: 4100;
+}
+
+.wp-scope-card {
+  max-width: 760px;
+  width: min(92vw, 760px);
+  padding: var(--space-4);
+}
