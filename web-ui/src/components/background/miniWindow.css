@@ -1,0 +1,195 @@
+/*
+ * The mini app window drawn in the Picker preview (design `Picker.dc.html`
+ * board): glass sidebar with traffic lights, tab strip, centre content and
+ * status bar. Every size is a `cqw` of `.wp-preview-frame`, so the miniature is
+ * the same window at 1280x720 and on a phone; the colours are the real chrome
+ * tokens, so it follows the theme and the Sidebar and bars transparency slider (stored as opacity).
+ */
+
+.wp-mini {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Sidebar, tab strip and status bar: the real chrome look at the preview's
+   scale. `.wp-mini__tabs` overrides the tone with `--bg-secondary`, like the
+   real tab strip. */
+.wp-mini__glass {
+  background: color-mix(in srgb, var(--bg-sidebar) var(--wp-chrome-alpha), transparent);
+  backdrop-filter: blur(var(--wp-blur-chrome)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome)) saturate(1.3);
+}
+
+.wp-mini__side {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  width: 20cqw;
+  padding: 1.6cqw 1.8cqw;
+  display: flex;
+  flex-direction: column;
+  gap: max(4px, 1.2cqw);
+  border-right: var(--border-width) solid var(--border-default);
+}
+
+.wp-mini__lights {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 4px;
+}
+
+.wp-mini__light {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+}
+
+.wp-mini__light--close {
+  background: var(--window-light-close);
+}
+.wp-mini__light--minimize {
+  background: var(--window-light-minimize);
+}
+.wp-mini__light--zoom {
+  background: var(--window-light-zoom);
+}
+
+.wp-mini__brand {
+  font-size: max(7px, 1.6cqw);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.wp-mini__bar {
+  display: block;
+  height: max(4px, 1.1cqw);
+  width: 72%;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--fg-primary) 12%, transparent);
+}
+
+.wp-mini__bar--on {
+  width: 86%;
+  background: color-mix(in srgb, var(--fg-primary) 30%, transparent);
+}
+
+.wp-mini__bar--short {
+  width: 54%;
+}
+
+.wp-mini__bar--section {
+  width: 40%;
+  margin-top: 1.2cqw;
+}
+
+.wp-mini__tabs {
+  position: absolute;
+  left: 20cqw;
+  right: 0;
+  top: 0;
+  box-sizing: border-box;
+  height: max(16px, 4cqw);
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 1.4cqw;
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-secondary) var(--wp-chrome-alpha), transparent);
+}
+
+.wp-mini__tab {
+  font-size: max(6px, 1.35cqw);
+  padding: 0.5cqw 1.4cqw;
+  color: var(--fg-muted);
+}
+
+.wp-mini__tab.is-on {
+  color: var(--fg-primary);
+  background: color-mix(in srgb, var(--bg-card) 85%, transparent);
+  border-radius: 4px 4px 0 0;
+}
+
+.wp-mini__status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: max(8px, 2.4cqw);
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+/* Centre column: the empty view's title + composer + quote, or the session
+   view's transcript cards sitting above the same composer. */
+.wp-mini__center {
+  position: absolute;
+  left: 20cqw;
+  right: 0;
+  top: max(16px, 4cqw);
+  bottom: max(8px, 2.4cqw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.8cqw;
+}
+
+.wp-mini__center--session {
+  justify-content: flex-end;
+}
+
+.wp-mini__title {
+  font-size: clamp(10px, 3.2cqw, 22px);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  color: var(--fg-primary);
+  text-shadow: var(--wp-text-halo);
+}
+
+.wp-mini__composer {
+  box-sizing: border-box;
+  width: 62%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.6cqw 1.8cqw;
+  border-radius: 1.8cqw;
+  font-size: max(6px, 1.5cqw);
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--bg-card) var(--wp-composer-alpha), transparent);
+  backdrop-filter: blur(var(--wp-blur-composer));
+  -webkit-backdrop-filter: blur(var(--wp-blur-composer));
+  border: var(--border-width) solid var(--border-default);
+}
+
+.wp-mini__send {
+  flex: none;
+  width: max(8px, 2.4cqw);
+  height: max(8px, 2.4cqw);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.wp-mini__quote {
+  position: absolute;
+  bottom: 1cqw;
+  font-size: max(6px, 1.35cqw);
+  letter-spacing: 0.02em;
+  color: var(--fg-secondary);
+  opacity: 0.8;
+}
+
+.wp-mini__card {
+  width: 70%;
+  height: 8cqw;
+  border-radius: 1cqw;
+  background: color-mix(in srgb, var(--bg-card) var(--wp-card-alpha), transparent);
+}
+.wp-mini__card--short {
+  height: 5cqw;
+}

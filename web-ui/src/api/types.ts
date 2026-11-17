@@ -2619,3 +2619,45 @@ export interface LspLanguageSurveyEntry {
 export interface LspLanguageSurveyResponse {
   languages: LspLanguageSurveyEntry[];
 }
+
+/** One CC0 wallpaper (`GET /api/wallpapers`).
+ *  Mirrors `WallpaperEntry` in `rust/vst-types/src/rest/wallpapers.rs` — that
+ *  module is the source of truth (hand-mirrored, no codegen). `id` is the
+ *  mobile id (`wp-001`..`wp-031`) and is the stable identity every per-client
+ *  wallpaper preference stores. */
+export interface WallpaperEntry {
+  id: string;
+  name: string;
+  /** `"places"` | `"abstract"` (free-form upstream category). */
+  category: string;
+  /** `"dark"` | `"light"` | `"any"`. */
+  mode: "dark" | "light" | "any";
+  /** Upstream full-size image (https). Never used as a URL in the UI — see
+   *  `fetchWallpaperBlob` (Tauri auth is a Bearer header). */
+  url: string;
+  /** Upstream thumbnail; equals `url` when the source has no separate thumb. */
+  thumbnailUrl: string;
+  /** sha256 of the upstream full image, when the source publishes one. */
+  fullSizeSha?: string | null;
+  thumbnailSha?: string | null;
+  width: number;
+  height: number;
+  license?: string | null;
+  /** Absent when the source lists the author as "unknown". */
+  author?: string | null;
+  sourcePage?: string | null;
+}
+
+/** Response from GET /api/wallpapers. */
+export interface WallpaperCatalogResponse {
+  version: number;
+  wallpapers: WallpaperEntry[];
+}
+
+/** Machine-readable wallpaper image error codes (the image route's JSON `error`).
+ *  Mirrors `WallpaperErrorCode` in `rust/vst-types/src/rest/wallpapers.rs`. */
+export type WallpaperErrorCode =
+  | "WALLPAPER_NOT_FOUND"
+  | "WALLPAPER_UNAVAILABLE"
+  | "WALLPAPER_BACKING_OFF"
+  | "VALIDATION_ERROR";

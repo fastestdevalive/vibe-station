@@ -84,3 +84,81 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* Step 3 (Background). The picker's own sections are styled by picker.css; this
+   is only the step's frame. */
+.oobe-bg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.oobe-bg__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.oobe-bg__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+}
+
+.oobe-bg__lead {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+.oobe-bg__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+.oobe-bg__hint {
+  flex: 1;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* Phone (design `OnboardingPhone.dc.html`): the content scrolls and Skip /
+   Continue stay pinned to the bottom edge. Step 3 drops the screen's own bottom
+   padding so no wallpaper tile shows below the pinned bar (R2F-09). */
+@media (max-width: 768px) {
+  .oobe-screen:has(.oobe-bg) {
+    padding-bottom: 0;
+  }
+
+  .oobe-bg__foot {
+    position: sticky;
+    bottom: 0;
+    margin: 0 calc(-1 * var(--space-4));
+    padding: var(--space-3) var(--space-4);
+    /* The bar now sits on the bottom edge, so keep its content clear of the
+       phone's home indicator. */
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+    background: var(--bg-card);
+  }
+
+  /* CUJ7: 44px touch targets on phones (design `OnboardingPhone.dc.html` footer). */
+  .oobe-bg__foot .btn {
+    min-height: 44px;
+  }
+}
+
+/* With a wallpaper behind the window, the onboarding screen must not paint over
+   it and the card becomes translucent like every other panel. These two rules
+   are the ONLY wallpaper-scoped rules in this file. */
+:root[data-wallpaper="on"] .oobe-screen {
+  background: transparent;
+}
+
+:root[data-wallpaper="on"] .oobe-card {
+  background: color-mix(in srgb, var(--bg-card) var(--wp-card-alpha), transparent);
+}

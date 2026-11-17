@@ -29,6 +29,7 @@ import { __resetForDemo as resetDiffViews } from "@/preview/diffViewRegistry";
 import { __resetForDemo as resetTabsStrip } from "@/components/layout/TabsStrip";
 import * as chatSnapshotCache from "@/hooks/chatSnapshotCache";
 import { useUpdateStore } from "@/hooks/useUpdateStore";
+import { useScopePickerStore } from "@/components/background/scopePickerStore";
 import { defaultThemeId } from "@/theme/registry";
 
 export { setThemeRoot, getThemeRoot, setStyleHost, getStyleHost } from "./demoRoots";
@@ -53,6 +54,7 @@ export const APP_STORES = [
   useDetailsStore,
   useVcsCacheStore,
   useSwitchNotices,
+  useScopePickerStore,
 ] as const;
 
 /** Return every module-level singleton to its freshly-imported state (persisted stores re-read the storage). */

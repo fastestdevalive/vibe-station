@@ -48,6 +48,7 @@ import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialo
 import { CollapsedProjectRail } from "@/components/layout/CollapsedProjectRail";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 import { clampPopupPosition } from "@/lib/popupPosition";
+import { WallpaperMenuRow } from "@/components/background/WallpaperMenuRow";
 import { RelativeTime } from "@/components/layout/RelativeTime";
 import { sessionActivityAt } from "@/lib/sessionActivity";
 import { useSidebarRowLongPress } from "@/components/layout/useSidebarRowLongPress";
@@ -3308,6 +3309,12 @@ export function LeftSidebar({
                   />
                   {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
                 </button>
+                <WallpaperMenuRow
+                  scope={`worktree:${wtMenu.worktree.id}`}
+                  label={wtMenu.worktree.name ?? wtMenu.worktree.branch}
+                  kind="worktree"
+                  onDone={() => setWtMenu(null)}
+                />
                 <button
                   type="button"
                   role="menuitem"
@@ -3516,6 +3523,12 @@ export function LeftSidebar({
                   zIndex: 4000,
                 }}
               >
+                <WallpaperMenuRow
+                  scope={`project:${projMenu.project.id}`}
+                  label={projMenu.project.name}
+                  kind="project"
+                  onDone={() => setProjMenu(null)}
+                />
                 <button
                   type="button"
                   role="menuitem"

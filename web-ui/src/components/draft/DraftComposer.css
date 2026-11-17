@@ -132,6 +132,27 @@
   padding: 0 var(--space-1);
 }
 
+/* The one decorative quote under the composer (mobile's draft-quotes bundle):
+   bottom centre of the draft pane, 18px above its edge and over the wallpaper's
+   bottom fade (design Quote.dc.html / App.dc.html:273), quieter than the hint
+   row, never clickable. `DraftQuoteLine` drops its text when the pane has no
+   room to spare, never squeezed. No z-index: the composer box and its popovers
+   stay above it. */
+.draft-quote-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  pointer-events: none;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  color: var(--fg-secondary);
+  opacity: 0.85;
+  text-align: center;
+  padding: 0 var(--space-2);
+  text-shadow: 0 1px 10px color-mix(in srgb, var(--bg-primary) 90%, transparent);
+}
+
 /* The one outer box: bordered, rounded, no overflow hidden (a popover overflows
    the box in Phase 2). Rows fold in Phase 2; the composer is the last section. */
 .draft-composer__box {

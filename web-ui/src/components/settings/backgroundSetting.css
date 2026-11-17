@@ -1,0 +1,72 @@
+/*
+ * Settings › Background: the device-level switch the picker deliberately does
+ * not carry. Tokens only.
+ *
+ * The drawn track keeps the design's 36×20 (`BackgroundDialog.dc.html`
+ * `st-switch`); the button is the hit area, so a phone gets ≥44px of tappable
+ * height (CUJ7) without a bigger drawn track.
+ */
+
+.bg-own-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.bg-own-switch__track {
+  display: block;
+  box-sizing: border-box;
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  transition: background 120ms ease;
+}
+
+.bg-own-switch[aria-checked="true"] .bg-own-switch__track {
+  background: var(--accent);
+}
+
+.bg-own-switch__knob {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  transition: transform 120ms ease;
+}
+
+.bg-own-switch[aria-checked="true"] .bg-own-switch__knob {
+  transform: translateX(16px);
+}
+
+.bg-own-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-own-switch__track,
+  .bg-own-switch__knob {
+    transition: none;
+  }
+}
+
+/* Settings only: onboarding keeps its full-width preview. Width-capped, so
+   `aspect-ratio: 16/9` still crops 16:9 at a height the controls below can share
+   the fold with. */
+.bg-setting .wp-preview-frame {
+  max-width: calc(var(--settings-preview-max-h) * 16 / 9);
+  margin-inline: auto;
+}
+
+@media (max-width: 768px) {
+  .bg-own-switch {
+    min-height: 44px;
+  }
+}

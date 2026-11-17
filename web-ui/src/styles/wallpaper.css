@@ -1,0 +1,216 @@
+/* Every rule below is scoped under :root[data-wallpaper="on"]; with no wallpaper
+   (or Solid / high-contrast) nothing changes. `workspace.css` and `chat.css` stay
+   untouched: the opaque rules they already ship keep winning whenever the root
+   attribute is absent. */
+
+/* Inert constants: they are only read by the rules below (all scoped under
+   [data-wallpaper="on"]) plus the Picker's mini window, which must draw them
+   even when the main window is solid, so they live on :root. */
+:root {
+  --wp-card-alpha: 78%;
+  --wp-composer-alpha: 58%;
+  --wp-blur-chrome: 12px;
+  --wp-blur-composer: 14px;
+  /* Halo for text that sits on no surface at all (design App.dc.html:273): the
+     soft shadow plus the tight one (`0 0 2px` at 80%) that keeps small text crisp
+     on a bright image. */
+  --wp-text-halo:
+    0 0 2px color-mix(in srgb, var(--bg-primary) 80%, transparent),
+    0 1px 10px color-mix(in srgb, var(--bg-primary) 90%, transparent);
+}
+
+/* Tokens. `--wp-chrome-alpha` is overridden inline on <html> by useBackground
+   (the stored chrome opacity, shown in Settings as transparency), so the value here is only the initial one. */
+:root[data-wallpaper="on"] {
+  --wp-chrome-alpha: 72%;
+  /* Layout's inline style reads these with today's token as fallback; they only
+     exist while a wallpaper is drawn, so the fallback keeps the flat look. */
+  --wp-sidebar-bg: color-mix(in srgb, var(--bg-sidebar) var(--wp-chrome-alpha), transparent);
+  --wp-main-bg: transparent;
+  /* Settings' nav is a secondary sidebar, like the file tree. */
+  --wp-settings-nav-bg: color-mix(
+    in srgb,
+    var(--bg-sidebar-secondary) var(--wp-chrome-alpha),
+    transparent
+  );
+}
+
+/* Surfaces between the window layer and the transcript paint --bg-primary; they
+   must let the image through instead of covering it. A new draft paints its own
+   random wallpaper behind the empty view, so `.draft-composer` itself (not just
+   its pane) must be transparent too. */
+:root[data-wallpaper="on"] .pane:has(.chat-pane),
+:root[data-wallpaper="on"] .pane:has(.draft-composer),
+:root[data-wallpaper="on"] .draft-composer,
+:root[data-wallpaper="on"] .chat-pane,
+:root[data-wallpaper="on"] .chat-pane__body {
+  background: transparent;
+}
+
+/* The draft's composer box is a translucent, blurred card (design Quote.dc.html):
+   the draft wallpaper stays visible around and through it. Every menu the box can
+   open (ModePopover, Select, AccountPicker) renders inline with no fixed node, so
+   a backdrop-filter here cannot trap a fixed descendant. */
+:root[data-wallpaper="on"] .draft-composer__box {
+  background: color-mix(in srgb, var(--bg-card) var(--wp-composer-alpha), transparent);
+  backdrop-filter: blur(var(--wp-blur-composer));
+  -webkit-backdrop-filter: blur(var(--wp-blur-composer));
+  /* The blur makes the box a stacking context; z-index keeps its popovers above the quote and hint row. */
+  z-index: 1;
+}
+
+/* Loose text drawn straight on the wallpaper gets the design's soft halo in the
+   theme's background colour (App.dc.html:273). Only text with no surface of its
+   own: cards, chrome and the composer box are untouched. The caption and the
+   empty-viewer line also take the secondary colour instead of muted. */
+:root[data-wallpaper="on"] .draft-composer__caption,
+:root[data-wallpaper="on"] .draft-composer__hint,
+:root[data-wallpaper="on"] .draft-quote-line,
+:root[data-wallpaper="on"] .empty-state,
+:root[data-wallpaper="on"] .dashboard-header,
+:root[data-wallpaper="on"] .dashboard-section__label,
+:root[data-wallpaper="on"] .dashboard-kanban__col-title {
+  text-shadow: var(--wp-text-halo);
+}
+:root[data-wallpaper="on"] .draft-composer__caption,
+:root[data-wallpaper="on"] .draft-composer__hint,
+:root[data-wallpaper="on"] .empty-state {
+  color: var(--fg-secondary);
+}
+:root[data-wallpaper="on"] .draft-composer__logo {
+  filter: drop-shadow(0 1px 6px color-mix(in srgb, var(--bg-primary) 90%, transparent));
+}
+
+/* Chrome: translucent by the one alpha token, blurred so text stays readable
+   over a busy image. The sidebar takes the same look through --wp-sidebar-bg. */
+:root[data-wallpaper="on"] .top-bar,
+:root[data-wallpaper="on"] .tabs-strip,
+:root[data-wallpaper="on"] .settings-nav {
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+:root[data-wallpaper="on"] .top-bar {
+  background: color-mix(in srgb, var(--bg-sidebar) var(--wp-chrome-alpha), transparent);
+}
+:root[data-wallpaper="on"] .tabs-strip {
+  background: color-mix(in srgb, var(--bg-secondary) var(--wp-chrome-alpha), transparent);
+}
+:root[data-wallpaper="on"] .global-status-bar {
+  background: color-mix(in srgb, var(--bg-sidebar) var(--wp-chrome-alpha), transparent);
+  /* Positioning only, so the blurred pseudo-element below can be placed. */
+  position: relative;
+}
+
+/* Sidebar: same chrome blur as the tab strip and status bar (~72% + blur).
+   Safe on both the desktop sidebar and the phone drawer because every menu inside
+   it is portaled (LeftSidebar's createPortal calls, CollapsedProjectRail,
+   ProjectPlusMenu, PreviousSessionsMenu), so a backdrop-filter traps no fixed
+   descendant. The drawer itself slides via `transform`; the blur sits on the inner
+   element, so the slide animation is untouched. */
+:root[data-wallpaper="on"] .pane-left-inner {
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+
+/* Settings: the nav takes the chrome tone + blur through `--wp-settings-nav-bg`
+   (its inline background reads the var, with today's token as fallback); the
+   content column sits on a card-alpha surface, so descriptions stay readable
+   over the image instead of on raw wallpaper. */
+:root[data-wallpaper="on"] .settings-content {
+  background: color-mix(in srgb, var(--bg-primary) var(--wp-card-alpha), transparent);
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+
+/* Blur on a pseudo-element: a backdrop-filter on the bar itself would trap the
+   phone limits popup's fixed backdrop inside the 24px bar. */
+:root[data-wallpaper="on"] .global-status-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+
+/* Transcript cards: opaque enough to read code/tool output, still tinted by the
+   wallpaper. Terminal panes, code/diff views, popovers and status dots stay
+   opaque on purpose (nothing here touches them). */
+:root[data-wallpaper="on"] .chat-bubble--user {
+  background: color-mix(in srgb, var(--bg-elevated) var(--wp-card-alpha), transparent);
+}
+:root[data-wallpaper="on"] .chat-tool-card {
+  background: color-mix(in srgb, var(--bg-secondary) var(--wp-card-alpha), transparent);
+}
+:root[data-wallpaper="on"] .chat-session-break__card {
+  background: color-mix(in srgb, var(--bg-card) var(--wp-card-alpha), transparent);
+}
+
+/* Dashboard cards behave like transcript cards: tinted by the image, still
+   readable. Status dots and PR chips keep their own tokens (STATUS-INDICATORS). */
+:root[data-wallpaper="on"] .acard {
+  background: color-mix(in srgb, var(--bg-card) var(--wp-card-alpha), transparent);
+}
+:root[data-wallpaper="on"] .acard:hover {
+  background: color-mix(in srgb, var(--bg-elevated) var(--wp-card-alpha), transparent);
+}
+:root[data-wallpaper="on"] .dashboard-card {
+  background: color-mix(in srgb, var(--bg-card) var(--wp-card-alpha), transparent);
+}
+:root[data-wallpaper="on"] .dashboard-card--project:hover {
+  background: color-mix(in srgb, var(--bg-hover) var(--wp-card-alpha), transparent);
+}
+
+/* Tools pane: the frame and the empty file viewer let the image through; the
+   docked list side (Files tree, VCS commit list) is ONE chrome-alpha surface with
+   blur, exactly like the sidebar — the DockedListLayout overlay paints it and
+   every layer inside it is transparent. An OPEN file stays on its own opaque
+   --bg-primary (the generic `.pane` / `.vcs-panel` rules), so code, diffs and the
+   terminal are untouched. Every menu these hosts can open is portaled
+   (ArtifactPopover — row context menus and the agent picker — WorkspaceActions'
+   "..." menu, the tab strip's reset menu), so the overlay's backdrop-filter traps
+   no fixed descendant. */
+:root[data-wallpaper="on"] .tool-panel,
+:root[data-wallpaper="on"] .pane.pane-stack:has(> .empty-state) {
+  background: transparent;
+}
+/* DockedListLayout sets this inline; the wallpaper override has to outrank it. */
+:root[data-wallpaper="on"] .files-left-pane-overlay {
+  background: color-mix(in srgb, var(--bg-sidebar-secondary) var(--wp-chrome-alpha), transparent) !important;
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+/* The list's inner layers paint nothing: the overlay above is the one surface. */
+:root[data-wallpaper="on"] .files-left-pane,
+:root[data-wallpaper="on"] .files-left-pane__body,
+:root[data-wallpaper="on"] .files-left-pane .pane,
+:root[data-wallpaper="on"] .vcs-sidebar {
+  background: transparent;
+}
+:root[data-wallpaper="on"] .files-topbar,
+:root[data-wallpaper="on"] .files-left-rail,
+:root[data-wallpaper="on"] .tools-rail,
+:root[data-wallpaper="on"] .tool-panel__tile-rail {
+  background: color-mix(in srgb, var(--bg-secondary) var(--wp-chrome-alpha), transparent);
+}
+:root[data-wallpaper="on"] .files-topbar,
+:root[data-wallpaper="on"] .tools-rail,
+:root[data-wallpaper="on"] .tool-panel__tile-rail {
+  backdrop-filter: blur(var(--wp-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--wp-blur-chrome));
+}
+/* The phone in-pane rail's aside is the one surface; its `.files-left-rail` would
+   otherwise stack a second translucent layer inside it. The rail holds only rail
+   buttons (no un-portaled fixed node), so the aside's backdrop-filter traps none. */
+:root[data-wallpaper="on"] .tool-panel__tile-rail .files-left-rail {
+  background: transparent;
+}
+
+/* Composer shell: the most translucent surface, blurred so the input text keeps
+   its contrast over the image. */
+:root[data-wallpaper="on"] .chat-composer__shell {
+  background: color-mix(in srgb, var(--bg-input) var(--wp-composer-alpha), transparent);
+  backdrop-filter: blur(var(--wp-blur-composer));
+  -webkit-backdrop-filter: blur(var(--wp-blur-composer));
+}

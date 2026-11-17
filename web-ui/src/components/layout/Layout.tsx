@@ -9,6 +9,7 @@ import { ToolsRailColumn } from "@/components/layout/ToolsRailColumn";
 import { TopActionsProvider, createTopActionsStore } from "@/context/TopActionsContext";
 import { TopActionsOwner } from "@/components/layout/TopActionsSlot";
 import type { GroupZone } from "@/context/TopActionsContext";
+import { BackgroundMount } from "@/components/background/BackgroundMount";
 
 interface LayoutProps {
   topBar?: ReactNode;
@@ -201,7 +202,8 @@ export function Layout({
         overflow: "auto",
         // Lighter tone of the standard 3-tier hierarchy (sidebar, top bar,
         // bottom bar > secondary tree panels > main content) — see tokens.css.
-        background: "var(--bg-sidebar)",
+        // `--wp-sidebar-bg` is only set while a wallpaper is on; unset keeps today's value.
+        background: "var(--wp-sidebar-bg, var(--bg-sidebar))",
       }}
     >
       {leftSidebar}
@@ -280,7 +282,7 @@ export function Layout({
           {mainWithStatusBar(
             <div
               className="pane pane-dashboard"
-              style={{ overflow: "hidden", background: "var(--bg-primary)", flex: 1, minHeight: 0 }}
+              style={{ overflow: "hidden", background: "var(--wp-main-bg, var(--bg-primary))", flex: 1, minHeight: 0 }}
             >
               {dashboardPane}
             </div>,
@@ -291,6 +293,9 @@ export function Layout({
         {null}
         {paneHostLayer}
         {isMobile ? globalStatusBar : null}
+        {/* LAST child: the whole-window wallpaper paints at z-index:-1 behind every panel.
+            Appending it changes no earlier sibling's tree position (AGENTS.md "Terminal"). */}
+        <BackgroundMount />
       </div>
       </TopActionsProvider>
     );
@@ -528,6 +533,8 @@ export function Layout({
       {fullscreenOverlay}
       {paneHostLayer}
       {isMobile ? globalStatusBar : null}
+      {/* LAST child — same wallpaper layer as the dashboard return (Decision 5). */}
+      <BackgroundMount />
     </div>
     </TopActionsProvider>
   );

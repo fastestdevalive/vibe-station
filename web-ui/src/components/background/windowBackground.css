@@ -1,0 +1,114 @@
+/*
+ * The whole-window wallpaper layer. It is mounted as the last child of
+ * `.app-shell` and painted at `z-index: -1`, so it sits behind every panel;
+ * `.app-shell` (and `#root` / `.workspace-route`) must never create a stacking
+ * context, or the layer would be trapped under them — see
+ * `styles/backgroundTokens.test.ts`.
+ *
+ * Everything else (translucent chrome, cards, composer) lives in
+ * `styles/wallpaper.css`, keyed off `:root[data-wallpaper="on"]`.
+ */
+
+.window-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Every wallpaper picture (plain or baked, window or preview) is sized here, so
+   swapping plain for baked never moves the image. */
+.wp-picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* One complete picture (image + texture). `will-change: opacity` makes each
+   slide its own backdrop root, so Frost's backdrop blur only sees its own image,
+   never the other slide during a dissolve. */
+.window-bg__slide {
+  position: absolute;
+  inset: 0;
+  will-change: opacity;
+}
+
+.window-bg__slide[data-phase="incoming"] {
+  opacity: 0;
+}
+
+.window-bg__slide[data-phase="fading"] {
+  animation: wp-slide-in 350ms ease-out both;
+}
+
+/* A baked layer that lands after its slide is already visible dissolves in; one
+   that is ready on its first render (a memory hit) must not animate. */
+.wp-effect .wp-picture--arriving {
+  animation: wp-slide-in 350ms ease-out both;
+}
+
+@keyframes wp-slide-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-bg__slide[data-phase="fading"],
+  .wp-effect .wp-picture--arriving {
+    animation: none;
+  }
+}
+
+/* Visibility: how much of the wallpaper survives behind the content.
+   `--wp-vis` is a plain token written on <html> (and on the Picker preview's own root). In the real
+   window the scrim reads `--wp-scrim-vis` instead, a registered <number> that transitions on `.window-bg`
+   only: moving between screens with different visibility (a project at 20% -> a new-agent draft at 90%)
+   then dims or brightens the picture instead of snapping, which showed as a bright flash. `.window-bg`
+   is created fresh whenever a picture first appears, so a first appearance has nothing to animate from,
+   and only this one element restyles during the transition. */
+@property --wp-scrim-vis {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+.window-bg {
+  --wp-scrim-vis: var(--wp-vis, 1);
+  transition: --wp-scrim-vis 350ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-bg {
+    transition: none;
+  }
+}
+
+.window-bg__scrim {
+  --scrim-vis: var(--wp-vis, 1);
+  position: absolute;
+  inset: 0;
+  background: color-mix(
+    in srgb,
+    var(--bg-primary) calc((1 - var(--scrim-vis)) * 100%),
+    transparent
+  );
+}
+
+.window-bg .window-bg__scrim {
+  --scrim-vis: var(--wp-scrim-vis);
+}
+
+/* The shared fade on every wallpaper surface. Its `background` is set inline from
+   `gradient.ts` (`WallpaperOverlay`), so the preset table is the only fade owner. */
+.window-bg__fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}

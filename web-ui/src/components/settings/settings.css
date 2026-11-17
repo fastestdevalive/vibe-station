@@ -1,4 +1,13 @@
 /* ---- Settings page anatomy (About, Storage; matches Appearance/Doctor rows) ---- */
+
+/* The desktop content column: capped and centred so a wide window does not stretch
+   every row/preview across ~1000px. The scroller itself (`.settings-content`) stays
+   full width, so its padding and wallpaper tint still frame the column. */
+.settings-content__inner {
+  max-width: var(--settings-content-max-w);
+  margin-inline: auto;
+}
+
 .settings-row {
   display: flex;
   align-items: center;

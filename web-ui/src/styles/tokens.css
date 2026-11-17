@@ -100,6 +100,15 @@
      in workspace.css, chips in chat.css) share one value. */
   --agent-surface-max-width: 18rem;
 
+  /* Settings content column. 800px is the design's BackgroundDialog width; it also
+     fits Markdown's 400px editor column beside its preview and Appearance's 11
+     theme swatches on one row, while keeping a row's description close enough to
+     its control to read as one line on wide windows. */
+  --settings-content-max-w: 800px;
+  /* Cap on the Background preview's height, so the controls below it stay in view
+     at 720-900px tall windows (the width follows at 16:9). */
+  --settings-preview-max-h: clamp(160px, 32vh, 340px);
+
   --transition-fast: 150ms ease;
   --transition-base: 200ms ease;
   --transition-slow: 300ms ease;
@@ -134,6 +143,15 @@
   --kind-prop: #c084fc;
   --kind-mod: #f472b6;
   --kind-neutral: #a3a3a3;
+
+  /* `--wp-chrome-alpha`/`--wp-vis` default to 'no wallpaper'; the card/composer
+     alpha and blur constants live in styles/wallpaper.css :root, read only by
+     rules scoped under [data-wallpaper="on"] and by the Picker's mini window.
+     `--wp-sidebar-bg` / `--wp-main-bg` / `--wp-settings-nav-bg` are deliberately
+     NOT defined here: the inline `var(--wp-…, var(--bg-…))` fallbacks (Layout,
+     SettingsPanel) must apply while no wallpaper is drawn. */
+  --wp-chrome-alpha: 100%;
+  --wp-vis: 1;
 }
 
 /* Feature tokens that must exist in EVERY theme. Themes are generated per theme
@@ -193,6 +211,11 @@
   --find-ring: var(--fg-warning);
   --find-hit: var(--fg-warning);
   --find-focus: color-mix(in srgb, var(--accent) 24%, transparent);
+
+  /* macOS window controls, drawn only in the background preview; same in both themes. */
+  --window-light-close: #ff5f57;
+  --window-light-minimize: #febc2e;
+  --window-light-zoom: #28c840;
 }
 /* Ink for text on solid --success/--warning fills (update chip). Dark ink passes
    4.5:1 on every theme's fills except the one dark-green/brown set overridden below;
