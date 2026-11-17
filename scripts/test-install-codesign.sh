@@ -181,13 +181,14 @@ begin_case adhoc; adhoc "$WWW/adhoc/pkg/vst" "$WWW/adhoc/pkg/claude-acp"; finish
 expect_fail adhoc "$PINNED" "not signed by Apple Developer ID team $PINNED"
 
 # codesign only signs with an identity it considers valid, and a self-signed cert is untrusted.
-# Locally this case SKIPs (we never touch trust settings). Under VST_CI=1 (ephemeral CI runner,
-# passwordless sudo) the throwaway cert is trusted for code signing in the System keychain for the
-# duration of the case and untrusted again afterwards. UNVERIFIED on a real runner as of this writing;
-# if it fails there the case reports FAIL rather than skipping.
+# By default this case SKIPs softly (we never touch trust settings). It can be made to run by
+# trusting the throwaway cert for code signing in the System keychain for the duration of the case
+# (and untrusting it afterwards), but only when BOTH VST_CI=1 and VST_TEST_TRUST_FORGED=1 are set:
+# `security add-trusted-cert` blocks forever waiting for an authorization prompt on a headless
+# GitHub runner (the v0.0.6-beta CI run sat here for 30 minutes), so it is opt-in, never default.
 TRUSTED_CRT=""
 trust_forged_for_ci() {
-  [ "${VST_CI:-0}" = 1 ] || return 1
+  [ "${VST_CI:-0}" = 1 ] && [ "${VST_TEST_TRUST_FORGED:-0}" = 1 ] || return 1
   sudo -n security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$W/forged.crt" >/dev/null 2>&1 || return 1
   TRUSTED_CRT="$W/forged.crt"
 }

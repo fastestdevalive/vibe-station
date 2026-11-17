@@ -145,8 +145,9 @@ jobs:
 
   # The macOS-only installer matrix: install.sh's codesign fallback (verify_codesign),
   # plus the release-signing script tests on macOS (BSD userland, shasum, no GNU find).
-  # VST_CI=1 turns a SKIPPED case (notably forged_ou) into a failure so the matrix cannot
-  # silently shrink.
+  # VST_CI=1 turns a SKIPPED case into a failure so the matrix cannot silently shrink, except
+  # forged_ou: it needs the OS to trust a throwaway certificate, which a headless runner cannot
+  # do, so it soft-skips with a warning (opt in with VST_TEST_TRUST_FORGED=1).
   macos-installer-tests:
     name: macOS installer + release script tests
     runs-on: macos-latest
@@ -167,6 +168,9 @@ jobs:
           bash scripts/test-export-signing-secrets.sh
 
       - name: install.sh codesign fallback matrix
+        # The matrix takes a couple of minutes. A step-level limit makes a hang fail fast
+        # instead of holding a macOS runner until the 60 minute job limit.
+        timeout-minutes: 10
         env:
           VST_CI: "1"
         run: bash scripts/test-install-codesign.sh
