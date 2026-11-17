@@ -20,3 +20,9 @@ multiple-versions = "warn"
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # chrono is flagged unmaintained: informational only (no vulnerability), and no fixed
+    # version exists, so the check cannot be satisfied by upgrading. Seven crates use it;
+    # migrating to jiff or time is a follow-up. Re-check this entry when that lands.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (informational, not a vulnerability); migrate to jiff or time" },
+]
