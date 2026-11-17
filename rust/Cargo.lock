@@ -3257,6 +3257,7 @@ dependencies = [
  "vst-store",
  "vst-testkit",
  "vst-types",
+ "vst-wallpapers",
  "vst-ws",
 ]
 
@@ -3489,6 +3490,22 @@ dependencies = [
  "serde_with",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "vst-wallpapers"
+version = "0.0.6-beta"
+dependencies = [
+ "axum",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "vst-types",
 ]
 
 [[package]]

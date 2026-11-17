@@ -31,6 +31,7 @@ vst-lsp = { workspace = true }
 vst-agy-stream-acp = { workspace = true }
 vst-artifacts = { workspace = true }
 vst-fswatch = { workspace = true }
+vst-wallpapers = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full", "signal"] }

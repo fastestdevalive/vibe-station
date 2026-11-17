@@ -22,6 +22,7 @@ pub mod run;
 pub mod server;
 pub mod update;
 pub mod version;
+pub mod wallpaper_routes;
 
 pub use agy_stream_acp_cmd::run_agy_stream_acp;
 pub use run::{init_tracing, run_daemon, DaemonOptions};

@@ -19,6 +19,7 @@ members = [
     "vst-lifecycle",
     "vst-diffstat",
     "vst-harness-limits",
+    "vst-wallpapers",
     "vst-ws",
     "vst-routes",
     "vst-daemon",
@@ -67,6 +68,7 @@ vst-agy-stream-acp = { path = "vst-agy-stream-acp" }
 vst-lifecycle = { path = "vst-lifecycle" }
 vst-diffstat = { path = "vst-diffstat" }
 vst-harness-limits = { path = "vst-harness-limits" }
+vst-wallpapers = { path = "vst-wallpapers" }
 vst-ws = { path = "vst-ws" }
 vst-routes = { path = "vst-routes" }
 vst-daemon = { path = "vst-daemon" }

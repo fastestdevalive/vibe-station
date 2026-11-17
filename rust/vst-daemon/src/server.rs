@@ -173,6 +173,9 @@ pub struct AppState {
     /// Artifacts owner (`vst-artifacts`); `run.rs` starts it and installs it as
     /// the Rich Chat capture sink.
     pub artifacts: vst_artifacts::ArtifactsHandle,
+    /// Wallpaper catalog + image cache owner (`vst-wallpapers`); serves the
+    /// bundled CC0 catalog and same-origin image bytes.
+    pub wallpapers: vst_wallpapers::WallpaperHandle,
     /// Review-comments owner (`vst-review`); `run.rs` starts its lease sweeper.
     pub review: vst_review::ReviewHandle,
     /// Draft-text owner (server-owned composer draft text). Built here so the
@@ -712,6 +715,23 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         tree_change_hook: Some(tree_hook),
     };
 
+    // Wallpaper catalog + image cache: the bundled snapshot is parsed at boot
+    // (no network here); the fetcher is bounded and only ever reads URLs that
+    // are already in that catalog.
+    let wallpaper_catalog =
+        vst_wallpapers::Catalog::bundled().expect("bundled wallpaper catalog is valid");
+    let wallpapers = vst_wallpapers::WallpaperHandle::with_catalog(
+        opts.paths.vst_home().join("cache").join("wallpapers"),
+        Arc::new(vst_wallpapers::ReqwestFetcher::new(
+            vst_wallpapers::FetchPolicy {
+                allowed_hosts: wallpaper_catalog.hosts(),
+                https_only: true,
+                timeout: std::time::Duration::from_secs(15),
+            },
+        )),
+        wallpaper_catalog,
+    );
+
     let state = AppState {
         port: opts.port,
         auth_state: opts.auth_state,
@@ -734,6 +754,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         ws_hub,
         code_store,
         artifacts,
+        wallpapers,
         review,
         draft_text,
         accounts: None,
@@ -778,6 +799,15 @@ impl AppState {
         self.worktree_routes.accounts = Some(accounts.clone());
         self.project_routes.accounts = Some(accounts.clone());
         self.accounts = Some(accounts);
+    }
+
+    /// Replace the wallpaper owner (catalog + image cache). Integration tests
+    /// swap in a fake [`vst_wallpapers::ImageFetcher`] so the routes can be
+    /// exercised without touching an upstream CDN.
+    #[must_use]
+    pub fn with_wallpapers(mut self, wallpapers: vst_wallpapers::WallpaperHandle) -> Self {
+        self.wallpapers = wallpapers;
+        self
     }
 }
 
@@ -1174,7 +1204,9 @@ pub fn router_from_state(state: AppState) -> Router {
         .route("/health", get(handle_health))
         .merge(crate::update::routes::router())
         // Accounts (thin handlers in account_routes.rs)
-        .merge(crate::account_routes::routes());
+        .merge(crate::account_routes::routes())
+        // Wallpaper catalog + images (thin handlers in wallpaper_routes.rs)
+        .merge(crate::wallpaper_routes::routes());
 
     Router::new()
         // Utility & protocol routes stay at root (not under /api)
