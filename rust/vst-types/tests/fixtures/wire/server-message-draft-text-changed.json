@@ -1,0 +1,8 @@
+{
+  "type": "draft-text:changed",
+  "scope": "vs-141-a-5853aa1a",
+  "text": "fix the failing test in @src/lib.rs",
+  "revision": 4,
+  "updatedAt": "2026-11-17T10:00:01.000Z",
+  "clientId": "client-7f3a"
+}

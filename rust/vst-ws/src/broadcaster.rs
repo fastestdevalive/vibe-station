@@ -373,6 +373,19 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             rev,
             tasks,
         },
+        ServerEvent::DraftTextChanged {
+            scope,
+            text,
+            revision,
+            updated_at,
+            client_id,
+        } => ServerMessage::DraftText {
+            scope,
+            text,
+            revision,
+            updated_at,
+            client_id,
+        },
         ServerEvent::LimitsUpdated { limits } => ServerMessage::LimitsUpdated { limits },
         ServerEvent::ArtifactUpserted {
             scope_kind,

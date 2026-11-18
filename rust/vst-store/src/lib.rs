@@ -33,6 +33,8 @@ pub mod tunnel;
 pub mod global_drafts;
 pub mod scheduled;
 
+pub mod draft_texts;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
