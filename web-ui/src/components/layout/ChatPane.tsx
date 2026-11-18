@@ -26,6 +26,7 @@ import { useResetProgress } from "@/hooks/useResetProgress";
 import { useModesStore, iconForMode } from "@/store/modesStore";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { AccountBanner } from "@/components/accounts/AccountBanner";
+import { SessionAccountSwitch } from "@/components/accounts/SessionAccountSwitch";
 import { accountOf, isAccountRemoved, sessionCli } from "@/lib/accounts";
 import { ResetPendingBar } from "./ResetPendingBar";
 import type { ModelAction } from "@/components/chat/ModelSwitch";
@@ -958,7 +959,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               </button>
             ) : null
           }
-          accountId={session?.accountId}
           fontControls={
             <div className="chat-font-overlay__btns">
               <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease chat font" onClick={() => bumpTerminalFont(-0.05)}>
@@ -1040,6 +1040,9 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
               usePaneDialogs.getState().open(sessionId, name === "switch" ? "switch" : "fresh")
             }
             {...(startedAsMode ? { startedAsMode } : {})}
+            {...(session
+              ? { accountControl: <SessionAccountSwitch api={api} session={session} cli={sessionCliName ?? meta?.cli} /> }
+              : {})}
             {...(resetPending || accountUnusable ? { disabled: true } : {})}
             usage={meta?.usage}
             onScheduleSend={async (message, ids, fireAt, reviewIds) => {

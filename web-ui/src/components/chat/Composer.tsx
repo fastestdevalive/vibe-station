@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Clock, SendHorizontal, Square } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Command, UsageInfo } from "@/api/types";
@@ -78,6 +78,10 @@ interface ComposerProps {
   /** The chat's ROOT mode differs from this session's mode — show a dimmed
    *  "started as <mode>" beside the dropdown (not for a model-only change). */
   startedAsMode?: string;
+  /** The session's account control (`SessionAccountSwitch`), rendered in the
+   *  toolbar before Send, where the draft composer puts its `AccountPicker`.
+   *  The caller owns the account/CLI data; the composer only places it. */
+  accountControl?: ReactNode;
   /** Overrides the idle "Ready" label (e.g. "⚠ Error" after a failed turn). */
   statusLabel?: string;
   /** Turns waiting in the queue — shown next to "Working…" while busy. */
@@ -112,6 +116,7 @@ export function Composer({
   modeIconKey,
   actions,
   startedAsMode,
+  accountControl,
   usage,
   statusLabel,
   queuedCount = 0,
@@ -357,6 +362,7 @@ export function Composer({
       }
       toolbarEnd={
         <>
+          {accountControl}
           {stateLabel ? (
             <span
               // Plain "Working…" is redundant with the Stop icon in the top-right

@@ -195,5 +195,26 @@ describe("accounts row menu and phone targets", () => {
     expect(block(tablet, "  .session-account__btn {")).toMatch(/z-index:\s*1/);
     expect(block(tablet, ".session-account__btn::before {")).toMatch(/inset:\s*-12px 0/);
     expect(block(tablet, ".agent-pane-header .session-account__btn::before")).toMatch(/inset:\s*-4px 0 -20px/);
+    expect(block(tablet, ".chat-composer__toolbar .session-account__btn {")).toMatch(/min-height:\s*var\(--h-touch\)/);
+  });
+});
+
+describe("chat composer toolbar account control", () => {
+  const chat = readFileSync(resolve(__dirname, "../../styles/chat.css"), "utf8");
+
+  it("matches the model switch: borderless, line-box height, body-sans text", () => {
+    const btn = block(chat, ".chat-composer__toolbar .session-account__btn {");
+    const model = block(chat, ".chat-model-switch__button {");
+    expect(btn).toMatch(/border:\s*var\(--border-width\) solid transparent/);
+    expect(btn).not.toMatch(/height:\s*var\(--h-md\)/);
+    for (const decl of [/padding:\s*0 var\(--space-1\)/, /font-size:\s*var\(--fs-body-sans\)/, /line-height:\s*1\.4/]) {
+      expect(btn).toMatch(decl);
+      expect(model).toMatch(decl);
+    }
+  });
+
+  it("keeps the monogram-only collapse in narrow composers", () => {
+    const narrow = block(chat, "@container composer (max-width: 440px) {\n  .chat-composer__toolbar .session-account");
+    expect(block(narrow, ".account-chip__name {")).toMatch(/display:\s*none/);
   });
 });

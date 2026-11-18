@@ -260,7 +260,7 @@ function WorktreeDiffStatBadge({ worktreeId }: { worktreeId: string }) {
  *  agent session's account. Renders nothing for a one-account CLI. */
 function WorktreeAccountMark({ sessions, api }: { sessions: Session[] | undefined; api: ApiInstance }) {
   const main = sessions?.find((s) => s.isMain && s.archivedAt == null);
-  return main ? <AccountBadge session={main} api={api} /> : null;
+  return main ? <AccountBadge session={main} api={api} hideDefault /> : null;
 }
 
 interface LeftSidebarProps {
@@ -1800,7 +1800,7 @@ export function LeftSidebar({
                                 )}
                                 <span className="pinned-row__subhead" title={proj?.path}>
                                   {proj?.name ?? sess.projectId}
-                                  <AccountBadge session={sess} api={api} />
+                                  <AccountBadge session={sess} api={api} hideDefault />
                                 </span>
                               </div>
                               <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
@@ -2573,7 +2573,7 @@ export function LeftSidebar({
                                       {!collapsed ? (
                                         <SessionModeIcon session={sess} api={api} className="direct-session__mode-icon" />
                                       ) : null}
-                                      {!collapsed ? <AccountBadge session={sess} api={api} /> : null}
+                                      {!collapsed ? <AccountBadge session={sess} api={api} hideDefault /> : null}
                                       {!collapsed &&
                                       inlineRename?.kind === "session" &&
                                       inlineRename.id === sess.id &&
@@ -2999,7 +2999,7 @@ export function LeftSidebar({
                                                       {!collapsed ? (
                                                         <SessionModeIcon session={sess} api={api} className="direct-session__mode-icon" />
                                                       ) : null}
-                                                      {!collapsed ? <AccountBadge session={sess} api={api} /> : null}
+                                                      {!collapsed ? <AccountBadge session={sess} api={api} hideDefault /> : null}
                                                       {!collapsed &&
                                                       inlineRename?.kind === "session" &&
                                                       inlineRename.id === sess.id &&

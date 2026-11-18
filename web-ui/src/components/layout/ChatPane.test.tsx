@@ -1238,6 +1238,34 @@ describe("ChatPane account surfaces", () => {
     expect(await screen.findByRole("button", { name: "Account: System login" })).toBeInTheDocument();
   });
 
+  it("shows the account the session runs under, not the CLI default, when they differ", async () => {
+    const api = createMockApi();
+    useServerStore.setState({ accounts: [SYSTEM, WORK], accountsLoaded: true });
+    render(<ChatPane api={api} session={{ ...jsonSession("js1"), accountId: "acc_work" }} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js1", meta: meta("js1") });
+    });
+    expect(await screen.findByRole("button", { name: "Account: Work" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Account: System login" })).toBeNull();
+  });
+
+  it("places the account control inside the composer toolbar, not in a row above it", async () => {
+    const api = createMockApi();
+    useServerStore.setState({ accounts: [SYSTEM, WORK], accountsLoaded: true });
+    const { container } = render(<ChatPane api={api} session={{ ...jsonSession("js1"), accountId: "acc_work" }} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js1", meta: meta("js1") });
+    });
+    const btn = await screen.findByRole("button", { name: "Account: Work" });
+    expect(btn.closest(".chat-composer__toolbar")).not.toBeNull();
+    expect(container.querySelector(".chat-statusbar .session-account")).toBeNull();
+    // Draft-composer order: model/mode first, account, then Send.
+    const toolbar = btn.closest(".chat-composer__toolbar")!;
+    const send = screen.getByRole("button", { name: /^Send message/ });
+    expect(btn.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toolbar.contains(send)).toBe(true);
+  });
+
   it("disables sending while the session's account is signed out, with the banner explaining", async () => {
     const api = createMockApi();
     useServerStore.setState({

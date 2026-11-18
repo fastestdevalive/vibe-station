@@ -1,6 +1,6 @@
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
-import { accountOf, isAccountRemoved, sessionCli, showsAccount } from "@/lib/accounts";
+import { accountOf, accountState, defaultAccountFor, isAccountRemoved, sessionCli, showsAccount } from "@/lib/accounts";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useModesStore, useModesSync } from "@/store/modesStore";
 import { AccountChip } from "./AccountChip";
@@ -18,10 +18,15 @@ import { AccountChip } from "./AccountChip";
 export function AccountBadge({
   session,
   api,
+  hideDefault = false,
 }: {
   session: Pick<Session, "modeId" | "draftConfig" | "accountId">;
   /** Loads the modes cache when nothing else on the route has. */
   api?: ApiInstance;
+  /** Draw nothing for a session on its CLI's default account, so only
+   *  non-default accounts get a mark (the left sidebar). A removed account
+   *  or one needing attention (signed out, waiting, limited) still shows its mark. */
+  hideDefault?: boolean;
 }) {
   useModesSync(api);
   const accounts = useServerStore((s) => s.accounts);
@@ -30,7 +35,10 @@ export function AccountBadge({
   const cli = sessionCli(session, modes);
   if (!cli || !showsAccount(accounts, accountsLoaded, cli, session.accountId)) return null;
   const acct = accountOf(accounts, cli, session.accountId);
-  if (acct) return <AccountChip variant="mark" account={acct} />;
+  if (acct) {
+    if (hideDefault && accountState(acct) === "ok" && defaultAccountFor(accounts, cli)?.id === acct.id) return null;
+    return <AccountChip variant="mark" account={acct} />;
+  }
   if (!isAccountRemoved(accounts, accountsLoaded, cli, session.accountId)) return null;
   return <AccountChip variant="mark" removed />;
 }
