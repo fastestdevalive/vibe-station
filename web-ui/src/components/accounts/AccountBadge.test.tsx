@@ -50,6 +50,39 @@ describe("AccountBadge", () => {
     expect(screen.getByRole("img", { name: "Account: System login" })).toBeInTheDocument();
   });
 
+  describe("hideDefault", () => {
+    it("hides the mark for the CLI's default account (System, explicit or implicit)", () => {
+      const { container, rerender } = render(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: null }} />);
+      expect(container.firstChild).toBeNull();
+      rerender(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: "system" }} />);
+      expect(container.firstChild).toBeNull();
+    });
+
+    it("shows a non-default account while System is the default", () => {
+      render(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: WORK.id }} />);
+      expect(screen.getByRole("img", { name: "Account: Work" })).toBeInTheDocument();
+    });
+
+    it("hides a non-System account when it is the default, and shows System then", () => {
+      useServerStore.setState({ accounts: [{ ...SYSTEM, isDefault: false }, { ...WORK, isDefault: true }], accountsLoaded: true });
+      const { container, rerender } = render(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: WORK.id }} />);
+      expect(container.firstChild).toBeNull();
+      rerender(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: null }} />);
+      expect(screen.getByRole("img", { name: "Account: System login" })).toBeInTheDocument();
+    });
+
+    it("still marks a default account that needs attention", () => {
+      useServerStore.setState({ accounts: [{ ...SYSTEM, auth: "signed_out" }, WORK], accountsLoaded: true });
+      render(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: null }} />);
+      expect(screen.getByRole("img", { name: /Account: System login/ })).toBeInTheDocument();
+    });
+
+    it("still marks a removed account", () => {
+      render(<AccountBadge hideDefault session={{ modeId: "claude-mode", accountId: "acc_gone" }} />);
+      expect(screen.getByRole("img", { name: "Account: Account removed" })).toBeInTheDocument();
+    });
+  });
+
   it("is absent for a single-account CLI", () => {
     // opencode has only its virtual System row in this fixture.
     useServerStore.setState({

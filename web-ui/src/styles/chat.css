@@ -1748,10 +1748,6 @@
   color: var(--fg-muted);
 }
 .chat-statusbar__info {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
   min-width: 0;
 }
 .chat-statusbar__model {
@@ -2154,6 +2150,36 @@
 @container composer (max-width: 380px) {
   .chat-composer__mode-chip,
   .chat-composer__state-label--working {
+    display: none;
+  }
+}
+/* Account control in the toolbar: the same flat, borderless weight as its
+   neighbour `.chat-model-switch__button` (height from the line box, hover
+   reveals a subtle border). It shrinks first and ellipsises its name; narrow
+   composers keep only the monogram + chevron (the aria-label/title still carry
+   the full name). Phones get a 44px min-height in accounts.css. */
+.chat-composer__toolbar > .session-account {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.chat-composer__toolbar .session-account__btn {
+  height: auto;
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  border: var(--border-width) solid transparent;
+  font-size: var(--fs-body-sans);
+  line-height: 1.4;
+}
+.chat-composer__toolbar .session-account__btn:hover:not(:disabled) {
+  border-color: var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+}
+.chat-composer__toolbar .session-account__anchor {
+  min-width: 0;
+}
+@container composer (max-width: 440px) {
+  .chat-composer__toolbar .session-account .account-chip__name {
     display: none;
   }
 }

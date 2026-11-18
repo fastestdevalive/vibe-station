@@ -593,7 +593,7 @@
   outline-offset: 1px;
 }
 
-/* Session account control (chat status bar and terminal toolbar). */
+/* Session account control (chat composer toolbar and terminal toolbar). */
 .session-account {
   position: relative;
   display: inline-flex;
@@ -659,6 +659,16 @@
   /* At the very top of the pane: the same 44px, shifted down to stay inside it. */
   .agent-pane-header .session-account__btn::before {
     inset: -4px 0 -20px;
+  }
+
+  /* In the composer toolbar the button is a real 44px target (like the draft
+     picker's chip), not a padded hit area. */
+  .chat-composer__toolbar .session-account__btn {
+    min-height: var(--h-touch);
+  }
+
+  .chat-composer__toolbar .session-account__btn::before {
+    content: none;
   }
 
   .switch-refusal {

@@ -3721,11 +3721,12 @@ describe("LeftSidebar session account badge", () => {
     return document.querySelector(".tree-row--worktree-session") as HTMLElement | null;
   }
 
-  it("shows the account name for a CLI with several accounts", async () => {
+  it("shows the account name only for a non-default account", async () => {
     renderSidebar();
-    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
-    // claude has 4 accounts in the mock fixture; the session starts on System.
-    expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toBe("Account: System login");
+    await waitFor(() => expect(firstSessionRow() && useServerStore.getState().accountsLoaded).toBeTruthy());
+    // claude has 4 accounts in the mock fixture; the session starts on System,
+    // the default, which gets no mark.
+    expect(firstSessionRow()!.querySelector(".account-chip")).toBeNull();
 
     act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
     expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toContain("Account: Work");
@@ -3733,8 +3734,11 @@ describe("LeftSidebar session account badge", () => {
 
   it("is absent for a single-account CLI", async () => {
     renderSidebar();
-    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    await waitFor(() => expect(firstSessionRow() && useServerStore.getState().accountsLoaded).toBeTruthy());
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
+    expect(firstSessionRow()!.querySelector(".account-chip")).toBeTruthy();
 
+    act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: null }));
     act(() =>
       useServerStore.setState({
         accounts: [
@@ -3759,7 +3763,7 @@ describe("LeftSidebar session account badge", () => {
 
   it("says 'Account removed' when the stored account id is unknown", async () => {
     renderSidebar();
-    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    await waitFor(() => expect(firstSessionRow() && useServerStore.getState().accountsLoaded).toBeTruthy());
     act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_gone" }));
     expect(firstSessionRow()!.querySelector(".account-chip")!.getAttribute("aria-label")).toBe("Account: Account removed");
   });
@@ -3774,6 +3778,8 @@ describe("LeftSidebar session account badge", () => {
     });
     await api.pinSession(sess.id, true);
     renderSidebar();
+    await waitFor(() => expect(useServerStore.getState().sessions.some((x) => x.id === sess.id)).toBe(true));
+    act(() => useServerStore.getState().applySessionUpdated(sess.id, { accountId: "acc_1a2b3c4d" }));
     const region = await screen.findByRole("region", { name: /^pinned$/i });
     await waitFor(() =>
       expect(region.querySelector(".pinned-row__subhead .account-chip")).not.toBeNull(),
@@ -3789,14 +3795,15 @@ describe("LeftSidebar session account badge", () => {
           ".tree-row--worktree:not(.tree-row--worktree-session):not(.draft-row):not(.pinned-row) .wt-row__expand .account-chip",
         ),
       ).map((el) => el.getAttribute("aria-label") ?? "");
-    await waitFor(() => expect(wtMarks().length).toBeGreaterThan(0));
+    await waitFor(() => expect(firstSessionRow() && useServerStore.getState().accountsLoaded).toBeTruthy());
+    expect(wtMarks()).toEqual([]);
     act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));
     expect(wtMarks().some((label) => label.startsWith("Account: Work"))).toBe(true);
   });
 
   it("leaves the status dot class unchanged when the badge appears", async () => {
     renderSidebar();
-    await waitFor(() => expect(firstSessionRow()?.querySelector(".account-chip")).toBeTruthy());
+    await waitFor(() => expect(firstSessionRow() && useServerStore.getState().accountsLoaded).toBeTruthy());
     const dot = () => firstSessionRow()!.querySelector(".status-spinner, .status-dot")!.className;
     const before = dot();
     act(() => useServerStore.getState().applySessionUpdated("sess-main", { accountId: "acc_1a2b3c4d" }));

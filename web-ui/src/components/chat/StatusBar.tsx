@@ -1,10 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { SessionMeta, TurnState } from "@/api/types";
-import { SessionAccountSwitch } from "@/components/accounts/SessionAccountSwitch";
 import { ChannelToggleButton } from "./ChannelToggleButton";
 import { cliDisplayName } from "@/lib/cliNames";
-import "@/components/accounts/accounts.css";
 
 interface StatusBarProps {
   meta: SessionMeta | null;
@@ -13,8 +11,6 @@ interface StatusBarProps {
   /** When provided (with sessionId), enables the channel toggle. */
   api?: ApiInstance;
   sessionId?: string;
-  /** The session's account id (`null`/absent = the CLI's System login). */
-  accountId?: string | null;
   /** Font -/+ controls rendered to the left of the channel toggle overlay. */
   fontControls?: ReactNode;
   /** Trailing controls (e.g. Find in chat icon) rendered after the channel toggle. */
@@ -49,7 +45,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * Footer row: font controls + the Rich Chat → Terminal channel toggle. Token /
  * context-window usage lives in the composer's status row (`ContextMeter`).
  */
-export function StatusBar({ meta, queueDepth = 0, api, sessionId, accountId, fontControls, trailingControls }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, api, sessionId, fontControls, trailingControls }: StatusBarProps) {
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
 
@@ -79,11 +75,7 @@ export function StatusBar({ meta, queueDepth = 0, api, sessionId, accountId, fon
   return (
     <div className="chat-statusbar" data-turn-state={state ?? "idle"}>
       {/* Spacer: keeps the controls overlay right-aligned (space-between). */}
-      <div className="chat-statusbar__info">
-        {api && sessionId ? (
-          <SessionAccountSwitch api={api} session={{ id: sessionId, channel: "json", ...(accountId !== undefined ? { accountId } : {}) }} cli={cli} />
-        ) : null}
-      </div>
+      <div className="chat-statusbar__info" />
       {canToggle || fontControls || trailingControls ? (
         <div className="chat-font-overlay">
           {fontControls}
