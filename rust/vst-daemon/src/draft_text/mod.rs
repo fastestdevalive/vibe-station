@@ -8,7 +8,8 @@
 //! migration-gated orphan sweep lives in `boot.rs`.
 //!
 //! Bodies are never logged — `scope` and byte length only (R8). Scopes:
-//! `global-new`, a session id (live, or a global drafting session), and
+//! `global-new`, a session id (live, or a global drafting session),
+//! `schedule:<session id>` (the Terminal agent's schedule box), and
 //! `review-picker:<worktree|project>:<id>`.
 
 use vst_store::draft_texts::{DraftTextRow, PutOutcome};
@@ -118,8 +119,10 @@ impl DraftTextHandle {
         }
     }
 
-    /// Delete a session's row when the session goes away (`SessionDeleted`).
-    /// `Lagged` is ignored: the next boot's gated sweep catches strays.
+    /// Delete a session's rows when the session goes away (`SessionDeleted`):
+    /// both the session-id scope and its Terminal schedule scope
+    /// (`schedule:<session id>`). `Lagged` is ignored: the next boot's gated
+    /// sweep catches strays.
     pub fn spawn_session_deleted_subscriber(&self) -> tokio::task::JoinHandle<()> {
         let store = self.store.clone();
         let mut rx = self.broadcaster.subscribe();
@@ -127,14 +130,16 @@ impl DraftTextHandle {
             loop {
                 match rx.recv().await {
                     Ok(ServerEvent::SessionDeleted { session_id }) => {
-                        match store.delete_draft_text(&session_id).await {
-                            Ok(true) => {
-                                tracing::debug!(scope = %session_id, "draft text row removed with its session");
+                        for scope in [session_id.clone(), format!("schedule:{session_id}")] {
+                            match store.delete_draft_text(&scope).await {
+                                Ok(true) => {
+                                    tracing::debug!(scope = %scope, "draft text row removed with its session");
+                                }
+                                Ok(false) => {}
+                                Err(e) => tracing::warn!(
+                                    "[vst] draft text delete for a deleted session failed: {e}"
+                                ),
                             }
-                            Ok(false) => {}
-                            Err(e) => tracing::warn!(
-                                "[vst] draft text delete for a deleted session failed: {e}"
-                            ),
                         }
                     }
                     Ok(_) => {}
@@ -148,26 +153,26 @@ impl DraftTextHandle {
 
 /// Whether `scope` names something that exists right now. `global-new` is
 /// always valid; a session id may be a live session or a global drafting
-/// session; picker scopes name a worktree/project. Anything else is `NotFound`
-/// here and is swept at boot.
+/// session; `schedule:<session id>` names an existing session; picker scopes
+/// name a worktree/project. Anything else is `NotFound` here and is swept at
+/// boot.
 async fn scope_exists(store: &StoreHandle, scope: &str) -> bool {
     if scope == GLOBAL_NEW_SCOPE {
         return true;
     }
+    if let Some(id) = scope.strip_prefix("schedule:") {
+        return store.session_exists(id).await;
+    }
     if let Some(rest) = scope.strip_prefix("review-picker:") {
         if let Some(id) = rest.strip_prefix("worktree:") {
-            return store
-                .get_all_projects()
-                .await
-                .iter()
-                .any(|p| p.worktrees.iter().any(|w| w.id == id));
+            return store.worktree_exists(id).await;
         }
         if let Some(id) = rest.strip_prefix("project:") {
             return store.get_project(id).await.is_some();
         }
         return false;
     }
-    store.find_session(scope).await.is_some() || store.get_global_draft(scope).await.is_some()
+    store.session_exists(scope).await || store.get_global_draft(scope).await.is_some()
 }
 
 /// `^[A-Za-z0-9._:-]{1,160}$`.

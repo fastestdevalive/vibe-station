@@ -334,6 +334,70 @@ async fn unknown_session_not_found() {
     ));
 }
 
+/// `schedule:<session id>` is the Terminal agent's schedule box: it names an
+/// existing session (worktree or direct), and an unknown id is `NotFound`.
+#[tokio::test]
+async fn schedule_scope_needs_existing_session() {
+    let h = H::with_project().await;
+    assert!(matches!(
+        h.handle.put("schedule:vs-nope", "t", CLIENT).await,
+        Err(DraftTextError::NotFound)
+    ));
+
+    let doc = h
+        .handle
+        .put("schedule:s1", "queued message", CLIENT)
+        .await
+        .unwrap();
+    assert_eq!(doc.scope, "schedule:s1");
+    assert_eq!(doc.revision, 1);
+
+    let doc = h
+        .handle
+        .put("schedule:sd1", "queued message", CLIENT)
+        .await
+        .unwrap();
+    assert_eq!(doc.scope, "schedule:sd1");
+    assert_eq!(doc.revision, 1);
+}
+
+/// Deleting a session removes both its own draft row and its Terminal schedule
+/// row (`schedule:<session id>`), so neither outlives the session.
+#[tokio::test]
+async fn session_deleted_removes_schedule_row() {
+    let h = H::with_project().await;
+    h.handle
+        .put("schedule:s1", "queued message", CLIENT)
+        .await
+        .unwrap();
+    assert_eq!(h.handle.get("schedule:s1").await.unwrap().revision, 1);
+
+    let subscriber = h.handle.spawn_session_deleted_subscriber();
+    h.broadcaster.send(ServerEvent::SessionDeleted {
+        session_id: "s1".into(),
+    });
+
+    let mut gone = false;
+    for _ in 0..200 {
+        if h.store
+            .get_draft_text("schedule:s1")
+            .await
+            .unwrap()
+            .is_none()
+        {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    subscriber.abort();
+    assert!(gone, "the session's schedule draft row must be deleted");
+    // The row is gone, so a GET is the revision-0 empty doc.
+    let doc = h.handle.get("schedule:s1").await.unwrap();
+    assert_eq!(doc.revision, 0);
+    assert_eq!(doc.text, "");
+}
+
 #[tokio::test]
 async fn unknown_picker_worktree_not_found() {
     let h = H::with_project().await;

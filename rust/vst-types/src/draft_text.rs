@@ -1,8 +1,9 @@
 //! Draft text wire types — the server-owned composer draft text
 //! (`.vibekit/feature-plans/wip/draft-text-sync`).
 //!
-//! One row per scope (`global-new`, a session id, `review-picker:<kind>:<id>`),
-//! pushed live to every client as `ServerEvent::DraftTextChanged`. The server
+//! One row per scope (`global-new`, a session id, `schedule:<session id>`,
+//! `review-picker:<kind>:<id>`), pushed live to every client as
+//! `ServerEvent::DraftTextChanged`. The server
 //! stores the text opaquely (draft-form mentions/skills included); only the
 //! owner module (`vst-daemon/src/draft_text`) validates scopes and enforces the
 //! cap. Bodies are never logged.
