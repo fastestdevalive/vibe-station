@@ -98,17 +98,25 @@ export function useDraftComposerSync({
     },
   });
 
-  // Tier 2: every edit is a save to the server-owned scope.
+  // Tier 2: save only an actual edit. The mount run is not an edit — the first
+  // paint is already the server's/legacy's text — and saving it before the
+  // engine's fetch lands is what wiped the synced prompt (F-01).
+  const savedPromptRef = useRef(prompt);
+  const tier2Save = tier2.save;
   useEffect(() => {
     if (isTier1) return;
-    tier2.save(prompt);
-  }, [isTier1, prompt, tier2]);
+    if (prompt === savedPromptRef.current) return;
+    savedPromptRef.current = prompt;
+    tier2Save(prompt);
+  }, [isTier1, prompt, tier2Save]);
 
-  // Tier 2: flush the debounced save when the composer goes away.
+  // Tier 2: flush the debounced save when the composer goes away. Depends on the
+  // stable method (never on the binding object, which changes per render — F-03).
+  const tier2Flush = tier2.flush;
   useEffect(() => {
     if (isTier1) return;
-    return () => tier2.flush();
-  }, [isTier1, tier2]);
+    return () => tier2Flush();
+  }, [isTier1, tier2Flush]);
 
   // Tier 1: apply another client's prompt when this editor is clean.
   const incoming = session?.draftPrompt ?? "";
@@ -140,7 +148,12 @@ export function useDraftComposerSync({
       const ring = sentPromptsRef.current;
       ring.push(pair.draftPrompt);
       if (ring.length > SENT_RING) ring.shift();
-      return api.updateDraft(id, body, opts);
+      // A failed PATCH must not count as sent: restore the previous pair so the
+      // unmount/pagehide flush re-sends it instead of deduping it away (F-06).
+      return api.updateDraft(id, body, opts).catch((e) => {
+        if (lastPairRef.current === pair) lastPairRef.current = previous;
+        throw e;
+      });
     },
     [api],
   );

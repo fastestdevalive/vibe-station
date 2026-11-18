@@ -2,6 +2,7 @@ import { useEffect, useState, type RefObject } from "react";
 import type { ApiInstance } from "@/api";
 import { ApiError } from "@/api/errors";
 import { ScheduleSendPopover } from "@/components/chat/ScheduleSendPopover";
+import { scheduleScope, useDraftText } from "@/components/draftsync";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { SCHEDULE_COPY } from "./scheduleCopy";
 
@@ -39,18 +40,24 @@ export function ScheduleMessagePopover({
   targetLabel,
   onClose,
 }: ScheduleMessagePopoverProps) {
-  const [message, setMessage] = useState("");
+  // The message is server-owned draft text for this agent (F-05): it survives a
+  // reload and follows another device. `ScheduleButton` is per session, so the
+  // scope change (not a reset effect) is what swaps drafts.
+  const draft = useDraftText(api, scheduleScope(sessionId), {
+    onRemote: (text) => setMessage(text),
+  });
+  const [message, setMessage] = useState(() => draft.initialText);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // A different agent is a different draft.
-  useEffect(() => {
-    setMessage("");
-    setError(null);
-  }, [sessionId]);
   useEffect(() => {
     if (open) setError(null);
   }, [open]);
+
+  function onMessageChange(text: string) {
+    setMessage(text);
+    draft.save(text);
+  }
 
   function submit(fireAt: string) {
     if (busy) return;
@@ -59,6 +66,7 @@ export function ScheduleMessagePopover({
     api
       .scheduleMessage(sessionId, message, fireAt)
       .then(() => {
+        draft.clear();
         setMessage("");
         onClose();
       })
@@ -75,7 +83,7 @@ export function ScheduleMessagePopover({
       anchorRef={anchorRef}
       title="Schedule message"
       messageValue={message}
-      onMessageChange={setMessage}
+      onMessageChange={onMessageChange}
       targetLabel={targetLabel}
       note={TERMINAL_SCHEDULE_NOTE}
       error={error}

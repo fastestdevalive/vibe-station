@@ -10,6 +10,16 @@ export type { ScopeState };
 /** The slice of `ApiInstance` the draft-sync engine drives (narrowed so tests can fake it). */
 export type DraftTextApi = Pick<ApiInstance, "listDraftTexts" | "getDraftText" | "putDraftText" | "on">;
 
+/** What `useDraftText` hands an editor (Decision 9). */
+export interface DraftBinding {
+  /** The first paint's text (buffer → server doc → legacy → ""). */
+  initialText: string;
+  save(text: string): void;
+  flush(opts?: { keepalive?: boolean }): void;
+  clear(): void;
+  dispose(): void;
+}
+
 /** A scope's shared engine state (Decision 9: one per scope per api, shared by
  *  every binding of that scope on this page). */
 export interface ScopeRecord extends ScopeState {
@@ -34,6 +44,14 @@ export interface ScopeRecord extends ScopeState {
   retryTimer: ReturnType<typeof setTimeout> | null;
   /** Consecutive retryable failures, for the capped backoff; reset on success. */
   retryAttempt: number;
+  /** The scope is gone (a final 400/404, or `session:deleted`): never write it
+   *  again, so a stale buffer cannot re-PUT on every reconnect (F-04). */
+  gone: boolean;
+}
+
+/** A scope's revision-0 empty doc (the server holds no row for it). */
+export function emptyDoc(scope: string): DraftTextDoc {
+  return { scope, text: "", revision: 0, updatedAt: null, clientId: null };
 }
 
 /**
@@ -85,6 +103,7 @@ export function createRecord(
     rejectedText: null,
     retryTimer: null,
     retryAttempt: 0,
+    gone: false,
   };
 }
 
@@ -156,6 +175,33 @@ export interface DocFoldDeps {
   flush(rec: ScopeRecord): void;
   /** Set the text everywhere before notifying, so an applied remote never re-PUTs. */
   applyRemote(rec: ScopeRecord, text: string): void;
+}
+
+/** Set a remote text everywhere BEFORE notifying, so an apply never re-PUTs (Decision 4). */
+export function applyRemoteText(
+  rec: ScopeRecord,
+  text: string,
+  discardUnsent: (rec: ScopeRecord) => void,
+): void {
+  discardUnsent(rec); // nothing older than the applied remote may still be sent.
+  rec.localText = text;
+  rec.lastSynced = text;
+  rec.pendingRemote = null;
+  rec.seed = null;
+  for (const listener of rec.listeners) listener(text);
+}
+
+/** Fold one `draft-text:changed` event into a bound scope (`decideRemote`, Decision 4). */
+export function applyChangedEvent(
+  rec: ScopeRecord,
+  ev: { text: string; revision: number; clientId: string | null },
+  discardUnsent: (rec: ScopeRecord) => void,
+): void {
+  const decision = decideRemote(rec, ev);
+  if (decision === "ignore") return;
+  rec.heldRevision = ev.revision;
+  if (decision === "apply") applyRemoteText(rec, ev.text, discardUnsent);
+  else rec.pendingRemote = { text: ev.text, revision: ev.revision };
 }
 
 /**

@@ -130,6 +130,8 @@ export class ScopeOutbox {
   }
 
   private enqueue(rec: ScopeRecord, text: string, opts?: { keepalive?: boolean }): void {
+    // A gone scope (final 400/404 or a deleted session) is never written again.
+    if (rec.gone) return;
     // A new write supersedes a scheduled retry; only a success resets `attempt`.
     this.cancelRetry(rec);
     rec.queued = text;
@@ -166,6 +168,10 @@ export class ScopeOutbox {
 
   private async pump(rec: ScopeRecord): Promise<void> {
     while (rec.queued !== null) {
+      if (rec.gone) {
+        rec.queued = null;
+        break;
+      }
       const text = rec.queued;
       const keepalive = rec.queuedKeepalive;
       rec.queued = null;
@@ -189,6 +195,15 @@ export class ScopeOutbox {
         // a socket that stays open will never send a `ws:open` flush.
         if (err instanceof ApiError && err.status === 413) {
           rec.rejectedText = text;
+        } else if (err instanceof ApiError && (err.status === 404 || err.status === 400)) {
+          // A final rejection means the scope is gone (deleted session, unknown
+          // id): drop the buffer and never write this scope again, so a
+          // reconnect cannot re-PUT it forever (F-04).
+          clearBuffer(rec.scope);
+          rec.lastSynced = rec.localText; // nothing left to flush/pagehide-send.
+          rec.gone = true;
+          rec.queued = null;
+          this.cancelRetry(rec);
         } else if (isRetryable(err) && rec.queued === null) {
           this.scheduleRetry(rec);
         }

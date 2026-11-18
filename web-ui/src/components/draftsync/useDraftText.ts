@@ -26,10 +26,14 @@ export function useDraftText(
 
   const initialText =
     scope === null ? "" : engine ? engine.initialText(scope) : (readBuffer(scope)?.text ?? legacyTextFor(scope));
+  // The text the editor actually painted with this mount. `bind` reconciles it
+  // against the record, so a doc that arrived before the (possibly delayed) bind
+  // replaces the empty/legacy first paint instead of being overwritten by it.
+  const renderedRef = useRef(initialText);
 
   useEffect(() => {
     if (scope === null || !engine) return;
-    const binding = engine.bind(scope, (text) => onRemote.current(text));
+    const binding = engine.bind(scope, (text) => onRemote.current(text), renderedRef.current);
     live.current = binding;
     return () => {
       live.current = null;
@@ -47,14 +51,18 @@ export function useDraftText(
     return () => clearTimeout(timer);
   }, [api, scope, engine]);
 
-  return useMemo<DraftBinding>(
+  // Built once: a keystroke changes `initialText`, and an identity change there
+  // would re-run every caller's save/flush effects (an immediate PUT per
+  // keystroke, F-03). The methods read `live.current` at call time.
+  const fns = useMemo(
     () => ({
-      initialText,
-      save: (text) => live.current?.save(text),
-      flush: (opts2) => live.current?.flush(opts2),
+      save: (text: string) => live.current?.save(text),
+      flush: (opts2?: { keepalive?: boolean }) => live.current?.flush(opts2),
       clear: () => live.current?.clear(),
       dispose: () => live.current?.dispose(),
     }),
-    [initialText],
+    [],
   );
+
+  return useMemo<DraftBinding>(() => ({ initialText, ...fns }), [initialText, fns]);
 }

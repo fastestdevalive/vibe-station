@@ -5,25 +5,22 @@ import { getClientId } from "./clientId";
 import { startGlobalDraftMirror } from "./globalDraftMirror";
 import { legacyTextFor, migrateLegacy, type LegacyImportTarget } from "./migrateLegacy";
 import { ScopeOutbox } from "./outbox";
-import { decideRemote } from "./reconcile";
 import {
+  applyChangedEvent,
+  applyRemoteText,
   createRecord,
+  emptyDoc,
   foldDocArrival,
   resolveInitialText,
   type DocFoldDeps,
+  type DraftBinding,
   type DraftTextApi,
   type ScopeRecord,
 } from "./scopeState";
 
-/** What `useDraftText` hands an editor (Decision 9). */
-export interface DraftBinding {
-  /** The first paint's text (buffer → server doc → legacy → ""). */
-  initialText: string;
-  save(text: string): void;
-  flush(opts?: { keepalive?: boolean }): void;
-  clear(): void;
-  dispose(): void;
-}
+/** The binding shape lives with the scope state it describes; re-exported here
+ *  so `useDraftText`/`index.ts` keep one import site. */
+export type { DraftBinding };
 
 type ChangedEvent = Extract<WSEvent, { type: "draft-text:changed" }>;
 
@@ -48,6 +45,13 @@ export function ensureDraftTextSync(api: ApiInstance): void {
  *  an engine — a test that never ensures one keeps the legacy localStorage path. */
 export function appendDraftText(api: ApiInstance, scope: string, text: string): void {
   engineFor(api)?.append(scope, text);
+}
+
+/** Set a scope's draft with no editor mounted (e.g. a Tier-1 → Tier-2 demote,
+ *  which must carry the preserved prompt into `global-new`). Inert without an
+ *  engine, like `appendDraftText`: the engine stays the only writer (F-02). */
+export function setDraftText(api: ApiInstance, scope: string, text: string): void {
+  engineFor(api)?.save(scope, text);
 }
 
 /**
@@ -105,6 +109,13 @@ export class DraftTextEngine implements LegacyImportTarget {
     const refetch = () => void this.fetch();
     this.offs.push(this.api.on("ws:open", refetch));
     this.offs.push(this.api.on("ws:resync", refetch));
+    // A deleted session's draft scope can never be written again: drop its
+    // buffer so a reconnect does not re-PUT it (F-04, CUJ5).
+    this.offs.push(
+      this.api.on("session:deleted", (ev) => {
+        if (ev.type === "session:deleted") this.onSessionDeleted(ev.sessionId);
+      }),
+    );
     if (typeof window !== "undefined") {
       const onPageHide = () => this.outbox.pageHide(this.records.values());
       const onOnline = () => this.outbox.retryNow(this.records.values());
@@ -135,9 +146,13 @@ export class DraftTextEngine implements LegacyImportTarget {
     return resolveInitialText(this.knownDoc(scope), readBuffer(scope), legacyTextFor(scope)).text;
   }
 
-  bind(scope: string, onRemote: (text: string) => void): DraftBinding {
+  bind(scope: string, onRemote: (text: string) => void, rendered?: string): DraftBinding {
     const rec = this.ensureRecord(scope);
     rec.listeners.add(onRemote);
+    // The record wins over the caller's first paint (F-01): nothing can have
+    // been typed between that render and this effect, so a mismatch means the
+    // text arrived from the server (or a buffer) in the meantime.
+    if (rendered !== undefined && rendered !== rec.localText) onRemote(rec.localText);
     return {
       initialText: rec.localText,
       save: (text) => this.save(scope, text, onRemote),
@@ -153,7 +168,9 @@ export class DraftTextEngine implements LegacyImportTarget {
   /** Debounced save; a local edit also updates same-page sibling bindings. */
   save(scope: string, text: string, caller?: (text: string) => void): void {
     const rec = this.ensureRecord(scope);
+    if (rec.gone) return; // a deleted/final-4xx scope is never written again (F-04).
     if (text === rec.rejectedText) return; // 413: this exact text is never retried.
+    if (text === rec.localText) return; // nothing changed: notify/send nothing (F-01).
     rec.localText = text;
     rec.seed = null;
     for (const listener of rec.listeners) if (listener !== caller) listener(text);
@@ -215,21 +232,23 @@ export class DraftTextEngine implements LegacyImportTarget {
     this.docs.set(ev.scope, doc);
     const rec = this.records.get(ev.scope);
     if (!rec) return;
-    const decision = decideRemote(rec, ev);
-    if (decision === "ignore") return;
-    rec.heldRevision = ev.revision;
-    if (decision === "apply") this.applyRemote(rec, ev.text);
-    else rec.pendingRemote = { text: ev.text, revision: ev.revision };
+    applyChangedEvent(rec, ev, (r) => this.outbox.discardUnsent(r));
   }
 
   /** Set the text everywhere BEFORE notifying, so an apply never re-PUTs (Decision 4). */
   private applyRemote(rec: ScopeRecord, text: string): void {
-    this.outbox.discardUnsent(rec); // nothing older than the applied remote may still be sent.
-    rec.localText = text;
-    rec.lastSynced = text;
-    rec.pendingRemote = null;
-    rec.seed = null;
-    for (const listener of rec.listeners) listener(text);
+    applyRemoteText(rec, text, (r) => this.outbox.discardUnsent(r));
+  }
+
+  /** `session:deleted`: its draft scope is gone for good (F-04, CUJ5). */
+  private onSessionDeleted(sessionId: string): void {
+    clearBuffer(sessionId);
+    const rec = this.records.get(sessionId);
+    if (!rec) return;
+    rec.gone = true;
+    rec.lastSynced = rec.localText; // a flush/pagehide then has nothing to send.
+    this.outbox.discardUnsent(rec);
+    if (rec.listeners.size === 0) this.records.delete(sessionId);
   }
 
   private fetch(): Promise<void> {
@@ -246,13 +265,13 @@ export class DraftTextEngine implements LegacyImportTarget {
         // A bound scope absent from the list is revision 0 — its buffer may still
         // match that base and must be flushed (Decision 6).
         for (const rec of this.records.values()) {
-          if (!seen.has(rec.scope)) this.absorbDoc(this.emptyDoc(rec.scope));
+          if (!seen.has(rec.scope)) this.absorbDoc(emptyDoc(rec.scope));
         }
         // A buffer can outlive its editor: flush or drop it with no binding mounted.
         for (const scope of bufferedScopes()) {
           if (this.records.has(scope)) continue;
           this.ensureRecord(scope);
-          this.absorbDoc(this.docs.get(scope) ?? this.emptyDoc(scope));
+          this.absorbDoc(this.docs.get(scope) ?? emptyDoc(scope));
         }
         if (!this.migrated) {
           this.migrated = true;
@@ -268,14 +287,10 @@ export class DraftTextEngine implements LegacyImportTarget {
     return run;
   }
 
-  private emptyDoc(scope: string): DraftTextDoc {
-    return { scope, text: "", revision: 0, updatedAt: null, clientId: null };
-  }
-
   /** The server doc for a scope: once the list has returned, a missing scope is
    *  a known revision-0 empty doc rather than an unknown one. */
   private knownDoc(scope: string): DraftTextDoc | null {
-    return this.docs.get(scope) ?? (this.listed ? this.emptyDoc(scope) : null);
+    return this.docs.get(scope) ?? (this.listed ? emptyDoc(scope) : null);
   }
 
   /** Fold one fetched doc into a bound scope (`foldDocArrival`, Decision 6 + 4). */

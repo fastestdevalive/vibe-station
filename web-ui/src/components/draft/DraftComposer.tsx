@@ -32,6 +32,7 @@ import { useGlobalDraftStore, type GlobalDraftState } from "@/store/globalDraftS
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { useSkillCommands } from "@/hooks/useSkillCommands";
 import { globalDraftInitialText, useDraftComposerSync } from "@/components/draftsync/useDraftComposerSync";
+import { GLOBAL_NEW_SCOPE, setDraftText } from "@/components/draftsync";
 import { draftLabel } from "@/lib/sessionLabel";
 import { toPlainText } from "@/lib/mentions";
 import type { MentionEditorConfig } from "@/components/mentions/types";
@@ -589,6 +590,11 @@ function DraftComposerInner({
     };
     committedRef.current = true;
     useServerStore.getState().applySessionDeleted(draftSessionId); // optimistic: drop from sidebar now
+    // Tier 2 seeds its prompt from the server-owned `global-new` scope, not from
+    // the store (Decision 10), so the preserved prompt must be written there
+    // first — otherwise the remount shows the old/empty `global-new` text and the
+    // mirror clears the preserved config too (F-02). The engine stays the writer.
+    setDraftText(api, GLOBAL_NEW_SCOPE, preserved.draftPrompt);
     setGlobalDraft(preserved);
     navigate("/draft/new", { replace: true });
     void api.terminateSession(draftSessionId).catch((e) => {

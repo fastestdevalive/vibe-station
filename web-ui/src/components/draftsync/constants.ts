@@ -19,3 +19,6 @@ export const GLOBAL_NEW_SCOPE = "global-new";
 
 /** Terminal send message scope: `review-picker:worktree:<id>` / `review-picker:project:<id>`. */
 export const pickerScope = (scopeKey: string) => `review-picker:${scopeKey}`;
+
+/** Terminal agent "Schedule message" draft scope (one per session). */
+export const scheduleScope = (sessionId: string) => `schedule:${sessionId}`;

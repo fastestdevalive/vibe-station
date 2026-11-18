@@ -239,6 +239,26 @@ describe("DraftTextEngine — writes", () => {
 
     expect(readBuffer("s1")).toBeNull();
   });
+
+  it("save_same_text_notifies_no_listener_and_sends_no_put", async () => {
+    const server = makeServer();
+    const engine = await startEngine(server);
+    const sibling = vi.fn();
+    engine.bind("s1", sibling);
+
+    engine.save("s1", "same");
+    await vi.advanceTimersByTimeAsync(600);
+    await settle();
+    expect(server.puts.map((p) => p.text)).toEqual(["same"]);
+
+    sibling.mockClear();
+    engine.save("s1", "same");
+    await vi.advanceTimersByTimeAsync(600);
+    await settle();
+
+    expect(server.puts).toHaveLength(1);
+    expect(sibling).not.toHaveBeenCalled();
+  });
 });
 
 describe("DraftTextEngine — remote updates", () => {
@@ -972,6 +992,53 @@ describe("DraftTextEngine — cap + lifecycle", () => {
     ensureDraftTextSync(api as unknown as ApiInstance);
     await settle();
     expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("final_404_drops_the_buffer_and_stops_reconnect_replying", async () => {
+    // A legacy key for a long-deleted session: the import PUT is answered 404.
+    localStorage.setItem("vst-chat-draft-gone-session", "old text");
+    const server = makeServer();
+    server.fail = new ApiError("scope not found", 404, "scope_not_found");
+    await startEngine(server);
+
+    expect(server.puts.map((p) => p.scope)).toEqual(["gone-session"]);
+    expect(readBuffer("gone-session")).toBeNull();
+
+    // Neither reconnect path may re-PUT a gone scope.
+    server.fail = null;
+    emit(server, { type: "ws:open" });
+    await settle();
+    emit(server, { type: "ws:resync" });
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+
+    expect(server.puts).toHaveLength(1);
+    expect(readBuffer("gone-session")).toBeNull();
+  });
+
+  it("session_deleted_clears_its_scope_buffer", async () => {
+    const server = makeServer();
+    const engine = await startEngine(server);
+    const binding = engine.bind("s1", () => {});
+
+    binding.save("typed");
+    expect(readBuffer("s1")?.text).toBe("typed");
+
+    emit(server, { type: "session:deleted", sessionId: "s1" });
+    expect(readBuffer("s1")).toBeNull();
+
+    // The pending debounce is dropped and nothing may be written again.
+    await vi.advanceTimersByTimeAsync(600);
+    await settle();
+    binding.save("typed more");
+    binding.flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+
+    expect(server.puts).toHaveLength(0);
+    expect(readBuffer("s1")).toBeNull();
+    expect(engine.initialText("s1")).toBe("typed");
   });
 
   it("global_prompt_snapshot_taken_at_creation", async () => {

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
@@ -145,12 +145,13 @@ async function renderTier1(api: ApiInstance, session: Session = draftSession()) 
     sessions: [session],
     loaded: true,
   } as never);
-  render(
+  const view = render(
     <MemoryRouter initialEntries={[`/draft/${session.id}`]}>
       <DraftComposer api={api} draftSessionId={session.id} onStarted={vi.fn()} onDiscard={vi.fn()} />
     </MemoryRouter>,
   );
   await screen.findByTestId("prompt-input");
+  return view;
 }
 
 async function renderTier2(api: ApiInstance) {
@@ -288,5 +289,188 @@ describe("DraftComposer live draft sync (Phase 4 Track B)", () => {
     expect(useGlobalDraftStore.getState().draft).toBeNull();
     await waitFor(() => expect(put).toHaveBeenCalledWith(GLOBAL, "", expect.any(String), undefined));
     expect((await api.getDraftText(GLOBAL)).text).toBe("");
+  }, 15_000);
+});
+
+/**
+ * The real app's `/draft/*` route: `Workspace.tsx` keys `DraftComposer` on the
+ * session id (or the new location key), so a Tier-1 → Tier-2 demote remounts it.
+ */
+function DraftApp({ api }: { api: ApiInstance }) {
+  const location = useLocation();
+  const draftSessionId = location.pathname === "/draft/new" ? null : "t1-draft";
+  return (
+    <DraftComposer
+      key={draftSessionId ?? `new:${location.key}`}
+      api={api}
+      draftSessionId={draftSessionId}
+      onStarted={vi.fn()}
+      onDiscard={vi.fn()}
+    />
+  );
+}
+
+/** Seed the mock server's `global-new` row before any engine exists. */
+async function seedGlobal(api: ReturnType<typeof createMockApi>, text: string): Promise<void> {
+  await api.putDraftText(GLOBAL, text, "seed");
+}
+
+const putCalls = (put: { mock: { calls: unknown[][] } }) =>
+  put.mock.calls.filter(([scope]) => scope === GLOBAL).length;
+
+describe("DraftComposer draft-sync fixes (final review)", () => {
+  it("tier2_cold_load_keeps_the_synced_prompt", async () => {
+    // A hard reload of /draft/new: the composer mounts BEFORE `useServerSync`'s
+    // `ensureDraftTextSync` creates the engine, so its first paint is "".
+    const api = mockApi();
+    await seedGlobal(api, "abc");
+    useGlobalDraftStore.setState({ draft: { draftPrompt: "", draftConfig: { entryPoint: "global" } } });
+    await renderTier2(api);
+    const put = vi.spyOn(api, "putDraftText");
+
+    await start(api);
+    await act(async () => {
+      // the delayed bind (`setTimeout(0)`) and the fetch land
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    await waitFor(() => expect(promptInput().value).toBe("abc"));
+    expect(put).not.toHaveBeenCalledWith(GLOBAL, "", expect.any(String), undefined);
+    expect(useGlobalDraftStore.getState().draft?.draftPrompt).toBe("abc");
+  }, 10_000);
+
+  it("tier2_bind_before_doc_arrival_keeps_the_synced_prompt", async () => {
+    // The engine binds while its first list fetch is still in flight: the record
+    // is still empty at bind time, and the doc must then win (not the empty paint).
+    const api = mockApi();
+    await seedGlobal(api, "abc");
+    const list = api.listDraftTexts.bind(api);
+    let releaseList: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(api, "listDraftTexts").mockImplementation(async () => {
+      await held;
+      return list();
+    });
+    useGlobalDraftStore.setState({ draft: { draftPrompt: "", draftConfig: { entryPoint: "global" } } });
+    await renderTier2(api);
+    const put = vi.spyOn(api, "putDraftText");
+
+    ensureDraftTextSync(api);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0)); // the delayed bind
+    });
+    await act(async () => {
+      releaseList();
+    });
+
+    await waitFor(() => expect(promptInput().value).toBe("abc"));
+    expect(put).not.toHaveBeenCalledWith(GLOBAL, "", expect.any(String), undefined);
+    expect(useGlobalDraftStore.getState().draft?.draftPrompt).toBe("abc");
+  }, 10_000);
+
+  it("tier2_one_put_per_burst", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = mockApi();
+      await start(api);
+      vi.spyOn(api, "listModes").mockResolvedValue([mode]);
+      vi.spyOn(api, "getSupportedClis").mockResolvedValue([cli]);
+      useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: true } as never);
+      const view = render(
+        <MemoryRouter initialEntries={["/draft/new"]}>
+          <DraftComposer api={api} draftSessionId={null} onStarted={vi.fn()} onDiscard={vi.fn()} />
+        </MemoryRouter>,
+      );
+      const put = vi.spyOn(api, "putDraftText");
+
+      let text = "";
+      for (const ch of ["a", "b", "c", "d", "e"]) {
+        text += ch;
+        act(() => {
+          fireEvent.change(promptInput(), { target: { value: text } });
+        });
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+
+      expect(putCalls(put)).toBe(1);
+      expect(put).toHaveBeenCalledWith(GLOBAL, "abcde", expect.any(String), undefined);
+
+      // The text is already synced: unmounting must not send it again.
+      view.unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(putCalls(put)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 10_000);
+
+  it("clear_project_carries_the_prompt_into_global_new", async () => {
+    const api = mockApi();
+    await start(api);
+    // The demote terminates the draft record; the mock has no such session, and
+    // that call is irrelevant to the prompt carry asserted here.
+    vi.spyOn(api, "terminateSession").mockResolvedValue({ ok: true });
+    vi.spyOn(api, "listModes").mockResolvedValue([mode]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([cli]);
+    useServerStore.setState({
+      projects: [project],
+      worktrees: [{ id: "wt-1", projectId: "p1", branch: "feat" }],
+      sessions: [
+        draftSession({
+          draftPrompt: "keep me",
+          draftConfig: { entryPoint: "direct", modeId: "m-claude", channel: "json" },
+        }),
+      ],
+      loaded: true,
+    } as never);
+    render(
+      <MemoryRouter initialEntries={["/draft/t1-draft"]}>
+        <DraftApp api={api} />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId("prompt-input");
+    expect(promptInput().value).toBe("keep me");
+    const put = vi.spyOn(api, "putDraftText");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+    });
+
+    // Remounted on /draft/new: Tier 2 seeds from the server-owned scope.
+    await screen.findByTestId("prompt-input");
+    expect(promptInput().value).toBe("keep me");
+    expect(useGlobalDraftStore.getState().draft?.draftPrompt).toBe("keep me");
+    expect(useGlobalDraftStore.getState().draft?.draftConfig.entryPoint).toBe("global");
+
+    await settleSave();
+    expect(put).toHaveBeenCalledWith(GLOBAL, "keep me", expect.any(String), undefined);
+  }, 15_000);
+
+  it("tier1_failed_patch_is_re_sent_on_unmount", async () => {
+    const api = mockApi();
+    const update = vi
+      .spyOn(api, "updateDraft")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ ok: true, name: null });
+    const view = await renderTier1(api);
+
+    await typePrompt("keep");
+    await settleSave();
+    expect(update.mock.calls.filter(([, b]) => b.draftPrompt === "keep")).toHaveLength(1);
+
+    // The failed PATCH must not count as sent: the unmount flush re-sends it.
+    view.unmount();
+    await waitFor(() =>
+      expect(update.mock.calls.filter(([, b]) => b.draftPrompt === "keep")).toHaveLength(2),
+    );
   }, 15_000);
 });
