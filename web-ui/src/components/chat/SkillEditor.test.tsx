@@ -562,3 +562,29 @@ describe("SkillEditor disabled (live)", () => {
     await waitFor(() => expect(editable()).toBe("true"));
   });
 });
+
+describe("SkillEditor setText (remote draft apply)", () => {
+  it("setText_replaces_content", async () => {
+    const { ref } = renderComposer("old text");
+    expect(editorEl().textContent).toBe("old text");
+    await act(async () => ref.current!.setText("new text"));
+    expect(editorEl().textContent).toBe("new text");
+  });
+
+  it("setText_parses_skill_and_mention_tokens", async () => {
+    const { ref } = renderComposer("");
+    await act(async () => ref.current!.setText('hello {@file ["src/a.ts","a.ts"]} {/code-review high}'));
+    expect(argInput("code-review").value).toBe("high");
+    expect(editorEl().textContent).toContain("hello");
+    expect(editorEl().textContent).toContain("a.ts");
+  });
+
+  it("setText_does_not_focus", async () => {
+    const { ref } = renderComposer("", { focusOnMount: false });
+    const el = editorEl();
+    expect(document.activeElement).not.toBe(el);
+    await act(async () => ref.current!.setText("remote text"));
+    expect(document.activeElement).not.toBe(el);
+    expect(el.textContent).toBe("remote text");
+  });
+});

@@ -1457,6 +1457,19 @@ export type AccountErrorCode =
   | "folder_nested"
   | "folder_create_failed";
 
+/** Server-owned composer draft text (mirror of `DraftTextDoc` in `vst-types`).
+ *  `revision` 0 with `updatedAt: null` is the "no row yet" shape. */
+export interface DraftTextDoc {
+  scope: string;
+  text: string;
+  revision: number;
+  updatedAt: string | null;
+  clientId: string | null;
+}
+
+/** Machine-readable codes a failed `PUT /draft-texts/:scope` returns. */
+export type DraftTextErrorCode = "bad_scope" | "bad_client_id" | "scope_not_found" | "draft_too_large";
+
 export type WSEvent =
   | {
       type: "session:created";
@@ -1609,6 +1622,17 @@ export type WSEvent =
       sessionId: string;
       rev: number;
       tasks: TaskSummary[];
+    }
+  | {
+      /** A scope's server-owned draft text changed (`PUT /api/draft-texts/:scope`).
+       *  Sent only on a real text change (an empty `text` clears the box).
+       *  Drop any event whose `revision` is <= the one already held. */
+      type: "draft-text:changed";
+      scope: string;
+      text: string;
+      revision: number;
+      updatedAt: string;
+      clientId: string | null;
     }
   | {
       /** JSON agent chat: an edit-a-sent-message fork truncated these turns —

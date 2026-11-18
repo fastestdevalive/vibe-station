@@ -5,7 +5,6 @@ import type { CommentAnchor } from "./types";
  * worktree switch and a reload. Every access is wrapped: storage can be blocked, full or throw.
  */
 const PREFIX = "vst-comment-draft:";
-const PICKER_PREFIX = "vst-review-picker-draft:";
 
 /** Short stable hash (djb2) of the anchor's identity: surface, side, span and quote. */
 export function anchorHash(a: Pick<CommentAnchor, "surface" | "side" | "lineStart" | "lineEnd" | "quote" | "occurrence">): string {
@@ -23,10 +22,6 @@ export function draftKey(scopeKey: string, path: string, hash: string): string {
 /** Draft of an EDIT of a saved comment (so a half-typed edit survives too). */
 export function editDraftKey(scopeKey: string, commentId: string): string {
   return `${PREFIX}${scopeKey}:edit:${commentId}`;
-}
-
-export function pickerDraftKey(scopeKey: string): string {
-  return `${PICKER_PREFIX}${scopeKey}`;
 }
 
 const anchorKey = (key: string) => `${key}:anchor`;

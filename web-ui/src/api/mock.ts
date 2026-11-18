@@ -85,6 +85,7 @@ import type {
 import { ApiError, ReviewApiError } from "./errors";
 import { createMockArtifacts } from "./mockArtifacts";
 import { createMockComments } from "./mockComments";
+import { createMockDraftText } from "./mockDraftText";
 import {
   accountCapabilitiesFor,
   createMockAccounts,
@@ -609,6 +610,7 @@ export function createMockApi(seed: MockSeed = {}) {
     ),
     ...mockComments,
     ...createMockAccounts(emit),
+    ...createMockDraftText(emit),
 
     __test: {
       simulateExit,

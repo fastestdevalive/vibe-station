@@ -31,6 +31,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { useGlobalDraftStore, type GlobalDraftState } from "@/store/globalDraftStore";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { useSkillCommands } from "@/hooks/useSkillCommands";
+import { globalDraftInitialText, useDraftComposerSync } from "@/components/draftsync/useDraftComposerSync";
 import { draftLabel } from "@/lib/sessionLabel";
 import { toPlainText } from "@/lib/mentions";
 import type { MentionEditorConfig } from "@/components/mentions/types";
@@ -179,7 +180,11 @@ function DraftComposerInner({
   // component mounts — for Tier 1 the wrapper guarantees `session` is present;
   // for Tier 2 `globalDraft` is read once from the persisted store.
   const initialConfig = isTier1 ? (session?.draftConfig ?? null) : (globalDraft?.draftConfig ?? null);
-  const initialPrompt = isTier1 ? (session?.draftPrompt ?? "") : (globalDraft?.draftPrompt ?? "");
+  // Tier 1's first paint is the session's persisted prompt; Tier 2 reads the
+  // server-owned `global-new` draft (the store no longer persists the prompt —
+  // Decision 10), synchronously, so the editor mounts with the text already in
+  // place (Lexical never re-reads `initialText`).
+  const initialPrompt = session?.draftPrompt ?? "";
 
   // Initialize every field synchronously from `initialConfig` so that when
   // `<SkillEditor>` mounts (driven by `editorReady`), its `initialText` is
@@ -204,7 +209,7 @@ function DraftComposerInner({
   const [baseBranch, setBaseBranch] = useState(initialConfig?.baseBranch ?? "");
   const [branches, setBranches] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(initialConfig?.useWorktree ?? true);
-  const [prompt, setPrompt] = useState(initialPrompt);
+  const [prompt, setPrompt] = useState(isTier1 ? initialPrompt : globalDraftInitialText(api));
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -444,6 +449,20 @@ function DraftComposerInner({
     latestSaveDataRef.current = { prompt, currentConfig };
   }, [prompt, currentConfig]);
 
+  // Live draft sync (Decisions 10 + 11): Tier 2 binds the server-owned
+  // `global-new` scope; Tier 1 applies a remote `draftPrompt` only while clean,
+  // and the deduping wrapper replaces the three `api.updateDraft` call sites.
+  const sync = useDraftComposerSync({
+    api,
+    isTier1,
+    draftSessionId,
+    session,
+    prompt,
+    setPrompt,
+    editorRef,
+    currentConfig,
+  });
+
   // ── Debounced prompt/config save. ─────────────────────────────────────────
   const flushSave = useCallback((opts?: { keepalive?: boolean }) => {
     if (saveTimerRef.current) {
@@ -451,11 +470,11 @@ function DraftComposerInner({
       saveTimerRef.current = null;
     }
     if (isTier1 && draftSessionId) {
-      void api.updateDraft(draftSessionId, { draftPrompt: prompt, draftConfig: currentConfig }, opts).catch(() => {});
+      void sync.updateDraft(draftSessionId, { draftPrompt: prompt, draftConfig: currentConfig }, opts).catch(() => {});
     } else {
       setGlobalDraft({ draftPrompt: prompt, draftConfig: currentConfig });
     }
-  }, [api, isTier1, draftSessionId, prompt, currentConfig, setGlobalDraft]);
+  }, [api, isTier1, draftSessionId, prompt, currentConfig, setGlobalDraft, sync.updateDraft]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -508,14 +527,14 @@ function DraftComposerInner({
         const { prompt: latestPrompt, currentConfig: latestConfig } = latestSaveDataRef.current;
         if (latestConfig) {
           if (isTier1 && draftSessionId) {
-            void api.updateDraft(draftSessionId, { draftPrompt: latestPrompt, draftConfig: latestConfig }).catch(() => {});
+            void sync.updateDraft(draftSessionId, { draftPrompt: latestPrompt, draftConfig: latestConfig }).catch(() => {});
           } else {
             setGlobalDraft({ draftPrompt: latestPrompt, draftConfig: latestConfig });
           }
         }
       }
     };
-  }, [isTier1, draftSessionId, api, setGlobalDraft]);
+  }, [isTier1, draftSessionId, api, setGlobalDraft, sync.updateDraft]);
 
   // Autofocus the prompt editor once Lexical is ready.
   useEffect(() => {
@@ -1156,7 +1175,7 @@ function DraftComposerInner({
                           const newConfig = { ...currentConfig, entryPoint: "direct" as const, useWorktree: false };
                           // Optimistic update so entryPoint flips immediately — no intermediate state
                           useServerStore.getState().applySessionUpdated(draftSessionId, { draftConfig: newConfig });
-                          void api.updateDraft(draftSessionId, {
+                          void sync.updateDraft(draftSessionId, {
                             draftPrompt: prompt,
                             draftConfig: newConfig,
                           }).catch(() => {

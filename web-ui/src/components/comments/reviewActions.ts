@@ -192,7 +192,7 @@ export async function attachFromPicker(
   messageDraft: string,
 ): Promise<void> {
   await attachToComposer(api, scope, sessionId, commentIds);
-  appendComposerDraft(sessionId, messageDraft.trim());
+  appendComposerDraft(api, sessionId, messageDraft.trim());
   useWorkspaceStore.getState().setActiveSession(sessionId);
 }
 

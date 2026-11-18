@@ -16,7 +16,7 @@ import { registerEscapeLayer } from "@/lib/escapeLayers";
 import { renderDraftText } from "@/lib/mentions";
 import { clampPopupPosition } from "@/lib/popupPosition";
 import { checkFireAt, defaultFireAt } from "@/components/chat/ScheduleSendPopover";
-import { clearDraft, loadDraft, pickerDraftKey, saveDraft } from "./commentDrafts";
+import { useDraftText, pickerScope } from "@/components/draftsync";
 import {
   attachFromPicker,
   copyReviewAsText,
@@ -156,8 +156,16 @@ function PickerBody({ api, scope, comments, initialWhen = "now", onClose, onDone
   const listRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const scopeKey = `${scope.scopeKind}:${scope.scopeId}`;
-  const draftKey = pickerDraftKey(scopeKey);
-  const [message, setMessage] = useState(() => loadDraft(draftKey));
+  // The picker's message is a server-owned draft (Decision 9): the first paint
+  // falls back to the pre-sync legacy key, and a change from another client
+  // lands in the editor while this one is clean.
+  const draft = useDraftText(api, pickerScope(scopeKey), {
+    onRemote: (text) => {
+      editorRef.current?.setText(text);
+      setMessage(text);
+    },
+  });
+  const [message, setMessage] = useState(() => draft.initialText);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -225,10 +233,10 @@ function PickerBody({ api, scope, comments, initialWhen = "now", onClose, onDone
   else if (whenError) block = whenError;
 
   const finish = useCallback(() => {
-    clearDraft(draftKey);
+    draft.clear();
     onDone();
     onClose();
-  }, [draftKey, onDone, onClose]);
+  }, [draft, onDone, onClose]);
 
   async function run(fn: () => Promise<void>) {
     if (busy) return;
@@ -428,7 +436,7 @@ function PickerBody({ api, scope, comments, initialWhen = "now", onClose, onDone
             enterBehavior="newline"
             onChangeText={(next) => {
               setMessage(next);
-              saveDraft(draftKey, next);
+              draft.save(next);
             }}
             onSubmit={() => {}}
           />

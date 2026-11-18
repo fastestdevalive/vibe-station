@@ -89,6 +89,7 @@ import { createLatestOnly } from "./latestOnly";
 import { createArtifactsClient } from "./artifactsClient";
 import { createTranscriptOutlineClient } from "./transcriptOutlineClient";
 import { createCommentsClient, parseReviewJson } from "./commentsClient";
+import { createDraftTextClient } from "./draftTextClient";
 
 export function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
@@ -587,6 +588,7 @@ export function createClientApi() {
     ...createArtifactsClient({ baseUrl, apiFetch }),
     ...createCommentsClient({ baseUrl, apiFetch }),
     ...createTranscriptOutlineClient({ baseUrl, apiFetch }),
+    ...createDraftTextClient({ baseUrl, apiFetch }),
 
     async health(): Promise<HealthResponse> {
       const root = baseUrl();

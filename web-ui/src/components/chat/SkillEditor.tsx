@@ -101,6 +101,8 @@ export interface SkillEditorHandle {
   focus: () => void;
   /** Append brace-token text at the end (on a new line when the editor is not empty) without remounting. */
   appendText: (text: string) => void;
+  /** Replace the whole content with brace-token text (remote draft apply); never steals focus. */
+  setText: (text: string) => void;
   getWire: () => { text: string; mentions: Mention[] };
 }
 
@@ -149,6 +151,8 @@ interface SkillEditorProps {
   enterBehavior?: "submit" | "newline";
   /** Whether a chip's arg input currently has focus — swaps the hint line. */
   onArgFocusChange?: (focused: boolean) => void;
+  /** Focus left the whole editor shell — the mount site flushes its draft. */
+  onBlur?: () => void;
   /** A `"vibe-station"` entry was selected (or typed + Enter): open the pane
    *  dialog instead of inserting a chip / sending text. */
   onVibeCommand?: (name: string) => void;
@@ -731,6 +735,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     onEscape,
     enterBehavior,
     onArgFocusChange,
+    onBlur,
     onVibeCommand,
   },
   ref,
@@ -875,6 +880,18 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
           paragraph.selectEnd();
         });
       },
+      setText: (text) => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        editor.update(() => {
+          const root = $getRoot();
+          root.clear();
+          const paragraph = $createParagraphNode();
+          appendDraftSegments(paragraph, text);
+          root.append(paragraph);
+          paragraph.selectEnd();
+        });
+      },
     }),
     [closePopover],
   );
@@ -922,7 +939,10 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
             }
           }}
           onBlurCapture={(e) => {
-            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setEditorFocused(false);
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setEditorFocused(false);
+              onBlur?.();
+            }
             if (e.target instanceof HTMLInputElement && e.target.closest(".chat-skill-chip")) {
               onArgFocusChange?.(false);
             }
