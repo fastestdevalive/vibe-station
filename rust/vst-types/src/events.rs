@@ -237,6 +237,17 @@ pub enum ServerEvent {
         rev: u64,
         tasks: Vec<crate::domain::TaskSummary>,
     },
+    /// A scope's draft text changed. Sent only on a real change (including
+    /// `text: ""`); clients keep the highest `revision` and ignore their own
+    /// `client_id` echo. Bodies are never logged.
+    #[serde(rename = "draft-text:changed", rename_all = "camelCase")]
+    DraftTextChanged {
+        scope: String,
+        text: String,
+        revision: u64,
+        updated_at: String,
+        client_id: Option<String>,
+    },
     /// Cached harness limits changed (or the pinned slots changed). Full
     /// snapshot, replace-not-diff.
     #[serde(rename = "limits:updated", rename_all = "camelCase")]

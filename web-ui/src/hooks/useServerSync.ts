@@ -3,6 +3,7 @@ import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { createSessionRepository } from "@/api/repositories/sessionRepository";
 import { createWorktreeRepository } from "@/api/repositories/worktreeRepository";
+import { ensureDraftTextSync } from "@/components/draftsync";
 import { useServerStore } from "./useServerStore";
 import {
   useWorkspaceStore,
@@ -232,6 +233,8 @@ export function useServerSync(api: ApiInstance): void {
       return inFlightPinnedOrderSync;
     }
 
+    // One engine per api: it fetches now and on ws:open / ws:resync itself.
+    ensureDraftTextSync(api);
     void refresh();
     void syncPinnedOrder();
     const off = api.on("ws:open", () => {

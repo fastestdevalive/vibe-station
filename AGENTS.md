@@ -704,6 +704,18 @@ external-peek token, authorized by `is_denied_prefix`. Nothing else may read a p
 - **Boot:** `reconcile_boot()` runs before `recover_orphans` (holds with a persisted user row are deleted, others restored; claimed json schedule rows and rows of vanished sessions restored; claimed immediate rows noted so their `error` reads `restart`).
 - **Rich Chat never steers a review turn**, and the hold id travels in `EnqueueSpec`; a reset carry rehomes the hold to the carried turn's NEW id.
 
+## Draft text sync — server-owned composer draft text, one owner, pushed live
+
+**Files:** `rust/vst-daemon/src/draft_text/{mod,routes,boot}.rs` · `rust/vst-store/src/draft_texts.rs` · `rust/vst-types/src/draft_text.rs` · `web-ui/src/api/{types,draftTextClient,mockDraftText}.ts` · `web-ui/src/components/draftsync/` · `web-ui/src/store/globalDraftStore.ts`
+
+- **One owner.** `rust/vst-daemon/src/draft_text/mod.rs` (`DraftTextHandle`) is the single writer of the `draft_texts` table: it validates the scope grammar + existence (`global-new`, a session id, `schedule:<sessionId>` for the Terminal agent's schedule box, `review-picker:<kind>:<id>`), enforces the 65 536-byte cap, lets `vst-store` assign `revision = prev + 1`, and broadcasts `DraftTextChanged` only on a real change (equal text → same doc, no event). Existence checks use the non-cloning `StoreHandle::{worktree,session}_exists` scans, never `get_all_projects()`/`find_session()` clones on the PUT hot path. Routes (`routes.rs`) are thin; the web client never talks to `vst-store`. No crate-graph change, no `docs/STATUS-INDICATORS.md` change.
+- **Clear paths, exactly three:** a send clears the row with a client `PUT ""`; a session delete clears it via the central `SessionDeleted` subscriber (`spawn_session_deleted_subscriber`, started from `run.rs`), which deletes both the session-id row and its `schedule:<sessionId>` row; orphan rows only via the migration-gated `boot::sweep_after_migration`. **Empty tombstones are never purged** — deleting the row would restart `revision` at 1 under an open client holding a higher one, making it drop real updates.
+- **Bodies are never logged** (R8): `tracing` carries `scope` and `len` only. Do not add a log line with the text.
+- **No FK to sessions** (projects are deleted/re-inserted on save), so nothing cascades; the subscriber + boot sweep are the only garbage collection.
+- **Wire types are hand-mirrored:** `vst-types/src/draft_text.rs` is the source of truth; a REST/WS change updates `web-ui/src/api/types.ts` (`DraftTextDoc`, the `draft-text:changed` `WSEvent` member) in the same commit.
+- **The global draft has one source of truth:** `globalDraftStore.ts` never persists `draftPrompt` (only `draftConfig`); the server row `global-new` owns the prompt, and `draftsync/globalDraftMirror.ts` is the only bridge. Never add a second writer or a second poll loop for this data.
+- **The composer's own write never echoes back:** events with the writer's `clientId` and events at `revision <= heldRevision` are dropped client-side (`draftsync/reconcile.ts`); a remote apply sets `localText = lastSynced` before touching the editor, so applying never re-PUTs.
+
 ## @-mentions — draft-form vs wire-form
 
 **Files:** `web-ui/src/lib/mentions.ts` · `web-ui/src/components/mentions/` · `web-ui/src/lexical/`

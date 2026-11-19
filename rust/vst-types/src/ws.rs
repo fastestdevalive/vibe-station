@@ -335,6 +335,16 @@ pub enum ServerMessage {
         rev: u64,
         tasks: Vec<crate::domain::TaskSummary>,
     },
+    /// A scope's draft text changed — see `ServerEvent::DraftTextChanged`.
+    /// Client keeps the higher `revision` and ignores its own `clientId`.
+    #[serde(rename = "draft-text:changed", rename_all = "camelCase")]
+    DraftText {
+        scope: String,
+        text: String,
+        revision: u64,
+        updated_at: String,
+        client_id: Option<String>,
+    },
     #[serde(rename = "session:fork", rename_all = "camelCase")]
     SessionFork {
         session_id: String,

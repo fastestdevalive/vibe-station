@@ -419,6 +419,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     crate::artifact_boot::purge_orphan_artifacts_after_migration(&store, &migration).await;
     // Same for review comments (before the owner's boot pass re-anchors them).
     crate::review_boot::purge_orphan_comments_after_migration(&store, &migration).await;
+    // Draft text has no FK either (a project save re-inserts sessions), so rows
+    // of deleted sessions/worktrees are swept under the same gate.
+    crate::draft_text::boot::sweep_after_migration(&store, &migration).await;
 
     // Snapshot each existing session's mode icon so deleting a mode can't
     // change it (idempotent; new sessions are stamped at creation).
@@ -584,6 +587,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         update: update_service.clone(),
     });
     state.install_accounts(accounts.clone());
+    // Draft text follows session deletion (no FK): subscribe before any session
+    // can be deleted. `Lagged` is fine — the next boot's gated sweep catches it.
+    let draft_text_subscriber = state.draft_text.spawn_session_deleted_subscriber();
     // Drop half-made sign-ins a crash left behind (Risk 14), then start the
     // identity/derivation task (Decision 12) before serving.
     match accounts.sweep_pending_on_boot() {
@@ -752,6 +758,7 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         pr_handle.abort();
         diffstat_handle.abort();
         schedule_handle.abort();
+        draft_text_subscriber.abort();
         // Jobs mid-wait leave their rows `waiting`; the next boot re-arms them.
         terminal_delivery.shutdown();
         limits_handle.abort();

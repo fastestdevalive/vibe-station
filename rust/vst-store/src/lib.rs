@@ -33,6 +33,8 @@ pub mod tunnel;
 pub mod global_drafts;
 pub mod scheduled;
 
+pub mod draft_texts;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,6 +186,39 @@ impl StoreHandle {
     pub async fn get_all_projects(&self) -> Vec<ProjectRecord> {
         self.ensure_loaded().await;
         self.0.cache.read().unwrap().values().cloned().collect()
+    }
+
+    /// Whether a worktree with `id` exists, without cloning any project.
+    ///
+    /// The existence checks on hot paths (draft-text scope validation runs on
+    /// every PUT) must not deep-clone the whole store via
+    /// `get_all_projects()`: this scans the cache in place, like `find_session`.
+    ///
+    /// `ensure_loaded()` first, exactly like `get_project`/`get_all_projects` —
+    /// without it this silently answers `false` on the very first check after a
+    /// cold daemon start.
+    pub async fn worktree_exists(&self, id: &str) -> bool {
+        self.ensure_loaded().await;
+        self.0
+            .cache
+            .read()
+            .unwrap()
+            .values()
+            .any(|p| p.worktrees.iter().any(|w| w.id == id))
+    }
+
+    /// Whether a session with `id` exists — worktree sessions AND direct
+    /// sessions — without cloning any project. Same hot-path rationale and
+    /// `ensure_loaded()` requirement as `worktree_exists`.
+    pub async fn session_exists(&self, id: &str) -> bool {
+        self.ensure_loaded().await;
+        let cache = self.0.cache.read().unwrap();
+        cache.values().any(|p| {
+            p.worktrees
+                .iter()
+                .any(|w| w.sessions.iter().any(|s| s.id == id))
+                || p.direct_sessions.iter().any(|s| s.id == id)
+        })
     }
 
     /// Resolve a session id to its `(project, session)` pair, scanning worktree

@@ -175,6 +175,9 @@ pub struct AppState {
     pub artifacts: vst_artifacts::ArtifactsHandle,
     /// Review-comments owner (`vst-review`); `run.rs` starts its lease sweeper.
     pub review: vst_review::ReviewHandle,
+    /// Draft-text owner (server-owned composer draft text). Built here so the
+    /// routes reach it; `run.rs` starts its `SessionDeleted` subscriber.
+    pub draft_text: crate::draft_text::DraftTextHandle,
 
     /// The accounts registry (`vst-accounts`). `run.rs` builds it and calls
     /// [`AppState::install_accounts`] before serving; `None` means every
@@ -447,6 +450,11 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.store.clone(),
         opts.broadcaster.clone(),
     ));
+
+    // Draft-text owner: built here off the same store/broadcaster (no new
+    // `BuildServerOptions` field, so every test's struct literal stays valid).
+    let draft_text =
+        crate::draft_text::DraftTextHandle::new(opts.store.clone(), opts.broadcaster.clone());
 
     // Diffstat poller: built here off the same store/broadcaster/paths.
     let hub_for_ds = ws_hub.clone();
@@ -727,6 +735,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         code_store,
         artifacts,
         review,
+        draft_text,
         accounts: None,
         pr_poller,
         diffstat_poller,
@@ -1159,6 +1168,8 @@ pub fn router_from_state(state: AppState) -> Router {
         .merge(crate::artifact_routes::routes())
         // Review comments (thin handlers in review_routes.rs)
         .merge(crate::review_routes::routes())
+        // Draft text (thin handlers in draft_text/routes.rs)
+        .merge(crate::draft_text::routes::routes())
         // `/api/health` alias for the web UI's restart poll (auth-exempt).
         .route("/health", get(handle_health))
         .merge(crate::update::routes::router())

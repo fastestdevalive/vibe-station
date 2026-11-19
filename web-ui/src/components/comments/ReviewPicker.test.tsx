@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApiInstance } from "@/api";
 import { ReviewApiError } from "@/api/errors";
+import { createMockDraftText } from "@/api/mockDraftText";
+import { ensureDraftTextSync } from "@/components/draftsync";
+import { engineFor } from "@/components/draftsync/engine";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { openEscapeLayers } from "@/lib/escapeLayers";
@@ -21,7 +25,22 @@ if (typeof Text !== "undefined" && !(Text.prototype as unknown as { getBoundingC
 }
 
 const DRAFT = "vst-review-picker-draft:worktree:wt-1";
+const SCOPE = "review-picker:worktree:wt-1";
 const comments = [c({ id: "a", pin: 1, path: "a.ts" }), c({ id: "b", pin: 2, path: "b.ts" })];
+
+/** The picker's own server-owned draft rows, plus the page engine (Decision 9). */
+const syncedApis: ApiInstance[] = [];
+function syncedApi(over: Record<string, unknown> = {}): ApiInstance {
+  const api = makeApi({ ...createMockDraftText(() => {}), ...over });
+  ensureDraftTextSync(api);
+  syncedApis.push(api);
+  return api;
+}
+/** The legacy key is imported into the server row by the one-time migration;
+ *  once the row holds it, bound editors already show it. */
+async function serverDraftIs(api: ApiInstance, text: string): Promise<void> {
+  await waitFor(async () => expect((await api.getDraftText(SCOPE)).text).toBe(text));
+}
 
 function sessions() {
   return [
@@ -86,6 +105,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const api of syncedApis) engineFor(api)?.stop();
+  syncedApis.length = 0;
   anchor.current?.remove();
 });
 
@@ -444,14 +465,17 @@ describe("ReviewPicker primary Send / Schedule (R61, R65, R66)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("Rich Chat + Now converts the message with toWire and clears the draft", async () => {
+  it("Rich Chat + Now converts the message with toWire and clears the server draft", async () => {
     localStorage.setItem(DRAFT, "Please fix a{b}");
-    const { api } = mount();
+    const api = syncedApi();
+    const put = vi.spyOn(api, "putDraftText");
+    mount(api);
     await agents();
+    await serverDraftIs(api, "Please fix a{b}");
     fireEvent.click(primary());
     await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
     expect(calls(api.sendChat)[0]![1]).toBe("Please fix a\\{b}");
-    await waitFor(() => expect(localStorage.getItem(DRAFT)).toBeNull());
+    await waitFor(() => expect(put).toHaveBeenCalledWith(SCOPE, "", expect.any(String), undefined));
   });
 
   it("Terminal + Now: createTerminalDelivery with the plain-text message (renderDraftText) and the delivery in the store", async () => {
@@ -473,8 +497,11 @@ describe("ReviewPicker primary Send / Schedule (R61, R65, R66)", () => {
 
   it("Rich Chat + Later: scheduleMessage with the sidecar-less wire message (escaped braces), no attachments, the comment ids and a future ISO time", async () => {
     localStorage.setItem(DRAFT, "later a{b}");
-    const { api } = mount();
+    const api = syncedApi();
+    const put = vi.spyOn(api, "putDraftText");
+    mount(api);
     await agents();
+    await serverDraftIs(api, "later a{b}");
     chooseLater();
     fireEvent.click(primary());
     await waitFor(() => expect(api.scheduleMessage).toHaveBeenCalledTimes(1));
@@ -484,7 +511,7 @@ describe("ReviewPicker primary Send / Schedule (R61, R65, R66)", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(useCommentStore.getState().byScope["wt-1"]!.comments).toHaveLength(0);
-    expect(localStorage.getItem(DRAFT)).toBeNull();
+    await waitFor(() => expect(put).toHaveBeenCalledWith(SCOPE, "", expect.any(String), undefined));
   });
 
   it("W2-02 — Rich Chat + Later keeps a /skill token in the wire form; Terminal + Later sends the plain rendering", async () => {
@@ -587,7 +614,9 @@ describe("ReviewPicker primary Send / Schedule (R61, R65, R66)", () => {
 
   it("a 409 delivery_in_flight keeps the popup open and says so", async () => {
     const create = vi.fn().mockRejectedValue(new ReviewApiError("x", 409, "delivery_in_flight", {}));
-    mount(makeApi({ createTerminalDelivery: create, terminalReadiness: vi.fn().mockResolvedValue("ready") }));
+    const api = syncedApi({ createTerminalDelivery: create, terminalReadiness: vi.fn().mockResolvedValue("ready") });
+    const put = vi.spyOn(api, "putDraftText");
+    mount(api);
     await agents();
     await waitFor(() => expect(within(rowOf("Agent 1")).getByText("ready")).toBeInTheDocument());
     fireEvent.click(rowOf("Agent 1"));
@@ -598,7 +627,8 @@ describe("ReviewPicker primary Send / Schedule (R61, R65, R66)", () => {
     expect(alert.closest(".comment-picker__bar")).not.toBeNull();
     expect(alert.nextElementSibling).toBe(document.querySelector(".comment-picker__bar-row"));
     expect(onClose).not.toHaveBeenCalled();
-    expect(localStorage.getItem(DRAFT)).toBeNull(); // nothing typed; the draft is only cleared on success
+    // Only a successful send clears the server draft.
+    expect(put).not.toHaveBeenCalledWith(SCOPE, "", expect.any(String), undefined);
   });
 
   it("over the Rich Chat limit: the primary is disabled with the hint for a Rich agent, enabled for a Terminal agent; Copy as text still works (R66)", async () => {
@@ -777,7 +807,10 @@ describe("ReviewPicker Attach to agent (6.T3b)", () => {
     await waitFor(() => expect(api.attachComments).toHaveBeenCalledWith("wt-1", "worktree", { composerKey: "session:busy", commentIds: ["a", "b"] }));
     await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBe("busy"));
     expect(localStorage.getItem("vst-chat-draft-busy")).toBe("Run the tests");
-    expect(localStorage.getItem(DRAFT)).toBeNull();
+    // No engine on this api: the binding is inert (Decision 9), so the picker's
+    // clear is a no-op and the legacy key stays. The server clear is covered by
+    // ReviewPicker.draftSync.test.tsx (`send_clears`).
+    expect(localStorage.getItem(DRAFT)).toBe("Run the tests");
     expect(api.sendChat).not.toHaveBeenCalled();
     expect(useCommentStore.getState().byScope["wt-1"]!.comments.every((x) => x.attachedTo === "session:busy")).toBe(true);
     expect(onClose).toHaveBeenCalled();

@@ -1,9 +1,11 @@
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
+import { ensureDraftTextSync } from "@/components/draftsync";
+import { engineFor } from "@/components/draftsync/engine";
 import { appendComposerDraft } from "@/hooks/useComposerDraft";
 import { Composer } from "./Composer";
 import type { SkillEditorHandle } from "./SkillEditor";
@@ -26,6 +28,11 @@ import type { SkillEditorHandle } from "./SkillEditor";
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("Composer attachments + send", () => {
@@ -78,7 +85,7 @@ describe("Composer picker Attach append (review 9)", () => {
     fireEvent.drop(document.querySelector(".chat-composer")!, { dataTransfer: { files: [new File(["x"], "log.txt")] } });
     expect(await screen.findByText("log.txt")).toBeTruthy();
 
-    act(() => appendComposerDraft("s1", "picker message"));
+    act(() => appendComposerDraft(api, "s1", "picker message"));
 
     expect(screen.getByLabelText("Message")).toBe(editor); // same DOM node: not remounted
     await waitFor(() => expect(editor.textContent).toContain("picker message"));
@@ -95,14 +102,23 @@ describe("Composer picker Attach append (review 9)", () => {
         <Composer api={api} sessionId="s1" onSend={vi.fn()} initialText="" />
       </>,
     );
-    act(() => appendComposerDraft("s1", "once"));
+    act(() => appendComposerDraft(api, "s1", "once"));
     await waitFor(() => expect(screen.getAllByLabelText("Message").filter((e) => e.textContent?.includes("once"))).toHaveLength(1));
   });
 
-  it("with no composer mounted the text lands in the stored draft", () => {
+  it("with no composer mounted the text is appended to the server draft", async () => {
     localStorage.setItem("vst-chat-draft-s9", "keep");
-    appendComposerDraft("s9", "more");
-    expect(localStorage.getItem("vst-chat-draft-s9")).toBe("keep\nmore");
+    const api = createMockApi();
+    ensureDraftTextSync(api);
+    await act(async () => {
+      // first fetch lands, importing the legacy key into the server draft
+    });
+    const put = vi.spyOn(api, "putDraftText");
+    appendComposerDraft(api, "s9", "more");
+    await waitFor(() => expect(put).toHaveBeenCalledWith("s9", "keep\nmore", expect.any(String), undefined));
+    expect((await api.getDraftText("s9")).text).toBe("keep\nmore");
+    expect(localStorage.getItem("vst-chat-draft-s9")).toBeNull(); // imported once, never rewritten
+    engineFor(api)?.stop();
   });
 });
 
@@ -121,8 +137,13 @@ describe("Composer draft persistence (RA1)", () => {
     expect(screen.getByLabelText("Message").textContent).toBe("salvaged");
   });
 
-  it("persists edits (via a chip's arg input) and clears the key on a successful send", async () => {
+  it("buffers edits until acked and clears the server draft on a successful send", async () => {
     const api = createMockApi();
+    ensureDraftTextSync(api);
+    await act(async () => {
+      // initial fetch
+    });
+    const put = vi.spyOn(api, "putDraftText");
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
     render(
       <Composer
@@ -138,11 +159,16 @@ describe("Composer draft persistence (RA1)", () => {
     await act(async () => {
       fireEvent.change(argInput, { target: { value: "high" } });
     });
-    await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBe("{/code-review high}"));
+    // While unacknowledged the text lives in the offline buffer.
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("vst-draft-buffer:s1") ?? "{}").text).toBe("{/code-review high}"),
+    );
+    await waitFor(() => expect(put).toHaveBeenCalledWith("s1", "{/code-review high}", expect.any(String), undefined));
 
     fireEvent.click(screen.getByLabelText("Send message"));
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("{/code-review high}", []));
-    await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBeNull());
+    await waitFor(() => expect(put).toHaveBeenCalledWith("s1", "", expect.any(String), undefined));
+    engineFor(api)?.stop();
   });
 
   it("Send button does NOT pass the queue flag (steers when possible; 2-arg call)", async () => {

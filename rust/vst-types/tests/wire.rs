@@ -590,3 +590,80 @@ fn server_message_update_changed_roundtrips() {
     let reserialized = serde_json::to_value(&msg).unwrap();
     assert_eq!(reserialized, fixture);
 }
+
+// ── draft text sync (plan draft-text-sync, Phase 1) ─────────────────────
+
+#[test]
+fn draft_text_doc_fixture_roundtrips() {
+    assert_roundtrip::<vst_types::DraftTextDoc>("draft-text-doc.json");
+}
+
+/// An absent scope reads as `{text:"",revision:0,updatedAt:null,clientId:null}`
+/// — both optionals must serialize as JSON null (not be skipped), so a client
+/// can tell "known to be unset" from "field missing".
+#[test]
+fn draft_text_absent_tombstone_keeps_null_fields() {
+    let doc = vst_types::DraftTextDoc {
+        scope: "global-new".into(),
+        text: String::new(),
+        revision: 0,
+        updated_at: None,
+        client_id: None,
+    };
+    let v = serde_json::to_value(&doc).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "scope": "global-new",
+            "text": "",
+            "revision": 0,
+            "updatedAt": null,
+            "clientId": null
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<vst_types::DraftTextDoc>(v).unwrap(),
+        doc
+    );
+}
+
+#[test]
+fn server_message_draft_text_changed_roundtrips() {
+    assert_roundtrip::<ServerMessage>("server-message-draft-text-changed.json");
+}
+
+/// The internal event and the wire message serialize identically (the
+/// broadcaster's mapping is field-for-field).
+#[test]
+fn draft_text_event_matches_server_message_shape() {
+    let v = load_fixture("server-message-draft-text-changed.json");
+    let ev: vst_types::ServerEvent = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(serde_json::to_value(ev).unwrap(), v);
+}
+
+#[test]
+fn draft_text_rest_bodies_roundtrip() {
+    use vst_types::draft_text::{DraftTextListResponse, PutDraftTextBody};
+
+    let body: PutDraftTextBody = serde_json::from_str(r#"{"text":"hi","clientId":"c1"}"#).unwrap();
+    assert_eq!(
+        serde_json::to_value(&body).unwrap(),
+        serde_json::json!({"text": "hi", "clientId": "c1"})
+    );
+
+    let list = DraftTextListResponse {
+        drafts: vec![vst_types::DraftTextDoc {
+            scope: "global-new".into(),
+            text: "x".into(),
+            revision: 2,
+            updated_at: Some("2026-11-17T10:00:00.000Z".into()),
+            client_id: None,
+        }],
+    };
+    let v = serde_json::to_value(&list).unwrap();
+    assert_eq!(v["drafts"][0]["clientId"], serde_json::Value::Null);
+    assert_eq!(
+        serde_json::from_value::<DraftTextListResponse>(v).unwrap(),
+        list
+    );
+}

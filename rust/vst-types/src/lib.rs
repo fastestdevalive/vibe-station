@@ -19,6 +19,7 @@ pub mod activity;
 pub mod artifacts;
 pub mod coalescer;
 pub mod domain;
+pub mod draft_text;
 pub mod events;
 pub mod limits;
 pub mod rest;
@@ -33,6 +34,7 @@ pub use account_port::*;
 pub use accounts::*;
 pub use coalescer::{Coalescer, CoalescerConfig, MarkOpts};
 pub use domain::*;
+pub use draft_text::*;
 pub use events::{Broadcaster, ServerEvent};
 pub use limits::*;
 pub use terminal_delivery::{

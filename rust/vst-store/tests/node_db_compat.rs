@@ -67,7 +67,7 @@ fn rust_open_of_node_db_is_a_schema_noop() {
     let expected = std::fs::read_to_string(dir.join("schema-dump.sql")).unwrap();
 
     // The Node fixture stays pristine. Since then the Rust migration has added
-    // exactly TWO columns to `sessions` via `add_column_if_missing`:
+    // exactly TWO columns to `sessions` (plus one new table, below) via `add_column_if_missing`:
     // `prStaleSince` (poller-redesign Phase 1) and `accountId` (multi-account,
     // appended last); anything else would still be drift.
     let expected = expected.replace(
@@ -79,9 +79,15 @@ fn rust_open_of_node_db_is_a_schema_noop() {
         "handoffCarryOver TEXT, accountId TEXT)",
     );
 
+    // ...and one additive TABLE, `draft_texts` (draft-text-sync), which sorts
+    // first in the name-ordered dump.
+    let expected = format!(
+        "CREATE TABLE draft_texts (\n      scope     TEXT PRIMARY KEY,\n      text      TEXT NOT NULL,\n      revision  INTEGER NOT NULL,\n      updatedAt TEXT NOT NULL,\n      clientId  TEXT\n    );\n{expected}"
+    );
+
     let conn = Connection::open(&copy).unwrap();
     // The migration runner's open pass must be a no-op for the Node schema
-    // apart from that single additive column: no error, no other drift.
+    // apart from those additive columns/table: no error, no other drift.
     ensure_schema(&conn).unwrap();
 
     let actual = dump_schema(&conn);

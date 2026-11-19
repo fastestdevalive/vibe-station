@@ -107,6 +107,19 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
       createdAt  TEXT NOT NULL
     );
 
+    -- NO foreign key on purpose: every project save deletes and re-inserts
+    -- that project's sessions (see `save_project`), and draft rows must
+    -- outlive a session delete — empty tombstones are never purged, so a
+    -- purge would restart `revision` at 1 under open clients holding a higher
+    -- one. Session deletion removes the row explicitly (draft_text owner).
+    CREATE TABLE IF NOT EXISTS draft_texts (
+      scope     TEXT PRIMARY KEY,
+      text      TEXT NOT NULL,
+      revision  INTEGER NOT NULL,
+      updatedAt TEXT NOT NULL,
+      clientId  TEXT
+    );
+
     -- NO foreign key to sessions on purpose: every project save deletes and
     -- re-inserts that project's sessions (see `save_project`), and an
     -- `ON DELETE CASCADE` here silently wiped every pending scheduled message.

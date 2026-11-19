@@ -1,6 +1,8 @@
 //! `StoreHandle::find_session` — the session-id lookup the hot WS paths
 //! (`session:open`/`input`/`resize`) use instead of deep-cloning the whole
-//! store via `get_all_projects()` on every message.
+//! store via `get_all_projects()` on every message — and its non-cloning
+//! existence siblings `worktree_exists`/`session_exists` (the draft-text scope
+//! check runs on every PUT, so it must not clone the store either).
 //!
 //! Two things are load-bearing here and both have burned us before:
 //!   1. Direct sessions (a project's `direct_sessions`, no worktree) must be
@@ -169,4 +171,39 @@ async fn loads_the_cache_on_a_cold_handle() {
         .await
         .expect("cold handle must load the cache before answering");
     assert_eq!(s.id, "proj-1-d1");
+}
+
+/// `worktree_exists` scans the cache without cloning: true for a seeded
+/// worktree, false for a project with none and for an unknown id.
+#[tokio::test]
+async fn worktree_exists_true_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = seeded_store(dir.path()).await;
+
+    assert!(store.worktree_exists("proj-1-w1").await);
+    assert!(
+        !store.worktree_exists("proj-2-w1").await,
+        "proj-2 has no worktree"
+    );
+    assert!(!store.worktree_exists("nope").await);
+}
+
+/// `session_exists` covers worktree sessions AND direct sessions, and loads the
+/// cache itself on a cold handle (a false here would answer `scope_not_found`
+/// for a live session).
+#[tokio::test]
+async fn session_exists_direct_and_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let _seed = seeded_store(dir.path()).await;
+    }
+
+    let cold = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    assert!(cold.session_exists("proj-1-w1-m").await, "worktree session");
+    assert!(cold.session_exists("proj-1-d1").await, "direct session");
+    assert!(
+        cold.session_exists("proj-2-d1").await,
+        "later project's direct session"
+    );
+    assert!(!cold.session_exists("nope").await);
 }

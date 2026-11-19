@@ -1,56 +1,49 @@
-import { renderHook, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApiInstance } from "@/api";
+import { createMockApi } from "@/api/mock";
+import { ensureDraftTextSync } from "@/components/draftsync";
+import { engineFor } from "@/components/draftsync/engine";
 import { loadDraft, useComposerDraft } from "./useComposerDraft";
 
 beforeEach(() => {
   localStorage.clear();
-  vi.useFakeTimers();
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("useComposerDraft (RA1)", () => {
-  it("debounces writes — only the last value lands after the delay", () => {
-    const { result } = renderHook(() => useComposerDraft("s1"));
-
-    act(() => result.current.save("a"));
-    act(() => result.current.save("ab"));
-    act(() => result.current.save("abc"));
-    // Nothing written yet — still within the debounce window.
-    expect(loadDraft("s1")).toBe("");
-
-    act(() => vi.advanceTimersByTime(400));
-    expect(loadDraft("s1")).toBe("abc");
-  });
-
-  it("empty/whitespace text removes the key", () => {
+describe("useComposerDraft (server-owned drafts)", () => {
+  it("legacy key is the first-paint read when no engine is ensured", () => {
     localStorage.setItem("vst-chat-draft-s1", "old");
-    const { result } = renderHook(() => useComposerDraft("s1"));
-
-    act(() => result.current.save("   "));
-    act(() => vi.advanceTimersByTime(400));
-    expect(localStorage.getItem("vst-chat-draft-s1")).toBeNull();
+    expect(loadDraft("s1")).toBe("old");
+    const { result } = renderHook(() => useComposerDraft({} as ApiInstance, "s1", vi.fn()));
+    expect(result.current.initialText).toBe("old");
+    // Inert binding: no engine means no write can leave this test.
+    act(() => {
+      result.current.save("ignored");
+      result.current.clear();
+    });
+    expect(localStorage.getItem("vst-chat-draft-s1")).toBe("old");
   });
 
-  it("clear cancels a pending write and removes the key", () => {
-    localStorage.setItem("vst-chat-draft-s1", "stored");
-    const { result } = renderHook(() => useComposerDraft("s1"));
+  it("clear PUTs empty text for a scope already on the server", async () => {
+    const api = createMockApi();
+    await api.putDraftText("s1", "server text", "other");
+    ensureDraftTextSync(api);
+    await act(async () => {
+      // Let the engine's initial fetch land before rendering the binding.
+    });
+    const put = vi.spyOn(api, "putDraftText");
+    const { result, unmount } = renderHook(() => useComposerDraft(api, "s1", vi.fn()));
+    expect(result.current.initialText).toBe("server text");
 
-    act(() => result.current.save("typing"));
     act(() => result.current.clear());
-    // Advancing past the debounce must NOT resurrect the cancelled write.
-    act(() => vi.advanceTimersByTime(400));
-    expect(localStorage.getItem("vst-chat-draft-s1")).toBeNull();
-  });
+    await waitFor(() => expect(put).toHaveBeenCalledWith("s1", "", expect.any(String), undefined));
 
-  it("flushes a pending write synchronously on unmount", () => {
-    const { result, unmount } = renderHook(() => useComposerDraft("s1"));
-
-    act(() => result.current.save("unsaved"));
-    expect(loadDraft("s1")).toBe("");
     unmount();
-    expect(loadDraft("s1")).toBe("unsaved");
+    engineFor(api)?.stop();
   });
 });

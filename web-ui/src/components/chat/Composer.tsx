@@ -3,7 +3,7 @@ import { Clock, SendHorizontal, Square } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Command, UsageInfo } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
-import { COMPOSER_DRAFT_EXTERNAL_EVENT, loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
+import { COMPOSER_DRAFT_EXTERNAL_EVENT, useComposerDraft } from "@/hooks/useComposerDraft";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { vibeCommandFromText, withVibeStationCommands } from "@/lib/composerCommands";
 import { migrateV1Draft } from "@/lib/skillInvocation";
@@ -130,13 +130,23 @@ export function Composer({
   // into a skill chip.
   const editorCommands = commands === undefined ? undefined : withVibeStationCommands(commands);
 
-  // Salvaged text (from a failed queued-turn edit) wins over any stored
-  // draft; otherwise seed from the persisted draft for this session,
-  // migrated once from the v1 canonical form if needed (Phase 7B.7). `text`
-  // is the flat brace-token wire string (Decision 2), not display text.
-  const [text, setText] = useState(() => migrateV1Draft(initialText ?? loadDraft(sessionId), commandNames));
+  const internalEditorRef = useRef<SkillEditorHandle | null>(null);
+  // The editor echoes an applied remote text through onChangeText; do not
+  // re-save (or notify sibling bindings of) that echo — it would ping-pong
+  // forever when two panes bind the same scope.
+  const appliedRemote = useRef<string | null>(null);
+  // Salvaged text (from a failed queued-turn edit) wins over the server-owned
+  // draft for this session; otherwise seed from the binding's first paint
+  // (buffer → server doc → legacy key), migrated once from the v1 form if
+  // needed. `text` is the flat brace-token wire string (Decision 2).
+  const draft = useComposerDraft(api, sessionId, (remote) => {
+    appliedRemote.current = remote;
+    internalEditorRef.current?.setText(remote);
+    setText(remote);
+    setHasContent(remote.trim().length > 0);
+  });
+  const [text, setText] = useState(() => migrateV1Draft(initialText ?? draft.initialText, commandNames));
   const [hasContent, setHasContent] = useState(() => text.trim().length > 0);
-  const draft = useComposerDraft(sessionId);
 
   const [argFocused, setArgFocused] = useState(false);
   const softKeyboardVisible = useSoftKeyboardVisible();
@@ -153,7 +163,6 @@ export function Composer({
   const scheduleAnchorRef = useRef<HTMLButtonElement | null>(null);
   const [schedulePopoverOpen, setSchedulePopoverOpen] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const internalEditorRef = useRef<SkillEditorHandle | null>(null);
   const setEditorRef = useCallback(
     (el: SkillEditorHandle | null) => {
       internalEditorRef.current = el;
@@ -471,13 +480,16 @@ export function Composer({
         placeholder="Type a message…"
         className="chat-composer__textarea"
         onChangeText={(next, content) => {
+          const echo = appliedRemote.current === next;
+          if (!echo) appliedRemote.current = null;
           setText(next);
-          draft.save(next);
+          if (!echo) draft.save(next);
           setHasContent(content);
         }}
         onSubmit={() => void handleSend(false)}
         onCtrlEnter={() => void handleSend(true)}
         onArgFocusChange={setArgFocused}
+        onBlur={() => draft.flush()}
         {...(onVibeCommand ? { onVibeCommand } : {})}
       />
     </ComposerShell>
