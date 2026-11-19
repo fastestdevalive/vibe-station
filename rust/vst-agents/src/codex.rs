@@ -142,10 +142,11 @@ fn rollout_exists(sessions_root: &std::path::Path, id: &str) -> bool {
     )
 }
 
-/// The id to resume: the stored id, else the one this session's SessionStart hook
-/// recorded, whichever still has a rollout. `None` ⇒ launch fresh. Re-checked on
-/// every call, so a stale stored id heals itself once the hook records the id of
-/// the replacement conversation.
+/// The id to resume: the stored id or the one this session's SessionStart hook
+/// recorded, in the shared [`crate::native_chat_id::resume_order`] (stored first
+/// unless the recorded rollout is newer), whichever still has a rollout. `None` ⇒
+/// launch fresh. Re-checked on every call, so a stale stored id heals itself once
+/// the hook records the id of the replacement conversation.
 ///
 /// `account_dir: Some(..)` = the session's account folder (Decision 6); its
 /// rollouts live under `<account>/sessions`, not the daemon's own store.
@@ -155,12 +156,16 @@ fn resumable_chat_id(
     account_dir: Option<&std::path::Path>,
 ) -> Option<String> {
     let root = crate::codex_import::codex_native_store_path_for(account_dir);
-    [known, recorded]
-        .into_iter()
-        .flatten()
-        .filter(|id| !id.is_empty())
-        .find(|id| rollout_exists(&root, id))
-        .map(str::to_string)
+    crate::native_chat_id::resume_order(known, recorded, |id| {
+        match crate::codex_import::find_rollout(&root, id) {
+            crate::codex_import::RolloutSearch::Found(path) => {
+                std::fs::metadata(path).and_then(|m| m.modified()).ok()
+            }
+            _ => None,
+        }
+    })
+    .into_iter()
+    .find(|id| rollout_exists(&root, id))
 }
 
 async fn read_recorded_chat_id(token_file: &std::path::Path) -> Option<String> {
@@ -465,8 +470,9 @@ impl AgentPlugin for CodexPlugin {
         })
     }
 
-    /// Resumes this session's own thread: the stored chat id, else the one the
-    /// `SessionStart` hook recorded (not yet persisted, e.g. a prompt-less spawn).
+    /// Resumes this session's own thread: the stored chat id or the one the
+    /// `SessionStart` hook recorded (not yet persisted, e.g. a prompt-less spawn),
+    /// in the shared `resume_order` (see `resumable_chat_id`).
     /// Neither means a fresh launch.
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
         let known = args.session.agent_chat_id.clone();
@@ -837,6 +843,18 @@ mod acp_bin_tests {
         // neither live -> fresh launch
         assert_eq!(resumable_chat_id(Some(ID), None, None), None);
         assert_eq!(resumable_chat_id(None, None, None), None);
+        // both live, the recorded rollout newer (`/new` in the pane) -> recorded
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        rollout(&_g.0.path().join(".codex/sessions/2026/10/04"), ID);
+        assert_eq!(
+            resumable_chat_id(Some(OTHER), Some(ID), None).as_deref(),
+            Some(ID)
+        );
+        // ...and the stored one when it is the newer of the two
+        assert_eq!(
+            resumable_chat_id(Some(ID), Some(OTHER), None).as_deref(),
+            Some(ID)
+        );
     }
 
     #[cfg(unix)]

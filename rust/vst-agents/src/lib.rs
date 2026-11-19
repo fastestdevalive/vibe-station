@@ -35,7 +35,7 @@
 //! - `claude` / `opencode` / `agy` — `identical`: implement neither
 //!   `capture_native_chat_id` nor `supports_channel_resume` (≡ `true`). `agy`
 //!   (like `omp`) declares only `acp_session_id_is_native`.
-//! - `cursor` — `unavailable`: implements `capture_native_chat_id` (best-effort)
+//! - `cursor` — `unavailable`: implements `capture_native_chat_id` (stored id only)
 //!   AND `supports_json_to_terminal_resume() -> false`.
 //!
 //! ## Ported-from-scope helpers

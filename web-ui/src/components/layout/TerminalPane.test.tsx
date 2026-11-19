@@ -390,6 +390,34 @@ describe("TerminalPane", () => {
     spy.mockRestore();
   });
 
+  it("shows why Resume failed instead of silently restoring the button", async () => {
+    const user = userEvent.setup();
+    const spy = vi
+      .spyOn(api, "resumeSession")
+      .mockRejectedValue(
+        new ApiError(JSON.stringify({ error: "agent process exited immediately after launch" }), 500),
+      );
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "exited" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    await user.click(screen.getByRole("button", { name: /Resume/i }));
+    const alert = await screen.findByRole("alert");
+    // Only the failure is announced, not the banner's "Session exited." text.
+    expect(alert).toHaveTextContent(/^Resume failed: agent process exited immediately after launch$/);
+    expect(alert).not.toHaveTextContent("Session exited");
+    expect(screen.getByRole("button", { name: /Resume/i })).toBeInTheDocument();
+
+    // The session comes back some other way: the banner goes, and a later
+    // exit shows a fresh banner without the stale error.
+    act(() => useWorkspaceStore.setState({ sessionStates: { "sess-main": "working" } }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Resume/i })).not.toBeInTheDocument());
+    act(() => useWorkspaceStore.setState({ sessionStates: { "sess-main": "exited" } }));
+    expect(await screen.findByRole("button", { name: /Resume/i })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+
   it("replaces Resume with busy indicator while resumeSession is in flight", async () => {
     const user = userEvent.setup();
     let resolveResume!: (v: Awaited<ReturnType<typeof api.resumeSession>>) => void;
