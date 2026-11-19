@@ -3107,8 +3107,17 @@
   border-bottom: var(--border-width) solid var(--border-default);
   font-size: var(--font-size-sm);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+}
+
+/* Resume failure: its own row under the message + button. */
+.terminal-resume-banner__error {
+  order: 3;
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .terminal-resume-banner__msg {

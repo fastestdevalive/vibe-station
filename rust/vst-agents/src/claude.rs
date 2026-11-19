@@ -1,7 +1,7 @@
 //! Claude Code CLI plugin — ports `agent-plugins/claude.ts`.
 //!
 //! Delivery: inline (system + task prompts via CLI flags). Ready signal: waits
-//! for the interactive prompt sentinel `"> "`. `identical` two-session-identity
+//! for the interactive prompt glyph `"❯"`. `identical` two-session-identity
 //! strategy: implements neither `capture_native_chat_id` nor
 //! `supports_json_to_terminal_resume`.
 
@@ -22,7 +22,10 @@ use vst_types::{
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
 use crate::acp_transport::AcpTransport;
-use crate::native_chat_id::find_latest_claude_chat_uuid;
+use crate::native_chat_id::{
+    claude_presence, claude_projects_dir, claude_transcript_modified, first_resumable,
+    resume_order, Presence,
+};
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult,
     LaunchConfig, ListModelsResult, PromptDelivery, ReadySignal, RestoreArgs, SkillInvocation,
@@ -256,6 +259,15 @@ fn hook_entry(command: &str) -> serde_json::Value {
     serde_json::json!({ "hooks": [{ "type": "command", "command": command }] })
 }
 
+/// `<cwd>/.vibe-station/agent-chat-ids/<sessionId>` — written by the
+/// `SessionStart` hook (`vibe-recorder.sh`) on every start, resume and `/clear`.
+fn chat_id_token_file(cwd: &str, session_id: &str) -> PathBuf {
+    PathBuf::from(cwd)
+        .join(".vibe-station")
+        .join("agent-chat-ids")
+        .join(session_id)
+}
+
 /// Claude Code plugin (stateless singleton).
 pub struct ClaudePlugin;
 
@@ -296,7 +308,15 @@ impl AgentPlugin for ClaudePlugin {
 
     fn get_ready_signal(&self) -> ReadySignal {
         ReadySignal {
-            sentinel: Some("> "),
+            // The input box's prompt glyph. The old `"> "` never matched: the
+            // prompt is `❯` and `capture-pane` drops trailing spaces, so every
+            // spawn / Resume sat out the full fallback.
+            //
+            // A latency hint only, not proof of readiness (like opencode's
+            // paint marker): `❯` also appears in claude's own selection
+            // dialogs (trust prompt, /resume picker) and in many shell
+            // prompts, so it can match before the input box is drawn.
+            sentinel: Some("❯"),
             fallback_ms: 15_000,
         }
     }
@@ -409,10 +429,7 @@ impl AgentPlugin for ClaudePlugin {
     }
 
     fn capture_chat_id(&self, args: CaptureArgs<'_>) -> AsyncResult<Option<String>> {
-        let token_file = PathBuf::from(args.cwd)
-            .join(".vibe-station")
-            .join("agent-chat-ids")
-            .join(&args.session.id);
+        let token_file = chat_id_token_file(args.cwd, &args.session.id);
         Box::pin(async move {
             let Ok(raw) = fs::read_to_string(&token_file).await else {
                 return None;
@@ -607,19 +624,47 @@ impl AgentPlugin for ClaudePlugin {
         Some(vec!["--fork-session".to_string()])
     }
 
+    /// Resumes THIS session's own conversation: the stored chat id or the id
+    /// its `SessionStart` hook recorded (it follows `/clear`), in the shared
+    /// [`resume_order`] (stored first, unless the recorded transcript is
+    /// newer), whichever still has a transcript. Neither ⇒ a fresh launch.
+    ///
+    /// Never "the newest transcript in the worktree": a Terminal claude session
+    /// has no stored id (inline prompt delivery skips the post-launch capture),
+    /// so that fallback resumed whichever sibling tab / Rich Chat session wrote
+    /// last, and a stale id made `claude --resume` exit 1 on every Resume click.
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
-        let uuid = args.session.agent_chat_id.clone();
-        let cwd = args.cwd.to_string();
+        let known = args.session.agent_chat_id.clone();
+        let session_id = args.session.id.clone();
+        let token_file = chat_id_token_file(args.cwd, &args.session.id);
         let model = args.model.map(|m| m.to_string());
-        let account_dir = args.account_dir.clone();
+        let projects = claude_projects_dir(args.account_dir.as_deref());
         Box::pin(async move {
-            let uuid = match uuid {
-                Some(u) if !u.is_empty() => u,
-                _ => match find_latest_claude_chat_uuid(&cwd, account_dir.as_deref()).await {
-                    Some(u) => u,
-                    None => return None,
-                },
+            let recorded = fs::read_to_string(&token_file)
+                .await
+                .ok()
+                .map(|raw| raw.trim().to_string());
+            let order = {
+                let projects = projects.clone();
+                tokio::task::spawn_blocking(move || {
+                    resume_order(known.as_deref(), recorded.as_deref(), |id| {
+                        claude_transcript_modified(&projects, id)
+                    })
+                })
+                .await
+                .unwrap_or_default()
             };
+            let resolution = first_resumable(order, |id| {
+                let projects = projects.clone();
+                async move {
+                    tokio::task::spawn_blocking(move || claude_presence(&projects, &id))
+                        .await
+                        .unwrap_or(Presence::Unknown)
+                }
+            })
+            .await;
+            resolution.log_fresh_launch("claude", &session_id);
+            let uuid = resolution.id?;
             let mut argv = vec![
                 "claude".to_string(),
                 "--resume".to_string(),

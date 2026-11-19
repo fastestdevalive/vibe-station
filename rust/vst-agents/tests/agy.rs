@@ -428,3 +428,152 @@ async fn restore_command_none_without_any_conversation_id() {
         .await
         .is_none());
 }
+
+/// Seed `<home>/.gemini/antigravity-cli/conversations/<id>.db`.
+fn seed_agy_conversation(home: &Path, id: &str) {
+    let dir = home.join(".gemini/antigravity-cli/conversations");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{id}.db")), b"").unwrap();
+}
+
+fn agy_restore_id(argv: Option<Vec<String>>) -> Option<String> {
+    let argv = argv?;
+    let i = argv.iter().position(|a| a == "--conversation")?;
+    Some(argv[i + 1].clone())
+}
+
+const OWN: &str = "11111111-1111-4111-8111-111111111111";
+const SIBLING: &str = "22222222-2222-4222-8222-222222222222";
+
+/// A Terminal agy session whose id was never stored must resume the
+/// conversation ITS OWN `--log-file` recorded — never the cwd-keyed
+/// `last_conversations.json` "latest" (a sibling agent's), and nothing at all
+/// when its log recorded nothing.
+#[tokio::test]
+async fn restore_command_resumes_this_sessions_logged_conversation_not_the_latest() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    seed_agy_conversation(home.path(), OWN);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    seed_agy_conversation(home.path(), SIBLING);
+    let cache = home.path().join(".gemini/antigravity-cli/cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join("last_conversations.json"),
+        format!(r#"{{"/repos/p1":"{SIBLING}"}}"#),
+    )
+    .unwrap();
+    write_log(
+        home.path(),
+        "s1",
+        &format!("I Created conversation {OWN}\nI Streaming conversation {OWN}\n"),
+    )
+    .await;
+    let plugin = create_agy_plugin();
+    let project = make_project("p1");
+
+    let argv = plugin
+        .get_restore_command(restore_args(&session("s1"), &project, None))
+        .await;
+    assert_eq!(agy_restore_id(argv).as_deref(), Some(OWN));
+
+    let argv = plugin
+        .get_restore_command(restore_args(&session("s2"), &project, None))
+        .await;
+    assert_eq!(argv, None, "nothing recorded for s2 -> fresh launch");
+}
+
+/// An id agy no longer has (store readable, no `<id>.db` / `brain/<id>`) is
+/// never resumed: the logged one falls through to a live stored id, and a
+/// stored id with no conversation means a fresh launch.
+#[tokio::test]
+async fn restore_command_skips_ids_without_a_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    seed_agy_conversation(home.path(), OWN);
+    write_log(
+        home.path(),
+        "s1",
+        &format!("I Created conversation {SIBLING}\n"),
+    )
+    .await;
+    let plugin = create_agy_plugin();
+    let project = make_project("p1");
+
+    let mut s = session("s1");
+    s.agent_chat_id = Some(OWN.to_string());
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await;
+    assert_eq!(agy_restore_id(argv).as_deref(), Some(OWN));
+
+    s.agent_chat_id = Some("33333333-3333-4333-8333-333333333333".to_string());
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await;
+    assert_eq!(argv, None);
+}
+
+/// Stored id (Rich Chat moved it) vs the id an earlier terminal run logged,
+/// both on disk: the newer conversation wins.
+#[tokio::test]
+async fn restore_command_prefers_the_newer_of_stored_and_logged() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    seed_agy_conversation(home.path(), SIBLING);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    seed_agy_conversation(home.path(), OWN);
+    write_log(
+        home.path(),
+        "s1",
+        &format!("I Created conversation {SIBLING}\n"),
+    )
+    .await;
+    let plugin = create_agy_plugin();
+    let project = make_project("p1");
+    let mut s = session("s1");
+    s.agent_chat_id = Some(OWN.to_string());
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await;
+    assert_eq!(
+        agy_restore_id(argv).as_deref(),
+        Some(OWN),
+        "stale log loses"
+    );
+    // A new conversation in the pane after that: the logged one is newer.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    seed_agy_conversation(home.path(), SIBLING);
+    let argv = plugin
+        .get_restore_command(restore_args(&s, &project, None))
+        .await;
+    assert_eq!(agy_restore_id(argv).as_deref(), Some(SIBLING));
+}
+
+/// `brain/<id>/` alone also counts as the conversation being on disk.
+#[tokio::test]
+async fn restore_command_accepts_a_brain_dir_as_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    std::fs::create_dir_all(home.path().join(".gemini/antigravity-cli/brain").join(OWN)).unwrap();
+    let mut s = session("s1");
+    s.agent_chat_id = Some(OWN.to_string());
+    let argv = create_agy_plugin()
+        .get_restore_command(restore_args(&s, &make_project("p1"), None))
+        .await;
+    assert_eq!(agy_restore_id(argv).as_deref(), Some(OWN));
+}
+
+/// No readable store at all (moved, permissions): resume the stored id rather
+/// than silently drop the conversation.
+#[tokio::test]
+async fn restore_command_resumes_the_stored_id_when_the_store_is_unreadable() {
+    let home = tempfile::tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    let mut s = session("s1");
+    s.agent_chat_id = Some(OWN.to_string());
+    let argv = create_agy_plugin()
+        .get_restore_command(restore_args(&s, &make_project("p1"), None))
+        .await;
+    assert_eq!(agy_restore_id(argv).as_deref(), Some(OWN));
+}

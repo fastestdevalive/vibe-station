@@ -177,7 +177,7 @@ mod claude_plugin {
     #[test]
     fn ready_signal_has_sentinel() {
         let signal = create_claude_plugin().get_ready_signal();
-        assert_eq!(signal.sentinel, Some("> "));
+        assert_eq!(signal.sentinel, Some("❯"));
         assert!(signal.fallback_ms >= 10_000);
     }
 
@@ -331,10 +331,26 @@ mod claude_plugin {
         assert_eq!(result, None);
     }
 
+    /// Seed `<home>/.claude/projects/<slug(cwd)>/<id>.jsonl`.
+    fn seed_claude_transcript(home: &std::path::Path, cwd: &str, id: &str) {
+        let dir = home
+            .join(".claude/projects")
+            .join(cwd.replace(['/', '.'], "-"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{id}.jsonl")), "{}\n").unwrap();
+    }
+
+    fn claude_restore_id(argv: Option<Vec<String>>) -> Option<String> {
+        let argv = argv?;
+        let i = argv.iter().position(|a| a == "--resume")?;
+        Some(argv[i + 1].clone())
+    }
+
     #[tokio::test]
-    async fn restore_command_uses_agent_chat_id_without_fs() {
+    async fn restore_command_uses_agent_chat_id_with_a_transcript() {
         let home = tempfile::tempdir().unwrap();
         let _guard = with_home(home.path().to_path_buf());
+        seed_claude_transcript(home.path(), "/tmp/vst-test-cwd", "known-uuid");
         let plugin = create_claude_plugin();
         let mut session = make_session("s1");
         session.agent_chat_id = Some("known-uuid".into());
@@ -357,6 +373,150 @@ mod claude_plugin {
                 "--chrome".into(),
             ])
         );
+    }
+
+    /// The /exit bug: a Terminal claude session has no stored id, so Resume
+    /// used to pick the newest transcript in the worktree — a sibling agent's.
+    /// It must resume the conversation THIS session's hook recorded instead,
+    /// and never a sibling's when nothing was recorded.
+    #[tokio::test]
+    async fn restore_command_resumes_this_sessions_recorded_conversation_not_the_newest() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        seed_claude_transcript(home.path(), cwd, "own-conversation");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_claude_transcript(home.path(), cwd, "sibling-conversation");
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), "own-conversation\n").unwrap();
+        let plugin = create_claude_plugin();
+        let restore = |sid: &'static str| {
+            let plugin = &plugin;
+            async move {
+                let session = make_session(sid);
+                plugin
+                    .get_restore_command(RestoreArgs {
+                        session: &session,
+                        project: &make_project("p1"),
+                        cwd,
+                        model: None,
+                        account_dir: None,
+                    })
+                    .await
+            }
+        };
+        assert_eq!(
+            claude_restore_id(restore("s1").await).as_deref(),
+            Some("own-conversation")
+        );
+        // Not consumed by restore (capture_chat_id persists + deletes it later).
+        assert!(ids.join("s1").exists());
+        // Nothing recorded for this session → fresh launch, not the sibling's.
+        assert_eq!(restore("s2").await, None);
+    }
+
+    /// `claude --resume <id>` with no transcript exits 1 ("No conversation
+    /// found"): a stored or recorded id without one must fall through (here to
+    /// the stored id that has one, else to a fresh launch), never be resumed.
+    #[tokio::test]
+    async fn restore_command_skips_ids_without_a_transcript() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        seed_claude_transcript(home.path(), cwd, "stored-live");
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        // Recorded at startup of a run the user quit before chatting.
+        std::fs::write(ids.join("s1"), "never-chatted").unwrap();
+        let plugin = create_claude_plugin();
+        let project = make_project("p1");
+        let restore = |stored: &'static str| {
+            let plugin = &plugin;
+            let project = &project;
+            async move {
+                let mut session = make_session("s1");
+                session.agent_chat_id = Some(stored.into());
+                plugin
+                    .get_restore_command(RestoreArgs {
+                        session: &session,
+                        project,
+                        cwd,
+                        model: None,
+                        account_dir: None,
+                    })
+                    .await
+            }
+        };
+        assert_eq!(
+            claude_restore_id(restore("stored-live").await).as_deref(),
+            Some("stored-live")
+        );
+        assert_eq!(restore("gone").await, None);
+    }
+
+    /// claude's own slug rule differs from ours for some paths (`_`, spaces):
+    /// the transcript is still found by id in any project dir.
+    #[tokio::test]
+    async fn restore_command_finds_the_transcript_under_any_project_slug() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = home.path().join(".claude/projects/-claude-own-slug");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("known-uuid.jsonl"), "{}\n").unwrap();
+        let mut session = make_session("s1");
+        session.agent_chat_id = Some("known-uuid".into());
+        let result = create_claude_plugin()
+            .get_restore_command(RestoreArgs {
+                session: &session,
+                project: &make_project("p1"),
+                cwd: "/tmp/my_project wt",
+                model: None,
+                account_dir: None,
+            })
+            .await;
+        assert_eq!(claude_restore_id(result).as_deref(), Some("known-uuid"));
+    }
+
+    /// Stored id vs hook-recorded id when BOTH have a transcript: the newer
+    /// one wins. A stale token file from an earlier terminal run must not beat
+    /// the conversation Rich Chat moved the stored id to (json→tty), and a
+    /// `/clear` in the pane (recorded id newer) must not resume the old one.
+    #[tokio::test]
+    async fn restore_command_prefers_the_newer_of_stored_and_recorded() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_str().unwrap();
+        let ids = dir.path().join(".vibe-station/agent-chat-ids");
+        std::fs::create_dir_all(&ids).unwrap();
+        std::fs::write(ids.join("s1"), "recorded-id\n").unwrap();
+        let restore = || async {
+            let mut session = make_session("s1");
+            session.agent_chat_id = Some("stored-id".into());
+            claude_restore_id(
+                create_claude_plugin()
+                    .get_restore_command(RestoreArgs {
+                        session: &session,
+                        project: &make_project("p1"),
+                        cwd,
+                        model: None,
+                        account_dir: None,
+                    })
+                    .await,
+            )
+        };
+        // Stale token, Rich Chat wrote the stored conversation since.
+        seed_claude_transcript(home.path(), cwd, "recorded-id");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_claude_transcript(home.path(), cwd, "stored-id");
+        assert_eq!(restore().await.as_deref(), Some("stored-id"));
+        // `/clear` in the pane: the hook's new conversation is the newer one.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_claude_transcript(home.path(), cwd, "recorded-id");
+        assert_eq!(restore().await.as_deref(), Some("recorded-id"));
     }
 
     #[test]
@@ -610,6 +770,93 @@ mod cursor_plugin {
             })
             .await;
         assert_eq!(result, None);
+    }
+
+    /// Seed `<home>/.cursor/chats/<hash>/<id>/store.db`.
+    fn seed_cursor_chat(home: &std::path::Path, hash: &str, id: &str) {
+        let dir = home.join(".cursor/chats").join(hash).join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("store.db"), b"").unwrap();
+    }
+
+    /// Seed `<home>/.cursor/projects/<slug>/agent-transcripts/<id>/`.
+    fn seed_cursor_transcript(home: &std::path::Path, cwd: &str, id: &str) {
+        let slug = cwd
+            .trim_start_matches('/')
+            .replace('.', "")
+            .replace('/', "-");
+        let dir = home
+            .join(".cursor/projects")
+            .join(slug)
+            .join("agent-transcripts")
+            .join(id);
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    async fn cursor_restore_id(session: &vst_types::SessionRecord, cwd: &str) -> Option<String> {
+        let argv = create_cursor_plugin()
+            .get_restore_command(RestoreArgs {
+                session,
+                project: &make_project("p1"),
+                cwd,
+                model: None,
+                account_dir: None,
+            })
+            .await?;
+        let i = argv.iter().position(|a| a == "--resume")?;
+        Some(argv[i + 1].clone())
+    }
+
+    /// Resume must never pick "the newest chat in the workspace" (a sibling
+    /// agent's): its own stored id wins over a newer sibling chat, and a
+    /// session with nothing stored launches fresh.
+    #[tokio::test]
+    async fn restore_command_resumes_own_chat_not_the_newest_sibling() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let cwd = "/repos/p1";
+        seed_cursor_transcript(home.path(), cwd, "own-chat");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        seed_cursor_transcript(home.path(), cwd, "sibling-chat");
+        let mut own = make_session("s1");
+        own.agent_chat_id = Some("own-chat".into());
+        assert_eq!(
+            cursor_restore_id(&own, cwd).await.as_deref(),
+            Some("own-chat")
+        );
+        let fresh = make_session("s2");
+        assert_eq!(cursor_restore_id(&fresh, cwd).await, None);
+    }
+
+    /// A stored chat cursor no longer has (store readable, id absent) is not
+    /// resumed; the chat store under `~/.cursor/chats` counts too.
+    #[tokio::test]
+    async fn restore_command_skips_a_stored_chat_that_is_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        seed_cursor_chat(home.path(), "abc123", "live-chat");
+        let mut s = make_session("s1");
+        s.agent_chat_id = Some("live-chat".into());
+        assert_eq!(
+            cursor_restore_id(&s, "/repos/p1").await.as_deref(),
+            Some("live-chat")
+        );
+        s.agent_chat_id = Some("gone-chat".into());
+        assert_eq!(cursor_restore_id(&s, "/repos/p1").await, None);
+    }
+
+    /// No readable cursor store at all: resume the stored id rather than
+    /// silently drop the conversation.
+    #[tokio::test]
+    async fn restore_command_resumes_stored_chat_when_store_unreadable() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let mut s = make_session("s1");
+        s.agent_chat_id = Some("cursor-uuid-xyz".into());
+        assert_eq!(
+            cursor_restore_id(&s, "/repos/p1").await.as_deref(),
+            Some("cursor-uuid-xyz")
+        );
     }
 
     #[test]

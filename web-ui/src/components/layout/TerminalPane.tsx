@@ -6,6 +6,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import { ApiError } from "@/api/errors";
+import { apiErrorText } from "@/lib/apiErrorText";
 import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useIsTouch } from "@/hooks/useIsTouch";
@@ -158,6 +159,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
 
   const [atBottom, setAtBottom] = useState(true);
   const [resumePending, setResumePending] = useState(false);
+  // Why the last Resume failed (daemon `{ error }` text), shown in the banner.
+  // A rethrow from the click handler went nowhere: the button just came back.
+  const [resumeError, setResumeError] = useState<string | null>(null);
 
 
   // `sessionStates` is the LIVE map (WS `session:state`/`session:exited`/
@@ -688,11 +692,13 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
 
   useEffect(() => {
     setResumePending(false);
+    setResumeError(null);
   }, [activeSessionId]);
 
   async function resume() {
     if (!activeSessionId || resumePending) return;
     setResumePending(true);
+    setResumeError(null);
     try {
       await api.resumeSession(activeSessionId);
       patchSessionState(activeSessionId, "working");
@@ -705,7 +711,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     } catch (err) {
       // 404: the daemon already deleted this exited terminal (its tab is going
       // away via `session:deleted`). Anything else is a real failure.
-      if (!(err instanceof ApiError && err.status === 404)) throw err;
+      if (!(err instanceof ApiError && err.status === 404)) {
+        setResumeError(apiErrorText(err, "Couldn't resume the session."));
+      }
     } finally {
       setResumePending(false);
     }
@@ -736,12 +744,26 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   // — a daemon crash or disconnect must show the offline overlay rather than frozen content.
   const showOfflineOverlay = mountTerminal && !showBanner;
 
+  // A Resume failure belongs to the banner it was shown in: once the banner
+  // goes away (the session came back some other way) a later exit must not
+  // re-show the stale error.
+  useEffect(() => {
+    if (!showBanner) setResumeError(null);
+  }, [showBanner]);
+
   return (
     <div className="terminal-pane-root">
       {showBanner ? (
         <>
           <div className="terminal-resume-banner">
             <span className="terminal-resume-banner__msg error-text">{bannerMsg}</span>
+            {/* A sibling, not inside the message: `role="alert"` then announces
+                only the failure text. Wraps onto its own row (CSS `order`). */}
+            {resumeError ? (
+              <span className="terminal-resume-banner__error error-text" role="alert">
+                Resume failed: {resumeError}
+              </span>
+            ) : null}
             <span className="terminal-resume-banner__action">
               {resumePending ? (
                 <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">

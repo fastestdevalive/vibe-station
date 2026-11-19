@@ -6,7 +6,7 @@
 //!
 //! Delivery: inline (system + task prompts baked into the launch command).
 //! Ready signal: no sentinel, 8s fallback. `unavailable` two-session-identity
-//! strategy: implements `capture_native_chat_id` (best-effort) AND
+//! strategy: implements `capture_native_chat_id` (stored id only — no bridge) AND
 //! `supports_json_to_terminal_resume() -> false`.
 //!
 //! No history importer: the cursor native store is not yet parsed (deferred
@@ -28,7 +28,7 @@ use vst_types::{
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
-use crate::native_chat_id::find_latest_cursor_chat_id;
+use crate::native_chat_id::{cursor_chat_presence, first_resumable};
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, CaptureNativeChatIdArgs, ComposePromptInput,
     ComposePromptResult, LaunchConfig, ListModelsResult, PromptDelivery, ReadySignal, RestoreArgs,
@@ -447,19 +447,22 @@ impl AgentPlugin for CursorPlugin {
         Box::pin(async { None })
     }
 
+    /// Resumes THIS session's stored chat id when cursor still has that chat.
+    /// No stored id, or a chat that is gone ⇒ a fresh launch.
+    ///
+    /// Never "the newest chat in the workspace": that is whichever sibling
+    /// agent in the worktree wrote last. cursor has no hook / per-session log
+    /// to recover its own id from, so there is nothing else to prefer.
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
         let chat_id = args.session.agent_chat_id.clone();
+        let session_id = args.session.id.clone();
         let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
-        let account_dir = args.account_dir.clone();
         Box::pin(async move {
-            let chat_id = match chat_id {
-                Some(c) if !c.is_empty() => c,
-                _ => match find_latest_cursor_chat_id(&cwd, account_dir.as_deref()).await {
-                    Some(c) => c,
-                    None => return None,
-                },
-            };
+            let resolution =
+                first_resumable(chat_id, |id| async move { cursor_chat_presence(&id).await }).await;
+            resolution.log_fresh_launch("cursor", &session_id);
+            let chat_id = resolution.id?;
             let mut argv = vec!["cursor-agent".to_string(), "--resume".to_string(), chat_id];
             if let Some(model) = model {
                 argv.push("--model".to_string());
@@ -533,19 +536,19 @@ impl AgentPlugin for CursorPlugin {
         AccountSwitchSupport::Transcript
     }
 
+    /// `unavailable` strategy: cursor's ACP session lives in a separate store
+    /// (`~/.cursor/acp-sessions`) with no bridge to the id `--resume` reads,
+    /// so there is no native id to recover — only an already-stored one is
+    /// returned. Deliberately NOT "the newest chat in the workspace": that is
+    /// whichever sibling agent wrote last, and a json→tty toggle would then
+    /// resume someone else's conversation (`supports_channel_resume` is
+    /// `false`, so a fresh terminal conversation is the expected outcome).
     fn capture_native_chat_id(
         &self,
         args: CaptureNativeChatIdArgs<'_>,
     ) -> AsyncResult<Option<String>> {
         let known = args.session.agent_chat_id.clone();
-        let cwd = args.cwd.to_string();
-        let account_dir = args.account_dir.clone();
-        Box::pin(async move {
-            if let Some(id) = known.filter(|id| !id.is_empty()) {
-                return Some(id);
-            }
-            find_latest_cursor_chat_id(&cwd, account_dir.as_deref()).await
-        })
+        Box::pin(async move { known.filter(|id| !id.is_empty()) })
     }
 
     fn run_turn(

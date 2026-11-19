@@ -41,7 +41,9 @@ use vst_types::{
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
 use crate::home::home_dir;
-use crate::native_chat_id::read_latest_agy_conversation_id;
+use crate::native_chat_id::{
+    agy_conversation_modified, agy_conversation_presence, first_resumable, resume_order,
+};
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult,
     LaunchConfig, ListModelsResult, PromptDelivery, ReadySignal, RestoreArgs, TurnContext,
@@ -375,22 +377,44 @@ impl AgentPlugin for AgyPlugin {
         AccountSwitchSupport::None
     }
 
+    /// Resumes THIS session's own conversation: the stored chat id or the last
+    /// id its per-session `--log-file` recorded (follows a new conversation
+    /// started inside the pane), in the shared `resume_order` (stored first,
+    /// unless the logged conversation is newer), whichever agy still has on
+    /// disk. Neither ⇒ a fresh launch.
+    ///
+    /// Never the cwd-keyed `last_conversations.json` "latest": it is shared by
+    /// every agy session in the worktree (a sibling's conversation) and only
+    /// written on a graceful `/quit`.
     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
         let known = args.session.agent_chat_id.clone();
-        let cwd = args.cwd.to_string();
         let model = args.model.map(|m| m.to_string());
+        let session_id = args.session.id.clone();
         let log_path = agy_log_path(&args.session.id);
-        // agy ships without accounts (V9), so this is always `None`; the
-        // parameter exists so the lookup signature is uniform across harnesses.
-        let account_dir = args.account_dir.clone();
         Box::pin(async move {
-            let id = match known {
-                Some(id) if !id.is_empty() => id,
-                _ => match read_latest_agy_conversation_id(&cwd, account_dir.as_deref()).await {
-                    Some(id) => id,
-                    None => return None,
-                },
-            };
+            let recorded = parse_last_conversation_id_from_log(&log_path).await;
+            // The shared `resume_order` (see there): Rich Chat moves the stored
+            // id (agy's ACP id is native), so the log of an earlier terminal run
+            // can be stale; a new conversation inside the pane only reaches the
+            // log. Newer conversation wins when both exist.
+            let mut mtimes = Vec::new();
+            for id in [known.as_deref(), recorded.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                mtimes.push((id.to_string(), agy_conversation_modified(id).await));
+            }
+            let order = resume_order(known.as_deref(), recorded.as_deref(), |id| {
+                mtimes.iter().find(|(m, _)| m == id).and_then(|(_, t)| *t)
+            });
+            let resolution =
+                first_resumable(
+                    order,
+                    |id| async move { agy_conversation_presence(&id).await },
+                )
+                .await;
+            resolution.log_fresh_launch("agy", &session_id);
+            let id = resolution.id?;
             let mut argv = vec![
                 "agy".to_string(),
                 "--conversation".to_string(),
