@@ -27,6 +27,7 @@
  */
 
 import { mkdir, writeFile, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -41,7 +42,11 @@ const VIEW = { w: 1440, h: 810 };
 const RAW_DSF = 1.6;
 const STAGE_SCALE = 1120 / 1440; // README/website stage: 1120px wide for a 1440px app viewport
 const OUT_DSF = 2;
-const THEME = "vibestation-dark";
+const THEME = "vibestation-dark"; // default; a shot can pass `theme` to openApp (e.g. LIGHT)
+const LIGHT = "vibestation-light";
+// Window background (v0.0.7 wallpapers). Shots for earlier releases use the solid background those releases had.
+const SOLID = { mode: "solid", wallpaperId: null, texture: "none" };
+const MISTY = { mode: "wallpaper", wallpaperId: "wp-009", texture: "grain" }; // "Misty Mountain Clouds"
 const WORKTREE = "napi-1";
 const SESSION = "napi-1-m"; // main session of the worktree; presented as Rich Chat for this browser only
 
@@ -63,6 +68,9 @@ function limitsSnapshot() {
       res("claude", [win("claude", "five_hour", 300, 42, 2.3), win("claude", "seven_day", 10080, 61, 52)]),
       res("codex", [win("codex", "primary", 43200, 4, 480)]),
       res("agy", [win("agy", "gemini_5h", 300, 12, 3.1), win("agy", "gemini_weekly", 10080, 83, 70), win("agy", "3p_5h", 300, 47, 1.4)]),
+      // Per-account limits for the injected demo accounts (ACCOUNTS below).
+      { ...res("claude", [win("claude", "five_hour", 300, 18, 3.6), win("claude", "seven_day", 10080, 34, 96)]), accountId: "acc_0a1b2c3d" },
+      { ...res("claude", [win("claude", "five_hour", 300, 93, 0.7), win("claude", "seven_day", 10080, 72, 40)]), accountId: "acc_4e5f6a7b" },
     ],
   };
 }
@@ -156,6 +164,49 @@ function artifactRows() {
   return { rev: 1, cap: 500, total: items.length, items };
 }
 
+/** Updates (v0.0.5): a curl install one release behind, injected for this browser only. The changelog is the
+ *  v0.0.5-beta notes file itself. */
+const UPDATE_STATUS = {
+  current: "0.0.4-beta", latest: "0.0.5-beta", behindCount: 1, updateAvailable: true, skipped: [],
+  changelog: readFileSync(join(ROOT, ".github", "release-notes", "v0.0.5-beta.md"), "utf8"),
+  releaseUrl: "https://github.com/fastestdevalive/vibe-station/releases/tag/v0.0.5-beta",
+  installMethod: "curl", targets: [{ method: "curl", path: "~/.local/bin/vst", version: "0.0.4-beta", auto: true }],
+  checkedAt: new Date().toISOString(), autoCheck: true, platform: "darwin-aarch64", noAsset: false, canInstall: true,
+};
+const UPDATE_ROUTE = ["**/api/update/check**", (r) => r.fulfill({ json: UPDATE_STATUS })];
+
+/** Find in chat (v0.0.6): answer the transcript search route from an injected chat (as replayed by mockRichChat:
+ *  seq = index + 1, a new turn at each user row), case-insensitive substring like `lib/findTerms.ts`. */
+function searchPage(chat, q) {
+  const term = q.trim().toLowerCase();
+  const matches = [];
+  let turn = 0;
+  chat.forEach((e, i) => {
+    if (e.kind === "user") turn++;
+    if (!term || (e.kind !== "user" && e.kind !== "text")) return;
+    const lower = e.text.toLowerCase();
+    let at = lower.indexOf(term), occurrence = 0;
+    while (at !== -1) {
+      const from = Math.max(0, at - 28), to = Math.min(e.text.length, at + term.length + 40);
+      matches.push({
+        seq: i + 1, turnId: `demo-t${e.kind === "user" ? i : i - 1}`, turnIndex: turn, kind: e.kind, occurrence: occurrence++,
+        snippet: [{ text: (from ? "…" : "") + e.text.slice(from, at) }, { text: e.text.slice(at, at + term.length), hit: true }, { text: e.text.slice(at + term.length, to) + (to < e.text.length ? "…" : "") }],
+      });
+      at = lower.indexOf(term, at + 1);
+    }
+  });
+  return { query: q, total: matches.length, totalCapped: false, matches, backfilling: false, turnCount: turn };
+}
+
+/** Accounts (v0.0.6/v0.0.7): the System login plus two named Claude accounts, labels only (no emails), injected for
+ *  this browser only. Their limits are in limitsSnapshot(). */
+const ACCOUNTS = [
+  { id: "system", cli: "claude", label: null, displayName: "System login", email: null, plan: null, method: "system", auth: "signed_in", isDefault: true, limited: null, createdAt: null, dir: "~/.claude", createdByUs: false, pending: false, signIn: null },
+  { id: "acc_0a1b2c3d", cli: "claude", label: "Work", displayName: "Work", email: null, plan: "Max", method: "sign_in", auth: "signed_in", isDefault: false, limited: null, createdAt: "2026-11-02T09:00:00Z", dir: "~/.vibe-station/accounts/claude/acc_0a1b2c3d", createdByUs: true, pending: false, signIn: null },
+  { id: "acc_4e5f6a7b", cli: "claude", label: "Side project", displayName: "Side project", email: null, plan: "Pro", method: "sign_in", auth: "signed_in", isDefault: false, limited: null, createdAt: "2026-11-09T09:00:00Z", dir: "~/.vibe-station/accounts/claude/acc_4e5f6a7b", createdByUs: true, pending: false, signIn: null },
+];
+const ACCOUNTS_ROUTE = ["**/api/accounts", (r) => (r.request().method() === "GET" ? r.fulfill({ json: { accounts: ACCOUNTS } }) : r.continue())];
+
 // ── REST / WS interception (adapted from capture-readme-screenshots.mjs) ───
 
 /** Rewrite session records for `id` to the json channel, anywhere they appear in a JSON body. */
@@ -216,9 +267,13 @@ function patchById(node, patch) {
   return node;
 }
 
-async function openApp(browser, { chat, chats, inject, route, path = `/worktree/${WORKTREE}`, patchSessions = false, hideTools = false }) {
-  const ctx = await browser.newContext({ viewport: { width: VIEW.w, height: VIEW.h }, deviceScaleFactor: RAW_DSF });
-  await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), THEME);
+async function openApp(browser, { chat, chats, inject, route, routes = [], path = `/worktree/${WORKTREE}`, patchSessions = false, hideTools = false, theme = THEME, viewport = VIEW, isMobile = false, background = SOLID }) {
+  const ctx = await browser.newContext({ viewport: { width: viewport.w, height: viewport.h }, deviceScaleFactor: RAW_DSF, isMobile, hasTouch: isMobile });
+  await ctx.addInitScript((t) => localStorage.setItem("vibestation:theme", t), theme);
+  // Background prefs live in this browser's storage (keyed by daemon origin). Seed them once per context so a shot
+  // never shows the random first-run wallpaper; later picks made through the UI are kept across navigations.
+  await ctx.addInitScript(([key, prefs]) => { if (localStorage.getItem(key) === null) localStorage.setItem(key, JSON.stringify(prefs)); },
+    [`vst.background.v1:${new URL(LIVE_URL).origin}`, { v: 2, rolled: true, picked: true, agentWallpapers: false, ...background }]);
   const page = await ctx.newPage();
   const allChats = chats ?? (chat ? { [SESSION]: chat } : null);
   if (allChats || inject) await mockRichChat(page, allChats ?? {}, inject); // before the routes below: later routes win
@@ -228,12 +283,13 @@ async function openApp(browser, { chat, chats, inject, route, path = `/worktree/
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const res = await route.fetch();
-    await route.fulfill({ response: res, json: { ...(await res.json()), themeId: THEME } });
+    await route.fulfill({ response: res, json: { ...(await res.json()), themeId: theme } });
   });
   if (route) await page.route(...route);
+  for (const r of routes) await page.route(...r);
   if (patchSessions) await page.route(/\/api\/sessions(\?.*)?$/, decorateSessions);
   await page.goto(`${LIVE_URL}${path}`);
-  await page.waitForSelector('button[aria-label="Hide projects sidebar"]');
+  await page.waitForSelector(isMobile ? "#root *" : 'button[aria-label="Hide projects sidebar"]');
   // The seed session is "waiting" (red pane border); that status colour is unrelated to what these shots show.
   await page.addStyleTag({ content: ".agent-pane-slot { border-color: var(--border-default) !important; }" });
   await page.waitForTimeout(2500);
@@ -297,6 +353,53 @@ async function deleteSeededComments(page) {
   }
 }
 
+/** Settings > Background: one of the picker's collapsible sections ("Wallpaper", "Texture", "Gradient"...). */
+const sectionToggle = (page, title) => page.locator(".wp-section__head").filter({ has: page.locator(".wp-section__label", { hasText: new RegExp(`^${title}$`) }) }).first();
+async function openSection(page, title) {
+  const head = sectionToggle(page, title);
+  if ((await head.getAttribute("aria-expanded")) !== "true") await head.click();
+  await page.waitForTimeout(300);
+}
+/** Pick a fixed wallpaper and texture through the real picker (stored in this browser only), so shots are stable
+ *  instead of showing the random first-run pick. Leaves the Wallpaper and Texture sections open. */
+async function pickBackground(page, wallpaper, texture) {
+  await page.locator(".wp-picker").first().waitFor();
+  await openSection(page, "Wallpaper");
+  await page.locator(`.wp-thumb[aria-label="${wallpaper}"]`).first().click();
+  await openSection(page, "Texture");
+  await page.locator(".wp-tile").filter({ hasText: new RegExp(`^${texture}$`) }).first().click();
+  await page.waitForTimeout(600);
+}
+
+/** "Create new agent" opens a real (global) draft session; shots delete exactly the drafts they created. */
+async function draftIds(page) {
+  const res = await page.request.get(`${LIVE_URL}/api/sessions`);
+  return new Set((await res.json()).filter((s) => s.state === "drafting").map((s) => s.id));
+}
+async function deleteGlobalDrafts(page, before) {
+  for (const id of await draftIds(page)) {
+    if (!before.has(id) && id.startsWith("global-")) await page.request.delete(`${LIVE_URL}/api/sessions/${encodeURIComponent(id)}`, { headers: { "x-vst-csrf": "1" } });
+  }
+}
+
+/** Compose several raw crops (same RAW_DSF) side by side, bottom-aligned, into RAW_DIR/<file>; returns its css box
+ *  so the framing step treats it like any other clip. The gap shows the frame's own inner background. */
+async function sideBySide(browser, file, parts, gap = 18) {
+  const W = parts.reduce((s, p) => s + p.w, 0) + gap * (parts.length + 1);
+  const H = Math.max(...parts.map((p) => p.h)) + gap * 2;
+  const imgs = parts.map((p) => `<img src="${pathToFileURL(join(RAW_DIR, p.file)).href}" style="width:${p.w}px;height:${p.h}px;display:block;outline:1px solid rgba(241,239,233,0.14)">`).join("");
+  const html = `<!doctype html><body style="margin:0;width:${W}px;height:${H}px;background:#111110;display:flex;align-items:flex-end;gap:${gap}px;padding:${gap}px;box-sizing:border-box">${imgs}</body>`;
+  const htmlPath = join(RAW_DIR, `${file}.compose.html`);
+  await writeFile(htmlPath, html);
+  const ctx = await browser.newContext({ viewport: { width: Math.ceil(W), height: Math.ceil(H) }, deviceScaleFactor: RAW_DSF });
+  const page = await ctx.newPage();
+  await page.goto(pathToFileURL(htmlPath).href);
+  await page.waitForFunction(() => [...document.images].every((i) => i.complete && i.naturalWidth > 0));
+  await page.screenshot({ path: join(RAW_DIR, file) });
+  await ctx.close();
+  return { x: 0, y: 0, width: Math.ceil(W), height: Math.ceil(H) };
+}
+
 /** Close a capture context without in-flight route callbacks throwing after the page is gone. */
 async function closeCtx(ctx) {
   for (const p of ctx.pages()) await p.unrouteAll({ behavior: "ignoreErrors" });
@@ -357,6 +460,279 @@ async function decorateSessions(route) {
 // ── shots ───────────────────────────────────────────────────────────────────
 
 const SHOTS = [
+  // ── v0.0.1-beta ──
+  {
+    release: "v0.0.1-beta",
+    file: "01-subagents.png",
+    title: "subagents",
+    async run(browser) {
+      // The worktree's two demo agents, linked as subagents of the main session for this browser only.
+      const patch = {
+        "napi-1-a1": { parentSessionId: SESSION, name: "auth tests", nameSource: "user" },
+        "napi-1-a2": { parentSessionId: SESSION, name: "API docs", nameSource: "user" },
+      };
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE }, inject: { patch }, theme: LIGHT });
+      const row = page.locator(".chat-subagent-row").first();
+      await row.waitFor();
+      await page.mouse.move(1300, 700);
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The parent's chat pane: its tab strip (with the subagents' tabs), the chat, the subagent row and the composer.
+      const pane = await box(page.locator(".agent-pane-slot").first());
+      const c = await box(page.locator(".chat-composer").first());
+      const clip = inView({ x: pane.x, y: 0, width: pane.width, height: c.y + c.height + 2 });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.1-beta",
+    file: "02-code-outline.png",
+    title: "code navigation",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, {});
+      await openPreviewFile(page, ["src", "middleware"], "authMiddleware.ts");
+      await page.getByRole("button", { name: "Outline" }).first().click();
+      // Symbols from the language server (needs LSP on for the worktree and typescript-language-server installed).
+      await page.locator('[aria-label="Outline panel"]').getByText("requireRole", { exact: false }).first().waitFor({ timeout: 60_000 });
+      await page.mouse.move(700, 790);
+      await page.waitForTimeout(1500);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The code preview and the outline beside it (symbols from the language server).
+      const body = await box(page.locator(".preview-body").first());
+      const x = body.x - 1;
+      const clip = inView({ x, y: 0, width: VIEW.w - x, height: 560 });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.1-beta",
+    file: "03-mobile.png",
+    title: "mobile",
+    async run(browser) {
+      const phoneView = { w: 390, h: 844 };
+      const { ctx, page } = await openApp(browser, { path: "/", viewport: phoneView, isMobile: true });
+      await page.waitForTimeout(1500);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      await page.screenshot({ path: join(RAW_DIR, this.file) });
+      await closeCtx(ctx);
+      return { x: 0, y: 0, width: phoneView.w, height: phoneView.h };
+    },
+  },
+  // ── v0.0.5-beta ──
+  {
+    release: "v0.0.5-beta",
+    file: "01-update.png",
+    title: "updates",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { theme: LIGHT, routes: [UPDATE_ROUTE] });
+      const chip = page.locator(".update-chip__main").first();
+      await chip.waitFor();
+      await page.waitForTimeout(600);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-chip-${this.file}`) });
+      await chip.click();
+      const dialog = page.locator('[role="dialog"]').last();
+      await dialog.waitFor();
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The chip in the top bar and the dialog it opened.
+      const chipBox = await box(page.locator(".update-chip").first());
+      const skip = await box(page.locator(".update-chip__skip").first());
+      const u = pad(union(chipBox, await box(dialog)), 22);
+      const clip = inView({ ...u, width: skip.x + skip.width + 8 - u.x }); // stop before the search button
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  // ── v0.0.6-beta ──
+  {
+    release: "v0.0.6-beta",
+    file: "01-accounts.png",
+    title: "accounts",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { path: "/settings/modes", theme: LIGHT, routes: [ACCOUNTS_ROUTE] });
+      await page.locator('[data-testid="harness-tab-claude"]').click();
+      const add = page.getByRole("button", { name: "Add account" }).first();
+      await add.waitFor();
+      await page.waitForTimeout(1200);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const tabs = await box(page.locator('[role="tablist"][aria-label="Harnesses"]').first());
+      // Down to the end of the accounts block: the "Claude modes" heading follows it.
+      const modes = await box(page.getByText("Claude modes", { exact: true }).first());
+      const clip = inView({ x: tabs.x - 16, y: tabs.y - 14, width: tabs.width + 32, height: modes.y - 14 - (tabs.y - 14) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.6-beta",
+    file: "02-find-in-chat.png",
+    title: "find in chat",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, {
+        chats: { [SESSION]: CHAT_PREV }, theme: LIGHT, hideTools: true,
+        routes: [[/\/api\/sessions\/[^/]+\/transcript\/search/, (r) => r.fulfill({ json: searchPage(CHAT_PREV, new URL(r.request().url()).searchParams.get("q") ?? "") })]],
+      });
+      await page.locator(".chat-composer").first().waitFor();
+      await page.getByRole("button", { name: "Find in chat" }).first().click();
+      await page.keyboard.type("token", { delay: 40 });
+      await page.waitForTimeout(900);
+      await page.getByRole("button", { name: /^List matches/ }).first().click();
+      await page.waitForTimeout(900);
+      await page.mouse.move(5, 400);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const pane = await box(page.locator(".agent-pane-slot").first());
+      // Down to just below the results list (the chat's empty space and composer are not part of this feature).
+      const list = await box(page.locator(".fpop").first());
+      const clip = inView({ x: pane.x, y: pane.y, width: pane.width, height: Math.min(pane.height, list.y + list.height + 60 - pane.y) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.6-beta",
+    file: "03-tools-pane.png",
+    title: "tools pane",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { theme: LIGHT });
+      await openPreviewFile(page, ["src", "middleware"], "authMiddleware.ts");
+      await page.mouse.move(700, 790);
+      await page.waitForTimeout(800);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The preview pane (tab, file strip with back/forward, name and +/- counts) and the Files/Changes list beside it.
+      const body = await box(page.locator(".preview-body").first());
+      const x = body.x - 1;
+      const clip = inView({ x, y: 0, width: VIEW.w - x, height: 300 });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  // ── v0.0.7-beta ──
+  {
+    release: "v0.0.7-beta",
+    file: "01-wallpaper-picker.png",
+    title: "background",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { path: "/settings/background", theme: LIGHT, background: MISTY });
+      await pickBackground(page, "Misty Mountain Clouds", "Halftone");
+      await sectionToggle(page, "Texture").click(); // fold it again: the shot shows the wallpaper grid
+      await page.waitForTimeout(400);
+      await page.mouse.move(5, 400);
+      await page.locator(".bg-setting").first().evaluate((el) => {
+        for (let n = el; n; n = n.parentElement) n.scrollTop = 0;
+      });
+      await page.waitForTimeout(2000); // thumbnails
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const s = await box(page.locator(".bg-setting").first());
+      // Down to the third row of thumbnails (rows are measured, the grid is responsive).
+      const bottom = await page.locator(".wp-grid .wp-thumb").evaluateAll((els) => {
+        const rows = [...new Set(els.map((e) => Math.round(e.getBoundingClientRect().bottom)))].sort((a, b) => a - b);
+        return rows[Math.min(2, rows.length - 1)];
+      });
+      const clip = inView({ x: s.x - 18, y: s.y - 14, width: s.width + 36, height: bottom + 6 - (s.y - 14) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.7-beta",
+    file: "02-wallpaper-window.png",
+    title: "wallpaper",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { path: "/settings/background", chats: { [SESSION]: CHAT_SCHEDULE }, background: MISTY });
+      const before = await draftIds(page);
+      await pickBackground(page, "Reflections snowy mountains reflect calm", "Grain");
+      // Same page (client-side route): the picked background stays in this browser's storage.
+      await page.getByRole("button", { name: "Create new agent" }).first().click(); // client-side: the empty new-agent chat
+      await page.waitForTimeout(1500);
+      await page.mouse.move(700, 790);
+      await page.waitForTimeout(3000); // full-size image + texture bake
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const clip = inView({ x: 0, y: 0, width: VIEW.w, height: VIEW.h });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await deleteGlobalDrafts(page, before);
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
+  {
+    release: "v0.0.7-beta",
+    file: "03-drafts-sync.png",
+    title: "drafts",
+    async run(browser) {
+      // Two browsers on the same session (a desktop window and a phone): text typed on the desktop shows up in the
+      // phone's composer through the daemon's draft-text sync. The draft row is real; it is cleared afterwards.
+      const chats = { [SESSION]: CHAT_PREV };
+      const phoneView = { w: 390, h: 844 };
+      const desk = await openApp(browser, { chats, theme: LIGHT, background: MISTY });
+      const phone = await openApp(browser, { chats, theme: LIGHT, viewport: phoneView, isMobile: true, hideTools: true, background: MISTY });
+      const text = "After the flake fix, bump the refresh-token TTL to 14 days and note it in docs/API.md.";
+      const composer = desk.page.locator(".chat-composer").first();
+      await composer.waitFor();
+      await composer.click({ position: { x: 40, y: 24 } });
+      await desk.page.keyboard.type(text, { delay: 8 });
+      await phone.page.getByText("bump the refresh-token TTL", { exact: false }).first().waitFor({ timeout: 15_000 });
+      for (const pg of [desk.page, phone.page]) {
+        // The pane's font-zoom overlay sits on the last bubble; it is not part of this feature.
+        await pg.addStyleTag({ content: ".chat-font-overlay { display: none !important; }" });
+        await pg.mouse.move(2, 2);
+        await pg.waitForTimeout(800);
+      }
+      if (process.env.FULL) {
+        await desk.page.screenshot({ path: join(RAW_DIR, `full-desk-${this.file}`) });
+        await phone.page.screenshot({ path: join(RAW_DIR, `full-phone-${this.file}`) });
+      }
+      // Phone: its agent pane (tab strip to the composer's hint line). Desktop: the chat pane, same height, ending
+      // just below its composer.
+      const pp = await box(phone.page.locator(".agent-pane-slot").first());
+      const pc = await box(phone.page.locator(".chat-composer").first());
+      const phoneClip = { x: pp.x, y: pp.y, width: pp.width, height: pc.y + pc.height + 2 - pp.y };
+      const pane = await box(desk.page.locator(".agent-pane-slot").first());
+      const c = await box(composer);
+      const bottom = c.y + c.height + 2;
+      const deskClip = inView({ x: pane.x, y: bottom - phoneClip.height, width: pane.width, height: phoneClip.height });
+      await desk.page.screenshot({ path: join(RAW_DIR, `a-${this.file}`), clip: deskClip });
+      await phone.page.screenshot({ path: join(RAW_DIR, `b-${this.file}`), clip: phoneClip });
+      await desk.page.request.put(`${LIVE_URL}/api/draft-texts/${encodeURIComponent(SESSION)}`, {
+        headers: { "x-vst-csrf": "1" }, data: { text: "", clientId: "release-screenshots" },
+      });
+      await closeCtx(desk.ctx);
+      await closeCtx(phone.ctx);
+      return sideBySide(browser, this.file, [
+        { file: `a-${this.file}`, w: deskClip.width, h: deskClip.height },
+        { file: `b-${this.file}`, w: phoneClip.width, h: phoneClip.height },
+      ]);
+    },
+  },
+  {
+    release: "v0.0.7-beta",
+    file: "04-account-picker.png",
+    title: "accounts",
+    async run(browser) {
+      const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE }, theme: LIGHT, routes: [ACCOUNTS_ROUTE], background: MISTY });
+      await page.locator(".chat-composer").first().waitFor();
+      await page.locator(".session-account__btn").first().click();
+      const menu = page.locator('[role="menu"]').last();
+      await menu.waitFor();
+      await page.waitForTimeout(800);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      const c = await box(page.locator(".chat-composer").first());
+      const m = await box(menu);
+      const u = union(c, m);
+      const clip = inView({ x: c.x - 14, y: m.y - 16, width: u.x + u.width + 14 - (c.x - 14), height: u.y + u.height + 1 - (m.y - 16) });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
+      await closeCtx(ctx);
+      return clip;
+    },
+  },
   {
     release: "v0.0.4-beta",
     file: "01-start-fresh.png",
