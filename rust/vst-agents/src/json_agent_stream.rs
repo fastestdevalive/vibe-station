@@ -58,6 +58,12 @@ impl JsonAgentStream {
         Self::default()
     }
 
+    /// Attached `message` listeners. A permanent listener counts too (conservative:
+    /// it can only prevent an idle reap, never cause one).
+    pub fn message_listener_count(&self) -> usize {
+        self.inner.lock().unwrap().message.len()
+    }
+
     /// Register a permanent `message` listener (fan-out on every
     /// `emit_message`). Use [`Self::subscribe_message`] for a listener that
     /// must be removable.

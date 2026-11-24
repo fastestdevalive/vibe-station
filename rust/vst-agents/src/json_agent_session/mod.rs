@@ -18,6 +18,7 @@ pub mod boot_sweep;
 pub mod connection;
 pub mod drain;
 pub mod events;
+pub mod idle_reaper;
 pub mod lifecycle;
 pub mod meta;
 pub mod model_race;
@@ -25,10 +26,14 @@ pub mod out_of_band;
 pub mod pids;
 pub mod queue;
 pub mod review;
+mod store_lease;
 pub mod task_signals;
 pub mod tasks;
 pub mod transcript_outline;
 pub mod transcript_search;
+
+pub use store_lease::StoreLease;
+use store_lease::StoreSlot;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -235,6 +240,8 @@ pub(super) struct State {
     pub(super) last_unrecovered_model: Option<String>,
     pub(super) out_of_band_turn_id: Option<String>,
     pub(super) out_of_band_last_at_ms: u64,
+    /// Last enqueue / turn end / autonomous event / connection start (see `idle_reaper.rs`).
+    pub(super) last_busy_at: std::time::Instant,
 
     // ---- lifecycle writer / background window (see `background.rs`) ----
     /// Last lifecycle state this session wrote (under `Inner::lifecycle_lock`).
@@ -317,8 +324,15 @@ pub(super) struct Inner {
     /// takes the other. `release()` is the one place that cares about both and
     /// it does so sequentially, for the reason documented there.
     ///
-    /// `None` after `dispose()`.
-    pub(super) store: Mutex<Option<TranscriptStore>>,
+    /// Open exactly while at least one `StoreLease` lives (see `store_lease.rs`):
+    /// a session at rest holds no file descriptors.
+    pub(super) store: Mutex<StoreSlot>,
+    /// Test seam (`fail_store_opens_for_test`): every store open fails. Never
+    /// set in production.
+    pub(super) fail_store_opens: AtomicBool,
+    /// Immutable copy of `state.session.id`, so the store can be opened (and
+    /// logged) without taking `state` — see the lock order above.
+    pub(super) session_id: String,
     /// Release latch. An `AtomicBool` on `Inner` rather than a `State` field so
     /// that the "is released, then append" pair in `persist_event` stays atomic
     /// now that the append is guarded by `store` instead of `state`:
@@ -435,6 +449,7 @@ impl JsonAgentSession {
 
         // Open the transcript store; create data_dir if needed.
         let _ = std::fs::create_dir_all(&data_dir);
+        // Open once to validate and seed, then close: the store reopens per lease.
         let store = open_transcript_store(&data_dir, &opts.session.id).map_err(|e| {
             tracing::warn!(session_id = %opts.session.id, error = %e, "[json-agent] transcript open failed");
             SessionOpenError(e.to_string())
@@ -448,6 +463,7 @@ impl JsonAgentSession {
         // system prompt.
         let first_turn_done = store.count_since_last_break() > 0
             || store.last_break_carry_over() == Some(CarryOver::Native);
+        store.close();
 
         let mut model = opts.model.clone();
         if let Some(m) = &meta_tail.model {
@@ -468,7 +484,7 @@ impl JsonAgentSession {
 
         let initial_lifecycle = opts.session.lifecycle.state;
         let initial_reason = opts.session.lifecycle.reason.clone();
-        let session_id_for_tasks = opts.session.id.clone();
+        let session_id = opts.session.id.clone();
         let state = State {
             project: opts.project,
             worktree: opts.worktree,
@@ -497,6 +513,7 @@ impl JsonAgentSession {
             last_unrecovered_model: None,
             out_of_band_turn_id: None,
             out_of_band_last_at_ms: 0,
+            last_busy_at: std::time::Instant::now(),
             last_written: initial_lifecycle,
             last_written_reason: initial_reason,
             turn_end_unannounced: false,
@@ -514,7 +531,7 @@ impl JsonAgentSession {
         let tasks = tasks::new_registry(
             opts.plugin.clone(),
             opts.broadcaster.clone(),
-            session_id_for_tasks,
+            session_id.clone(),
         );
         let inner = Inner {
             activity: std::sync::OnceLock::new(),
@@ -525,7 +542,9 @@ impl JsonAgentSession {
             state: Mutex::new(state),
             lifecycle_lock: tokio::sync::Mutex::new(()),
             tasks,
-            store: Mutex::new(Some(store)),
+            store: Mutex::new(StoreSlot::default()),
+            fail_store_opens: AtomicBool::new(false),
+            session_id,
             released: AtomicBool::new(false),
             stream: JsonAgentStream::new(),
             store_handle: opts.store_handle,
@@ -717,13 +736,12 @@ impl JsonAgentSession {
     }
 
     pub fn read_transcript(&self) -> Vec<NormalizedEvent> {
-        let store = self.0.store.lock().unwrap();
-        store.as_ref().map_or_else(Vec::new, |st| st.read_all())
+        self.with_store(|st| st.read_all(), Vec::new())
     }
 
     pub fn tail(&self, n_turns: i64, max_bytes: usize) -> TranscriptPage {
-        let store = self.0.store.lock().unwrap();
-        store.as_ref().map_or(
+        self.with_store(
+            |st| st.tail(n_turns, max_bytes),
             TranscriptPage {
                 events: Vec::new(),
                 oldest_seq: None,
@@ -731,13 +749,12 @@ impl JsonAgentSession {
                 turns_before: 0,
                 payload_bytes: 0,
             },
-            |st| st.tail(n_turns, max_bytes),
         )
     }
 
     pub fn page_before(&self, before_seq: i64, limit: i64) -> TranscriptPage {
-        let store = self.0.store.lock().unwrap();
-        store.as_ref().map_or(
+        self.with_store(
+            |st| st.page_before(before_seq, limit),
             TranscriptPage {
                 events: Vec::new(),
                 oldest_seq: None,
@@ -745,20 +762,18 @@ impl JsonAgentSession {
                 turns_before: 0,
                 payload_bytes: 0,
             },
-            |st| st.page_before(before_seq, limit),
         )
     }
 
     pub fn since(&self, since_seq: i64, limit: Option<i64>) -> SincePage {
-        let store = self.0.store.lock().unwrap();
-        store.as_ref().map_or(
+        self.with_store(
+            |st| st.since(since_seq, limit),
             SincePage {
                 events: Vec::new(),
                 next_seq: None,
                 has_more: false,
                 payload_bytes: 0,
             },
-            |st| st.since(since_seq, limit),
         )
     }
 
@@ -772,10 +787,7 @@ impl JsonAgentSession {
         let cli = provider_str(self.0.cli);
         let importer = self.0.plugin.native_history_importer()?;
 
-        let watermark = {
-            let store = self.0.store.lock().unwrap();
-            store.as_ref().and_then(|st| st.get_native_watermark())
-        };
+        let watermark = self.with_store(|st| st.get_native_watermark(), None);
         let session_id = self.0.state.lock().unwrap().session.id.clone();
 
         let req = crate::native_history_importer::NativeImportRequest {
@@ -793,14 +805,11 @@ impl JsonAgentSession {
         let next_watermark = result.next_watermark;
         let events = result.events;
 
-        let outcome = {
-            let mut store = self.0.store.lock().unwrap();
-            let opts = vst_store::transcript::ImportOptions {
-                cli: cli.clone(),
-                cursor: next_watermark,
-            };
-            store.as_mut()?.import_transaction(events, opts)
+        let opts = vst_store::transcript::ImportOptions {
+            cli: cli.clone(),
+            cursor: next_watermark,
         };
+        let outcome = self.with_store(|st| Some(st.import_transaction(events, opts)), None)?;
 
         // Rebuild meta so status bar reflects backfilled context.
         self.rebuild_meta_from_transcript();
@@ -851,10 +860,7 @@ impl JsonAgentSession {
         };
 
         let cli = provider_str(self.0.cli);
-        let mut store = self.0.store.lock().unwrap();
-        if let Some(st) = store.as_mut() {
-            st.set_native_watermark(&cli, &cursor);
-        }
+        self.with_store(|st| st.set_native_watermark(&cli, &cursor), ());
     }
 }
 
@@ -863,16 +869,9 @@ impl JsonAgentSession {
 // ---------------------------------------------------------------------------
 
 impl JsonAgentSession {
-    /// Close the SQLite handle. Idempotent.
-    pub fn dispose(&self) {
-        let mut store = self.0.store.lock().unwrap();
-        if let Some(store) = store.take() {
-            store.close();
-        }
-    }
-
     /// Full teardown: latch released, abort + queue clear, wait for drain to
-    /// unwind (bounded), tear down ACP connection, close the SQLite handle.
+    /// unwind (bounded), tear down ACP connection. The SQLite handle needs no
+    /// step: it closes when the drain's lease (the last one) drops.
     pub async fn release(&self) {
         self.release_with(RestoreReason::SessionRemoved).await;
     }
@@ -932,7 +931,6 @@ impl JsonAgentSession {
             )
             .await;
         }
-        self.dispose();
     }
 
     /// Whether the queue is idle right now (no turn running or queued).
@@ -998,10 +996,7 @@ impl JsonAgentSession {
     /// Rebuild `usage`/`model`/`commands` from the last usage/result/model/
     /// `commands_update` events in the store.
     pub(super) fn rebuild_meta_from_transcript(&self) {
-        let meta = {
-            let store = self.0.store.lock().unwrap();
-            store.as_ref().map(|st| st.last_meta())
-        };
+        let meta = self.with_store(|st| Some(st.last_meta()), None);
         if let Some(TranscriptMeta {
             model,
             usage,
@@ -1159,22 +1154,29 @@ impl JsonAgentSession {
     }
 
     /// [`persist_event`](Self::persist_event) reporting whether the row was
-    /// appended (`false` when released or disposed).
+    /// appended (`false` when released, the store cannot be
+    /// opened, or the append fails).
     pub(super) fn persist_event_checked(&self, ev: &mut NormalizedEvent) -> bool {
-        let mut store = self.0.store.lock().unwrap();
-        if self.0.released.load(Ordering::SeqCst) {
+        // Checked before opening: never open the store just to drop the row.
+        if self.is_released() {
             return false;
         }
-        match store.as_mut() {
-            Some(store) => match store.try_append(ev) {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!(error = %e, "[json-agent] transcript append failed; event not persisted");
-                    false
+        self.with_store(
+            |store| {
+                // Re-checked under the slot lock, which `release()` also holds when latching.
+                if self.is_released() {
+                    return false;
+                }
+                match store.try_append(ev) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "[json-agent] transcript append failed; event not persisted");
+                        false
+                    }
                 }
             },
-            None => false,
-        }
+            false,
+        )
     }
 
     /// Test-only: append through the exact production path (`persist_event`).
@@ -1187,14 +1189,6 @@ impl JsonAgentSession {
     pub fn persist_event_for_test(&self, ev: &NormalizedEvent) {
         let mut ev_clone = ev.clone();
         self.persist_event(&mut ev_clone);
-    }
-
-    /// Test-only: drop the transcript store without releasing the session, so
-    /// the next user-row write is not persisted (the failure `persist_turn_row`
-    /// reports as `false` while the session is still live).
-    #[doc(hidden)]
-    pub fn drop_store_for_test(&self) {
-        *self.0.store.lock().unwrap() = None;
     }
 
     /// Test-only: run `f` while holding the session-`state` mutex.
@@ -1576,6 +1570,13 @@ mod tests {
 
     /// A session rooted at `home` (so a test can seed the data dir first).
     fn session_in(home: &std::path::Path) -> JsonAgentSession {
+        session_with_plugin(home, Arc::new(NoopPlugin))
+    }
+
+    fn session_with_plugin(
+        home: &std::path::Path,
+        plugin: Arc<dyn AgentPlugin>,
+    ) -> JsonAgentSession {
         let _home = crate::home::with_home(home.to_path_buf());
         let store_handle = vst_store::StoreHandle::open(home.join("test.db")).unwrap();
         let (tx, _rx) = tokio::sync::broadcast::channel(64);
@@ -1638,7 +1639,7 @@ mod tests {
             project: project_rec,
             worktree: None,
             session: session_rec,
-            plugin: Arc::new(NoopPlugin),
+            plugin,
             daemon_port: 0,
             cli: NormalizedEventProvider::Claude,
             model: None,
@@ -1989,4 +1990,6 @@ mod tests {
     mod account_env_acp;
     // A native account hand-over keeps the first turn done (Decision 8).
     mod native_break_marker;
+    // The idle reaper's skip conditions.
+    mod idle_reaper;
 }

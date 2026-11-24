@@ -23,9 +23,10 @@ fn catch_up_within(step: impl FnMut() -> rusqlite::Result<bool>) {
 impl JsonAgentSession {
     /// The live session's outline summary; the store lock is taken per catch-up step.
     pub fn outline_summary(&self) -> rusqlite::Result<Option<OutlineSummary>> {
+        let _lease = self.lease_store().ok();
         self.catch_up_outline();
         let guard = self.0.store.lock().unwrap();
-        guard.as_ref().map_or_else(
+        guard.store.as_ref().map_or_else(
             || Ok(Some(OutlineSummary::empty())),
             TranscriptStore::outline_summary,
         )
@@ -37,9 +38,10 @@ impl JsonAgentSession {
         from: i64,
         limit: usize,
     ) -> rusqlite::Result<Option<OutlineWindow>> {
+        let _lease = self.lease_store().ok();
         self.catch_up_outline();
         let guard = self.0.store.lock().unwrap();
-        guard.as_ref().map_or_else(
+        guard.store.as_ref().map_or_else(
             || Ok(Some(OutlineWindow::empty(from))),
             |st| st.outline_window(from, limit),
         )
@@ -49,6 +51,7 @@ impl JsonAgentSession {
         catch_up_within(|| {
             let mut guard = self.0.store.lock().unwrap();
             guard
+                .store
                 .as_mut()
                 .map_or(Ok(true), TranscriptStore::catch_up_step)
         });

@@ -85,9 +85,61 @@ pub fn pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
+/// Soft limit to request, or `None` when it is already at or above
+/// `min(hard, target)`. An infinite hard limit is treated as unbounded.
+fn nofile_target(soft: u64, hard: u64, target: u64) -> Option<u64> {
+    let new = if hard == libc::RLIM_INFINITY {
+        target
+    } else {
+        hard.min(target)
+    };
+    (new > soft).then_some(new)
+}
+
+/// Raise the soft `RLIMIT_NOFILE` towards `target` (clamped to the hard limit);
+/// never lowers it. Returns `(old_soft, new_soft)`.
+#[allow(unsafe_code)]
+pub fn raise_nofile_limit(target: u64) -> io::Result<(u64, u64)> {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `lim` is a valid, writable `rlimit` out-pointer.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let soft = lim.rlim_cur;
+    let Some(new) = nofile_target(soft, lim.rlim_max, target) else {
+        return Ok((soft, soft));
+    };
+    lim.rlim_cur = new;
+    // SAFETY: `lim` is a valid `rlimit`; the soft value is <= the hard value.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((soft, new))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nofile_target_table() {
+        let inf = libc::RLIM_INFINITY;
+        assert_eq!(nofile_target(256, 1_000_000, 10_240), Some(10_240));
+        assert_eq!(nofile_target(256, 4096, 10_240), Some(4096));
+        assert_eq!(nofile_target(256, inf, 10_240), Some(10_240));
+        assert_eq!(nofile_target(20_000, inf, 10_240), None);
+        assert_eq!(nofile_target(10_240, 1_000_000, 10_240), None);
+        assert_eq!(nofile_target(4096, 4096, 10_240), None);
+    }
+
+    #[test]
+    fn raise_to_current_soft_is_noop() {
+        let (soft, _) = raise_nofile_limit(0).unwrap();
+        assert_eq!(raise_nofile_limit(soft).unwrap(), (soft, soft));
+    }
 
     #[test]
     fn free_bytes_reports_nonzero_for_tmp() {

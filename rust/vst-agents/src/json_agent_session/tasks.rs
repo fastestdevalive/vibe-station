@@ -104,10 +104,13 @@ impl JsonAgentSession {
         self.0.tasks.rebuild(&rows);
     }
 
+    /// Test seam: output watchers the task registry currently holds.
+    #[doc(hidden)]
+    pub fn watcher_count_for_test(&self) -> usize {
+        self.0.tasks.watcher_count_for_test()
+    }
+
     fn read_last_rows(&self, limit: usize) -> Vec<NormalizedEvent> {
-        let store = self.0.store.lock().unwrap();
-        store
-            .as_ref()
-            .map_or_else(Vec::new, |st| st.read_last(limit))
+        self.with_store(|st| st.read_last(limit), Vec::new())
     }
 }

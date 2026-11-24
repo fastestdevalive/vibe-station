@@ -358,6 +358,14 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         crate::version::current()
     );
 
+    // macOS rejects soft limits above OPEN_MAX (10240) when the hard limit is infinite.
+    const NOFILE_TARGET: u64 = 10_240;
+    match vst_proc::raise_nofile_limit(NOFILE_TARGET) {
+        Ok((old, new)) if old == new => tracing::info!("[vst] fd limit {old} (unchanged)"),
+        Ok((old, new)) => tracing::info!("[vst] fd limit {old} -> {new}"),
+        Err(e) => tracing::warn!("[vst] could not raise fd limit (continuing): {e}"),
+    }
+
     // ── Paths ────────────────────────────────────────────────────────────────
     let paths = Paths::default_home();
     let vst_home = paths.vst_home().clone();
@@ -634,6 +642,14 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // Delete exited plain terminals: sweep stale ones now, then follow events.
     let terminal_reaper_handle =
         vst_routes::terminal_reaper::spawn_exited_terminal_reaper(state.session_routes.clone());
+    // End agent children idle for 2 h (`VST_AGENT_IDLE_REAP_SECS=0` disables).
+    let idle_reaper_handle = vst_agents::json_agent_session::idle_reaper::reap_after_from_env()
+        .map(|after| {
+            vst_agents::json_agent_session::idle_reaper::spawn_idle_reaper(
+                json_registry.clone(),
+                after,
+            )
+        });
     // The single Terminal delivery owner (built in `build_state`, shared with the
     // routes): the schedule poller hands tmux rows to it, boot reports to it.
     let terminal_delivery = state.session_routes.terminal_delivery.clone();
@@ -763,6 +779,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         terminal_delivery.shutdown();
         limits_handle.abort();
         terminal_reaper_handle.abort();
+        if let Some(handle) = &idle_reaper_handle {
+            handle.abort();
+        }
         accounts_task.abort();
         background_boot_for_shutdown.abort_all().await;
 

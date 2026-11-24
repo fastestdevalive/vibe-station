@@ -24,7 +24,11 @@ impl JsonAgentSession {
         budget: Duration,
         mut between: impl FnMut(bool),
     ) -> Result<SearchOutcome, SearchError> {
-        self.search_inner(req, budget, || between(self.0.store.try_lock().is_ok()))
+        self.search_inner(req, budget, || {
+            // Evaluated first: the probe guard must not outlive it into `between`.
+            let lock_free = self.0.store.try_lock().is_ok();
+            between(lock_free);
+        })
     }
 
     fn search_inner(
@@ -33,11 +37,14 @@ impl JsonAgentSession {
         budget: Duration,
         between: impl FnMut(),
     ) -> Result<SearchOutcome, SearchError> {
+        // One lease across every backfill step and the final read: the slot lock is
+        // taken per step, but the store is opened once.
+        let _lease = self.lease_store().ok();
         backfill_within(
             budget,
             || {
                 let mut guard = self.0.store.lock().unwrap();
-                let Some(store) = guard.as_mut() else {
+                let Some(store) = guard.store.as_mut() else {
                     return Ok(true);
                 };
                 let sid = store.session_id().to_string();
@@ -50,7 +57,7 @@ impl JsonAgentSession {
         )?;
 
         let mut guard = self.0.store.lock().unwrap();
-        let Some(store) = guard.as_mut() else {
+        let Some(store) = guard.store.as_mut() else {
             return Ok(SearchOutcome::empty(req.q.clone()));
         };
         store.search(req)
@@ -63,10 +70,9 @@ impl JsonAgentSession {
         n_turns: i64,
         max_bytes: usize,
     ) -> rusqlite::Result<AroundPage> {
-        let guard = self.0.store.lock().unwrap();
-        guard.as_ref().map_or_else(
-            || Ok(AroundPage::default()),
+        self.with_store(
             |st| st.page_around(seq, n_turns, max_bytes),
+            Ok(AroundPage::default()),
         )
     }
 }

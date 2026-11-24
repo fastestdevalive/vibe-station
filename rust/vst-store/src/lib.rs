@@ -18,6 +18,7 @@
 pub mod migration;
 pub mod row_mappers;
 pub mod schema;
+pub mod store_budget;
 pub mod transcript;
 pub mod transcript_outline;
 pub mod transcript_search;

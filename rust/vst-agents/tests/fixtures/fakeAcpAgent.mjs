@@ -7,6 +7,7 @@
 //   FAKE_ACP_MODE=cancel — session/prompt hangs until it receives session/cancel,
 //     then resolves with stopReason "cancelled".
 //   FAKE_ACP_MODE=exit_before_ready — exits immediately without responding to anything.
+//   FAKE_ACP_MODE=no_load_session — initialize does not advertise loadSession.
 //   FAKE_ACP_MODE=hang — never responds to ANYTHING (simulates a wedged adapter, 4.T2).
 //   FAKE_ACP_MODE=bg_terminal — the FIRST session/prompt starts a host-managed
 //     background terminal (client-side `terminal/create`) and then hangs until
@@ -186,7 +187,7 @@ rl.on("line", (line) => {
     if (process.env.CLIENT_CAPS_OUT_FILE) {
       writeFileSync(process.env.CLIENT_CAPS_OUT_FILE, JSON.stringify(msg.params?.clientCapabilities ?? null));
     }
-    const result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+    const result = { protocolVersion: 1, agentCapabilities: { loadSession: mode !== "no_load_session" } };
     if (mode === "steering_supported" || mode === "steering_strict" || mode === "steering_method_not_found") {
       result._meta = { steering: { supported: mode !== "steering_method_not_found" } };
     }

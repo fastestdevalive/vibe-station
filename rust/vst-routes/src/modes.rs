@@ -14,7 +14,7 @@
 //! `json_unsupported_cli`, and `find_mode`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -77,16 +77,51 @@ fn validate_icon(icon: &str) -> Result<String, ModeRouteError> {
     }
 }
 
-/// Load all modes from `~/.vibe-station/modes.json`. Returns an empty vec on
-/// any error (file missing, unparseable) — mirrors the TS `loadModes` catch.
+/// Why `modes.json` could not be read (anything but "file missing").
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ModesReadError(pub String);
+
+/// Parse the result of reading `path`: a missing file is an empty list, any
+/// other IO or JSON error is a [`ModesReadError`] naming the path.
+fn parse_modes(path: &Path, read: std::io::Result<String>) -> Result<Vec<Mode>, ModesReadError> {
+    let err = |cause: String| ModesReadError(format!("{}: {cause}", path.display()));
+    match read {
+        Ok(text) => serde_json::from_str::<Vec<Mode>>(&text)
+            .map(derive_missing_icons)
+            .map_err(|e| err(e.to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(err(e.to_string())),
+    }
+}
+
+/// Read the modes file at `path` (the testable core of [`try_load_modes`]).
+pub fn try_load_modes_at(path: &Path) -> Result<Vec<Mode>, ModesReadError> {
+    parse_modes(path, std::fs::read_to_string(path))
+}
+
+/// Read `~/.vibe-station/modes.json`; see [`try_load_modes_at`].
+pub fn try_load_modes() -> Result<Vec<Mode>, ModesReadError> {
+    try_load_modes_at(&home_dir().join(".vibe-station").join("modes.json"))
+}
+
+/// Best-effort read for callers that only look modes up: a read error is
+/// logged and reads as "no modes". Never use it before writing `modes.json`
+/// (an unreadable file would be saved over); writers go through
+/// `ModeRoutes::load_modes`, which returns the error.
 pub fn load_modes() -> Vec<Mode> {
-    let path = home_dir().join(".vibe-station").join("modes.json");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let modes = serde_json::from_str::<Vec<Mode>>(&text).unwrap_or_default();
-            derive_missing_icons(modes)
-        }
-        Err(_) => vec![],
+    try_load_modes().unwrap_or_else(|e| {
+        tracing::warn!("[modes] couldn't read modes.json: {e}");
+        vec![]
+    })
+}
+
+/// The message for a mode lookup that found nothing: the real read error when
+/// `modes.json` is unreadable, otherwise the classic "not found".
+pub fn mode_not_found_message(id: &str) -> String {
+    match try_load_modes() {
+        Err(e) => format!("Couldn't read modes.json: {e}"),
+        Ok(_) => format!("Mode '{id}' not found"),
     }
 }
 
@@ -375,27 +410,32 @@ impl ModeRoutes {
         }
     }
 
-    /// Load modes with in-memory caching and fallback to disk.
-    pub async fn load_modes(&self) -> Vec<Mode> {
+    /// Load modes with in-memory caching. A read error is returned, never
+    /// cached, so a writer can't save over a file it failed to read.
+    pub async fn load_modes(&self) -> Result<Vec<Mode>, ModeRouteError> {
         {
             let cache = self.modes_cache.read().await;
             if let Some(ref modes) = *cache {
-                return modes.clone();
+                return Ok(modes.clone());
             }
         }
 
         let path = self.file_path();
-        let loaded = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => {
-                let modes = serde_json::from_str::<Vec<Mode>>(&content).unwrap_or_default();
-                derive_missing_icons(modes)
-            }
-            Err(_) => vec![],
-        };
+        let read = tokio::fs::read_to_string(&path).await;
+        let loaded = parse_modes(&path, read)
+            .map_err(|e| ModeRouteError::Internal(format!("Couldn't read modes.json: {e}")))?;
 
         let mut cache = self.modes_cache.write().await;
         *cache = Some(loaded.clone());
-        loaded
+        Ok(loaded)
+    }
+
+    /// Read-only callers: log a read error and show an empty list.
+    async fn load_modes_or_empty(&self) -> Vec<Mode> {
+        self.load_modes().await.unwrap_or_else(|e| {
+            tracing::warn!("[modes] {e}");
+            vec![]
+        })
     }
 
     async fn save_modes(&self, modes: &[Mode]) -> Result<(), ModeRouteError> {
@@ -425,7 +465,7 @@ impl ModeRoutes {
 
     // ── 1. GET /supported-clis ─────────────────────────────────────────────
     pub async fn list_supported_clis(&self) -> Vec<SupportedCli> {
-        let modes = self.load_modes().await;
+        let modes = self.load_modes_or_empty().await;
         // Hoisted out of the per-CLI map (round-3 n3): a single config.json
         // read/parse for all 4 CLIs, not one per CLI.
         let overrides = load_default_channel_overrides();
@@ -500,7 +540,7 @@ impl ModeRoutes {
 
     // ── 3. GET /modes ─────────────────────────────────────────────────────
     pub async fn list_modes(&self) -> Vec<Mode> {
-        self.load_modes().await
+        self.load_modes_or_empty().await
     }
 
     // ── 4. POST /modes ────────────────────────────────────────────────────
@@ -534,7 +574,7 @@ impl ModeRoutes {
         // own doc comment for why an unguarded version of this is racy.
         let _create_guard = self.create_mode_lock.lock().await;
 
-        let modes = self.load_modes().await;
+        let modes = self.load_modes().await?;
         if modes.len() >= MAX_MODES {
             return Err(ModeRouteError::validation(format!(
                 "Maximum {MAX_MODES} modes allowed"
@@ -620,7 +660,7 @@ impl ModeRoutes {
             }
         }
 
-        let mut modes = self.load_modes().await;
+        let mut modes = self.load_modes().await?;
         let idx = modes
             .iter()
             .position(|m| m.id == id)
@@ -691,7 +731,7 @@ impl ModeRoutes {
 
     // ── 6. DELETE /modes/:id ──────────────────────────────────────────────
     pub async fn delete_mode(&self, id: &str) -> Result<DeleteModeResult, ModeRouteError> {
-        let modes = self.load_modes().await;
+        let modes = self.load_modes().await?;
         if !modes.iter().any(|m| m.id == id) {
             return Err(ModeRouteError::NotFound(id.to_string()));
         }
@@ -748,7 +788,21 @@ impl ModeRoutes {
         let mut already_present = vec![];
         let mut skipped = vec![];
         let has_named_entries = entries.iter().any(|e| e.model_name.is_some());
-        let existing_modes = self.load_modes().await;
+        // An unreadable modes.json creates nothing (reported via `models_error`,
+        // the one error channel the caller already surfaces).
+        let existing_modes = match self.load_modes().await {
+            Ok(m) => m,
+            Err(e) => {
+                return BundleOutcome {
+                    created,
+                    already_present: vec![],
+                    skipped: entries.iter().map(|e| e.name.clone()).collect(),
+                    used_fallback: false,
+                    primary_satisfied: false,
+                    models_error: Some(e.to_string()),
+                };
+            }
+        };
 
         // Resolve the live model list ONCE, and only if some named entry still
         // needs it (a bundle that already exists never depends on discovery).
@@ -837,7 +891,7 @@ impl ModeRoutes {
                 // report progress on this entry with no explanation).
                 Err(ModeRouteError::Conflict { .. }) => {
                     match self
-                        .load_modes()
+                        .load_modes_or_empty()
                         .await
                         .into_iter()
                         .find(|m| m.name == entry.name)
@@ -1298,6 +1352,7 @@ mod tests {
         let names: Vec<String> = routes
             .load_modes()
             .await
+            .unwrap()
             .into_iter()
             .map(|m| m.name)
             .collect();

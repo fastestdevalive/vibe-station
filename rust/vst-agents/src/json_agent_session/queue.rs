@@ -180,6 +180,7 @@ impl JsonAgentSession {
             }
             let order = s.enqueue_counter;
             s.enqueue_counter += 1;
+            s.last_busy_at = std::time::Instant::now();
             s.queue.push_back(QueuedTurn {
                 turn_id: turn_id.clone(),
                 enqueue_order: order,
@@ -734,21 +735,15 @@ impl JsonAgentSession {
         attachments: Vec<Attachment>,
         review: Option<ReviewTurn>,
     ) -> ForkResult {
-        let fork_seq = {
-            let store = self.0.store.lock().unwrap();
-            store
-                .as_ref()
-                .and_then(|st| st.first_seq_of_turn(from_turn_id))
-        };
+        // One lease so both reads share a single open.
+        let lease = self.lease_store().ok();
+        let fork_seq = self.with_store(|st| st.first_seq_of_turn(from_turn_id), None);
         let Some(fork_seq) = fork_seq else {
             return ForkResult::NotFound;
         };
-        let superseded_turn_ids = {
-            let mut store = self.0.store.lock().unwrap();
-            store
-                .as_mut()
-                .map_or_else(Vec::new, |st| st.mark_superseded_from(fork_seq))
-        };
+        let superseded_turn_ids =
+            self.with_store(|st| st.mark_superseded_from(fork_seq), Vec::new());
+        drop(lease);
         self.rebuild_meta_from_transcript();
 
         let agent_chat_id = self.0.state.lock().unwrap().session.agent_chat_id.clone();
@@ -805,7 +800,7 @@ impl JsonAgentSession {
             // `state`, set `running = true`, and spawn a `drain_loop` on an
             // already-released session — whose turn could then run to
             // completion (spawning a real CLI process) after `release()` has
-            // already returned and `dispose()`d the session.
+            // already returned and torn the session down.
             if s.running || self.is_released() {
                 return;
             }

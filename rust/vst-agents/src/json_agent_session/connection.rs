@@ -252,6 +252,7 @@ impl JsonAgentSession {
                         ModelState::Unchecked => {}
                     }
                     s.connection = Some(conn.clone());
+                    s.last_busy_at = std::time::Instant::now();
                     s.connection_first_turn_pending = true;
                     true
                 }

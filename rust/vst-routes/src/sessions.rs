@@ -106,7 +106,8 @@ use vst_ws::streams::pty_stream::PtySessionStream;
 
 use crate::account_sessions;
 use crate::modes::{
-    find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+    find_mode, mode_icon_for, mode_not_found_message, resolve_effective_default_channel,
+    resolve_mode, resolve_mode_id,
 };
 use crate::settings::load_default_channel_overrides;
 use crate::terminal_reaper::{find_live_terminal, lock_if_guarded};
@@ -1085,7 +1086,7 @@ impl SessionRoutes {
         if r#type == SessionType::Agent {
             if let Some(mid) = &mode_id {
                 let resolved = resolve_mode_id(mid)
-                    .ok_or_else(|| CreateError::Validation(format!("Mode '{mid}' not found")))?;
+                    .ok_or_else(|| CreateError::Validation(mode_not_found_message(&mid)))?;
                 mode_id = Some(resolved);
             }
         }
@@ -1697,8 +1698,7 @@ impl SessionRoutes {
     }
 
     async fn try_run_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
-        let mode =
-            find_mode(&opts.mode_id).ok_or_else(|| format!("Mode '{}' not found", opts.mode_id))?;
+        let mode = find_mode(&opts.mode_id).ok_or_else(|| mode_not_found_message(&opts.mode_id))?;
         let plugin = resolve_plugin(mode.cli);
         let worktree = opts
             .worktree
@@ -1732,8 +1732,7 @@ impl SessionRoutes {
     }
 
     async fn try_run_direct_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
-        let mode =
-            find_mode(&opts.mode_id).ok_or_else(|| format!("Mode '{}' not found", opts.mode_id))?;
+        let mode = find_mode(&opts.mode_id).ok_or_else(|| mode_not_found_message(&opts.mode_id))?;
         let plugin = resolve_plugin(mode.cli);
         let built = build_direct_prompt(&BuildDirectPromptInput {
             project: opts.project.clone(),
@@ -3706,9 +3705,9 @@ impl SessionRoutes {
         let requested_mode_id = match &body.mode_id {
             Some(req) => {
                 let resolved = resolve_mode_id(req)
-                    .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
+                    .ok_or_else(|| ResetError::ModeNotFound(mode_not_found_message(&req)))?;
                 find_mode(&resolved)
-                    .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
+                    .ok_or_else(|| ResetError::ModeNotFound(mode_not_found_message(&req)))?;
                 Some(resolved)
             }
             None => None,
@@ -3723,9 +3722,8 @@ impl SessionRoutes {
                 let mode_id = session.mode_id.clone().ok_or_else(|| {
                     ResetError::NoMode("Session has no mode; cannot reset".to_string())
                 })?;
-                find_mode(&mode_id).ok_or_else(|| {
-                    ResetError::ModeNotFound(format!("Mode '{mode_id}' not found"))
-                })?;
+                find_mode(&mode_id)
+                    .ok_or_else(|| ResetError::ModeNotFound(mode_not_found_message(&mode_id)))?;
                 mode_id
             }
         };
@@ -5628,7 +5626,7 @@ impl SessionRoutes {
         let requested_mode = match (&body.mode_id, to_json) {
             (Some(req), true) => Some(
                 resolve_mode(req)
-                    .ok_or_else(|| ChannelError::ModeNotFound(format!("Mode '{req}' not found")))?,
+                    .ok_or_else(|| ChannelError::ModeNotFound(mode_not_found_message(&req)))?,
             ),
             _ => None,
         };
@@ -5642,9 +5640,8 @@ impl SessionRoutes {
                         "Session has no mode; JSON chat requires an agent mode".to_string(),
                     )
                 })?;
-                find_mode(mode_id).ok_or_else(|| {
-                    ChannelError::ModeNotFound(format!("Mode '{mode_id}' not found"))
-                })?
+                find_mode(mode_id)
+                    .ok_or_else(|| ChannelError::ModeNotFound(mode_not_found_message(&mode_id)))?
             }
         } else {
             self.resolve_resume_mode(&session)
