@@ -98,6 +98,9 @@ pub struct QueuedTurn {
     /// run time and persisted on the user row; the `hold_id` marks the held rows
     /// that restore them if the turn never reaches the transcript.
     pub review: Option<ReviewTurn>,
+    /// The sender's `clientMessageId`, echoed on the turn's `user` row and in
+    /// `queuedTurns[]`.
+    pub client_message_id: Option<String>,
 }
 
 /// The review comments a queued turn carries: the hold (rows marked `heldBy`) that owns them
@@ -646,6 +649,7 @@ impl JsonAgentSession {
                         Some(t.mentions.clone())
                     },
                     review: t.review.as_ref().map(|r| r.record.summary()),
+                    client_message_id: t.client_message_id.clone(),
                 })
                 .collect(),
             usage: s.usage.clone(),
@@ -1685,6 +1689,7 @@ mod tests {
             let mut st = s.0.state.lock().unwrap();
             st.running = false;
             st.queue.push_back(QueuedTurn {
+                client_message_id: None,
                 turn_id: "existing".into(),
                 enqueue_order: 0,
                 raw_message: "existing".into(),

@@ -211,6 +211,7 @@ impl JsonAgentSession {
         if opts.silent {
             ev.silent = Some(true);
         }
+        ev.client_message_id = opts.client_message_id;
         // Never set on a cancelled row: the comments went back to the panel.
         if !opts.cancelled {
             ev.review = opts.review;
@@ -245,6 +246,8 @@ pub(super) struct EmitUserEventOpts {
     pub mentions: Vec<Mention>,
     /// The comments this turn carries (snapshot persisted on the row).
     pub review: Option<vst_types::review::ReviewRecord>,
+    /// Echo of the sender's `clientMessageId`.
+    pub client_message_id: Option<String>,
 }
 
 /// True when a usage record reflects a real model call (not a slash-command

@@ -29,6 +29,7 @@ impl TurnObserver for SeenHolds {
 
 fn review_turn(id: &str) -> QueuedTurn {
     QueuedTurn {
+        client_message_id: None,
         turn_id: id.into(),
         enqueue_order: 0,
         raw_message: "m".into(),

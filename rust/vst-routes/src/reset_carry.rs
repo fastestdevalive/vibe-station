@@ -97,6 +97,7 @@ pub async fn carry_to_json(
         }
         let res = enqueue_chat_turn(
             EnqueueChatTurnOpts {
+                client_message_id: None,
                 session_id: session_id.to_string(),
                 message,
                 attachments: vec![],

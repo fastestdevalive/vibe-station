@@ -399,6 +399,7 @@ async fn chat_missing_session_404() {
         .chat_session(
             "nope",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -420,6 +421,7 @@ async fn chat_global_draft_404() {
         .chat_session(
             "gd1",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -446,6 +448,7 @@ async fn chat_archived_400() {
         .chat_session(
             "s1",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -470,6 +473,7 @@ async fn chat_attachment_not_found_400() {
         .chat_session(
             "s1",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: Some(vec!["a1".into()]),
                 queue: None,
@@ -497,6 +501,7 @@ async fn chat_with_51_mentions_bad_request() {
         .chat_session(
             "any",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -522,6 +527,7 @@ async fn chat_with_control_char_label_bad_request() {
         .chat_session(
             "any",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -547,6 +553,7 @@ async fn chat_with_valid_mention_behaves_like_without() {
         .chat_session(
             "nope",
             ChatBody {
+                client_message_id: None,
                 message: "hi".into(),
                 attachment_ids: None,
                 queue: None,
@@ -982,6 +989,7 @@ async fn chat_json_returns_202_turn_id() {
         .chat_session(
             "s1",
             ChatBody {
+                client_message_id: None,
                 message: "hello".into(),
                 attachment_ids: None,
                 queue: Some(true),

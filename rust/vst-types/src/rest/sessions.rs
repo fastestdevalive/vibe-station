@@ -353,6 +353,11 @@ pub struct ChatBody {
     /// `message` may be empty when present).
     #[serde(default)]
     pub review_comment_ids: Option<Vec<String>>,
+    /// Client-minted idempotency/echo key (1..=64 chars, opaque). A repeat of
+    /// the same (session, id) returns the original result and never enqueues
+    /// again; the id is echoed on the turn's `user` event and `queuedTurns[]`.
+    #[serde(default)]
+    pub client_message_id: Option<String>,
 }
 
 /// `POST /sessions/:id/chat` success (202) — `EnqueueChatResult`.

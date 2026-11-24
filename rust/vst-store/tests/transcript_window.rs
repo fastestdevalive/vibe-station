@@ -61,6 +61,7 @@ fn ev(kind: NormalizedEventKind, turn_id: Option<&str>, text: Option<&str>) -> N
         parent_tool_use_id: None,
         task_signal: None,
         review: None,
+        client_message_id: None,
     }
 }
 

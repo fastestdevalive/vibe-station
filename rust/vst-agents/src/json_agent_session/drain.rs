@@ -515,6 +515,7 @@ impl JsonAgentSession {
             .await;
 
         let synthetic_turn = QueuedTurn {
+            client_message_id: None,
             turn_id: turn_id.clone(),
             enqueue_order: {
                 let mut s = self.0.state.lock().unwrap();

@@ -74,6 +74,7 @@ impl JsonAgentSession {
                 silent: turn.silent,
                 mentions: turn.mentions.clone(),
                 review: turn.review.as_ref().map(|r| r.record.clone()),
+                client_message_id: turn.client_message_id.clone(),
                 ..Default::default()
             },
         );

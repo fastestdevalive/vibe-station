@@ -59,6 +59,7 @@ pub mod acp_transport;
 pub mod agy;
 pub mod agy_accounts;
 pub mod agy_limits;
+pub mod chat_idempotency;
 pub mod claude;
 pub mod claude_accounts;
 pub mod claude_import;

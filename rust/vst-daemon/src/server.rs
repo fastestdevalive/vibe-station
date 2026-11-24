@@ -3879,9 +3879,17 @@ async fn handle_chat_session(
 ) -> Result<(StatusCode, Json<EnqueueChatResult>), (StatusCode, Json<serde_json::Value>)> {
     state
         .session_routes
-        .chat_session(&id, body)
+        .chat_session_outcome(&id, body)
         .await
-        .map(|res| (StatusCode::ACCEPTED, Json(res)))
+        .map(|o| {
+            // A duplicate `clientMessageId` is not a new acceptance: 200.
+            let status = if o.duplicate {
+                StatusCode::OK
+            } else {
+                StatusCode::ACCEPTED
+            };
+            (status, Json(o.result))
+        })
         .map_err(chat_err_to_response)
 }
 

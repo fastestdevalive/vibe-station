@@ -358,6 +358,7 @@ impl Env {
             .chat_session(
                 "s1",
                 ChatBody {
+                    client_message_id: None,
                     message: message.into(),
                     attachment_ids: None,
                     queue: None,
@@ -660,6 +661,7 @@ async fn a_non_json_session_is_refused_before_any_comment_moves() {
         .chat_session(
             "t1",
             ChatBody {
+                client_message_id: None,
                 message: "x".into(),
                 attachment_ids: None,
                 queue: None,

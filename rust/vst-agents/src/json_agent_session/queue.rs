@@ -33,6 +33,8 @@ pub struct EnqueueSpec {
     pub turn_id: Option<String>,
     /// Review comments riding this turn. A turn with a review is never steered.
     pub review: Option<ReviewTurn>,
+    /// The sender's `clientMessageId` (echo only; dedupe lives in the route).
+    pub client_message_id: Option<String>,
 }
 
 /// What `begin_edit_queued_turn` hands back: the held turn's content.
@@ -53,6 +55,17 @@ pub struct SubmitResult {
     pub turn_id: String,
     pub queue_position: usize,
     pub delivery: SubmitDelivery,
+}
+
+/// Everything a submit can carry (`submit` / `submit_with` fill the defaults).
+#[derive(Default)]
+pub struct SubmitSpec {
+    pub message: String,
+    pub attachments: Vec<Attachment>,
+    pub mentions: Vec<Mention>,
+    pub system_prompt: Option<String>,
+    pub fork_from_chat_id: Option<String>,
+    pub client_message_id: Option<String>,
 }
 
 pub enum SubmitDelivery {
@@ -152,6 +165,7 @@ impl JsonAgentSession {
             silent,
             turn_id,
             mut review,
+            client_message_id,
         } = spec;
         // Optionally write the system prompt file now (idempotent for later turns).
         if let Some(sp) = system_prompt {
@@ -190,6 +204,7 @@ impl JsonAgentSession {
                 mentions,
                 silent,
                 review,
+                client_message_id,
             });
             // Only flip to Queued when nothing is running. While a turn is
             // actively streaming (`s.running`), `queue_position` is always
@@ -212,6 +227,17 @@ impl JsonAgentSession {
             turn_id,
             queue_position,
         }
+    }
+
+    /// Where `turn_id` sits right now, in `queue_position` terms (turns ahead of
+    /// it: the running turn counts as one). `0` once it is running, steered,
+    /// finished, held for editing or unknown.
+    pub fn queue_position_of(&self, turn_id: &str) -> usize {
+        let s = self.0.state.lock().unwrap();
+        s.queue
+            .iter()
+            .position(|t| t.turn_id == turn_id)
+            .map_or(0, |i| i + usize::from(s.running))
     }
 
     /// Steer-eligibility shared by `submit()`, queue-head steering and the
@@ -262,6 +288,27 @@ impl JsonAgentSession {
         system_prompt: Option<String>,
         fork_from_chat_id: Option<String>,
     ) -> SubmitResult {
+        self.submit_full(SubmitSpec {
+            message,
+            attachments,
+            mentions,
+            system_prompt,
+            fork_from_chat_id,
+            client_message_id: None,
+        })
+        .await
+    }
+
+    /// The general submit: every option of [`SubmitSpec`].
+    pub async fn submit_full(&self, spec: SubmitSpec) -> SubmitResult {
+        let SubmitSpec {
+            message,
+            attachments,
+            mentions,
+            system_prompt,
+            fork_from_chat_id,
+            client_message_id,
+        } = spec;
         let can_attempt_steer = {
             let s = self.0.state.lock().unwrap();
             self.can_steer_now(&s)
@@ -295,6 +342,7 @@ impl JsonAgentSession {
                         &[],
                         EmitUserEventOpts {
                             mentions: mentions.clone(),
+                            client_message_id: client_message_id.clone(),
                             ..Default::default()
                         },
                     );
@@ -307,13 +355,15 @@ impl JsonAgentSession {
             }
         }
 
-        let result = self.enqueue_with(
+        let result = self.enqueue_full(EnqueueSpec {
             message,
             attachments,
             mentions,
             system_prompt,
             fork_from_chat_id,
-        );
+            client_message_id,
+            ..Default::default()
+        });
         SubmitResult {
             turn_id: result.turn_id,
             queue_position: result.queue_position,
@@ -542,6 +592,7 @@ impl JsonAgentSession {
                 EmitUserEventOpts {
                     cancelled: true,
                     mentions: turn.mentions.clone(),
+                    client_message_id: turn.client_message_id.clone(),
                     ..Default::default()
                 },
             );
@@ -585,6 +636,7 @@ impl JsonAgentSession {
                 EmitUserEventOpts {
                     cancelled: true,
                     mentions: t.mentions.clone(),
+                    client_message_id: t.client_message_id.clone(),
                     ..Default::default()
                 },
             );

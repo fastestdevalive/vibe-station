@@ -122,6 +122,7 @@ async fn an_idle_session_is_reaped_but_each_busy_signal_keeps_it() {
         ("running", |s| s.0.state.lock().unwrap().running = true),
         ("queued turn", |s| {
             let turn = QueuedTurn {
+                client_message_id: None,
                 turn_id: "q".into(),
                 enqueue_order: 0,
                 raw_message: "m".into(),
@@ -136,6 +137,7 @@ async fn an_idle_session_is_reaped_but_each_busy_signal_keeps_it() {
         ("held review turn", |s| {
             let held = HeldTurn {
                 turn: QueuedTurn {
+                    client_message_id: None,
                     turn_id: "h".into(),
                     enqueue_order: 0,
                     raw_message: "m".into(),

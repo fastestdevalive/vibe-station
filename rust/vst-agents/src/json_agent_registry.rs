@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+use crate::chat_idempotency::ChatIdempotency;
 use vst_types::activity::ActivitySink;
 use vst_types::artifacts::ArtifactSink;
 use vst_types::review::{ReviewPort, TurnObserver};
@@ -63,6 +64,10 @@ pub struct JsonAgentRegistry<T> {
     /// has no registry access); with none installed every session is the System
     /// login.
     account: OnceLock<Arc<dyn AccountPort>>,
+    /// `clientMessageId` slots for `POST /sessions/:id/chat`. Deliberately NOT
+    /// cleared by `remove`: that also runs on done / channel toggle / sign-out
+    /// halt, where the session id lives on and a client retry must still dedupe.
+    chat_idempotency: ChatIdempotency,
 }
 
 impl<T> Default for JsonAgentRegistry<T> {
@@ -74,11 +79,17 @@ impl<T> Default for JsonAgentRegistry<T> {
             artifact: OnceLock::new(),
             review: OnceLock::new(),
             account: OnceLock::new(),
+            chat_idempotency: ChatIdempotency::default(),
         }
     }
 }
 
 impl<T> JsonAgentRegistry<T> {
+    /// The daemon-wide `clientMessageId` slot store.
+    pub fn chat_idempotency(&self) -> &ChatIdempotency {
+        &self.chat_idempotency
+    }
+
     /// An empty registry.
     pub fn new() -> Self {
         Self::default()
