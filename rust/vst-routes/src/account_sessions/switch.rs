@@ -22,7 +22,7 @@ use vst_types::{
 
 use super::handover::{choose_handover, AccountSwitchPlan, Handover};
 use super::{account_cli_of, validate_selected, AccountProblem, HandleView};
-use crate::modes::{find_mode, resolve_mode_id};
+use crate::modes::{find_mode, mode_not_found_message, resolve_mode_id};
 use crate::sessions::{ResetError, SessionRoutes};
 
 /// How long a switch waits for the plugin's recorded chat id.
@@ -82,10 +82,10 @@ fn target_cli_of(
         return Ok(session_cli);
     };
     let id = resolve_mode_id(req)
-        .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
+        .ok_or_else(|| ResetError::ModeNotFound(mode_not_found_message(req)))?;
     find_mode(&id)
         .map(|m| Some(m.cli.as_str().to_string()))
-        .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))
+        .ok_or_else(|| ResetError::ModeNotFound(mode_not_found_message(req)))
 }
 
 /// Busy rule (Decision 7): a Terminal switch never stops the agent before
@@ -371,5 +371,26 @@ mod tests {
             api_key: None,
         };
         assert_eq!(account_root(&named), Some(home.path().join("work")));
+    }
+
+    #[test]
+    fn target_cli_lookup_reports_an_unreadable_modes_file() {
+        let home = tempfile::tempdir().expect("home");
+        let _guard = vst_agents::home::with_home(home.path().to_path_buf());
+        let dir = home.path().join(".vibe-station");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("modes.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        match target_cli_of(Some("m1"), None) {
+            Err(ResetError::ModeNotFound(msg)) => {
+                assert!(msg.starts_with("Couldn't read modes.json"), "{msg}")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        std::fs::remove_file(&file).unwrap();
+        match target_cli_of(Some("m1"), None) {
+            Err(ResetError::ModeNotFound(msg)) => assert_eq!(msg, "Mode 'm1' not found"),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

@@ -141,6 +141,7 @@ impl JsonAgentSession {
                 s.out_of_band_turn_id = Some(format!("notif-{}", crate::util::new_uuid_v4()));
             }
             s.out_of_band_last_at_ms = now;
+            s.last_busy_at = std::time::Instant::now();
             (new_burst, s.out_of_band_turn_id.clone())
         };
 

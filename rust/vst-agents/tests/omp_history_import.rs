@@ -882,7 +882,6 @@ async fn seal_then_import_emits_only_post_seal_turn() {
 
     // No duplicate user rows — the pre-seed count grows by exactly 1 (the
     // terminal turn), and none of the Rich-Chat / silent rows are re-added.
-    session.dispose();
     let store = open_transcript_store(&data_dir, SID).unwrap();
     let all = store.read_all();
     let user_texts: Vec<Option<&str>> = all

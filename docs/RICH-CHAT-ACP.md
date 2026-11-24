@@ -72,6 +72,24 @@ stateDiagram-v2
     Disposed --> [*]
 ```
 
+### 2.1 Idle reaping and dormant sessions
+
+A session's `messages.db` is open only while leased (a running turn, or one read
+or write call; `store_lease.rs`), so a chat at rest holds no file descriptors.
+Opens share a soft global cap of 32 (`vst-store` `store_budget.rs`): an open past
+it waits up to 250 ms for a slot, then proceeds with a rate-limited warning.
+
+The agent child is reaped after 2 h idle (`idle_reaper.rs`, swept every 10 min;
+`VST_AGENT_IDLE_REAP_SECS` overrides, `0` disables). Idle means no running,
+queued or held turn, no open background window, no tracked task (including a
+task whose hold lapsed), no pending scheduled message and no attached chat
+listener; an agent whose `initialize` did not advertise `loadSession` is never
+reaped (respawning it would start a fresh conversation). Reaping writes no
+lifecycle. A reaped ("dormant") session stays registered; opening it spawns
+nothing and holds no store past the open, and the next send (or a due scheduled
+message) respawns the child, which `session/load`s the stored id exactly like a
+daemon-restart resume.
+
 ## 3. Two channels, one session
 
 A session is on exactly one channel: `tmux`/`pty` (live TTY process) or `json`

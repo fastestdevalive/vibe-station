@@ -309,6 +309,20 @@ pub async fn handle_chat_open(
     };
     conn.register_chat_stream(&session_id, entry);
 
+    // One lease across the snapshot and meta reads: they share a single open, and a
+    // failed open reports an error instead of rendering an empty chat (the store is
+    // closed at rest, so a registered agent no longer proves the history is readable).
+    // Opening never spawns the child nor holds the store past this handler; the
+    // child starts only in `drain`.
+    let store_lease = match resolved.agent.lease_store() {
+        Ok(lease) => lease,
+        Err(error) => {
+            conn.unregister_chat_stream(&session_id);
+            send_history_error(conn, &session_id, &error);
+            return;
+        }
+    };
+
     // Snapshot AFTER attach — synchronous, so nothing interleaves (R2.7).
     send_snapshot(conn, &ctx, registry, &session_id, since_seq);
     // The meta MUST go out with no await between `get_meta()` and `send`: the
@@ -332,6 +346,7 @@ pub async fn handle_chat_open(
             tasks,
         });
     }
+    drop(store_lease);
     send_schedule_state(conn, store, &session_id).await;
 }
 

@@ -392,6 +392,9 @@ fn oversized_tool_result_backfill_caps_live_and_superseded() {
         ));
         s.mark_superseded_from(fork_seq);
     }
+    // The backfill runs on the first open per process; rows appended above
+    // bypass the write-time cap, so simulate a restart.
+    vst_store::transcript::forget_migrated_for_test(dir.path());
     let s2 = open_transcript_store(dir.path(), SESSION_ID).unwrap();
     let live = s2
         .read_all()

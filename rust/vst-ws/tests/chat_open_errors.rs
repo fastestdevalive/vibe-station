@@ -221,3 +221,82 @@ async fn unopenable_history_answers_with_session_error_and_others_keep_working()
         }
     }
 }
+
+/// A registered agent holds no store, so a failed lazy open at `chat:open` must be
+/// reported (not rendered as an empty chat).
+#[tokio::test]
+async fn a_registered_chat_whose_history_became_unopenable_reports_the_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("t.db")).unwrap();
+    store
+        .add_project(project(vec![session_record(
+            "reg",
+            LifecycleState::WaitingForHuman,
+            Some("m"),
+        )]))
+        .await
+        .unwrap();
+    let broadcaster = Broadcaster::new(64);
+    let registry = JsonAgentRegistry::<JsonAgentSession>::new();
+
+    let sent = open(&store, &registry, &broadcaster, "reg").await;
+    assert_eq!(of_type(&sent, "chat:replay", "reg").len(), 1);
+    assert!(registry.get("reg").is_some());
+
+    let data_dir = Paths::default().direct_session_data_dir(PID, "reg");
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(data_dir.join(format!("messages.db{suffix}")));
+    }
+    break_transcript("reg");
+    let sent = open(&store, &registry, &broadcaster, "reg").await;
+    assert_history_error(&sent, "reg");
+
+    if let Some(s) = registry.remove("reg") {
+        s.release().await;
+    }
+}
+
+/// Opening a chat whose agent was never started (or was reaped) replays the seeded
+/// rows and leaves nothing behind: no store, no child, no output watchers.
+#[tokio::test]
+async fn opening_a_dormant_chat_replays_history_and_holds_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(tmp.path().to_path_buf());
+    let store = StoreHandle::open(tmp.path().join("t.db")).unwrap();
+    store
+        .add_project(project(vec![session_record(
+            "dormant",
+            LifecycleState::WaitingForHuman,
+            Some("m"),
+        )]))
+        .await
+        .unwrap();
+    let data_dir = Paths::default().direct_session_data_dir(PID, "dormant");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let mut seed = vst_store::transcript::open_transcript_store(&data_dir, "dormant").unwrap();
+    for n in 0..3 {
+        let mut e: vst_types::NormalizedEvent = serde_json::from_value(serde_json::json!({
+            "id": format!("e-{n}"), "sessionId": "dormant", "ts": "2026-01-01T00:00:00Z",
+            "provider": "claude", "kind": "text",
+        }))
+        .unwrap();
+        e.turn_id = Some("t1".into());
+        e.text = Some(format!("row {n}"));
+        seed.append(&mut e);
+    }
+    seed.close();
+
+    let broadcaster = Broadcaster::new(64);
+    let registry = JsonAgentRegistry::<JsonAgentSession>::new();
+    let sent = open(&store, &registry, &broadcaster, "dormant").await;
+
+    let replay = of_type(&sent, "chat:replay", "dormant");
+    assert_eq!(replay.len(), 1, "{:?}", sent.lock().unwrap());
+    assert_eq!(replay[0]["events"].as_array().map(Vec::len), Some(3));
+    let agent = registry.get("dormant").expect("live object, no child");
+    assert!(!agent.has_live_connection_for_test());
+    assert!(!agent.store_is_open_for_test());
+    assert_eq!(agent.watcher_count_for_test(), 0);
+    agent.release().await;
+}

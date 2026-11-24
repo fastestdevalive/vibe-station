@@ -68,7 +68,8 @@ use crate::artifact_gate::{
 use crate::file_serving::{read_file_response, FileServingError};
 use crate::file_stat::{self, StatError};
 use crate::modes::{
-    find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+    find_mode, mode_icon_for, mode_not_found_message, resolve_effective_default_channel,
+    resolve_mode, resolve_mode_id,
 };
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::settings::load_default_channel_overrides;
@@ -891,7 +892,8 @@ impl ProjectRoutes {
                     worktree: None,
                     session: None,
                     warning: Some(format!(
-                        "Mode '{mode_id_input}' not found. Project created but agent not started."
+                        "{}. Project created but agent not started.",
+                        mode_not_found_message(&mode_id_input)
                     )),
                 });
             };

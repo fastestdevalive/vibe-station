@@ -89,7 +89,7 @@ async fn test_modes_pure_and_resolution_helpers() {
     let broadcaster = Broadcaster::new(16);
     let routes = ModeRoutes::new(store, broadcaster).with_modes_file(modes_file.clone());
 
-    let loaded = routes.load_modes().await;
+    let loaded = routes.load_modes().await.unwrap();
     assert_eq!(loaded.len(), 2);
     assert_eq!(loaded[0].id, "mode-1");
     assert_eq!(loaded[1].id, "mode-2");
@@ -738,7 +738,7 @@ async fn test_modes_icon_backfill_cached_loader() {
     .unwrap();
     routes.reset_cache_for_test().await;
 
-    let loaded = routes.load_modes().await;
+    let loaded = routes.load_modes().await.unwrap();
     assert_eq!(loaded.len(), 2);
     assert_eq!(
         loaded
@@ -1384,4 +1384,113 @@ async fn supported_clis_account_link() {
     assert!(!pi.verifies_identity, "pi has no identity command");
 
     assert_eq!(link(CliId::Agy), None, "agy ships without accounts");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// modes.json read errors (fd-limits A2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn routes_with_file(dir: &Path, file: std::path::PathBuf) -> ModeRoutes {
+    let store = StoreHandle::open(dir.join("vibe-station.db")).unwrap();
+    ModeRoutes::new(store, Broadcaster::new(16)).with_modes_file(file)
+}
+
+fn create_body(name: &str) -> CreateModeBody {
+    CreateModeBody {
+        name: name.to_string(),
+        cli: CliId::Claude,
+        context: String::new(),
+        preset_id: None,
+        model: None,
+        icon: None,
+    }
+}
+
+#[test]
+fn try_load_modes_at_missing_file_is_empty() {
+    let dir = tempdir().unwrap();
+    let modes = vst_routes::modes::try_load_modes_at(&dir.path().join("nope.json")).unwrap();
+    assert!(modes.is_empty());
+}
+
+#[tokio::test]
+async fn garbage_modes_file_blocks_writes_and_is_left_unchanged() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("modes.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let routes = routes_with_file(dir.path(), file.clone());
+
+    let err = routes.create_mode(create_body("x")).await.unwrap_err();
+    assert!(matches!(&err, ModeRouteError::Internal(m) if m.contains("Couldn't read modes.json")));
+    assert!(matches!(
+        routes
+            .update_mode(
+                "m1",
+                UpdateModeBody {
+                    name: Some("y".into()),
+                    context: None,
+                    cli: None,
+                    model: None,
+                    icon: None,
+                }
+            )
+            .await,
+        Err(ModeRouteError::Internal(_))
+    ));
+    assert!(matches!(
+        routes.delete_mode("m1").await,
+        Err(ModeRouteError::Internal(_))
+    ));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_modes_file_is_an_error_and_never_cached() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("modes.json");
+    std::fs::write(&file, "[]").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_to_string(&file).is_ok() {
+        return; // running as root: chmod 000 does not block reads
+    }
+    let routes = routes_with_file(dir.path(), file.clone());
+
+    assert!(routes.load_modes().await.is_err());
+    assert!(routes.create_mode(create_body("x")).await.is_err());
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(
+        &file,
+        serde_json::to_string(&vec![Mode {
+            id: "m1".into(),
+            name: "real".into(),
+            cli: CliId::Claude,
+            context: String::new(),
+            created_at: "2026-09-15T00:00:00Z".into(),
+            model: None,
+            icon: None,
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let loaded = routes.load_modes().await.unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id, "m1");
+}
+
+#[test]
+fn mode_not_found_message_reports_the_read_error() {
+    let home = tempdir().unwrap();
+    let _guard = with_home(home.path().to_path_buf());
+    assert_eq!(
+        vst_routes::modes::mode_not_found_message("abc"),
+        "Mode 'abc' not found"
+    );
+    let vst = home.path().join(".vibe-station");
+    std::fs::create_dir_all(&vst).unwrap();
+    std::fs::write(vst.join("modes.json"), "garbage").unwrap();
+    let msg = vst_routes::modes::mode_not_found_message("abc");
+    assert!(msg.starts_with("Couldn't read modes.json: "), "{msg}");
 }

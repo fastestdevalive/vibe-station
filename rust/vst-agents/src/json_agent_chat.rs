@@ -139,13 +139,15 @@ pub fn session_data_dir_for(ctx: &JsonSessionContext) -> PathBuf {
 
 const FALLBACK_CLI: NormalizedEventProvider = NormalizedEventProvider::Claude;
 
-/// Load all modes from `~/.vibe-station/modes.json`. Returns empty vec on any error.
-async fn load_modes() -> Vec<Mode> {
-    let paths = Paths::default();
-    let modes_path = paths.vst_home().join("modes.json");
+/// Load all modes from `~/.vibe-station/modes.json`. A missing file is an
+/// empty list; any other read or parse error is returned, never hidden.
+async fn load_modes() -> Result<Vec<Mode>, String> {
+    let modes_path = Paths::default().vst_home().join("modes.json");
     match tokio::fs::read_to_string(&modes_path).await {
-        Ok(text) => serde_json::from_str::<Vec<Mode>>(&text).unwrap_or_default(),
-        Err(_) => vec![],
+        Ok(text) => serde_json::from_str::<Vec<Mode>>(&text)
+            .map_err(|e| format!("{}: {e}", modes_path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(vec![]),
+        Err(e) => Err(format!("{}: {e}", modes_path.display())),
     }
 }
 
@@ -160,7 +162,9 @@ async fn resolve_mode(
         .as_deref()
         .ok_or_else(|| "Session has no mode; JSON chat requires an agent mode".to_string())?;
 
-    let modes = load_modes().await;
+    let modes = load_modes()
+        .await
+        .map_err(|e| format!("Couldn't read modes.json: {e}"))?;
     if let Some(mode) = modes.iter().find(|m| m.id == mode_id) {
         return Ok(ResolvedMode {
             cli: cli_id_to_provider(mode.cli),
@@ -1126,5 +1130,73 @@ mod held_payload_tests {
     fn no_snapshot_is_plain_and_unreadable_snapshot_is_an_error() {
         assert!(held_payload(&row(None)).unwrap().is_none());
         assert!(held_payload(&row(Some("{\"state\":\"future\"}"))).is_err());
+    }
+}
+
+#[cfg(test)]
+mod modes_read_tests {
+    use super::*;
+    use crate::home::with_home;
+    use vst_types::domain::{
+        Channel, LifecycleState, SessionLifecycle, SessionRecord, SessionType,
+    };
+
+    fn session(mode_id: &str) -> SessionRecord {
+        SessionRecord {
+            id: "s1".into(),
+            worktree_id: None,
+            project_id: "p1".into(),
+            is_main: true,
+            sort_order: 1.0,
+            r#type: SessionType::Agent,
+            mode_id: Some(mode_id.into()),
+            mode_icon: None,
+            account_id: None,
+            name: None,
+            name_source: None,
+            tmux_name: "tmux-s1".into(),
+            use_tmux: false,
+            channel: Some(Channel::Json),
+            lifecycle: SessionLifecycle {
+                state: LifecycleState::Idle,
+                reason: None,
+                last_transition_at: "2026-01-01T00:00:00Z".into(),
+            },
+            transcript_ref: None,
+            agent_chat_id: None,
+            acp_session_id: None,
+            model_override: None,
+            pinned_at: None,
+            initial_prompt: None,
+            draft_prompt: None,
+            draft_config: None,
+            archived_at: None,
+            handoff_summary: None,
+            parent_session_id: None,
+            superseded_by: None,
+            carry_over: None,
+            pr: None,
+            last_activity_at: None,
+            last_line: None,
+            last_tool: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn garbage_modes_file_is_an_error_not_a_fallback() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = with_home(home.path().to_path_buf());
+        let dir = home.path().join(".vibe-station");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Missing file: empty list, so the classic fallback still applies.
+        assert!(load_modes().await.unwrap().is_empty());
+
+        std::fs::write(dir.join("modes.json"), "{ not json").unwrap();
+        assert!(load_modes().await.is_err());
+
+        let registry = JsonAgentRegistry::new();
+        let err = resolve_mode(&session("m1"), &registry).await.unwrap_err();
+        assert!(err.starts_with("Couldn't read modes.json: "), "{err}");
     }
 }

@@ -38,6 +38,11 @@ impl JsonAgentSession {
     /// Outer drain loop: runs turns from the queue + notice slot in order.
     /// Called by `kick_drain()` in a spawned task; owns `running=true`.
     pub(super) async fn drain_loop(&self) {
+        // The store stays open for the whole drain (every row of every turn reuses it)
+        // and closes when this function returns. Local value: dropping it takes the
+        // slot lock, so it must never be dropped under `state`. On error the turn
+        // still runs; each persist then retries the open and warns.
+        let _store_lease = self.lease_store().ok();
         // FIX-G: reset the abort flag at the start of every drain cycle.
         {
             let mut s = self.0.state.lock().unwrap();
@@ -156,6 +161,7 @@ impl JsonAgentSession {
         {
             let mut s = self.0.state.lock().unwrap();
             s.running = false;
+            s.last_busy_at = std::time::Instant::now();
             s.turn_end_unannounced = true;
             if !s.queue.is_empty() {
                 s.turn_state = TurnState::Queued;

@@ -201,3 +201,26 @@ async fn store_lock_is_free_between_backfill_chunks() {
     assert!(!outcome.backfilling);
     assert_eq!(outcome.total, 1);
 }
+
+/// One lease spans every backfill chunk (the store opens once, not per chunk) and the
+/// store is closed again once the search returns.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn backfill_keeps_the_store_open_between_chunks_and_closes_it_after() {
+    const ROWS: i64 = 12_000;
+    let dir = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let session = populated_session(dir.path(), "s-lease", ROWS);
+    assert!(!session.store_is_open_for_test());
+
+    let mut betweens = 0i64;
+    let outcome = session
+        .search_transcript_for_test(&search_req("target"), Duration::MAX, |lock_free| {
+            assert!(lock_free);
+            assert!(session.store_is_open_for_test(), "closed mid-backfill");
+            betweens += 1;
+        })
+        .unwrap();
+    assert!(betweens > 0);
+    assert_eq!(outcome.total, 1);
+    assert!(!session.store_is_open_for_test());
+}

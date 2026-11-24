@@ -299,7 +299,6 @@ async fn registry_is_rebuilt_from_the_transcript_and_running_goes_stale() {
         let first = fx.session(Arc::new(ScriptedClaudeLike { script: vec![] }));
         first.persist_event_for_test(&launch("a", &ts, "tool-r"));
         first.persist_event_for_test(&backgrounded("b", &ts, "tool-r", "rb1", &path));
-        first.dispose();
     }
     // A fresh one, created lazily through the registry (as in production).
     let registry = JsonAgentRegistry::<JsonAgentSession>::new();

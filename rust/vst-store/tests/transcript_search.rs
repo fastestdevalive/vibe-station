@@ -1065,6 +1065,8 @@ fn trimmed_pre_feature_db_is_persisted_stale() {
     raw_conn
         .execute_batch("DROP TABLE message_fts; DROP TABLE message_fts_state;")
         .unwrap();
+    // The oversized backfill runs on the first open per process: simulate a restart.
+    vst_store::transcript::forget_migrated_for_test(dir.path());
 
     {
         let mut store = open_transcript_store(dir.path(), SESSION_ID).unwrap();

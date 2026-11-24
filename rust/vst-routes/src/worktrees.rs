@@ -87,7 +87,8 @@ use crate::artifact_gate::{
 };
 use crate::file_stat::{self, StatError};
 use crate::modes::{
-    find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode,
+    find_mode, json_unsupported_cli, mode_not_found_message, resolve_effective_default_channel,
+    resolve_mode,
 };
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::settings::load_default_channel_overrides;
@@ -709,7 +710,7 @@ impl WorktreeRoutes {
         // TOCTOU panic risk (M2). No `.expect()` — an unresolvable mode is a
         // Validation error, not a panic.
         let mode = resolve_mode(mode_id_input).ok_or_else(|| {
-            WorktreeRouteError::Validation(format!("Mode '{mode_id_input}' not found"))
+            WorktreeRouteError::Validation(mode_not_found_message(&mode_id_input))
         })?;
         let mode_id = mode.id.clone();
 

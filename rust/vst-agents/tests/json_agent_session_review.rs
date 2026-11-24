@@ -710,7 +710,7 @@ async fn meta_summarises_each_queued_review() {
 #[tokio::test]
 async fn a_failed_user_row_write_on_a_live_session_restores_and_does_not_deliver_the_block() {
     let h = harness(false);
-    h.session.drop_store_for_test();
+    h.session.fail_store_opens_for_test();
     h.session.enqueue_full(EnqueueSpec {
         message: "please look".into(),
         turn_id: Some("t-fail".into()),

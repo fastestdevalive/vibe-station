@@ -352,6 +352,12 @@ impl std::fmt::Debug for AcpConnection {
 }
 
 impl AcpConnection {
+    /// Whether `initialize` advertised `loadSession`, i.e. a respawned agent can
+    /// resume this session's conversation.
+    pub fn supports_load_session(&self) -> bool {
+        self.0.shared.load_session_supported.load(Ordering::SeqCst)
+    }
+
     /// Build a connection handle and spawn its background actor. Must be
     /// called from within a tokio runtime (as all tests and the daemon are).
     pub fn new(spec: AcpLaunchSpec) -> Self {

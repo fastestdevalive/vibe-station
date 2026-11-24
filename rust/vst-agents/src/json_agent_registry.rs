@@ -135,6 +135,11 @@ impl<T> JsonAgentRegistry<T> {
         lock(&self.inner).get(session_id).cloned()
     }
 
+    /// Every registered session (cloned out, so callers never hold the map lock).
+    pub fn all(&self) -> Vec<Arc<T>> {
+        lock(&self.inner).values().cloned().collect()
+    }
+
     /// Register (or replace) the live session for `session_id`.
     pub fn set(&self, session_id: String, session: Arc<T>) {
         lock(&self.inner).insert(session_id, session);

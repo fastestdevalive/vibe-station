@@ -7,7 +7,10 @@
 //! `spawn_blocking` (Gotcha #4). It is exercised synchronously by tests, exactly
 //! as the TS tests do.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use rusqlite::{params, Connection};
 use vst_types::{CarryOver, NormalizedEvent, NormalizedEventKind};
@@ -262,6 +265,20 @@ pub struct TranscriptStore {
     pub(crate) next_seq: i64,
     pub(crate) search: crate::transcript_search::SearchWriter,
     pub(crate) outline: crate::turn_outline::OutlineWriter,
+    /// Claim on the global open-store cap; released when the store drops.
+    _permit: crate::store_budget::Permit,
+}
+
+/// How long a locked database is retried before a statement fails.
+const TRANSCRIPT_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Databases whose one-shot per-open work (jsonl migration, oversized-row
+/// backfill) already ran in this process; reopening skips it. One `PathBuf`
+/// per session opened since boot.
+static MIGRATED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+fn migrated() -> &'static Mutex<HashSet<PathBuf>> {
+    MIGRATED.get_or_init(Mutex::default)
 }
 
 const INSERT_MESSAGE_SQL: &str =
@@ -303,11 +320,21 @@ fn insert_message(
 }
 
 impl TranscriptStore {
-    fn new(db_path: &Path, session_id: &str, jsonl_path: Option<&Path>) -> rusqlite::Result<Self> {
+    fn new(
+        db_path: &Path,
+        session_id: &str,
+        jsonl_path: Option<&Path>,
+        permit: crate::store_budget::Permit,
+    ) -> rusqlite::Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
         let mut conn = Connection::open(db_path)?;
+        conn.busy_timeout(TRANSCRIPT_BUSY_TIMEOUT)?;
+        let first_open = !migrated()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(db_path);
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.pragma_update(None, "synchronous", "NORMAL").ok();
         conn.execute_batch(
@@ -361,7 +388,7 @@ impl TranscriptStore {
             }
         }
 
-        if let Some(jsonl) = jsonl_path {
+        if let Some(jsonl) = jsonl_path.filter(|_| first_open) {
             migrate_jsonl_into_db(&mut conn, session_id, jsonl)?;
         }
 
@@ -456,8 +483,11 @@ impl TranscriptStore {
             }
         }
 
-        // Oversized `tool_result` backfill — runs on every open, idempotent.
-        let oversized: Vec<(i64, String)> = {
+        // Oversized `tool_result` backfill — idempotent; first open per process only
+        // (live rows are capped on write), since it scans every tool_result row.
+        let oversized: Vec<(i64, String)> = if !first_open {
+            Vec::new()
+        } else {
             let mut stmt = conn.prepare(
                 "SELECT seq, payload FROM message WHERE session_id = ?1 AND kind = 'tool_result' AND LENGTH(payload) > ?2",
             )?;
@@ -532,12 +562,17 @@ impl TranscriptStore {
             }
         };
 
+        migrated()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(db_path.to_path_buf());
         Ok(TranscriptStore {
             conn,
             session_id: session_id.to_string(),
             next_seq,
             search,
             outline,
+            _permit: permit,
         })
     }
 
@@ -1308,10 +1343,27 @@ impl TranscriptStore {
         Some(ev)
     }
 
+    /// The connection's `busy_timeout` in ms (test seam).
+    #[doc(hidden)]
+    pub fn busy_timeout_ms_for_test(&self) -> i64 {
+        self.conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap_or(0)
+    }
+
     /// Release the underlying handle.
     pub fn close(self) {
         self.conn.close().ok();
     }
+}
+
+/// Forget that a data dir's db was migrated, as in a fresh process (test seam).
+#[doc(hidden)]
+pub fn forget_migrated_for_test(data_dir: &Path) {
+    migrated()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&transcript_db_path(data_dir));
 }
 
 /// Standard per-session DB path beside the legacy transcript.
@@ -1335,7 +1387,22 @@ pub fn open_transcript_store(
     data_dir: &Path,
     session_id: &str,
 ) -> rusqlite::Result<TranscriptStore> {
+    open_transcript_store_with_budget(data_dir, session_id, crate::store_budget::global())
+}
+
+/// [`open_transcript_store`] against an explicit budget (test seam).
+///
+/// # Errors
+/// As [`open_transcript_store`].
+#[doc(hidden)]
+pub fn open_transcript_store_with_budget(
+    data_dir: &Path,
+    session_id: &str,
+    budget: &std::sync::Arc<crate::store_budget::StoreBudget>,
+) -> rusqlite::Result<TranscriptStore> {
     let db_path = transcript_db_path(data_dir);
     let jsonl_path = data_dir.join("messages.jsonl");
-    TranscriptStore::new(&db_path, session_id, Some(&jsonl_path))
+    // Acquired before the connection opens, so a failed open frees it again.
+    let permit = budget.acquire();
+    TranscriptStore::new(&db_path, session_id, Some(&jsonl_path), permit)
 }
