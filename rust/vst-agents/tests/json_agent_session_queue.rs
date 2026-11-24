@@ -6,6 +6,7 @@ use vst_agents::paths::Paths;
 
 fn make_turn(id: &str, order: u64) -> QueuedTurn {
     QueuedTurn {
+        client_message_id: None,
         turn_id: id.to_string(),
         enqueue_order: order,
         raw_message: format!("msg-{id}"),
@@ -1788,6 +1789,7 @@ async fn enqueue_chat_turn_escapes_attachment_path_and_delivers_plain_text() {
     };
     enqueue_chat_turn(
         EnqueueChatTurnOpts {
+            client_message_id: None,
             session_id: "s1".into(),
             message: r"C:\\temp \{a}".into(),
             attachments: vec![att],

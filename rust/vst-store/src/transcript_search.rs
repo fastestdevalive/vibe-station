@@ -1053,6 +1053,7 @@ mod tests {
             parent_tool_use_id: None,
             task_signal: None,
             review: None,
+            client_message_id: None,
         }
     }
 

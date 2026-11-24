@@ -667,3 +667,43 @@ fn draft_text_rest_bodies_roundtrip() {
         list
     );
 }
+
+// ── clientMessageId (chat idempotency + echo) ─────────────────────────────────
+
+#[test]
+fn chat_body_client_message_id_roundtrips() {
+    assert_roundtrip::<vst_types::rest::sessions::ChatBody>("chat-body-client-message-id.json");
+}
+
+#[test]
+fn user_event_client_message_id_roundtrips() {
+    assert_roundtrip::<vst_types::NormalizedEvent>("normalized-event-client-message-id.json");
+}
+
+#[test]
+fn session_meta_queued_turns_client_message_id_roundtrips() {
+    assert_roundtrip::<vst_types::SessionMeta>("session-meta-queued-turns.json");
+}
+
+/// Old clients never send the field: it must stay OMITTED (never `null`) on
+/// every shape that echoes it.
+#[test]
+fn absent_client_message_id_is_omitted_not_null() {
+    let ev: vst_types::NormalizedEvent =
+        serde_json::from_value(load_fixture("normalized-event.json")).unwrap();
+    assert!(serde_json::to_value(&ev)
+        .unwrap()
+        .get("clientMessageId")
+        .is_none());
+    let body: vst_types::rest::sessions::ChatBody =
+        serde_json::from_value(serde_json::json!({ "message": "hi" })).unwrap();
+    assert!(body.client_message_id.is_none());
+    assert!(serde_json::to_value(&body)
+        .unwrap()
+        .get("clientMessageId")
+        .is_none());
+    let meta: vst_types::SessionMeta =
+        serde_json::from_value(load_fixture("session-meta-queued-turns.json")).unwrap();
+    let wire = serde_json::to_value(&meta).unwrap();
+    assert!(wire["queuedTurns"][1].get("clientMessageId").is_none());
+}

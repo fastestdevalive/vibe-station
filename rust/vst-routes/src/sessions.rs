@@ -43,6 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use vst_agents::chat_idempotency::{AcceptError, AcceptedSend};
 use vst_agents::context::{resolved_context_of, session_data_dir_for, system_prompt_path_for};
 use vst_agents::json_agent_chat::{
     cli_id_to_provider, enqueue_chat_turn, find_json_session_context, read_session_page_before,
@@ -436,6 +437,17 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 pub const DEFAULT_HANDOFF_TIMEOUT: Duration = vst_lifecycle::handoff::HANDOFF_TIMEOUT;
+
+/// Upper bound (in characters) of a `clientMessageId`.
+pub const MAX_CLIENT_MESSAGE_ID_CHARS: usize = 64;
+
+/// Result of `POST /sessions/:id/chat`: the wire body plus whether it was a
+/// duplicate of an already accepted `clientMessageId` (HTTP 200, not 202).
+#[derive(Debug)]
+pub struct ChatOutcome {
+    pub result: EnqueueChatResult,
+    pub duplicate: bool,
+}
 
 /// How long stop-first waits for a json queue / terminal state to settle.
 const STOP_FIRST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1870,6 +1882,14 @@ impl SessionRoutes {
     /// main/promotion decision INSIDE the locked `mutate_project` callback
     /// (never off pre-lock state) — this closes the promotion race.
     pub async fn delete_session(&self, id: &str) -> Result<DeleteResult, DeleteError> {
+        let result = self.delete_session_inner(id).await;
+        if result.is_ok() {
+            self.json_registry.chat_idempotency().forget(id);
+        }
+        result
+    }
+
+    async fn delete_session_inner(&self, id: &str) -> Result<DeleteResult, DeleteError> {
         if self.store.get_global_draft(id).await.is_some() {
             let removed = self
                 .store
@@ -4852,6 +4872,7 @@ impl SessionRoutes {
         }
 
         let opts = EnqueueChatTurnOpts {
+            client_message_id: None,
             silent: false,
             session_id: session.id.clone(),
             // Daemon-made plain text; the chat pipeline expects wire form.
@@ -4975,6 +4996,7 @@ impl SessionRoutes {
                 .await?;
             enqueue_chat_turn(
                 EnqueueChatTurnOpts {
+                    client_message_id: None,
                     silent: false,
                     session_id: id.to_string(),
                     message: body.data.clone(),
@@ -5054,40 +5076,129 @@ impl SessionRoutes {
     }
 
     /// `POST /sessions/:id/chat` — enqueue a user turn. Always accepted (never
-    /// 409): queued behind any running turn (FIFO). Returns 202
-    /// `{ turnId, queuePosition }`.
+    /// 409): queued behind any running turn (FIFO). See
+    /// [`chat_session_outcome`](Self::chat_session_outcome) for the HTTP status
+    /// and `clientMessageId` handling; this wrapper drops the duplicate flag.
     pub async fn chat_session(
         &self,
         id: &str,
         body: ChatBody,
     ) -> Result<EnqueueChatResult, ChatRouteError> {
+        self.chat_session_outcome(id, body).await.map(|o| o.result)
+    }
+
+    /// [`chat_session`](Self::chat_session) that also says whether the send was
+    /// a duplicate of an already accepted `clientMessageId` (HTTP 200 instead of
+    /// 202). A duplicate returns the original `turnId`/`delivery` with the
+    /// turn's CURRENT `queuePosition` and enqueues nothing.
+    pub async fn chat_session_outcome(
+        &self,
+        id: &str,
+        body: ChatBody,
+    ) -> Result<ChatOutcome, ChatRouteError> {
         if let Some(ref m) = body.mentions {
             vst_agents::mention_context::validate_mentions(m)
                 .map_err(ChatRouteError::BadRequest)?;
         }
+        if let Some(ref cmid) = body.client_message_id {
+            let n = cmid.chars().count();
+            if n == 0 || n > MAX_CLIENT_MESSAGE_ID_CHARS {
+                return Err(ChatRouteError::BadRequest(format!(
+                    "clientMessageId must be 1..={MAX_CLIENT_MESSAGE_ID_CHARS} characters"
+                )));
+            }
+        }
 
+        let pre_ctx = self.chat_context(id).await?;
+
+        let Some(cmid) = body.client_message_id.clone() else {
+            return self
+                .chat_accept(id, body, pre_ctx)
+                .await
+                .map(|result| ChatOutcome {
+                    result,
+                    duplicate: false,
+                });
+        };
+
+        // Idempotent send: the registry's slot store runs the accept at most once.
+        drop(pre_ctx);
+        let this = self.clone();
+        let sid = id.to_string();
+        let accepted = self
+            .json_registry
+            .chat_idempotency()
+            .accept_once(id, &cmid, async move {
+                // Re-check: this may be a waiter promoted to owner after a failed first
+                // send, and the session can have changed while it waited.
+                let ctx = this.chat_context(&sid).await?;
+                let result = this.chat_accept(&sid, body, ctx).await?;
+                Ok(AcceptedSend {
+                    turn_id: result.turn_id,
+                    queue_position: result.queue_position.max(0) as usize,
+                    delivery: result.delivery,
+                })
+            })
+            .await
+            .map_err(|e| match e {
+                AcceptError::Send(e) => e,
+                AcceptError::Task(m) => {
+                    ChatRouteError::Internal(format!("chat send task failed: {m}"))
+                }
+            })?;
+        let (accepted, duplicate) = accepted;
+        // A duplicate reports where the turn is NOW; no live agent ⇒ not queued.
+        let queue_position = match (duplicate, self.json_registry.get(id)) {
+            (true, Some(agent)) => agent.queue_position_of(&accepted.turn_id),
+            (true, None) => 0,
+            (false, _) => accepted.queue_position,
+        };
+        Ok(ChatOutcome {
+            result: EnqueueChatResult {
+                turn_id: accepted.turn_id,
+                queue_position: queue_position as i64,
+                delivery: accepted.delivery,
+            },
+            duplicate,
+        })
+    }
+
+    /// The session a chat send targets: exists, not a global draft, not archived.
+    async fn chat_context(&self, id: &str) -> Result<SessionContext, ChatRouteError> {
         // Bug 4 fix: an archived session is displayed read-only — never let a
         // chat turn spawn/run a live agent process against it.
-        let pre_ctx = find_session_context(&self.store, id)
+        let ctx = find_session_context(&self.store, id)
             .await
             .ok_or_else(|| ChatRouteError::NotFound(format!("Session '{id}' not found")))?;
-        if matches!(pre_ctx, SessionContext::Global { .. }) {
-            return Err(ChatRouteError::NotFound(format!(
+        match &ctx {
+            SessionContext::Global { .. } => Err(ChatRouteError::NotFound(format!(
                 "Session '{id}' not found"
-            )));
+            ))),
+            SessionContext::Worktree { session, .. } | SessionContext::Direct { session, .. }
+                if session.archived_at.is_some() =>
+            {
+                Err(ChatRouteError::Archived(
+                    "Session is archived — start a new session instead".to_string(),
+                ))
+            }
+            _ => Ok(ctx),
         }
+    }
+
+    /// The accept half of `POST /sessions/:id/chat`: attachments, review hold,
+    /// enqueue/steer, lifecycle. `pre_ctx` is the already-checked session.
+    async fn chat_accept(
+        &self,
+        id: &str,
+        body: ChatBody,
+        pre_ctx: SessionContext,
+    ) -> Result<EnqueueChatResult, ChatRouteError> {
         let pre_session = match &pre_ctx {
             SessionContext::Worktree { session, .. } | SessionContext::Direct { session, .. } => {
                 session
             }
             SessionContext::Global { .. } => unreachable!(),
         };
-        if pre_session.archived_at.is_some() {
-            return Err(ChatRouteError::Archived(
-                "Session is archived — start a new session instead".to_string(),
-            ));
-        }
-
         let attachments = self
             .resolve_attachments(id, body.attachment_ids.as_deref())
             .await?;
@@ -5147,6 +5258,7 @@ impl SessionRoutes {
                 steer: Some(!body.queue.unwrap_or(false)),
                 turn_id,
                 review,
+                client_message_id: body.client_message_id.clone(),
                 store: self.store.clone(),
                 broadcaster: self.broadcaster.clone(),
             },

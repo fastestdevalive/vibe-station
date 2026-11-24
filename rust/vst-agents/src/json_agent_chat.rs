@@ -356,6 +356,8 @@ pub struct EnqueueChatTurnOpts {
     /// Review comments riding this turn: forces a plain FIFO enqueue (a steer
     /// would drop them) regardless of `steer`.
     pub review: Option<json_agent_session::ReviewTurn>,
+    /// Echoed on the turn's `user` row and `queuedTurns[]`.
+    pub client_message_id: Option<String>,
     pub store: StoreHandle,
     pub broadcaster: Broadcaster,
 }
@@ -397,6 +399,7 @@ pub async fn enqueue_chat_turn(
             silent: opts.silent,
             turn_id: opts.turn_id,
             review: opts.review,
+            client_message_id: opts.client_message_id,
         });
         EnqueueChatResult {
             turn_id: r.turn_id,
@@ -405,13 +408,14 @@ pub async fn enqueue_chat_turn(
         }
     } else {
         let r = agent
-            .submit_with(
+            .submit_full(json_agent_session::queue::SubmitSpec {
                 message,
-                opts.attachments,
-                opts.mentions,
+                attachments: opts.attachments,
+                mentions: opts.mentions,
                 system_prompt,
-                None, // fork_from_chat_id
-            )
+                fork_from_chat_id: None,
+                client_message_id: opts.client_message_id,
+            })
             .await;
         EnqueueChatResult {
             turn_id: r.turn_id,
@@ -537,6 +541,7 @@ pub async fn start_json_create_turn(
 
     let res = enqueue_chat_turn(
         EnqueueChatTurnOpts {
+            client_message_id: None,
             session_id: opts.session_id.clone(),
             message: prompt,
             attachments: vec![],
@@ -1009,6 +1014,7 @@ async fn deliver_plain(
     };
     let result = enqueue_chat_turn(
         EnqueueChatTurnOpts {
+            client_message_id: None,
             session_id: row.session_id.clone(),
             message: row.message.clone(),
             attachments: parse_attachments_json(row.attachments.as_deref()).unwrap_or_default(),

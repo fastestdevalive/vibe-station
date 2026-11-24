@@ -355,6 +355,9 @@ pub struct QueuedTurnMeta {
     /// Summary of the review comments this turn carries (count + files).
     #[serde(default)]
     pub review: Option<crate::review::ReviewSummary>,
+    /// The sender's `clientMessageId` for this turn, when it supplied one.
+    #[serde(default)]
+    pub client_message_id: Option<String>,
 }
 
 /// Normalized non-text content block (acp-normalize-superset, Gap 1).
@@ -560,6 +563,10 @@ pub struct NormalizedEvent {
     /// cancelled rows). Rendered into the message at run time, restorable from here.
     #[serde(default)]
     pub review: Option<crate::review::ReviewRecord>,
+    /// user only: the sender's `clientMessageId` for this turn (echo; absent
+    /// when the sender supplied none).
+    #[serde(default)]
+    pub client_message_id: Option<String>,
 }
 
 impl Default for NormalizedEvent {
@@ -611,6 +618,7 @@ impl Default for NormalizedEvent {
             parent_tool_use_id: None,
             task_signal: None,
             review: None,
+            client_message_id: None,
         }
     }
 }

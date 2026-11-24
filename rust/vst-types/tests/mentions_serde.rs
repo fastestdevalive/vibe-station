@@ -20,6 +20,7 @@ fn chat_body_with_mentions_round_trips() {
         label: "b.ts".to_string(),
     };
     let body = ChatBody {
+        client_message_id: None,
         message: "hello".to_string(),
         attachment_ids: None,
         queue: None,

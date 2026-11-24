@@ -641,6 +641,8 @@ export interface NormalizedEvent {
   mentions?: Mention[];
   /** `user` only — the review comments this turn carried (snapshot; absent on cancelled rows). */
   review?: ReviewRecord;
+  /** user only: the sender's `clientMessageId` for this turn (echo); absent when none was sent. */
+  clientMessageId?: string;
   /** Marks a superseding `user` event from editing a queued turn (last wins). */
   edited?: boolean;
   /** Marks a superseding `user` event for a queued turn cancelled before it ran —
@@ -880,7 +882,7 @@ export interface SessionMeta {
    *  source of truth while the turn hasn't run yet (its transcript event doesn't
    *  exist until it does). Optional only because mock.ts / an older daemon may
    *  omit it — a real daemon always sends it. */
-  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[]; mentions?: Mention[]; review?: ReviewSummary }>;
+  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[]; mentions?: Mention[]; review?: ReviewSummary; clientMessageId?: string }>;
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;
