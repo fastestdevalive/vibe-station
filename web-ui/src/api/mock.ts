@@ -256,6 +256,10 @@ export interface MockSeed {
   tree?: Record<string, Record<string, TreeEntry[]>>;
   tunnel?: TunnelState;
   settings?: { themeId?: string; fileScrollMap?: FileScrollMap };
+  /** Simulate an OLD daemon: only `pinned-all` is an ordered-list scope (any
+   *  other scope answers 400 `invalid scope key`) and pin/unpin never touch
+   *  the list. */
+  legacyOrderedLists?: boolean;
 }
 
 // Mirrors the daemon's per-CLI `supports_json()` capability for the mock's
@@ -272,6 +276,63 @@ const CLI_SUPPORTS_JSON: Record<string, boolean> = {
 export function createMockApi(seed: MockSeed = {}) {
   /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
   const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
+  const legacyOrderedLists = seed.legacyOrderedLists === true;
+  /** Old-daemon rejection of any scope but `pinned-all` (body has no `code`). */
+  function assertOrderedScope(scopeKey: string): void {
+    if (legacyOrderedLists && scopeKey !== "pinned-all") {
+      throw new ApiError(
+        JSON.stringify({
+          error: `validation_error: invalid scope key '${scopeKey}' (expected 'pinned-all')`,
+        }),
+        400,
+      );
+    }
+  }
+  /** Strictly increasing pin stamps, so pins made in one tick never tie. */
+  let lastPinStampMs = 0;
+  function nextPinStamp(): string {
+    lastPinStampMs = Math.max(Date.now(), lastPinStampMs + 1);
+    return new Date(lastPinStampMs).toISOString();
+  }
+  /** Mirror of the daemon's `pin_to_top`: `[id] ++ pinned ids missing from the
+   *  stored list (newest pin first, hidden included, superseded excluded) ++
+   *  stored minus id`, capped at 500; emits only on a real change. Stored ids
+   *  are kept as-is; like the daemon, ids of deleted items are dropped only
+   *  when the result would exceed the 500 cap, then the tail is truncated. */
+  function pinnedAllPrepend(id: string): void {
+    if (legacyOrderedLists) return;
+    const stored = orderedLists.get("pinned-all")?.itemIds ?? [];
+    const storedSet = new Set(stored);
+    const candidates: { at: string; id: string }[] = [];
+    for (const w of worktrees) if (w.pinnedAt) candidates.push({ at: w.pinnedAt, id: w.id });
+    for (const x of sessions) {
+      if (!x.pinnedAt || x.worktreeId !== null || x.type !== "agent") continue;
+      if (x.supersededBy && sessions.some((y) => y.id === x.supersededBy)) continue;
+      candidates.push({ at: x.pinnedAt, id: x.id });
+    }
+    candidates.sort((a, b) => b.at.localeCompare(a.at) || a.id.localeCompare(b.id));
+    const head = [id, ...candidates.map((c) => c.id).filter((c) => c !== id && !storedSet.has(c))];
+    let rest = stored.filter((x) => x !== id);
+    if (head.length + rest.length > 500) {
+      const live = new Set<string>([...worktrees.map((w) => w.id), ...sessions.map((x) => x.id)]);
+      rest = rest.filter((x) => live.has(x));
+    }
+    const next = [...head, ...rest].slice(0, 500);
+    if (next.length === stored.length && next.every((x, i) => x === stored[i])) return;
+    writePinnedAll(next);
+  }
+  /** Mirror of `unpin_remove`: emits only when the id was listed. */
+  function pinnedAllRemove(id: string): void {
+    if (legacyOrderedLists) return;
+    const stored = orderedLists.get("pinned-all")?.itemIds ?? [];
+    if (!stored.includes(id)) return;
+    writePinnedAll(stored.filter((x) => x !== id));
+  }
+  function writePinnedAll(itemIds: string[]): void {
+    const updatedAt = nowIso();
+    orderedLists.set("pinned-all", { itemIds, updatedAt });
+    emit({ type: "orderedList:updated", scopeKey: "pinned-all", itemIds: [...itemIds], updatedAt });
+  }
   /** Session ids whose in-flight mock summary wait has been cancelled. */
   const pendingResetCancels = new Map<string, boolean>();
   /** In-memory settings mirror (themeId/markdownStyle) — persisted across
@@ -911,7 +972,8 @@ export function createMockApi(seed: MockSeed = {}) {
       const wt = worktrees.find((w) => w.id === id);
       if (!wt) throw new ApiError("not found", 404);
       if (wt.pinnedAt == null) {
-        wt.pinnedAt = new Date().toISOString();
+        wt.pinnedAt = nextPinStamp();
+        pinnedAllPrepend(wt.id); // list event first, like the daemon
         emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       }
       return { ok: true, worktree: structuredClone(wt) };
@@ -922,6 +984,7 @@ export function createMockApi(seed: MockSeed = {}) {
       if (!wt) throw new ApiError("not found", 404);
       if (wt.pinnedAt != null) {
         wt.pinnedAt = null;
+        pinnedAllRemove(wt.id);
         emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       }
       return { ok: true, worktree: structuredClone(wt) };
@@ -992,6 +1055,7 @@ export function createMockApi(seed: MockSeed = {}) {
     },
 
     async getOrderedList(scopeKey: string): Promise<{ scopeKey: string; itemIds: string[]; updatedAt: string | null }> {
+      assertOrderedScope(scopeKey);
       const row = orderedLists.get(scopeKey);
       return row
         ? { scopeKey, itemIds: [...row.itemIds], updatedAt: row.updatedAt }
@@ -1002,6 +1066,7 @@ export function createMockApi(seed: MockSeed = {}) {
       scopeKey: string,
       itemIds: string[],
     ): Promise<{ ok: true; scopeKey: string; itemIds: string[]; updatedAt: string }> {
+      assertOrderedScope(scopeKey);
       const updatedAt = nowIso();
       orderedLists.set(scopeKey, { itemIds: [...itemIds], updatedAt });
       emit({ type: "orderedList:updated", scopeKey, itemIds: [...itemIds], updatedAt });
@@ -1224,7 +1289,23 @@ export function createMockApi(seed: MockSeed = {}) {
       if (!s) throw new ApiError("not found", 404);
       // Like the daemon: a superseded id acts on the live head of its chain.
       const head = sessions.find((x) => x.id === resolveSupersededChain(id, sessions)) ?? s;
-      head.pinnedAt = pinned ? new Date(0).toISOString() : null;
+      const wasPinned = head.pinnedAt != null;
+      if (pinned) {
+        // Like the daemon, an already-pinned head keeps its stamp and position.
+        head.pinnedAt ??= nextPinStamp();
+        // Only a direct agent enters `pinned-all` on pin.
+        if (
+          !wasPinned &&
+          head.worktreeId === null &&
+          head.projectId != null &&
+          head.type === "agent"
+        ) {
+          pinnedAllPrepend(head.id);
+        }
+      } else {
+        head.pinnedAt = null;
+        if (wasPinned) pinnedAllRemove(head.id);
+      }
       emit({ type: "session:updated", sessionId: head.id, pinnedAt: head.pinnedAt });
       return { ok: true, pinnedAt: head.pinnedAt };
     },

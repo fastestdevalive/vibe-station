@@ -2731,3 +2731,274 @@ async fn commits_request_never_fetches_origin() {
     let after = git_out(&clone_path, &["rev-parse", "refs/remotes/origin/main"]);
     assert_eq!(after, before, "commits() must not run git fetch");
 }
+
+// ── pin / unpin write `pinned-all` ──────────────────────────────────────────
+
+fn env_with_events() -> (
+    tempfile::TempDir,
+    StoreHandle,
+    WorktreeRoutes,
+    tokio::sync::broadcast::Receiver<ServerEvent>,
+) {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(64);
+    let rx = broadcaster.subscribe();
+    let routes = WorktreeRoutes::new(
+        store.clone(),
+        broadcaster,
+        Arc::new(JsonAgentRegistry::new()),
+        vst_proc::test_support::isolated_tmux(),
+        4000,
+    );
+    (dir, store, routes, rx)
+}
+
+/// Project `proj-1` with worktrees `ids`; `(pinned_at, hidden_at)` per id.
+fn project_with_worktrees(
+    path: &Path,
+    specs: &[(&str, Option<&str>, Option<&str>)],
+    hidden_project: bool,
+) -> ProjectRecord {
+    let mut p = make_sample_project("proj-1", specs[0].0, path);
+    let template = p.worktrees[0].clone();
+    p.worktrees = specs
+        .iter()
+        .map(|(id, pin, hid)| {
+            let mut w = template.clone();
+            w.id = (*id).into();
+            w.sessions[0].id = format!("sess-{id}");
+            w.pinned_at = pin.map(String::from);
+            w.hidden_at = hid.map(String::from);
+            w
+        })
+        .collect();
+    if hidden_project {
+        p.hidden = Some(true);
+    }
+    p
+}
+
+fn pin_body(pinned: bool) -> PatchWorktreeToggleBody {
+    PatchWorktreeToggleBody {
+        pinned: Some(pinned),
+        hidden: None,
+    }
+}
+
+fn drain(rx: &mut tokio::sync::broadcast::Receiver<ServerEvent>) -> Vec<ServerEvent> {
+    let mut out = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        out.push(e);
+    }
+    out
+}
+
+fn list_events(evs: &[ServerEvent]) -> Vec<Vec<String>> {
+    evs.iter()
+        .filter_map(|e| match e {
+            ServerEvent::OrderedListUpdated {
+                scope_key,
+                item_ids,
+                ..
+            } if scope_key == "pinned-all" => Some(item_ids.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_worktree_pin_writes_pinned_all() {
+    let (_dir, store, routes, mut rx) = env_with_events();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(project_with_worktrees(
+            wt_dir.path(),
+            // x, y: real (unpinned) worktrees, so the saved order below
+            // holds live ids (dead ids are pruned on pin).
+            &[
+                ("wt-1", None, None),
+                ("wt-2", None, None),
+                ("x", None, None),
+                ("y", None, None),
+            ],
+            false,
+        ))
+        .await
+        .unwrap();
+    let ids = |s: &StoreHandle| {
+        let s = s.clone();
+        async move { s.get_ordered_list("pinned-all").await.item_ids }
+    };
+
+    // (a) empty list => [wt-1]; list event precedes the worktree event.
+    routes.patch_pin("wt-1", pin_body(true)).await.unwrap();
+    assert_eq!(ids(&store).await, vec!["wt-1"]);
+    let evs = drain(&mut rx);
+    let list_pos = evs
+        .iter()
+        .position(|e| matches!(e, ServerEvent::OrderedListUpdated { .. }))
+        .expect("list event");
+    let wt_pos = evs
+        .iter()
+        .position(|e| matches!(e, ServerEvent::WorktreeUpdated { .. }))
+        .expect("worktree event");
+    assert!(list_pos < wt_pos);
+
+    // (f) pin already-pinned => unchanged, no list event.
+    let before = store.get_ordered_list("pinned-all").await;
+    routes.patch_pin("wt-1", pin_body(true)).await.unwrap();
+    assert_eq!(store.get_ordered_list("pinned-all").await, before);
+    assert!(list_events(&drain(&mut rx)).is_empty());
+
+    // (b) saved order [x, y] ... pin wt-2 lands above wt-1 and the saved ids.
+    store
+        .set_ordered_list("pinned-all", vec!["x".into(), "y".into()])
+        .await;
+    routes.patch_pin("wt-2", pin_body(true)).await.unwrap();
+    // wt-1 is pinned but unlisted => between wt-2 and the stored list.
+    assert_eq!(ids(&store).await, vec!["wt-2", "wt-1", "x", "y"]);
+    drain(&mut rx);
+
+    // (c) unpin wt-2 => removed + event.
+    routes.patch_pin("wt-2", pin_body(false)).await.unwrap();
+    assert_eq!(ids(&store).await, vec!["wt-1", "x", "y"]);
+    assert_eq!(list_events(&drain(&mut rx)).len(), 1);
+
+    // (d) unpin already-unpinned => no event.
+    routes.patch_pin("wt-2", pin_body(false)).await.unwrap();
+    assert!(list_events(&drain(&mut rx)).is_empty());
+
+    // (e) pin again => index 0.
+    routes.patch_pin("wt-2", pin_body(true)).await.unwrap();
+    assert_eq!(ids(&store).await[0], "wt-2");
+}
+
+#[tokio::test]
+async fn test_worktree_hide_removes_it_from_pinned_all() {
+    // Hiding clears the pin, so the id leaves `pinned-all` like an unpin.
+    let (_dir, store, routes, mut rx) = env_with_events();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(project_with_worktrees(
+            wt_dir.path(),
+            &[("wt-1", None, None), ("wt-2", None, None)],
+            false,
+        ))
+        .await
+        .unwrap();
+    routes.patch_pin("wt-1", pin_body(true)).await.unwrap();
+    routes.patch_pin("wt-2", pin_body(true)).await.unwrap();
+    drain(&mut rx);
+
+    routes
+        .patch_hide(
+            "wt-1",
+            PatchWorktreeToggleBody {
+                pinned: None,
+                hidden: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_ordered_list("pinned-all").await.item_ids,
+        vec!["wt-2"]
+    );
+    assert_eq!(list_events(&drain(&mut rx)), vec![vec!["wt-2".to_string()]]);
+
+    // Hiding an unpinned worktree leaves the list alone.
+    routes
+        .patch_hide(
+            "wt-1",
+            PatchWorktreeToggleBody {
+                pinned: None,
+                hidden: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(list_events(&drain(&mut rx)).is_empty());
+}
+
+#[tokio::test]
+async fn test_worktree_pin_seeds_unlisted_pins_newest_first() {
+    // (b2) no list row; A and B pinned (B newer); pin C => [C, B, A].
+    let (_dir, store, routes, _rx) = env_with_events();
+    let wt_dir = tempdir().unwrap();
+    store
+        .add_project(project_with_worktrees(
+            wt_dir.path(),
+            &[
+                ("wt-a", Some("2026-01-01T00:00:01.000Z"), None),
+                ("wt-b", Some("2026-01-01T00:00:02.000Z"), None),
+                ("wt-c", None, None),
+                ("x", None, None),
+                ("y", None, None),
+            ],
+            false,
+        ))
+        .await
+        .unwrap();
+    routes.patch_pin("wt-c", pin_body(true)).await.unwrap();
+    assert_eq!(
+        store.get_ordered_list("pinned-all").await.item_ids,
+        vec!["wt-c", "wt-b", "wt-a"]
+    );
+
+    // (b3) stored [x, y] plus unlisted pinned wt-a, pin wt-c => [c, a, x, y].
+    store
+        .set_ordered_list("pinned-all", vec!["x".into(), "y".into()])
+        .await;
+    routes.patch_pin("wt-c", pin_body(false)).await.unwrap();
+    store
+        .set_ordered_list("pinned-all", vec!["x".into(), "y".into()])
+        .await;
+    store
+        .mutate_project("proj-1", |p| {
+            p.worktrees
+                .iter_mut()
+                .find(|w| w.id == "wt-b")
+                .unwrap()
+                .pinned_at = None;
+            Ok(p.clone())
+        })
+        .await
+        .unwrap();
+    routes.patch_pin("wt-c", pin_body(true)).await.unwrap();
+    assert_eq!(
+        store.get_ordered_list("pinned-all").await.item_ids,
+        vec!["wt-c", "wt-a", "x", "y"]
+    );
+}
+
+#[tokio::test]
+async fn test_worktree_pin_includes_hidden_pins() {
+    // (b4) hidden worktree and hidden-project pins ARE inserted, pinned_at order.
+    for hidden_project in [false, true] {
+        let (_dir, store, routes, _rx) = env_with_events();
+        let wt_dir = tempdir().unwrap();
+        store
+            .add_project(project_with_worktrees(
+                wt_dir.path(),
+                &[
+                    (
+                        "wt-h",
+                        Some("2026-01-01T00:00:01.000Z"),
+                        Some("2026-01-02T00:00:00.000Z"),
+                    ),
+                    ("wt-v", Some("2026-01-01T00:00:02.000Z"), None),
+                    ("wt-n", None, None),
+                ],
+                hidden_project,
+            ))
+            .await
+            .unwrap();
+        routes.patch_pin("wt-n", pin_body(true)).await.unwrap();
+        assert_eq!(
+            store.get_ordered_list("pinned-all").await.item_ids,
+            vec!["wt-n", "wt-v", "wt-h"],
+            "hidden_project={hidden_project}"
+        );
+    }
+}

@@ -3,7 +3,13 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
-import { useServerSync } from "./useServerSync";
+import {
+  useServerSync,
+  __resetForDemo,
+  markOrderedListWrite,
+  clearOrderedListWrite,
+  isOrderedScopeUnsupported,
+} from "./useServerSync";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { useServerStore } from "./useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "./useStore";
@@ -481,6 +487,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
 // --- pinned-order-sync: mount-time migration/hydration + WS reducer ---
 describe("useServerSync — pinned order sync", () => {
   beforeEach(() => {
+    __resetForDemo();
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
     useWorkspaceStore.setState({ sortOrders: {} });
   });
@@ -509,7 +516,7 @@ describe("useServerSync — pinned order sync", () => {
     });
   });
 
-  it("2.T4 applies an orderedList:updated WS event for pinned-all, ignores other scopeKeys", async () => {
+  it("2.T4 applies an orderedList:updated WS event for pinned-all and projects, ignores unknown scopeKeys", async () => {
     const api = createMockApi();
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
@@ -529,13 +536,89 @@ describe("useServerSync — pinned order sync", () => {
     act(() => {
       api.__test.emit({
         type: "orderedList:updated",
-        scopeKey: "projects",
+        scopeKey: "workspaces:global",
         itemIds: ["should-not-apply"],
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
     });
     await new Promise((r) => setTimeout(r, 50));
-    expect(useWorkspaceStore.getState().sortOrders["projects"]).toBeUndefined();
+    expect(useWorkspaceStore.getState().sortOrders["workspaces:global"]).toBeUndefined();
+
+    act(() => {
+      api.__test.emit({
+        type: "orderedList:updated",
+        scopeKey: "projects",
+        itemIds: ["p2", "p1"],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual(["p2", "p1"]);
+    });
+  });
+
+  it("2.T4a hydrates sortOrders.projects from the daemon-side projects list", async () => {
+    useWorkspaceStore.setState({ sortOrders: { projects: ["stale"] } });
+    const api = createMockApi();
+    await api.setOrderedList("projects", ["p2", "p1"]);
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual(["p2", "p1"]);
+    });
+  });
+
+  it("2.T4b pushes an existing local projects order when the server has none yet", async () => {
+    useWorkspaceStore.setState({ sortOrders: { projects: ["p1", "p2"] } });
+    const api = createMockApi();
+    const setSpy = vi.spyOn(api, "setOrderedList");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await waitFor(() => expect(setSpy).toHaveBeenCalledWith("projects", ["p1", "p2"]));
+  });
+
+  it("2.T4d an old daemon marks projects unsupported silently: local order kept, no further PUT", async () => {
+    useWorkspaceStore.setState({ sortOrders: { projects: ["p1", "p2"] } });
+    const api = createMockApi({ legacyOrderedLists: true });
+    const setSpy = vi.spyOn(api, "setOrderedList");
+    const getSpy = vi.spyOn(api, "getOrderedList");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await waitFor(() => expect(isOrderedScopeUnsupported("projects")).toBe(true));
+    expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual(["p1", "p2"]);
+    expect(setSpy).not.toHaveBeenCalledWith("projects", expect.anything());
+    // pinned-all keeps working against the old daemon.
+    expect(getSpy).toHaveBeenCalledWith("pinned-all");
+  });
+
+  it("2.T4e a projects write in flight skips the projects hydrate but not pinned-all", async () => {
+    useWorkspaceStore.setState({
+      sortOrders: { projects: ["local"], "pinned-all": ["stale"] },
+    });
+    const api = createMockApi();
+    await api.setOrderedList("projects", ["server"]);
+    await api.setOrderedList("pinned-all", ["pinned-server"]);
+    const pending = new Promise<void>(() => {});
+    markOrderedListWrite(pending, "projects");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sortOrders["pinned-all"]).toEqual(["pinned-server"]);
+    });
+    expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual(["local"]);
+    clearOrderedListWrite(pending, "projects");
+  });
+
+  it("2.T4f ws:open re-probes projects after it was marked unsupported", async () => {
+    const api = createMockApi({ legacyOrderedLists: true });
+    const getSpy = vi.spyOn(api, "getOrderedList");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(isOrderedScopeUnsupported("projects")).toBe(true));
+    getSpy.mockClear();
+    act(() => {
+      api.__test.emit({ type: "ws:open" } as never);
+    });
+    await waitFor(() => expect(getSpy).toHaveBeenCalledWith("projects"));
   });
 
   it("2.T5 skips the hydrate branch while a pinned-order write is in flight", async () => {
@@ -548,7 +631,7 @@ describe("useServerSync — pinned order sync", () => {
     const pendingWrite = new Promise<void>((resolve) => {
       resolveWrite = resolve;
     });
-    markOrderedListWrite(pendingWrite);
+    markOrderedListWrite(pendingWrite, "pinned-all");
 
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));

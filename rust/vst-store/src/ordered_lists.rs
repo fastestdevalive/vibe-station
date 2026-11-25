@@ -4,7 +4,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::{StoreHandle, StoreResult};
+use crate::{StoreError, StoreHandle, StoreResult};
 
 /// The single implicit user id.
 const LOCAL_USER_ID: &str = "local";
@@ -62,32 +62,67 @@ impl StoreHandle {
     /// Set (overwrite) the ordered list for a scope key, returning the stored
     /// list with its updated-at timestamp.
     pub async fn set_ordered_list(&self, scope_key: &str, item_ids: Vec<String>) -> OrderedList {
+        match self
+            .update_ordered_list(scope_key, move |_| Some(item_ids))
+            .await
+        {
+            Ok(Some(list)) => list,
+            // The closure always returns `Some`, so `None` cannot happen; the
+            // fallback keeps the signature infallible like the original.
+            Ok(None) => OrderedList {
+                item_ids: vec![],
+                updated_at: None,
+            },
+            Err(e) => {
+                tracing::warn!(scope = scope_key, error = %e, "set_ordered_list failed");
+                OrderedList {
+                    item_ids: vec![],
+                    updated_at: None,
+                }
+            }
+        }
+    }
+
+    /// Atomic read-modify-write of a scope's list under ONE connection lock.
+    /// `f` gets the stored ids and returns `Some(next)` to write them (bumping
+    /// `updatedAt`) or `None` to leave the list untouched (no write, returns
+    /// `None`). `f` must not call back into the store (the connection lock is
+    /// held while it runs).
+    pub async fn update_ordered_list<F>(
+        &self,
+        scope_key: &str,
+        f: F,
+    ) -> StoreResult<Option<OrderedList>>
+    where
+        F: FnOnce(&[String]) -> Option<Vec<String>> + Send + 'static,
+    {
         let inner = self.0.clone();
         let scope_key = scope_key.to_string();
         let updated_at = iso_now();
-        tokio::task::spawn_blocking(move || -> StoreResult<OrderedList> {
-            let conn = inner.conn.lock().unwrap();
-            let encoded = serde_json::to_string(&item_ids).unwrap_or_else(|_| "[]".into());
+        tokio::task::spawn_blocking(move || -> StoreResult<Option<OrderedList>> {
+            let conn = inner
+                .conn
+                .lock()
+                .map_err(|_| StoreError::Mutation("store connection lock poisoned".into()))?;
+            let cur = get_list(&conn, &scope_key)?;
+            let Some(next) = f(&cur.item_ids) else {
+                return Ok(None);
+            };
+            let encoded = serde_json::to_string(&next)
+                .map_err(|e| StoreError::Mutation(format!("encode ordered list: {e}")))?;
             conn.execute(
                 "INSERT INTO user_ordered_lists (userId, scopeKey, itemIds, updatedAt)
                  VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(userId, scopeKey) DO UPDATE SET itemIds = excluded.itemIds, updatedAt = excluded.updatedAt",
                 params![LOCAL_USER_ID, scope_key, encoded, updated_at],
             )?;
-            Ok(OrderedList {
-                item_ids,
+            Ok(Some(OrderedList {
+                item_ids: next,
                 updated_at: Some(updated_at),
-            })
+            }))
         })
         .await
-        .unwrap_or_else(|_| Ok(OrderedList {
-            item_ids: vec![],
-            updated_at: None,
-        }))
-        .unwrap_or_else(|_| OrderedList {
-            item_ids: vec![],
-            updated_at: None,
-        })
+        .map_err(|e| StoreError::Mutation(format!("ordered list task failed: {e}")))?
     }
 }
 

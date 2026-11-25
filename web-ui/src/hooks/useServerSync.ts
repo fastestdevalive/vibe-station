@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
+import { ApiError } from "@/api/errors";
 import { createSessionRepository } from "@/api/repositories/sessionRepository";
 import { createWorktreeRepository } from "@/api/repositories/worktreeRepository";
 import { ensureDraftTextSync } from "@/components/draftsync";
@@ -35,34 +36,74 @@ let inFlightRefresh: Promise<void> | null = null;
  */
 let sessionsAnnouncedDuringRefresh = new Map<string, Session>();
 
-/** Dedup guard for `syncPinnedOrder`, mirroring `inFlightRefresh` above. */
-let inFlightPinnedOrderSync: Promise<void> | null = null;
+/** Ordered-list scopes this client syncs with the daemon. */
+export type OrderedScope = "pinned-all" | "projects";
+
+/** Per-scope dedup guard for `syncOrderedList`, mirroring `inFlightRefresh` above. */
+const inFlightOrderedSync = new Map<string, Promise<void>>();
 
 /**
- * Set while a `pinned-all` `PUT /user/ordered-lists/pinned-all` (LeftSidebar's
- * drag handler) is in flight. Guards `syncPinnedOrder`'s hydrate branch below
- * from clobbering a just-made local drag with a stale server value fetched by
- * a reconnect-triggered refresh landing mid-write (pinned-order-sync CUJ 1
+ * Per-scope in-flight `PUT /user/ordered-lists/:scope` (LeftSidebar's drag
+ * handlers). Guards `syncOrderedList`'s hydrate branch from clobbering a
+ * just-made local drag with a stale server value fetched by a
+ * reconnect-triggered refresh landing mid-write (pinned-order-sync CUJ 1
  * "Reconnect race"). `clearOrderedListWrite` is compare-and-clear so a second
  * drag's still-pending write can't be cleared early by the first drag's
  * `finally` settling after a newer write started (Risk 4).
  */
-let orderedListWriteInFlight: Promise<unknown> | null = null;
+const orderedListWritesInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Scopes an old daemon rejected (`400 invalid scope key`) on this connection:
+ * no further GET/PUT, no toast, local order kept. Cleared on every `ws:open`
+ * (an upgraded daemon is re-probed) and by an `orderedList:updated` event.
+ */
+const unsupportedOrderedScopes = new Set<string>();
 
 /** Demo hard-reset: forget every in-flight dedupe marker of the previous mount. */
 export function __resetForDemo(): void {
   inFlightRefresh = null;
   sessionsAnnouncedDuringRefresh = new Map<string, Session>();
-  inFlightPinnedOrderSync = null;
-  orderedListWriteInFlight = null;
+  inFlightOrderedSync.clear();
+  orderedListWritesInFlight.clear();
+  unsupportedOrderedScopes.clear();
 }
 
-export function markOrderedListWrite(p: Promise<unknown>): void {
-  orderedListWriteInFlight = p;
+export function markOrderedListWrite(p: Promise<unknown>, scope: OrderedScope): void {
+  orderedListWritesInFlight.set(scope, p);
 }
 
-export function clearOrderedListWrite(p: Promise<unknown>): void {
-  if (orderedListWriteInFlight === p) orderedListWriteInFlight = null;
+export function clearOrderedListWrite(p: Promise<unknown>, scope: OrderedScope): void {
+  if (orderedListWritesInFlight.get(scope) === p) orderedListWritesInFlight.delete(scope);
+}
+
+export function isOrderedScopeUnsupported(scope: string): boolean {
+  return unsupportedOrderedScopes.has(scope);
+}
+
+export function markOrderedScopeUnsupported(scope: string): void {
+  unsupportedOrderedScopes.add(scope);
+}
+
+/**
+ * An old daemon allowlists only `pinned-all` and answers any other scope with
+ * a 400 whose (code-less) body names `invalid scope key`. A plain 400 for any
+ * other reason (e.g. too many ids) must not trip the fallback.
+ */
+export function isScopeUnsupportedError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && /invalid scope key/i.test(err.message);
+}
+
+/**
+ * Log an ordered-list sync failure that is not the expected old-daemon
+ * rejection. Scope and HTTP status only: never the id list. No toast — the
+ * list is a display order and local state already reflects the user's intent.
+ */
+export function warnOrderedSyncFailure(scope: OrderedScope, err: unknown): void {
+  console.warn("ordered-list sync failed", {
+    scope,
+    status: err instanceof ApiError ? err.status : undefined,
+  });
 }
 
 /**
@@ -206,40 +247,53 @@ export function useServerSync(api: ApiInstance): void {
       return inFlightRefresh;
     }
 
-    // Pinned-order-sync (Decision 5): mirrors `refresh()`'s trigger points
-    // (mount + every `ws:open`, including reconnects) but is a separate,
-    // independently-dedup'd resource — a stale bundle refetch racing this
-    // is unrelated. The hydrate branch is skipped while a local drag's
-    // write is in flight (`orderedListWriteInFlight`) so a reconnect landing
+    // Ordered-list sync (pinned-order-sync Decision 5): mirrors `refresh()`'s
+    // trigger points (mount + every `ws:open`, including reconnects) but is a
+    // separate, per-scope dedup'd resource. The hydrate branch is skipped
+    // while that scope's local drag write is in flight so a reconnect landing
     // mid-drag can't clobber the just-made local order with a stale server
     // value; the pending write's own response/WS-echo settles it right after.
-    function syncPinnedOrder(): Promise<void> {
-      if (inFlightPinnedOrderSync) return inFlightPinnedOrderSync;
-      inFlightPinnedOrderSync = (async () => {
+    // `projects` degrades silently against an old daemon (Decision 7).
+    function syncOrderedList(scope: OrderedScope): Promise<void> {
+      const running = inFlightOrderedSync.get(scope);
+      if (running) return running;
+      const optional = scope === "projects";
+      if (optional && isOrderedScopeUnsupported(scope)) return Promise.resolve();
+      const p = (async () => {
         try {
-          const pinnedOrder = await worktreeRepo.getOrderedList("pinned-all");
-          if (pinnedOrder.updatedAt === null) {
-            const local = useWorkspaceStore.getState().sortOrders["pinned-all"];
+          const remote = await worktreeRepo.getOrderedList(scope);
+          if (remote.updatedAt === null) {
+            const local = useWorkspaceStore.getState().sortOrders[scope];
             if (local && local.length > 0) {
-              await worktreeRepo.setOrderedList("pinned-all", local);
+              await worktreeRepo.setOrderedList(scope, local.slice(0, 500));
             }
-          } else if (!orderedListWriteInFlight) {
-            useWorkspaceStore.getState().setSortOrder("pinned-all", pinnedOrder.itemIds);
+          } else if (!orderedListWritesInFlight.has(scope)) {
+            useWorkspaceStore.getState().setSortOrder(scope, remote.itemIds);
           }
+        } catch (err) {
+          if (!optional) throw err;
+          if (isScopeUnsupportedError(err)) markOrderedScopeUnsupported(scope);
+          else warnOrderedSyncFailure(scope, err);
+          // Every other `projects` failure is swallowed too: local order stays.
         } finally {
-          inFlightPinnedOrderSync = null;
+          inFlightOrderedSync.delete(scope);
         }
       })();
-      return inFlightPinnedOrderSync;
+      inFlightOrderedSync.set(scope, p);
+      return p;
     }
 
     // One engine per api: it fetches now and on ws:open / ws:resync itself.
     ensureDraftTextSync(api);
     void refresh();
-    void syncPinnedOrder();
+    void syncOrderedList("pinned-all");
+    void syncOrderedList("projects");
     const off = api.on("ws:open", () => {
       void refresh();
-      void syncPinnedOrder();
+      void syncOrderedList("pinned-all");
+      // Re-probe: the daemon may have been upgraded since it was marked.
+      unsupportedOrderedScopes.delete("projects");
+      void syncOrderedList("projects");
     });
     return off;
     // `api` stays a dep — `listProjects()` above and `ws:open` here are both
@@ -457,8 +511,13 @@ export function useServerSync(api: ApiInstance): void {
       }
     });
     const offOrderedListUpdated = worktreeRepo.on("orderedList:updated", (ev) => {
-      if (ev.type === "orderedList:updated" && ev.scopeKey === "pinned-all") {
+      if (ev.type !== "orderedList:updated") return;
+      if (ev.scopeKey === "pinned-all") {
         useWorkspaceStore.getState().setSortOrder("pinned-all", ev.itemIds);
+      } else if (ev.scopeKey === "projects") {
+        // An event proves the daemon supports the scope.
+        unsupportedOrderedScopes.delete("projects");
+        useWorkspaceStore.getState().setSortOrder("projects", ev.itemIds);
       }
     });
     // Accounts: upserts/removals/limited flags are stored centrally. The

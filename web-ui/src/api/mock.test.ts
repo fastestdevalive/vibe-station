@@ -156,6 +156,70 @@ describe("mock api contract", () => {
     off();
   });
 
+  it("2.T5 pin prepends to pinned-all and emits the list event before the entity event; unpin removes", async () => {
+    const api = createMockApi();
+    const order: string[] = [];
+    const off = api.on("*" as never, (ev) => {
+      if (ev.type === "orderedList:updated" || ev.type === "worktree:updated") order.push(ev.type);
+    });
+
+    await api.pinWorktree("wt-1");
+    expect(order).toEqual(["orderedList:updated", "worktree:updated"]);
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual(["wt-1"]);
+
+    await api.pinWorktree("wt-2");
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual(["wt-2", "wt-1"]);
+
+    // Already pinned: no change, no event.
+    order.length = 0;
+    await api.pinWorktree("wt-2");
+    expect(order).toEqual([]);
+
+    await api.unpinWorktree("wt-2");
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual(["wt-1"]);
+    await api.pinWorktree("wt-2");
+    expect((await api.getOrderedList("pinned-all")).itemIds[0]).toBe("wt-2");
+    off();
+  });
+
+  it("2.T5b pin seeds unlisted pins newest-first and pinned stamps never tie", async () => {
+    const api = createMockApi();
+    const a = await api.pinWorktree("wt-1");
+    const b = await api.pinWorktree("wt-2");
+    expect(b.worktree.pinnedAt! > a.worktree.pinnedAt!).toBe(true);
+    // Drop the list as if an old client had written nothing, then pin a third.
+    await api.setOrderedList("pinned-all", []);
+    await api.pinWorktree("wt-3");
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual(["wt-3", "wt-2", "wt-1"]);
+  });
+
+  it("2.T5c session pin: direct agents enter the list (chain head id), worktree sessions do not", async () => {
+    const api = createMockApi();
+    const direct = await api.createDirectSession({
+      target: "direct",
+      projectId: "proj-a",
+      type: "agent",
+      name: "d",
+    });
+    await api.pinSession(direct.id, true);
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual([direct.id]);
+    await api.pinSession("sess-main", true); // inside wt-1
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual([direct.id]);
+    await api.pinSession(direct.id, false);
+    expect((await api.getOrderedList("pinned-all")).itemIds).toEqual([]);
+  });
+
+  it("2.T5d legacy mode: 400 invalid scope key for projects, pin leaves the list untouched", async () => {
+    const api = createMockApi({ legacyOrderedLists: true });
+    await expect(api.getOrderedList("projects")).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("invalid scope key"),
+    });
+    await expect(api.setOrderedList("projects", ["a"])).rejects.toMatchObject({ status: 400 });
+    await api.pinWorktree("wt-1");
+    expect(await api.getOrderedList("pinned-all")).toMatchObject({ itemIds: [], updatedAt: null });
+  });
+
   it("renameSession updates name/nameSource, clears on empty string, and emits session:updated", async () => {
     const api = createMockApi();
     const handler = vi.fn();

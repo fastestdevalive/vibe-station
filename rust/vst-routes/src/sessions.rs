@@ -197,20 +197,6 @@ fn resolve_superseded_head(p: &ProjectRecord, start_id: &str) -> Option<String> 
     Some(cur.id.clone())
 }
 
-/// Replace `old_id` with `new_id` in a `pinned-all` id list. `None` when
-/// `old_id` is absent (nothing to do); if `new_id` is already present, only
-/// `old_id` is removed.
-fn swap_pinned_all_id(ids: &[String], old_id: &str, new_id: &str) -> Option<Vec<String>> {
-    let pos = ids.iter().position(|i| i == old_id)?;
-    let mut out = ids.to_vec();
-    if ids.iter().any(|i| i == new_id) {
-        out.remove(pos);
-    } else {
-        out[pos] = new_id.to_string();
-    }
-    Some(out)
-}
-
 /// Move pins stranded on hidden superseded rows to their chain head. A row is
 /// a candidate iff it is pinned AND its `superseded_by` resolves to an
 /// existing row; the head takes the latest candidate `pinned_at` unless it is
@@ -297,16 +283,22 @@ pub async fn repair_superseded_pins(store: &StoreHandle) -> Vec<String> {
         }
     }
     if !pairs_all.is_empty() {
-        let mut ids = store.get_ordered_list(PINNED_ALL).await.item_ids;
-        let mut changed = false;
-        for (old, head) in &pairs_all {
-            if let Some(next) = swap_pinned_all_id(&ids, old, head) {
-                ids = next;
-                changed = true;
-            }
-        }
-        if changed {
-            store.set_ordered_list(PINNED_ALL, ids).await;
+        let outcome = store
+            .update_ordered_list(PINNED_ALL, move |stored| {
+                let mut ids = stored.to_vec();
+                let mut changed = false;
+                for (old, head) in &pairs_all {
+                    if let Some(next) = crate::ordered_lists::swap_pinned_all_id(&ids, old, head) {
+                        ids = next;
+                        changed = true;
+                    }
+                }
+                changed.then_some(ids)
+            })
+            .await;
+        // Boot repair stays silent (no client is connected yet); only log a failure.
+        if let Err(e) = outcome {
+            tracing::warn!(error = %e, "pinned-all repair failed");
         }
     }
     failures
@@ -2931,9 +2923,12 @@ impl SessionRoutes {
                 });
             }
         }
+        let is_direct = matches!(ctx, SessionContext::Direct { .. });
         let project_id = project.id.clone();
         let start_id = id.to_string();
         let now = now_iso();
+        let changed = Arc::new(AtomicBool::new(false));
+        let changed_in = changed.clone();
         let updated = self
             .store
             .mutate_project(&project_id, move |p| {
@@ -2950,8 +2945,12 @@ impl SessionRoutes {
                     if pinned {
                         if head.pinned_at.is_none() {
                             head.pinned_at = Some(now.clone());
+                            changed_in.store(true, AtomicOrdering::Relaxed);
                         }
                     } else {
+                        if head.pinned_at.is_some() {
+                            changed_in.store(true, AtomicOrdering::Relaxed);
+                        }
                         head.pinned_at = None;
                     }
                 }
@@ -2967,6 +2966,23 @@ impl SessionRoutes {
         let head_pinned_at = project_sessions(&updated)
             .find(|s| s.id == head_id)
             .and_then(|s| s.pinned_at.clone());
+        // Same rule as `pinned_snapshot` and the web: a pin enters the list
+        // only for a DIRECT session whose head is an agent.
+        let head_is_agent = project_sessions(&updated)
+            .find(|s| s.id == head_id)
+            .is_some_and(|s| s.r#type == SessionType::Agent);
+        // `pinned-all` first, then the entity event. An unpin of an absent id
+        // is a no-op.
+        if changed.load(AtomicOrdering::Relaxed) {
+            if pinned {
+                if is_direct && head_is_agent {
+                    crate::ordered_lists::pin_to_top(&self.store, &self.broadcaster, &head_id)
+                        .await;
+                }
+            } else {
+                crate::ordered_lists::unpin_remove(&self.store, &self.broadcaster, &head_id).await;
+            }
+        }
         self.broadcaster.send(ServerEvent::SessionUpdated {
             session_id: head_id,
             pinned_at: Some(head_pinned_at.clone()),
@@ -4260,15 +4276,14 @@ impl SessionRoutes {
         // announced, so it first renders already in position. Only a moved pin
         // touches the list (an unpinned old id is never in it).
         if carried.is_some() {
-            let ids = self.store.get_ordered_list(PINNED_ALL).await.item_ids;
-            if let Some(next) = swap_pinned_all_id(&ids, &old_id, &new_id) {
-                let list = self.store.set_ordered_list(PINNED_ALL, next).await;
-                self.broadcaster.send(ServerEvent::OrderedListUpdated {
-                    scope_key: PINNED_ALL.to_string(),
-                    item_ids: list.item_ids,
-                    updated_at: list.updated_at.unwrap_or_default(),
-                });
-            }
+            let (swap_old, swap_new) = (old_id.clone(), new_id.clone());
+            let swapped = self
+                .store
+                .update_ordered_list(PINNED_ALL, move |ids| {
+                    crate::ordered_lists::swap_pinned_all_id(ids, &swap_old, &swap_new)
+                })
+                .await;
+            crate::ordered_lists::announce_pinned_all(&self.broadcaster, swapped, &new_id);
         }
 
         let wt_id_for_serialize = worktree.as_ref().map(|w| w.id.clone());
