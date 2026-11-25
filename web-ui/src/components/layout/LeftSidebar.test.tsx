@@ -3171,7 +3171,10 @@ describe("LeftSidebar - global Workspaces section", () => {
   });
 
   describe("superseded sessions visibility", () => {
-    const rollupSessions = (liveState: "done" | "idle", oldState: "exited" | "working") => [
+    const rollupSessions = (
+      liveState: "done" | "idle" | "working" | "waiting_for_human",
+      oldState: "exited" | "working",
+    ) => [
       {
         id: "sess-live",
         worktreeId: "wt-1",
@@ -3245,6 +3248,37 @@ describe("LeftSidebar - global Workspaces section", () => {
       const row = link.closest(".tree-row") as HTMLElement;
       expect(within(row).getByLabelText("status: idle")).toBeInTheDocument();
       expect(within(row).queryByLabelText("status: working")).toBeNull();
+    });
+
+    it("a working worktree dot names the agent driving it (tooltip + label), never a superseded row", async () => {
+      const localApi = createMockApi({ sessions: rollupSessions("working", "working") });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /^Open worktree wt-1$/i });
+      const row = link.closest(".tree-row") as HTMLElement;
+      const dot = within(row).getByLabelText("status: working: live-agent");
+      expect(dot).toHaveAttribute("title", "working: live-agent");
+      expect(row.textContent).not.toContain("old-agent");
+    });
+
+    it("a non-working worktree dot names nobody", async () => {
+      const localApi = createMockApi({ sessions: rollupSessions("waiting_for_human", "exited") });
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /^Open worktree wt-1$/i });
+      const row = link.closest(".tree-row") as HTMLElement;
+      const dot = within(row).getByLabelText("status: waiting_for_human");
+      expect(dot).toHaveAttribute("title", "waiting_for_human");
     });
 
     it("renders only the live agent when a worktree has a live agent and a superseded agent", async () => {

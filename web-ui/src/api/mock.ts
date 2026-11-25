@@ -94,6 +94,7 @@ import {
   mockAccountSwitchPlan,
 } from "./mockAccounts";
 import { resolveSupersededChain } from "@/lib/sessionVisibility";
+import { PRESET_BUG_FIX_TEXT, PRESET_PLANNING_TEXT } from "@/lib/modeContextPresets";
 import { mockSearchTranscript, mockGetTranscriptAround, mockGetTranscriptSince } from "./mockTranscriptSearch";
 import { mockTranscriptOutline, mockTranscriptOutlineWindow } from "./mockTranscriptOutline";
 import type { ConnectionState } from "./client";
@@ -215,10 +216,6 @@ const mockLimits: LimitsSnapshot = {
     ...mockAccountLimitResults(),
   ],
 };
-
-const PRESET_BUG_FIX =
-  "You are fixing a bug. Open a PR when done. Run tests before committing.";
-const PRESET_PLANNING = "You are planning. Do not commit or open a PR. Output a written plan.";
 
 /** Fixed home dir + directory tree for the mock `/fs/complete` autocomplete. */
 const MOCK_HOME = "/home/user";
@@ -375,7 +372,7 @@ export function createMockApi(seed: MockSeed = {}) {
       id: "mode-1",
       name: "Bugfix",
       cli: "claude",
-      context: PRESET_BUG_FIX,
+      context: PRESET_BUG_FIX_TEXT,
       presetId: "bug-fix-with-pr",
       icon: "claude",
     },
@@ -383,7 +380,7 @@ export function createMockApi(seed: MockSeed = {}) {
       id: "mode-2",
       name: "Plan",
       cli: "cursor",
-      context: PRESET_PLANNING,
+      context: PRESET_PLANNING_TEXT,
       presetId: "planning-no-pr",
       icon: "cursor",
     },

@@ -20,6 +20,10 @@ interface StatusDotProps {
    *  the lifecycle status. Defaults to `null` (no PR) for callers that don't
    *  track a PR at all (e.g. terminal sessions). */
   pr?: PrStatus | null;
+  /** Names the agents behind a rolled-up `working` dot (e.g. "a, b +2"),
+   *  appended to the title AND aria-label. Ignored unless the resolved class
+   *  is `working` — no colour, glyph or bucket depends on it. */
+  detail?: string;
 }
 
 /**
@@ -28,7 +32,7 @@ interface StatusDotProps {
  * renders as a circular spinner; all other states use a glyph dot.
  * Terminal states (done/exited) always keep their ✓/× glyph regardless of PR.
  */
-export function StatusDot({ status, pr = null }: StatusDotProps) {
+export function StatusDot({ status, pr = null, detail }: StatusDotProps) {
   const resolved = resolveStatusClass(status, pr);
 
   if (resolved === "working") {
@@ -36,11 +40,12 @@ export function StatusDot({ status, pr = null }: StatusDotProps) {
       pr?.state === "merged" ? " status-spinner--pr-merged"
       : pr?.state === "open" ? " status-spinner--pr-open"
       : "";
-    const workingTitle = pr?.error ? `working · PR: ${pr.error}` : "working";
+    const working = detail ? `working: ${detail}` : "working";
+    const workingTitle = pr?.error ? `${working} · PR: ${pr.error}` : working;
     return (
       <span
         className={`status-spinner${prMod}`}
-        aria-label="status: working"
+        aria-label={`status: ${working}`}
         title={workingTitle}
       />
     );

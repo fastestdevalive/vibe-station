@@ -3,17 +3,75 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { NewModeDialog } from "./NewModeDialog";
+import { PRESET_BUG_FIX_TEXT } from "@/lib/modeContextPresets";
 
 describe("NewModeDialog", () => {
   const api = createMockApi();
 
-  it("selecting Custom clears textarea", async () => {
+  it("selecting Custom keeps the preset text as a starting point", async () => {
     const user = userEvent.setup();
     render(<NewModeDialog open api={api} onClose={() => {}} existingNames={[]} />);
     const ctx = screen.getByRole("textbox", { name: /context/i });
-    expect(ctx).not.toHaveValue("");
+    expect(ctx).toHaveValue(PRESET_BUG_FIX_TEXT);
     await user.click(screen.getByRole("radio", { name: /Custom/i }));
-    expect(ctx).toHaveValue("");
+    expect(ctx).toHaveValue(PRESET_BUG_FIX_TEXT);
+  });
+
+  it("typing in the context switches the preset to Custom", async () => {
+    const user = userEvent.setup();
+    render(<NewModeDialog open api={api} onClose={() => {}} existingNames={[]} />);
+    await user.type(screen.getByRole("textbox", { name: /context/i }), " Extra.");
+    expect(screen.getByRole("radio", { name: /Custom/i })).toBeChecked();
+  });
+
+  it("sends presetId for an untouched preset and none after an edit", async () => {
+    const user = userEvent.setup();
+    const mock = createMockApi();
+    const spy = vi.spyOn(mock, "createMode");
+    const { rerender } = render(<NewModeDialog open api={mock} onClose={() => {}} existingNames={[]} />);
+    await user.type(screen.getByRole("textbox", { name: /mode name/i }), "A");
+    await user.click(screen.getByRole("button", { name: /Save/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ presetId: "bug-fix-with-pr", context: PRESET_BUG_FIX_TEXT });
+
+    rerender(<NewModeDialog open={false} api={mock} onClose={() => {}} existingNames={[]} />);
+    rerender(<NewModeDialog open api={mock} onClose={() => {}} existingNames={[]} />);
+    await user.type(screen.getByRole("textbox", { name: /mode name/i }), "B");
+    await user.type(screen.getByRole("textbox", { name: /context/i }), " Mine.");
+    await user.click(screen.getByRole("button", { name: /Save/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(spy.mock.calls[1]?.[0]).toMatchObject({ presetId: undefined, context: `${PRESET_BUG_FIX_TEXT} Mine.` });
+  });
+
+  it("reopening after Cancel starts fresh, and Save sends what is shown", async () => {
+    const user = userEvent.setup();
+    const mock = createMockApi();
+    const spy = vi.spyOn(mock, "createMode");
+    const { rerender } = render(<NewModeDialog open api={mock} onClose={() => {}} existingNames={[]} />);
+    await user.type(screen.getByRole("textbox", { name: /mode name/i }), "Half");
+    await user.clear(screen.getByRole("textbox", { name: /context/i }));
+    await user.type(screen.getByRole("textbox", { name: /context/i }), "stale");
+    rerender(<NewModeDialog open={false} api={mock} onClose={() => {}} existingNames={[]} />);
+    rerender(<NewModeDialog open api={mock} onClose={() => {}} existingNames={[]} />);
+    expect(screen.getByRole("textbox", { name: /mode name/i })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: /context/i })).toHaveValue(PRESET_BUG_FIX_TEXT);
+    expect(screen.getByRole("radio", { name: /Bug fix with PR/i })).toBeChecked();
+    await user.type(screen.getByRole("textbox", { name: /mode name/i }), "Fresh");
+    await user.click(screen.getByRole("button", { name: /Save/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0]?.[0]).toMatchObject({ context: PRESET_BUG_FIX_TEXT });
+  });
+
+  it("shows the daemon's error when createMode fails", async () => {
+    const user = userEvent.setup();
+    const mock = createMockApi();
+    vi.spyOn(mock, "createMode").mockRejectedValueOnce(new Error("Mode context must not exceed 10000 characters."));
+    const onClose = vi.fn();
+    render(<NewModeDialog open api={mock} onClose={onClose} existingNames={[]} />);
+    await user.type(screen.getByRole("textbox", { name: /mode name/i }), "X");
+    await user.click(screen.getByRole("button", { name: /Save/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/must not exceed/);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("submitting empty name shows validation error", async () => {
@@ -32,14 +90,14 @@ describe("NewModeDialog", () => {
     expect(screen.getByText(/64 characters/i)).toBeInTheDocument();
   });
 
-  it("submitting context >10KB shows error", async () => {
+  it("submitting context over 10,000 bytes shows error", async () => {
     const user = userEvent.setup();
     render(<NewModeDialog open api={api} onClose={() => {}} existingNames={[]} />);
     await user.type(screen.getByRole("textbox", { name: /mode name/i }), "ok");
     const ctx = screen.getByRole("textbox", { name: /context/i });
-    fireEvent.change(ctx, { target: { value: "x".repeat(10 * 1024 + 1) } });
+    fireEvent.change(ctx, { target: { value: "x".repeat(10_001) } });
     await user.click(screen.getByRole("button", { name: /Save/i }));
-    expect(screen.getByText(/10KB/i)).toBeInTheDocument();
+    expect(screen.getByText(/10,000 bytes/i)).toBeInTheDocument();
   });
 
   it("duplicate name shows error", async () => {

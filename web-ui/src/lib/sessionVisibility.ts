@@ -19,19 +19,41 @@ import type { Session } from "@/api/types";
  */
 
 /**
+ * Reverse of `supersededBy`: successor id → the session it superseded (the
+ * first one in list order if several point at the same successor).
+ */
+export function predecessorIndex(all: Session[]): Map<string, Session> {
+  const out = new Map<string, Session>();
+  for (const s of all) {
+    if (s.supersededBy && !out.has(s.supersededBy)) out.set(s.supersededBy, s);
+  }
+  return out;
+}
+
+/**
+ * THE reset-chain walk: `session` followed by its predecessors across
+ * `supersededBy`, newest-first, cycle-guarded. Shared by `ancestorIds` and the
+ * descendant walk in `worktreeStatus.ts`.
+ */
+export function predecessorChain(
+  session: Session,
+  predecessorOf: ReadonlyMap<string, Session>,
+): Session[] {
+  const chain = [session];
+  const seen = new Set<string>([session.id]);
+  for (let p = predecessorOf.get(session.id); p && !seen.has(p.id); p = predecessorOf.get(p.id)) {
+    seen.add(p.id);
+    chain.push(p);
+  }
+  return chain;
+}
+
+/**
  * Cycle-guarded backward walk from `session` across `supersededBy`, newest-first.
  * Returns a Set containing `session.id` and the ids of all its predecessors.
  */
 export function ancestorIds(session: Session, all: Session[]): Set<string> {
-  const ids = new Set<string>([session.id]);
-  let cur = session;
-  for (let i = 0; i < all.length; i++) {
-    const pred = all.find((s) => s.supersededBy === cur.id && !ids.has(s.id));
-    if (!pred) break;
-    ids.add(pred.id);
-    cur = pred;
-  }
-  return ids;
+  return new Set(predecessorChain(session, predecessorIndex(all)).map((s) => s.id));
 }
 
 /**

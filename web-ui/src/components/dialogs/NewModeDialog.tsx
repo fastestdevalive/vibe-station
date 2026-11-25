@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useReducer, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { CliId, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
+import { ModeContextField } from "./ModeContextField";
+import {
+  CONTEXT_TOO_LONG_MESSAGE,
+  contextFieldReducer,
+  contextTooLong,
+  initContextField,
+  presetIdForSave,
+} from "@/lib/modeContextPresets";
 import { CliOptionLabel } from "../agent/CliOptionLabel";
 import { ModelPicker } from "../shared/ModelPicker";
 import { ModeIcon } from "../agent/ModeIcon";
@@ -18,13 +26,6 @@ function modelPreference(cliId: string, apiDefault: string): string {
   }
   return apiDefault;
 }
-
-const PRESET_BUG =
-  "You are fixing a bug. Open a PR when done. Run tests before committing.";
-const PRESET_PLAN =
-  "You are planning. Do not commit or open a PR. Output a written plan.";
-
-export type PresetId = "bug-fix-with-pr" | "planning-no-pr" | "custom";
 
 interface NewModeDialogProps {
   open: boolean;
@@ -48,10 +49,23 @@ export function NewModeDialog({
   const [clisLoading, setClisLoading] = useState(true);
   const [name, setName] = useState("");
   const [cli, setCli] = useState<CliId>("");
-  const [preset, setPreset] = useState<PresetId>("bug-fix-with-pr");
-  const [context, setContext] = useState(PRESET_BUG);
+  // The dialog owns the context field's state (Dialog's children unmount while
+  // closed); Save sends exactly the text shown.
+  const [contextState, dispatchContext] = useReducer(contextFieldReducer, undefined, initContextField);
+  const context = contextState.text;
   const [model, setModel] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const errorId = useId();
+
+  // Every open starts fresh (Cancel/Esc/× used to keep the half-typed name
+  // and context for the next open, because this component stays mounted).
+  useEffect(() => {
+    if (!open) return;
+    setName("");
+    setError(null);
+    dispatchContext({ type: "reset" });
+  }, [open]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,13 +110,6 @@ export function NewModeDialog({
     [existingNames],
   );
 
-  function applyPreset(p: PresetId) {
-    setPreset(p);
-    if (p === "bug-fix-with-pr") setContext(PRESET_BUG);
-    else if (p === "planning-no-pr") setContext(PRESET_PLAN);
-    else setContext("");
-  }
-
   async function submit() {
     setError(null);
     const trimmed = name.trim();
@@ -114,8 +121,8 @@ export function NewModeDialog({
       setError("Name must be at most 64 characters.");
       return;
     }
-    if (context.length > 10 * 1024) {
-      setError("Context must be at most 10KB.");
+    if (contextTooLong(context)) {
+      setError(CONTEXT_TOO_LONG_MESSAGE);
       return;
     }
     if (namesLower.has(trimmed.toLowerCase())) {
@@ -126,17 +133,23 @@ export function NewModeDialog({
       setError("CLIs are still loading.");
       return;
     }
-    await api.createMode({
-      name: trimmed,
-      cli,
-      context,
-      presetId: preset === "custom" ? undefined : preset,
-      model: model && model.length > 0 ? model : undefined,
-    });
+    setSaving(true);
+    try {
+      await api.createMode({
+        name: trimmed,
+        cli,
+        context,
+        presetId: presetIdForSave(context),
+        model: model && model.length > 0 ? model : undefined,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    } finally {
+      setSaving(false);
+    }
     onSaved?.();
     onClose();
-    setName("");
-    applyPreset("bug-fix-with-pr");
     const def = clis.find((c) => c.id === cli)?.defaultModel ?? "";
     setModel(modelPreference(cli, def));
   }
@@ -151,7 +164,7 @@ export function NewModeDialog({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" disabled={clisLoading} onClick={() => void submit()}>
+          <button type="button" disabled={clisLoading || saving} onClick={() => void submit()}>
             Save
           </button>
         </>
@@ -189,41 +202,7 @@ export function NewModeDialog({
           }}
         />
       ))}
-      <div className="field-label">Context preset</div>
-      <Radio
-        name="preset"
-        label="Bug fix with PR"
-        checked={preset === "bug-fix-with-pr"}
-        onChange={() => applyPreset("bug-fix-with-pr")}
-      />
-      <Radio
-        name="preset"
-        label="Planning without PR"
-        checked={preset === "planning-no-pr"}
-        onChange={() => applyPreset("planning-no-pr")}
-      />
-      <Radio
-        name="preset"
-        label="Custom"
-        checked={preset === "custom"}
-        onChange={() => applyPreset("custom")}
-      />
-      <div className="field-label">Context</div>
-      <textarea
-        aria-label="Mode context"
-        value={context}
-        onChange={(e) => setContext(e.target.value)}
-        rows={6}
-        style={{
-          width: "100%",
-          padding: "var(--space-2) var(--space-3)",
-          borderRadius: "var(--radius-sm)",
-          border: "var(--border-width) solid var(--border-default)",
-          background: "var(--bg-input)",
-          color: "var(--fg-primary)",
-          fontFamily: "inherit",
-        }}
-      />
+      <ModeContextField state={contextState} dispatch={dispatchContext} errorId={error ? errorId : undefined} />
       <div className="field-label">Model</div>
       <ModelPicker api={api} cli={cli || null} value={model} onChange={setModel} />
       {cli ? (
@@ -235,7 +214,11 @@ export function NewModeDialog({
           <ModeIcon iconKey={deriveModeIcon(cli, model)} channel="json" size={16} label={deriveModeIcon(cli, model) ?? undefined} />
         </div>
       ) : null}
-      {error ? <div className="field-error">{error}</div> : null}
+      {error ? (
+        <div id={errorId} className="field-error" role="alert">
+          {error}
+        </div>
+      ) : null}
     </Dialog>
   );
 }

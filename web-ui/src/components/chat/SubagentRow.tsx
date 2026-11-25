@@ -11,7 +11,11 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { SessionModeIcon } from "@/components/agent/SessionModeIcon";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ancestorIds } from "@/lib/sessionVisibility";
-import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import {
+  buildDescendantIndex,
+  workingDescendants,
+  type WorktreeRolledUpStatus,
+} from "@/lib/worktreeStatus";
 
 const MAX_ROWS = 5;
 
@@ -135,6 +139,9 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
   const [confirmDelink, setConfirmDelink] = useState<{ id: string; rect: DOMRect } | null>(null);
 
   const byId = useMemo(() => new Map(allSessions.map((s) => [s.id, s])), [allSessions]);
+  // Built once per session list; the per-render walk below only reads live
+  // states at the end, so a `sessionStates` tick never re-scans the list.
+  const descendantIndex = useMemo(() => buildDescendantIndex(allSessions), [allSessions]);
 
   const parent = useMemo(() => {
     if (!session.parentSessionId) return null;
@@ -257,9 +264,15 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
       ) : null}
       {visibleChildren.map((child) => {
         const sameWorktree = child.worktreeId === session.worktreeId;
-        return (
+        // Working agents further down this child's subtree (grandchildren and
+        // below), with the same filter/scope as the worktree dot. Shown as a
+        // separate badge so the child's OWN dot keeps its own lifecycle.
+        const workingBelow =
+          sameWorktree && child.type === "agent"
+            ? workingDescendants(child, descendantIndex, sessionStates as Record<string, SessionState>)
+            : [];
+        const chip = (
           <div
-            key={child.id}
             role="button"
             tabIndex={sameWorktree ? 0 : -1}
             aria-disabled={!sameWorktree ? true : undefined}
@@ -314,6 +327,31 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
               />
             ) : null}
           </div>
+        );
+        // Always wrapped, so the chip keeps its tree position (and focus) when
+        // the badge comes and goes.
+        const target = workingBelow[0];
+        const badgeLabel = target
+          ? `${workingBelow.length} working below ${sessionLabel(child)}, open ${sessionLabel(target)}`
+          : "";
+        return (
+          <span key={child.id} className="chat-subagent-row__group">
+            {chip}
+            {target ? (
+              <button
+                type="button"
+                className="chat-subagent-row__below"
+                aria-label={badgeLabel}
+                title={badgeLabel}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen(target);
+                }}
+              >
+                {workingBelow.length} working below
+              </button>
+            ) : null}
+          </span>
         );
       })}
       {overflow > 0 ? <span className="chat-subagent-row__more">+{overflow} more</span> : null}

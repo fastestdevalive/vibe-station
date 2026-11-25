@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useReducer, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { CliId, Mode, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
@@ -6,6 +6,8 @@ import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { CliOptionLabel } from "../agent/CliOptionLabel";
 import { ModelPicker } from "../shared/ModelPicker";
+import { ModeContextField } from "./ModeContextField";
+import { CONTEXT_TOO_LONG_MESSAGE, contextFieldReducer, contextTooLong, initContextField } from "@/lib/modeContextPresets";
 
 function modelPreference(cliId: string, apiDefault: string): string | undefined {
   try {
@@ -29,9 +31,14 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
   const [clisLoading, setClisLoading] = useState(true);
   const [name, setName] = useState(mode.name);
   const [cli, setCli] = useState<CliId>(mode.cli);
-  const [context, setContext] = useState(mode.context);
+  // The dialog owns the context field's state (Dialog's children unmount while
+  // closed); Save sends exactly the text shown.
+  const [contextState, dispatchContext] = useReducer(contextFieldReducer, mode.context, initContextField);
+  const context = contextState.text;
   const [model, setModel] = useState<string | undefined>(mode.model);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const errorId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -49,13 +56,15 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
     };
   }, [api]);
 
+  // Every open starts from the saved mode, like NewModeDialog.
   useEffect(() => {
+    if (!open) return;
     setName(mode.name);
     setCli(mode.cli);
-    setContext(mode.context);
+    dispatchContext({ type: "reset", savedText: mode.context });
     setModel(mode.model);
     setError(null);
-  }, [mode]);
+  }, [open, mode]);
 
   async function submit() {
     setError(null);
@@ -68,14 +77,15 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
       setError("Name must be at most 64 characters.");
       return;
     }
-    if (context.length > 10 * 1024) {
-      setError("Context must be at most 10KB.");
+    if (contextTooLong(context)) {
+      setError(CONTEXT_TOO_LONG_MESSAGE);
       return;
     }
     if (clisLoading) {
       setError("CLIs are still loading.");
       return;
     }
+    setSaving(true);
     try {
       await api.updateMode(mode.id, {
         name: trimmed,
@@ -86,6 +96,8 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -99,7 +111,7 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" disabled={clisLoading} onClick={() => void submit()}>
+          <button type="button" disabled={clisLoading || saving} onClick={() => void submit()}>
             Save
           </button>
         </>
@@ -137,25 +149,14 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
           }}
         />
       ))}
-      <div className="field-label">Context</div>
-      <textarea
-        aria-label="Mode context"
-        value={context}
-        onChange={(e) => setContext(e.target.value)}
-        rows={6}
-        style={{
-          width: "100%",
-          padding: "var(--space-2) var(--space-3)",
-          borderRadius: "var(--radius-sm)",
-          border: "var(--border-width) solid var(--border-default)",
-          background: "var(--bg-input)",
-          color: "var(--fg-primary)",
-          fontFamily: "inherit",
-        }}
-      />
+      <ModeContextField state={contextState} dispatch={dispatchContext} errorId={error ? errorId : undefined} />
       <div className="field-label">Model</div>
       <ModelPicker api={api} cli={cli || null} value={model} onChange={setModel} />
-      {error ? <div className="field-error">{error}</div> : null}
+      {error ? (
+        <div id={errorId} className="field-error" role="alert">
+          {error}
+        </div>
+      ) : null}
     </Dialog>
   );
 }
