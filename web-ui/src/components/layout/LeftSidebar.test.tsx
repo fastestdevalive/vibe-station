@@ -14,7 +14,7 @@ import { createMockApi, type MockApi } from "@/api/mock";
 import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
-import { useServerSync } from "@/hooks/useServerSync";
+import { useServerSync, __resetForDemo } from "@/hooks/useServerSync";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 
 /**
@@ -959,6 +959,9 @@ describe("LeftSidebar", () => {
       // CUJ-2 migration check (a non-empty local order + a fresh mock api's
       // empty server-side row would otherwise auto-push on mount).
       useWorkspaceStore.setState({ sortOrders: {} });
+      // Module-level sync state (unsupported scopes, in-flight writes) must not
+      // leak between tests (a legacy-daemon test marks `projects` unsupported).
+      __resetForDemo();
     });
 
     /**
@@ -1048,24 +1051,255 @@ describe("LeftSidebar", () => {
       });
     });
 
-    it("3.T3 reordering the (unrelated) projects scope does not call api.setOrderedList", async () => {
-      const localApi = createMockApi();
-      const setOrderedListSpy = vi.spyOn(localApi, "setOrderedList");
-      render(
+    function renderSidebar(localApi: ReturnType<typeof createMockApi>) {
+      return render(
         <MemoryRouter>
           <Harness api={localApi}>
             <LeftSidebar api={localApi} />
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+    }
+    function pinnedLabels(): string[] {
+      const region = screen.getByRole("region", { name: /^pinned$/i });
+      return Array.from(region.querySelectorAll(".pinned-row__primary")).map((n) => n.textContent ?? "");
+    }
+    /** Worktree row labels in the project tree (NOT the Pinned section). */
+    function treeWorktreeLabels(): string[] {
+      return screen
+        .getAllByRole("link", { name: /^Open worktree / })
+        .map((n) => n.getAttribute("aria-label") ?? "");
+    }
+    function findProjectsPair() {
+      return [...capturedDndPairs].reverse().find((p) => p.items.includes("proj-a") && p.items.includes("proj-b"));
+    }
 
-      act(() => {
-        useWorkspaceStore.getState().setSortOrder("projects", ["proj-b", "proj-a"]);
+    it("2.T1a old daemon (no prepend): a new unlisted pin renders FIRST, before the saved order", async () => {
+      const localApi = createMockApi({ legacyOrderedLists: true });
+      await localApi.pinWorktree("wt-3");
+      useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["wt-3"] } });
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      await act(async () => {
+        await localApi.pinWorktree("wt-1");
       });
+      await waitFor(() => expect(pinnedLabels()).toEqual(["wt-1", "wt-main"]));
+      // The old daemon's list is untouched.
+      expect((await localApi.getOrderedList("pinned-all")).itemIds).toEqual(["wt-3"]);
+    });
 
+    it("2.T1b saved order plus two new unlisted pins: newest pin first, then older, then the saved order", async () => {
+      const localApi = createMockApi({ legacyOrderedLists: true });
+      await localApi.pinWorktree("wt-3");
+      await localApi.pinWorktree("wt-1"); // older of the two unlisted
+      await localApi.pinWorktree("wt-2"); // newer
+      useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["wt-3"] } });
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+      expect(pinnedLabels()).toEqual(["wt-2", "wt-1", "wt-main"]);
+    });
+
+    it("2.T1c a fully listed saved order is unchanged by pin recency", async () => {
+      const localApi = createMockApi({ legacyOrderedLists: true });
+      await localApi.pinWorktree("wt-3");
+      await localApi.pinWorktree("wt-1"); // newer, but saved order puts wt-1 first anyway
+      useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["wt-3", "wt-1"] } });
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+      expect(pinnedLabels()).toEqual(["wt-main", "wt-1"]);
+    });
+
+    it("2.T1d the stored order from orderedList:updated wins among listed ids", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      await localApi.pinWorktree("wt-3");
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+      // NOTE: the partial state "stored [C] with older unlisted A, B" would render
+      // [B, A, C] by the client rule, but the daemon writes COMPLETE lists
+      // (pin_to_top, Decision 2b), so it can no longer occur and is not asserted.
+      act(() => {
+        localApi.__test.emit({
+          type: "orderedList:updated",
+          scopeKey: "pinned-all",
+          itemIds: ["wt-1", "wt-3"],
+          updatedAt: new Date().toISOString(),
+        });
+      });
+      await waitFor(() => expect(pinnedLabels()).toEqual(["wt-1", "wt-main"]));
+    });
+
+    it("2.T2 pinning a worktree does not move its row within the project tree", async () => {
+      const localApi = createMockApi();
+      renderSidebar(localApi);
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const before = treeWorktreeLabels();
+      await act(async () => {
+        await localApi.pinWorktree("wt-2");
+      });
+      await screen.findByRole("region", { name: /^pinned$/i });
+      expect(treeWorktreeLabels()).toEqual(before);
+    });
+
+    it("2.T2b pinning a direct agent does not move it among its project's direct agents", async () => {
+      const localApi = createMockApi();
+      const d1 = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "direct-one",
+      });
+      const d2 = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "direct-two",
+      });
+      const user = userEvent.setup();
+      renderSidebar(localApi);
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
+      const directLabels = () =>
+        screen
+          .getAllByRole("link", { name: /^Open direct session / })
+          .map((n) => n.getAttribute("aria-label") ?? "");
+      await waitFor(() => expect(directLabels()).toHaveLength(2));
+      const before = directLabels();
+      // Pin the one that sorts LAST; a pinned-first comparator would move it up.
+      const lastId = before[1]!.includes("direct-two") ? d2.id : d1.id;
+      await act(async () => {
+        await localApi.pinSession(lastId, true);
+      });
+      await screen.findByRole("region", { name: /^pinned$/i });
+      expect(directLabels()).toEqual(before);
+    });
+
+    it("2.T3 dragging a project PUTs the projects list, keeping ids this client hides in place", async () => {
+      const localApi = createMockApi();
+      await localApi.addProject({ name: "hidden-proj", path: "/home/dev/hidden-proj" });
+      await localApi.hideProject("hidden-proj");
+      await localApi.setOrderedList("projects", ["proj-a", "hidden-proj", "proj-b"]);
+      const setSpy = vi.spyOn(localApi, "setOrderedList");
+      renderSidebar(localApi);
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      await waitFor(() =>
+        expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual([
+          "proj-a",
+          "hidden-proj",
+          "proj-b",
+        ]),
+      );
+      await waitFor(() => expect(findProjectsPair()).toBeDefined());
+      act(() => {
+        findProjectsPair()!.onDragEnd({
+          active: { id: "proj-b" },
+          over: { id: "proj-a" },
+        } as DragEndEvent);
+      });
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith("projects", ["proj-b", "hidden-proj", "proj-a"]),
+      );
+      expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual([
+        "proj-b",
+        "hidden-proj",
+        "proj-a",
+      ]);
+    });
+
+    it("2.T3c a deleted project id in the stored projects list is dropped by the next drag PUT, a hidden project's id is kept", async () => {
+      const localApi = createMockApi();
+      await localApi.addProject({ name: "hidden-proj", path: "/home/dev/hidden-proj" });
+      await localApi.hideProject("hidden-proj");
+      await localApi.setOrderedList("projects", ["proj-a", "gone-proj", "hidden-proj", "proj-b"]);
+      const setSpy = vi.spyOn(localApi, "setOrderedList");
+      renderSidebar(localApi);
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      await waitFor(() =>
+        expect(useWorkspaceStore.getState().sortOrders["projects"]).toContain("gone-proj"),
+      );
+      await waitFor(() => expect(findProjectsPair()).toBeDefined());
+      act(() => {
+        findProjectsPair()!.onDragEnd({
+          active: { id: "proj-b" },
+          over: { id: "proj-a" },
+        } as DragEndEvent);
+      });
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith("projects", ["proj-b", "hidden-proj", "proj-a"]),
+      );
+    });
+
+    it("2.T3a against an old daemon the projects PUT fails silently, local order updates, and is not retried", async () => {
+      const localApi = createMockApi({ legacyOrderedLists: true });
+      // Let the mount probe pass so the FIRST drag's PUT is what the old daemon rejects.
+      const realGet = localApi.getOrderedList.bind(localApi);
+      vi.spyOn(localApi, "getOrderedList").mockImplementation(async (scope: string) =>
+        scope === "projects" ? { scopeKey: scope, itemIds: [], updatedAt: null } : realGet(scope),
+      );
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      const setSpy = vi.spyOn(localApi, "setOrderedList");
+      renderSidebar(localApi);
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      await waitFor(() => expect(findProjectsPair()).toBeDefined());
+      const dragBToTop = () => {
+        const pair = findProjectsPair()!;
+        const [first, second] = pair.items;
+        act(() => {
+          pair.onDragEnd({ active: { id: second }, over: { id: first } } as DragEndEvent);
+        });
+      };
+      dragBToTop();
+      await waitFor(() => expect(setSpy).toHaveBeenCalledWith("projects", expect.any(Array)));
+      await waitFor(() => expect(useWorkspaceStore.getState().sortOrders["projects"]).toBeDefined());
+      const orderAfterFirst = useWorkspaceStore.getState().sortOrders["projects"]!;
+      // Let the rejection settle and mark the scope unsupported.
       await new Promise((r) => setTimeout(r, 50));
-      expect(setOrderedListSpy).not.toHaveBeenCalled();
+      const callsBefore = setSpy.mock.calls.filter((c) => c[0] === "projects").length;
+      dragBToTop();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(setSpy.mock.calls.filter((c) => c[0] === "projects")).toHaveLength(callsBefore);
+      expect(useWorkspaceStore.getState().sortOrders["projects"]).not.toEqual(orderAfterFirst);
+      expect(alertSpy).not.toHaveBeenCalled();
+      alertSpy.mockRestore();
+    });
+
+    it("2.T3b dragging a pinned item keeps stored pinned ids this client does not display in place", async () => {
+      const localApi = createMockApi();
+      await pinCrossProjectPair(localApi);
+      // wt-2 exists but is not pinned here, so it is not displayed.
+      await localApi.setOrderedList("pinned-all", ["wt-1", "wt-2", "wt-3"]);
+      const setSpy = vi.spyOn(localApi, "setOrderedList");
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+      await waitFor(() => expect(findPinnedPair()).toBeDefined());
+      act(() => {
+        findPinnedPair()!.onDragEnd({
+          active: { id: "wt-3" },
+          over: { id: "wt-1" },
+        } as DragEndEvent);
+      });
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith("pinned-all", ["wt-3", "wt-2", "wt-1"]),
+      );
+    });
+
+    it("2.T3d a deleted worktree id in the stored pinned list is dropped by the next drag PUT", async () => {
+      const localApi = createMockApi();
+      await pinCrossProjectPair(localApi);
+      await localApi.setOrderedList("pinned-all", ["wt-1", "wt-gone", "wt-2", "wt-3"]);
+      const setSpy = vi.spyOn(localApi, "setOrderedList");
+      renderSidebar(localApi);
+      await screen.findByRole("region", { name: /^pinned$/i });
+      await waitFor(() => expect(findPinnedPair()).toBeDefined());
+      act(() => {
+        findPinnedPair()!.onDragEnd({
+          active: { id: "wt-3" },
+          over: { id: "wt-1" },
+        } as DragEndEvent);
+      });
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith("pinned-all", ["wt-3", "wt-2", "wt-1"]),
+      );
     });
   });
 

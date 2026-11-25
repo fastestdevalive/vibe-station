@@ -20,7 +20,9 @@ use vst_routes::attachments::{
 use vst_routes::fs::{expand_tilde, FsRouteError, FsRoutes};
 use vst_routes::health::HealthRoutes;
 use vst_routes::modes::ModeRoutes;
-use vst_routes::ordered_lists::{OrderedListsRouteError, OrderedListsRoutes};
+use vst_routes::ordered_lists::{
+    pin_to_top_list, remove_id, OrderedListsRouteError, OrderedListsRoutes, PinnedSnapshot,
+};
 use vst_routes::settings::{
     default_projects_dir, default_skill_paths, SettingsRouteError, SettingsRoutes,
 };
@@ -145,6 +147,113 @@ async fn test_ordered_lists_get_put_validation_and_broadcast() {
     let list = routes.get_ordered_list(PINNED_ALL).await.unwrap();
     assert_eq!(list.item_ids, vec!["id1", "id2"]);
     assert!(list.updated_at.is_some());
+
+    // The error text keeps the substring the web fallback keys on.
+    let err = routes.get_ordered_list("invalid-scope").await.unwrap_err();
+    assert!(err.to_string().contains("invalid scope key"));
+
+    // `projects` scope: empty GET, PUT, broadcast, GET reflects.
+    let list = routes.get_ordered_list("projects").await.unwrap();
+    assert_eq!(list.scope_key, "projects");
+    assert!(list.item_ids.is_empty());
+    assert!(list.updated_at.is_none());
+    let too_many: Vec<String> = (0..501).map(|i| format!("item-{i}")).collect();
+    let err = routes
+        .put_ordered_list("projects", PutOrderedListBody { item_ids: too_many })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, OrderedListsRouteError::ItemIdsTooLong));
+    let put_res = routes
+        .put_ordered_list(
+            "projects",
+            PutOrderedListBody {
+                item_ids: vec!["p1".into(), "p2".into()],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_res.scope_key, "projects");
+    let ev = rx.try_recv().unwrap();
+    assert!(matches!(
+        ev,
+        ServerEvent::OrderedListUpdated { ref scope_key, ref item_ids, .. }
+            if scope_key == "projects" && item_ids == &["p1", "p2"]
+    ));
+    let list = routes.get_ordered_list("projects").await.unwrap();
+    assert_eq!(list.item_ids, vec!["p1", "p2"]);
+    // `pinned-all` is untouched by the `projects` write.
+    let pinned = routes.get_ordered_list(PINNED_ALL).await.unwrap();
+    assert_eq!(pinned.item_ids, vec!["id1", "id2"]);
+}
+
+fn v(xs: &[&str]) -> Vec<String> {
+    xs.iter().map(|s| s.to_string()).collect()
+}
+
+/// Snapshot whose `live` set holds every id in `extra_live` plus the pinned ids.
+fn snap(pinned: &[&str], extra_live: &[&str]) -> PinnedSnapshot {
+    PinnedSnapshot {
+        pinned: v(pinned),
+        live: pinned
+            .iter()
+            .chain(extra_live)
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+#[test]
+fn test_pin_to_top_list_rules() {
+    // absent id
+    assert_eq!(
+        pin_to_top_list(&v(&["a", "b"]), &snap(&["c"], &["a", "b"]), "c"),
+        Some(v(&["c", "a", "b"]))
+    );
+    // present mid => moved to 0
+    assert_eq!(
+        pin_to_top_list(&v(&["a", "b", "c"]), &snap(&["b", "a", "c"], &[]), "c"),
+        Some(v(&["c", "a", "b"]))
+    );
+    // already first, nothing unlisted => None
+    assert_eq!(
+        pin_to_top_list(&v(&["a", "b"]), &snap(&["a", "b"], &[]), "a"),
+        None
+    );
+    // empty stored list, pinned set seeds the list (newest first)
+    assert_eq!(
+        pin_to_top_list(&[], &snap(&["c", "b", "a"], &[]), "c"),
+        Some(v(&["c", "b", "a"]))
+    );
+    // unlisted pins land between id and the stored list
+    assert_eq!(
+        pin_to_top_list(&v(&["x", "y"]), &snap(&["c", "a"], &["x", "y"]), "c"),
+        Some(v(&["c", "a", "x", "y"]))
+    );
+    // under the cap, stored ids are kept as-is even when not in the snapshot
+    // (the snapshot is read before the list lock, so they may be new)
+    assert_eq!(
+        pin_to_top_list(&v(&["gone", "x", "gone2"]), &snap(&["c"], &["x"]), "c"),
+        Some(v(&["c", "gone", "x", "gone2"]))
+    );
+    // 500 cap truncates the tail
+    let stored: Vec<String> = (0..500).map(|i| format!("s{i}")).collect();
+    let mut live_snap = snap(&["n"], &[]);
+    live_snap.live.extend(stored.iter().cloned());
+    let out = pin_to_top_list(&stored, &live_snap, "n").unwrap();
+    assert_eq!(out.len(), 500);
+    assert_eq!(out[0], "n");
+    assert_eq!(out[499], "s498");
+    // under cap pressure dead ids are dropped first, so live ids survive it
+    let mut dead_heavy: Vec<String> = (0..499).map(|i| format!("dead{i}")).collect();
+    dead_heavy.push("keep".into());
+    let out = pin_to_top_list(&dead_heavy, &snap(&["n"], &["keep"]), "n").unwrap();
+    assert_eq!(out, v(&["n", "keep"]));
+}
+
+#[test]
+fn test_remove_id_rules() {
+    assert_eq!(remove_id(&v(&["a", "b"]), "z"), None);
+    assert_eq!(remove_id(&v(&["a", "b"]), "a"), Some(v(&["b"])));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -30,7 +30,15 @@ import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { createProjectDirectDraft, createProjectWorktreeDraft } from "@/lib/projectDraft";
-import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
+import {
+  markOrderedListWrite,
+  clearOrderedListWrite,
+  isOrderedScopeUnsupported,
+  markOrderedScopeUnsupported,
+  isScopeUnsupportedError,
+  warnOrderedSyncFailure,
+} from "@/hooks/useServerSync";
+import { mergeDisplayedOrder } from "@/lib/mergeDisplayedOrder";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
@@ -152,26 +160,29 @@ type TopLevelSidebarItem =
   | { kind: "global_draft"; data: Session; id: string };
 
 /**
- * Merge a persisted drag order with the current live id list: known ids are
- * placed per the stored order, anything not yet in the stored order (new
- * session/worktree) is appended at the end in its natural (server) order, and
- * stale ids no longer present are dropped. Never reorders by mutating the
- * live objects — callers re-sort their `.map()` input by this id list only,
- * keeping every item keyed by its own stable id (no index-keying, no remounts).
+ * Merge a stored drag order with the current live id list: known ids are
+ * placed per the stored order, stale ids no longer present are dropped, and
+ * ids not yet in the stored order (new session/worktree/pin) go LAST in the
+ * live list's order by default, or FIRST with `unlistedFirst` (the `pinned-all`
+ * rule: `liveIds` is newest-pinned first, so a new pin lands on top whether or
+ * not the daemon prepended it). Never reorders by mutating the live objects —
+ * callers re-sort their `.map()` input by this id list only, keeping every
+ * item keyed by its own stable id (no index-keying, no remounts).
  *
- * Used ONLY by the pinned sub-lists (`pinned-worktrees`/`pinned-direct`),
- * which stay on this local-only mechanism — the server's per-worktree/
- * per-project `sortOrder` column can't express a cross-project pinned order
- * (Part 03 Decision 1 exception). Formerly exported from `useStore.ts` as
- * `applySortOrder`; moved here since this is now its only consumer.
+ * Used by the pinned list (`unlistedFirst`) and the workspaces list (default).
+ * Formerly exported from `useStore.ts` as `applySortOrder`.
  */
-function applyLocalSortOrder(order: string[] | undefined, liveIds: string[]): string[] {
+function applyLocalSortOrder(
+  order: string[] | undefined,
+  liveIds: string[],
+  opts?: { unlistedFirst?: boolean },
+): string[] {
   if (!order || order.length === 0) return liveIds;
   const liveSet = new Set(liveIds);
   const known = order.filter((id) => liveSet.has(id));
   const knownSet = new Set(known);
   const rest = liveIds.filter((id) => !knownSet.has(id));
-  return [...known, ...rest];
+  return opts?.unlistedFirst ? [...rest, ...known] : [...known, ...rest];
 }
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
@@ -358,6 +369,7 @@ export function LeftSidebar({
     () => new Map<string, Session>(sessions.map((s) => [s.id, s])),
     [sessions],
   );
+  const worktreeById = useMemo(() => new Map(worktrees.map((w) => [w.id, w])), [worktrees]);
   /**
    * Direct *agent* sessions grouped by projectId.
    *
@@ -383,13 +395,13 @@ export function LeftSidebar({
         (m[s.projectId] ??= []).push(s);
       }
     }
-    // Pinned sessions first (newest pin on top), then the rest by id for stability.
+    // By `sortOrder` then id, the same key the worktree tree uses: pinning must
+    // never move an item inside its project (a pin never changes an item's
+    // position inside its project); the Pinned section is where pins surface.
     for (const id of Object.keys(m)) {
       m[id]!.sort((a, b) => {
-        const ap = a.pinnedAt ?? "";
-        const bp = b.pinnedAt ?? "";
-        if (!!ap !== !!bp) return ap ? -1 : 1;
-        if (ap && bp && ap !== bp) return ap < bp ? 1 : -1; // newer pin first
+        const d = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+        if (d !== 0) return d;
         return a.id < b.id ? -1 : 1;
       });
     }
@@ -453,13 +465,13 @@ export function LeftSidebar({
   // --- Rename + drag-reorder (Part 03 Phase 2): real daemon endpoints for
   // regular (unpinned) worktree/direct-session scopes, via the per-worktree/
   // per-project `sortOrder` column, which can't express a cross-project
-  // pinned order (Decision 1 exception). The `pinned-all` sub-list is ALSO
-  // daemon-synced now (pinned-order-sync), but through a separate mechanism:
-  // a generic `user_ordered_lists` table keyed by scopeKey, not the
-  // `sortOrder` column — see `handleReorder`'s `scopeKey === "pinned-all"`
-  // branch below. Every other scope (`projects`, `workspaces:global`) still
-  // uses the old local-only `sortOrders` mechanism (`applyLocalSortOrder`
-  // above). ---
+  // pinned order (Decision 1 exception). The `pinned-all` and `projects`
+  // lists are daemon-synced (pinned-order-sync, server-side-ordering), through
+  // a separate mechanism: a generic `user_ordered_lists` table keyed by
+  // scopeKey, not the `sortOrder` column — see `handleReorder`'s
+  // `scopeKey === "pinned-all"` branch and `handleTopLevelReorder` below.
+  // Every other scope (`workspaces:global`) still uses the old local-only
+  // `sortOrders` mechanism (`applyLocalSortOrder` above). ---
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
   // --- Saved workspace layouts (per-worktree, purely client-side — no daemon
@@ -561,12 +573,13 @@ export function LeftSidebar({
     }
   }
 
-  /** Reorder scope: pinned worktrees and direct sessions float in a single drag-order list,
-   *  independent of pin recency once the user has dragged them (documented
-   *  choice — see task write-up: pin recency is only the *default* order).
-   *  `sortOrders["pinned-all"]` is now daemon-synced (pinned-order-sync) —
+  /** Reorder scope: pinned worktrees and direct sessions float in a single drag-order list.
+   *  A pin not yet in the saved order goes FIRST (newest `pinnedAt` first), so a
+   *  new pin is on top even against a daemon that never prepends it; once
+   *  dragged, the saved order wins among listed ids.
+   *  `sortOrders["pinned-all"]` is daemon-synced (pinned-order-sync) —
    *  hydrated on mount/reconnect and kept live via `orderedList:updated`
-   *  (see `useServerSync.ts`), so this read site needs no changes. */
+   *  (see `useServerSync.ts`). */
   const orderedPinnedItems = useMemo(() => {
     const items = [
       ...pinnedWorktrees.map((w) => ({ id: w.id, kind: "worktree" as const, data: w })),
@@ -579,14 +592,14 @@ export function LeftSidebar({
       return bTime.localeCompare(aTime);
     });
     const ids = items.map((x) => x.id);
-    const order = applyLocalSortOrder(sortOrders["pinned-all"], ids);
+    const order = applyLocalSortOrder(sortOrders["pinned-all"], ids, { unlistedFirst: true });
     const byId = new Map(items.map((x) => [x.id, x]));
     return order.map((id) => byId.get(id)!).filter(Boolean);
   }, [pinnedWorktrees, pinnedDirectSessions, sortOrders]);
 
-  /** Projects reorder scope — local-only (Decision 1 exception, same as
-   *  pinned lists): no `Project.sortOrder` field/route exists server-side.
-   *  Now a unified top-level scope that mixes projects and global drafts
+  /** Projects reorder scope — daemon-synced through the `projects` ordered
+   *  list (`useServerSync.ts`; local-only against an old daemon): no
+   *  `Project.sortOrder` field exists. A unified top-level scope that mixes projects and global drafts
    *  (`TopLevelSidebarItem`), ordered by `sortOrders["projects"]`. New global
    *  drafts not yet persisted in that order float to the top (ordered by their
    *  server `sortOrder`) so a freshly created draft is immediately visible. */
@@ -612,7 +625,7 @@ export function LeftSidebar({
     return [...newDrafts, ...knownItems, ...rest];
   }, [visibleProjects, sessions, sortOrders]);
 
-  /** Pinned-scope reorder handler. `pinned-all` is now daemon-synced
+  /** Pinned-scope reorder handler. `pinned-all` is daemon-synced
    *  (pinned-order-sync) — every other scope stays on the old local-only
    *  `sortOrders` mechanism (see the comment above `sortOrders`). */
   function handleReorder(scopeKey: string, currentIds: string[], e: DragEndEvent) {
@@ -627,23 +640,33 @@ export function LeftSidebar({
     const next = currentIds.slice();
     next.splice(from, 1);
     next.splice(to, 0, String(active.id));
-    setSortOrder(scopeKey, next);
-
-    if (scopeKey === "pinned-all") {
-      const p = api.setOrderedList("pinned-all", next).catch(() => {
-        // Stale until the next successful write or reload — there is
-        // nothing to roll back to, local state already reflects intent.
-      });
-      markOrderedListWrite(p);
-      // Compare-and-clear: if a second drag started a newer write before
-      // this one settles, clearOrderedListWrite no-ops instead of wiping
-      // the newer promise out from under it.
-      void p.finally(() => clearOrderedListWrite(p));
+    if (scopeKey !== "pinned-all") {
+      setSortOrder(scopeKey, next);
+      return;
     }
+    // The client knows every worktree and session, so a stored id matching
+    // neither is a deleted item: drop it. Ids this client doesn't display
+    // (pins hidden here, or mobile-only) keep their relative positions.
+    const stored = (sortOrders["pinned-all"] ?? []).filter(
+      (id) => worktreeById.has(id) || sessionById.has(id),
+    );
+    const merged = mergeDisplayedOrder(stored, next);
+    setSortOrder(scopeKey, merged);
+    const p = api.setOrderedList("pinned-all", merged).catch((err) => {
+      // Stale until the next successful write or reload — there is nothing
+      // to roll back to, local state already reflects intent.
+      if (!isScopeUnsupportedError(err)) warnOrderedSyncFailure("pinned-all", err);
+    });
+    markOrderedListWrite(p, "pinned-all");
+    // Compare-and-clear: if a second drag started a newer write before this
+    // one settles, clearOrderedListWrite no-ops instead of wiping the newer
+    // promise out from under it.
+    void p.finally(() => clearOrderedListWrite(p, "pinned-all"));
   }
 
   /** Top-level (Projects) reorder — a unified scope mixing projects and global
-   *  drafts. Persists the full order to `sortOrders["projects"]` locally. If the
+   *  drafts. Stores the order in `sortOrders["projects"]` and PUTs it to the
+   *  `projects` ordered list (skipped once an old daemon rejected the scope). If the
    *  moved item is a global draft, also syncs its server `sortOrder` via
    *  `api.reorderSession` (fractional interpolation against its draft
    *  neighbours in the new order). */
@@ -658,7 +681,24 @@ export function LeftSidebar({
     const next = ids.slice();
     next.splice(from, 1);
     next.splice(to, 0, String(active.id));
-    setSortOrder("projects", next);
+    // The client knows every project (hidden included) and session (global
+    // drafts are sessions), so a stored id matching neither is a deleted item:
+    // drop it. Mobile only stores project ids, so nothing mobile-only is lost.
+    // Remaining ids this client doesn't display keep their relative positions.
+    const stored = (sortOrders["projects"] ?? []).filter(
+      (id) => Object.prototype.hasOwnProperty.call(projectById, id) || sessionById.has(id),
+    );
+    const merged = mergeDisplayedOrder(stored, next);
+    setSortOrder("projects", merged);
+    if (!isOrderedScopeUnsupported("projects")) {
+      const p = api.setOrderedList("projects", merged).catch((err) => {
+        // Old daemon: stay local-only, silently, for the rest of this connection.
+        if (isScopeUnsupportedError(err)) markOrderedScopeUnsupported("projects");
+        else warnOrderedSyncFailure("projects", err);
+      });
+      markOrderedListWrite(p, "projects");
+      void p.finally(() => clearOrderedListWrite(p, "projects"));
+    }
 
     const moved = orderedTopLevelItems[from];
     if (moved?.kind !== "global_draft") return;

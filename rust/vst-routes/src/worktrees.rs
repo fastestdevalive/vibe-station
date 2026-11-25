@@ -25,6 +25,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::process::Command;
@@ -1092,6 +1093,8 @@ impl WorktreeRoutes {
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_id_owned = wt_id.to_string();
+        let changed = Arc::new(AtomicBool::new(false));
+        let changed_in = changed.clone();
 
         let updated_wt = self
             .store
@@ -1104,6 +1107,7 @@ impl WorktreeRoutes {
                 if already_pinned == pinned {
                     return Ok(p.clone());
                 }
+                changed_in.store(true, Ordering::Relaxed);
                 wt.pinned_at = if pinned { Some(now_iso()) } else { None };
                 Ok(p.clone())
             })
@@ -1116,6 +1120,15 @@ impl WorktreeRoutes {
             .find(|w| w.id == wt_id)
             .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
         let serialized = serialize_worktree(&project.id, wt);
+
+        // `pinned-all` first (matches the reset swap), then the entity event.
+        if changed.load(Ordering::Relaxed) {
+            if pinned {
+                crate::ordered_lists::pin_to_top(&self.store, &self.broadcaster, wt_id).await;
+            } else {
+                crate::ordered_lists::unpin_remove(&self.store, &self.broadcaster, wt_id).await;
+            }
+        }
 
         self.broadcaster.send(ServerEvent::WorktreeUpdated {
             worktree: serialize_worktree_json(&project.id, wt),
@@ -1144,6 +1157,9 @@ impl WorktreeRoutes {
 
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_id_owned = wt_id.to_string();
+        // Hiding clears the pin, so it is an unpin for `pinned-all` too.
+        let unpinned = Arc::new(AtomicBool::new(false));
+        let unpinned_in = unpinned.clone();
 
         let updated_project = self
             .store
@@ -1157,7 +1173,9 @@ impl WorktreeRoutes {
                     return Ok(p.clone());
                 }
                 if hidden {
-                    wt.pinned_at = None;
+                    if wt.pinned_at.take().is_some() {
+                        unpinned_in.store(true, Ordering::Relaxed);
+                    }
                     wt.hidden_at = Some(now_iso());
                 } else {
                     wt.hidden_at = None;
@@ -1173,6 +1191,10 @@ impl WorktreeRoutes {
             .find(|w| w.id == wt_id)
             .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
         let serialized = serialize_worktree(&project.id, wt);
+
+        if unpinned.load(Ordering::Relaxed) {
+            crate::ordered_lists::unpin_remove(&self.store, &self.broadcaster, wt_id).await;
+        }
 
         self.broadcaster.send(ServerEvent::WorktreeUpdated {
             worktree: serialize_worktree_json(&project.id, wt),

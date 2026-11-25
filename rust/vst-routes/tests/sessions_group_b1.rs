@@ -955,7 +955,14 @@ async fn pin_broadcasts_tri_state_pinned_at() {
     let r = routes(store.clone());
     let mut rx = r.broadcaster.subscribe();
     let pin = r.pin_session("s1", true).await.unwrap();
-    match rx.recv().await.unwrap() {
+    // The `pinned-all` list event precedes the entity event; skip it here.
+    let next_session_event = |rx: &mut tokio::sync::broadcast::Receiver<ServerEvent>| loop {
+        match rx.try_recv().unwrap() {
+            ServerEvent::OrderedListUpdated { .. } => continue,
+            other => return other,
+        }
+    };
+    match next_session_event(&mut rx) {
         ServerEvent::SessionUpdated { pinned_at, .. } => {
             assert_eq!(pinned_at, Some(pin.pinned_at.clone()));
             assert!(matches!(pinned_at, Some(Some(_))));
@@ -963,10 +970,222 @@ async fn pin_broadcasts_tri_state_pinned_at() {
         other => panic!("expected session:updated, got {other:?}"),
     }
     r.pin_session("s1", false).await.unwrap();
-    match rx.recv().await.unwrap() {
+    match next_session_event(&mut rx) {
         ServerEvent::SessionUpdated { pinned_at, .. } => assert_eq!(pinned_at, Some(None)),
         other => panic!("expected session:updated, got {other:?}"),
     }
+}
+
+fn pinned_ids(evs: &[ServerEvent]) -> Vec<Vec<String>> {
+    evs.iter()
+        .filter_map(|e| match e {
+            ServerEvent::OrderedListUpdated {
+                scope_key,
+                item_ids,
+                ..
+            } if scope_key == "pinned-all" => Some(item_ids.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn drain_events(rx: &mut tokio::sync::broadcast::Receiver<ServerEvent>) -> Vec<ServerEvent> {
+    let mut out = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        out.push(e);
+    }
+    out
+}
+
+fn pinned_direct(id: &str, at: &str) -> SessionRecord {
+    let mut s = make_session(id, "p1");
+    s.pinned_at = Some(at.into());
+    s
+}
+
+async fn list(store: &StoreHandle) -> Vec<String> {
+    store.get_ordered_list("pinned-all").await.item_ids
+}
+
+#[tokio::test]
+async fn pin_direct_session_writes_pinned_all() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    p.direct_sessions.push(make_session("s2", "p1"));
+    // "x": a real unpinned session, so the saved order holds a live id.
+    p.direct_sessions.push(make_session("x", "p1"));
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+
+    r.pin_session("s1", true).await.unwrap();
+    assert_eq!(list(&store).await, vec!["s1"]);
+    let evs = drain_events(&mut rx);
+    assert_eq!(pinned_ids(&evs), vec![vec!["s1".to_string()]]);
+    // list event comes before the session event
+    let lp = evs
+        .iter()
+        .position(|e| matches!(e, ServerEvent::OrderedListUpdated { .. }))
+        .unwrap();
+    let sp = evs
+        .iter()
+        .position(|e| matches!(e, ServerEvent::SessionUpdated { .. }))
+        .unwrap();
+    assert!(lp < sp);
+
+    // idempotent pin => no event
+    r.pin_session("s1", true).await.unwrap();
+    assert!(pinned_ids(&drain_events(&mut rx)).is_empty());
+
+    // saved order: s2 lands above s1 and saved ids
+    store.set_ordered_list("pinned-all", vec!["x".into()]).await;
+    drain_events(&mut rx);
+    r.pin_session("s2", true).await.unwrap();
+    assert_eq!(list(&store).await, vec!["s2", "s1", "x"]);
+    drain_events(&mut rx);
+
+    // unpin removes + event; second unpin emits nothing
+    r.pin_session("s1", false).await.unwrap();
+    assert_eq!(list(&store).await, vec!["s2", "x"]);
+    assert_eq!(pinned_ids(&drain_events(&mut rx)).len(), 1);
+    r.pin_session("s1", false).await.unwrap();
+    assert!(pinned_ids(&drain_events(&mut rx)).is_empty());
+}
+
+#[tokio::test]
+async fn pin_direct_session_seeds_unlisted_pins() {
+    // no list row; A and B pinned (B newer); pin C => [C, B, A]
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions
+        .push(pinned_direct("a", "2026-01-01T00:00:01.000Z"));
+    p.direct_sessions
+        .push(pinned_direct("b", "2026-01-01T00:00:02.000Z"));
+    p.direct_sessions.push(make_session("c", "p1"));
+    p.direct_sessions.push(make_session("X", "p1"));
+    p.direct_sessions.push(make_session("Y", "p1"));
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    r.pin_session("c", true).await.unwrap();
+    assert_eq!(list(&store).await, vec!["c", "b", "a"]);
+
+    // stored [X, Y] + unlisted pinned A => [C, A, X, Y]
+    r.pin_session("c", false).await.unwrap();
+    r.pin_session("b", false).await.unwrap();
+    store
+        .set_ordered_list("pinned-all", vec!["X".into(), "Y".into()])
+        .await;
+    r.pin_session("c", true).await.unwrap();
+    assert_eq!(list(&store).await, vec!["c", "a", "X", "Y"]);
+}
+
+#[tokio::test]
+async fn pin_keeps_stored_ids_not_in_snapshot_under_cap() {
+    // Under the cap nothing is pruned: the project snapshot is read before the
+    // list lock, so an id missing from it may be brand new, not deleted.
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    p.direct_sessions.push(make_session("keep", "p1"));
+    add_project(&store, p).await;
+    store
+        .set_ordered_list(
+            "pinned-all",
+            vec!["deleted-1".into(), "keep".into(), "deleted-2".into()],
+        )
+        .await;
+    let r = routes(store.clone());
+    r.pin_session("s1", true).await.unwrap();
+    assert_eq!(
+        list(&store).await,
+        vec!["s1", "deleted-1", "keep", "deleted-2"]
+    );
+}
+
+#[tokio::test]
+async fn pin_drops_dead_ids_first_under_cap_pressure() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(make_session("s1", "p1"));
+    p.direct_sessions.push(make_session("keep", "p1"));
+    add_project(&store, p).await;
+    let mut stored: Vec<String> = (0..499).map(|i| format!("dead{i}")).collect();
+    stored.push("keep".into());
+    store.set_ordered_list("pinned-all", stored).await;
+    let r = routes(store.clone());
+    r.pin_session("s1", true).await.unwrap();
+    assert_eq!(list(&store).await, vec!["s1", "keep"]);
+}
+
+#[tokio::test]
+async fn pin_direct_terminal_session_leaves_list_untouched() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut t = make_session("t1", "p1");
+    t.r#type = SessionType::Terminal;
+    p.direct_sessions.push(t);
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    r.pin_session("t1", true).await.unwrap();
+    assert!(list(&store).await.is_empty());
+    assert!(pinned_ids(&drain_events(&mut rx)).is_empty());
+}
+
+#[tokio::test]
+async fn pinned_snapshot_breaks_equal_pinned_at_by_id_ascending() {
+    let mut p = make_project("p1");
+    p.direct_sessions
+        .push(pinned_direct("b", "2026-01-01T00:00:05.000Z"));
+    p.direct_sessions
+        .push(pinned_direct("a", "2026-01-01T00:00:05.000Z"));
+    p.direct_sessions
+        .push(pinned_direct("c", "2026-01-01T00:00:09.000Z"));
+    let snap = vst_routes::ordered_lists::pinned_snapshot(&[p]);
+    assert_eq!(snap.pinned, vec!["c", "a", "b"]);
+}
+
+#[tokio::test]
+async fn pin_seed_skips_superseded_but_keeps_dangling() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut old = pinned_direct("old", "2026-01-01T00:00:05.000Z");
+    old.superseded_by = Some("head".into());
+    let mut dangling = pinned_direct("dangling", "2026-01-01T00:00:04.000Z");
+    dangling.superseded_by = Some("gone".into());
+    p.direct_sessions.push(old);
+    p.direct_sessions.push(dangling);
+    p.direct_sessions.push(make_session("head", "p1"));
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    // Pin via the SUPERSEDED id: the chain HEAD id is written, not the old id.
+    r.pin_session("old", true).await.unwrap();
+    let l = list(&store).await;
+    assert_eq!(l[0], "head");
+    assert!(!l.contains(&"old".to_string()));
+    assert!(l.contains(&"dangling".to_string()));
+}
+
+#[tokio::test]
+async fn pin_session_inside_worktree_never_enters_list() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut w = make_worktree("w1");
+    let mut s = make_session("s1", "p1");
+    s.worktree_id = Some("w1".into());
+    w.sessions.push(s);
+    p.worktrees.push(w);
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+
+    r.pin_session("s1", true).await.unwrap();
+    assert!(list(&store).await.is_empty());
+    assert!(pinned_ids(&drain_events(&mut rx)).is_empty());
+    // unpin of an id absent from the list emits nothing
+    r.pin_session("s1", false).await.unwrap();
+    assert!(pinned_ids(&drain_events(&mut rx)).is_empty());
 }
 
 #[tokio::test]

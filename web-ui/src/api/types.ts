@@ -1714,7 +1714,7 @@ export type WSEvent =
     }
   | {
       /** Broadcast after PUT /user/ordered-lists/:scopeKey (pinned-order-sync).
-       *  `scopeKey` is generic even though only "pinned-all" is wired up today. */
+       *  `scopeKey` is generic; the client syncs "pinned-all" and "projects". */
       type: "orderedList:updated";
       scopeKey: string;
       itemIds: string[];

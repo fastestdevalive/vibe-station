@@ -32,5 +32,9 @@ pub struct PutOrderedListResult {
     pub updated_at: String,
 }
 
-/// The only allowlisted scopeKey.
+/// Allowlisted scopeKey: the pinned worktrees/direct agents order.
 pub const PINNED_ALL: &str = "pinned-all";
+/// Allowlisted scopeKey: top-level project (and global draft) order.
+pub const PROJECTS: &str = "projects";
+/// Every allowlisted scopeKey; anything else is a `validation_error`.
+pub const ORDERED_LIST_SCOPES: [&str; 2] = [PINNED_ALL, PROJECTS];
