@@ -88,6 +88,7 @@ import { ApiError } from "./errors";
 import { createLatestOnly } from "./latestOnly";
 import { createArtifactsClient } from "./artifactsClient";
 import { createTranscriptOutlineClient } from "./transcriptOutlineClient";
+import { randomId } from "@/lib/uuid";
 import { createCommentsClient, parseReviewJson } from "./commentsClient";
 import { createDraftTextClient } from "./draftTextClient";
 
@@ -164,6 +165,9 @@ export async function parseJson<T>(res: Response): Promise<T> {
  *  drop the cookie. When running inside the Tauri shell, also sends the
  *  injected VST_TOKEN as a Bearer header so the daemon can identify the
  *  request as 'tauri'-scoped rather than a generic loopback caller. */
+/** Pause before the single same-id retry of a chat send that got no HTTP response. */
+const SEND_CHAT_RETRY_DELAY_MS = 750;
+
 export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = tauriToken();
   const authHeaders: Record<string, string> = token
@@ -1804,7 +1808,13 @@ export function createClientApi() {
 
     /** Enqueue a user turn. Always accepted (202) — queued behind a running turn.
      *  `queue: true` forces a FIFO enqueue (never steers); the default steers a
-     *  running turn when the agent supports it. */
+     *  running turn when the agent supports it.
+     *
+     *  `clientMessageId` is the idempotency key of one send ATTEMPT (the daemon
+     *  answers a repeat with 200 + the original turn and enqueues nothing); a
+     *  caller that may re-send the same payload passes its own, otherwise one is
+     *  minted per call. A request that never got an HTTP response (`TypeError`)
+     *  is retried once, after a short pause, with the SAME id. */
     async sendChat(
       sessionId: string,
       message: string,
@@ -1814,9 +1824,10 @@ export function createClientApi() {
       /** Review comments to send with this turn (forces the queue; `message` may be empty). A failure is a
        *  `ReviewApiError` (`comments_changed {remaining}`, `review_too_large {limit}`, `not_attached`). */
       reviewCommentIds?: string[],
+      clientMessageId?: string,
     ): Promise<SendChatResponse> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat`, {
+      const init: RequestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1825,8 +1836,20 @@ export function createClientApi() {
           ...(queue ? { queue: true } : {}),
           ...(mentions?.length ? { mentions } : {}),
           ...(reviewCommentIds?.length ? { reviewCommentIds } : {}),
+          clientMessageId: clientMessageId ?? randomId(),
         }),
-      });
+      };
+      const url = `${root}/sessions/${encodeURIComponent(sessionId)}/chat`;
+      let res: Response;
+      try {
+        res = await apiFetch(url, init);
+      } catch (err) {
+        // No HTTP response at all (network drop): the daemon may or may not have
+        // the turn. Same body ⇒ same id ⇒ the daemon dedupes either way.
+        if (!(err instanceof TypeError)) throw err;
+        await new Promise((r) => setTimeout(r, SEND_CHAT_RETRY_DELAY_MS));
+        res = await apiFetch(url, init);
+      }
       return parseReviewJson<SendChatResponse>(res);
     },
 

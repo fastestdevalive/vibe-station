@@ -5,6 +5,7 @@ import type { Attachment, NormalizedEvent, ReviewSummary, SessionMeta } from "@/
 import { createChatRepository } from "@/api/repositories/chatRepository";
 import { ensureTaskSubscription } from "@/hooks/useTaskStore";
 import { fromWire, toWire } from "@/lib/mentions";
+import { randomId } from "@/lib/uuid";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 import { countUserTurns } from "@/lib/chatTurns";
 import { alignForwardPage, firstLogSeq } from "./chatForwardPage";
@@ -756,6 +757,9 @@ export function useChat(
     }
   }, []);
 
+  /** The in-flight / last-failed send attempt (see `send`). */
+  const attemptRef = useRef<{ key: string; id: string } | null>(null);
+
   const send = useCallback(
     async (
       message: string,
@@ -768,12 +772,25 @@ export function useChat(
         returnToLatest();
       }
       const w = toWire(message);
-      // A turn carrying comments always queues (the daemon never steers it); the ids ride as the last argument.
+      // One id per send ATTEMPT: re-sending the same payload after a failure (or a double
+      // click while it is in flight) reuses it, so the daemon dedupes instead of double-sending.
+      const attemptKey = JSON.stringify([sessionId, w.text, w.mentions, attachmentIds ?? null, !!queue, review?.ids ?? null]);
+      const clientMessageId =
+        attemptRef.current?.key === attemptKey ? attemptRef.current.id : randomId();
+      attemptRef.current = { key: attemptKey, id: clientMessageId };
+      // A turn carrying comments always queues (the daemon never steers it); the ids ride as the 6th argument.
       const res = review
-        ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, true, w.mentions.length ? w.mentions : undefined, review.ids)
-        : w.mentions.length === 0
-          ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue)
-          : await chatRepo.sendChat(sessionId, w.text, attachmentIds, queue, w.mentions);
+        ? await chatRepo.sendChat(sessionId, w.text, attachmentIds, true, w.mentions.length ? w.mentions : undefined, review.ids, clientMessageId)
+        : await chatRepo.sendChat(
+            sessionId,
+            w.text,
+            attachmentIds,
+            queue,
+            w.mentions.length === 0 ? undefined : w.mentions,
+            undefined,
+            clientMessageId,
+          );
+      attemptRef.current = null;
       // Dedupe: only add the optimistic bubble if the authoritative `user` event
       // for this turnId hasn't already landed (Decision 12).
       setPending((prev) => {
