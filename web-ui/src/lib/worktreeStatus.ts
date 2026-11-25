@@ -1,5 +1,11 @@
 import type { Session, SessionState } from "@/api/types";
-import { excludeSuperseded } from "@/lib/sessionVisibility";
+import {
+  excludeSuperseded,
+  isSupersededSession,
+  predecessorChain,
+  predecessorIndex,
+} from "@/lib/sessionVisibility";
+import { sessionLabel } from "@/lib/sessionLabel";
 
 export type WorktreeRolledUpStatus =
   | "waiting_for_human"
@@ -85,29 +91,141 @@ export function worktreeRolledUpStatus(
   sessions: Session[],
   live: Record<string, SessionState>,
 ): WorktreeRolledUpStatus {
+  return worktreeRolledUpStatusDetail(sessions, live).status;
+}
+
+/** The rolled-up status plus the agents that produce it. */
+export interface RolledUpStatusDetail {
+  status: WorktreeRolledUpStatus;
+  /** The agents whose own status equals `status`, in input order. */
+  drivers: Session[];
+}
+
+/**
+ * The one rollup loop: `worktreeRolledUpStatus` is this function's `.status`.
+ * `drivers` are the agents behind the dot (e.g. for the "working: a, b"
+ * tooltip) — the same agents, same filter, same live-state resolution, so the
+ * tooltip can never name a session the dot did not count.
+ */
+export function worktreeRolledUpStatusDetail(
+  sessions: Session[],
+  live: Record<string, SessionState>,
+): RolledUpStatusDetail {
   const agents = excludeSuperseded(sessions).filter((s) => s.type === "agent");
-  if (agents.length === 0) return "none";
 
   let best: WorktreeRolledUpStatus = "none";
   let bestRank = 0;
+  let drivers: Session[] = [];
 
   for (const s of agents) {
-    const st = live[s.id] ?? s.state;
-    let step: WorktreeRolledUpStatus;
-    if (st === "not_started") step = "spawning";
-    else if (st === "working") step = "working";
-    else if (st === "idle") step = "idle";
-    else if (st === "waiting_for_human") step = "waiting_for_human";
-    else if (st === "done") step = "done";
-    else if (st === "exited") step = "exited";
-    else step = "none";
-
+    const step = sessionStatus(live[s.id] ?? s.state);
     const r = rank[step];
     if (r > bestRank) {
       bestRank = r;
       best = step;
+      drivers = [s];
+    } else if (r === bestRank && r > 0) {
+      drivers.push(s);
     }
   }
 
-  return best;
+  return { status: best, drivers };
+}
+
+/**
+ * Tooltip detail naming the agents that make a rollup `working`, up to two
+ * names then "+N": `"a, b +2"`. `undefined` for any other status — only
+ * `working` names its agents (a PR colour can mask `waiting_for_human`, so
+ * naming waiting agents on a blue dot would mislead). Desktop-only affordance
+ * (a `title`); phones get the SubagentRow "working below" badge instead.
+ */
+export function workingDriversDetail(detail: RolledUpStatusDetail): string | undefined {
+  if (detail.status !== "working" || detail.drivers.length === 0) return undefined;
+  const names = detail.drivers.map(sessionLabel);
+  const shown = names.slice(0, 2).join(", ");
+  return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
+}
+
+/**
+ * Parent→children index over the WHOLE session list, built once per list
+ * (callers memoise it on the server store's `sessions`) so the per-render
+ * descendant walk never re-scans the list.
+ */
+export interface DescendantIndex {
+  byId: Map<string, Session>;
+  /** `parentSessionId` → sessions carrying it (any type/state). */
+  childrenByParent: Map<string, Session[]>;
+  /** successor id → the session it superseded (`predecessorIndex`). */
+  predecessorOf: Map<string, Session>;
+}
+
+export function buildDescendantIndex(sessions: Session[]): DescendantIndex {
+  const byId = new Map<string, Session>();
+  const childrenByParent = new Map<string, Session[]>();
+  for (const s of sessions) {
+    byId.set(s.id, s);
+    if (s.parentSessionId) {
+      const list = childrenByParent.get(s.parentSessionId);
+      if (list) list.push(s);
+      else childrenByParent.set(s.parentSessionId, [s]);
+    }
+  }
+  return { byId, childrenByParent, predecessorOf: predecessorIndex(sessions) };
+}
+
+/**
+ * Every descendant agent of `root` that the worktree rollup would also count:
+ * same filter as `worktreeRolledUpStatusDetail` (agents only, superseded rows
+ * dropped unless their replacement is gone, archived rows KEPT — the rollup
+ * counts them too) plus same scope as the dot (same worktree; for direct
+ * sessions, same project). Children of a reset session still carry the
+ * archived predecessor's id, so each node is expanded through its whole
+ * `predecessorChain` (the walk `ancestorIds` uses). No depth limit — the dot
+ * counts every depth; `seen` guards against parent cycles.
+ * Excludes `root` itself; order is breadth-first.
+ */
+export function descendantAgents(root: Session, index: DescendantIndex): Session[] {
+  const out: Session[] = [];
+  const seen = new Set<string>([root.id]);
+  const inScope = (s: Session) =>
+    s.worktreeId === root.worktreeId && (root.worktreeId != null || s.projectId === root.projectId);
+  let frontier: Session[] = [root];
+  while (frontier.length > 0) {
+    const next: Session[] = [];
+    for (const node of frontier) {
+      // Children of a reset node point at one of its predecessors.
+      for (const key of predecessorChain(node, index.predecessorOf)) {
+        for (const child of index.childrenByParent.get(key.id) ?? []) {
+          if (seen.has(child.id)) continue;
+          seen.add(child.id);
+          if (child.type !== "agent" || !inScope(child) || isSupersededSession(child, index.byId)) {
+            continue;
+          }
+          out.push(child);
+          next.push(child);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return out;
+}
+
+/**
+ * The working agents under `root` (see `descendantAgents`), live state via
+ * `live[id] ?? s.state`, most recently active first (ties by id) so "open the
+ * working one" is deterministic.
+ */
+export function workingDescendants(
+  root: Session,
+  index: DescendantIndex,
+  live: Record<string, SessionState>,
+): Session[] {
+  const activity = (s: Session) => {
+    const t = s.lastActivityAt ? Date.parse(s.lastActivityAt) : NaN;
+    return Number.isNaN(t) ? -Infinity : t;
+  };
+  return descendantAgents(root, index)
+    .filter((s) => (live[s.id] ?? s.state) === "working")
+    .sort((a, b) => activity(b) - activity(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }

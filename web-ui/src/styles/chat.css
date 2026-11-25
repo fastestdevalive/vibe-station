@@ -1546,6 +1546,38 @@
      with no "…" when hovering the parent chip). */
   padding-right: 1.75rem;
 }
+/* A child chip plus its optional "N working below" badge. The badge is a
+   sibling button (never nested in the role=button chip) and never a status
+   dot: the child's own dot keeps the child's own lifecycle. */
+.chat-subagent-row__group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+}
+.chat-subagent-row__below {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-subtle);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chat-subagent-row__below:hover {
+  color: var(--fg-primary);
+  background: var(--bg-card);
+}
+/* Touch: a taller, wider button is the hit area (no pseudo-element). */
+@media (pointer: coarse) {
+  .chat-subagent-row__below {
+    min-height: 28px;
+    padding: var(--space-1) var(--space-3);
+  }
+}
 .chat-subagent-row__more {
   font-size: var(--fs-body-sans);
   color: var(--fg-muted);

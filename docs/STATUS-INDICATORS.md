@@ -340,6 +340,25 @@ a pane that died before the option was set, plain terminals) is still `exited` w
     dashboard: both resolve the tile's/pane's worktree PR via `worktreePrStatus()` — never a
     sibling session's own `session.pr` directly — and branch-guard it against that worktree's
     current branch before applying it to the tile/pane border.
+- **Who makes a worktree "working", and agents hidden below a subagent** (no colour, glyph or
+  bucket change). The rolled-up worktree dot counts every agent in the worktree at any depth,
+  while a Rich Chat pane's `SubagentRow` lists only its direct children — so a grandchild that is
+  working could drive the dot while every visible row reads waiting. Two read-only aids explain
+  the dot; neither is a second rollup:
+  - **Tooltip:** `worktreeRolledUpStatusDetail()` (`worktreeStatus.ts`) is the one rollup loop —
+    `worktreeRolledUpStatus()` is its `.status` — and also returns `driverIds`, the agents at the
+    winning rank. `StatusDot`'s optional `detail` ("working: a, b +2", `workingDriversDetail()`)
+    is appended to `title` and `aria-label` **only when the resolved class is `working`** (a PR
+    colour can mask `waiting_for_human`, so waiting agents are never named on a PR dot). Sidebar
+    worktree + pinned rows and the collapsed rail's flyout rows pass it. Desktop only (a `title`).
+  - **"N working below" badge** in `SubagentRow`, next to a direct child whose subtree has working
+    agents (`workingDescendants()`): same filter and scope as the dot (agents, `excludeSuperseded`
+    semantics, same worktree / same project for direct sessions, `sessionStates[id] ?? state`,
+    archived agents counted because the rollup counts them), reset chains followed like
+    `ancestorIds` (one shared `predecessorChain` walk), cycle-guarded, at any depth (no cap — the
+    dot has none either). It is a separate button that opens the most recently active working
+    descendant; the child's own dot still shows the child's own lifecycle. This is the phone
+    affordance.
 
 ## Testing without a daemon
 

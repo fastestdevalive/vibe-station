@@ -6,7 +6,13 @@ import { usePortalRoot } from "../../context/DemoEnv";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreePrStatus } from "@/lib/statusColor";
-import { sessionStatus, worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import {
+  sessionStatus,
+  worktreeRolledUpStatus,
+  worktreeRolledUpStatusDetail,
+  workingDriversDetail,
+  type WorktreeRolledUpStatus,
+} from "@/lib/worktreeStatus";
 import { sessionLabel, worktreeLabel } from "@/lib/sessionLabel";
 import type { WorkspaceDoc } from "@/hooks/useStore";
 
@@ -355,6 +361,7 @@ function WorktreeRow({
   hint?: string;
   onClick: (e: React.MouseEvent) => void;
 }) {
+  const rollup = worktreeRolledUpStatusDetail(sessions, sessionStates as Record<string, SessionState>);
   return (
     <Link
       to={`/worktree/${w.id}`}
@@ -364,8 +371,9 @@ function WorktreeRow({
       onClick={onClick}
     >
       <StatusDot
-        status={worktreeRolledUpStatus(sessions, sessionStates as Record<string, SessionState>)}
+        status={rollup.status}
         pr={worktreePrStatus(sessions, w.branch)}
+        detail={workingDriversDetail(rollup)}
       />
       <span className="collapsed-rail__flyout-label">{worktreeLabel(w)}</span>
       {hint ? <span className="collapsed-rail__flyout-hint">{hint}</span> : null}

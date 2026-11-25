@@ -512,3 +512,59 @@ describe("SubagentRow — chip label ellipsis (verification bug 3)", () => {
   });
 
 });
+
+describe("SubagentRow — 'N working below' badge (worktree dot vs idle visible agents)", () => {
+  it("shows a badge on a waiting child whose grandchild is working; the child's own dot stays waiting", () => {
+    const parent = makeSession({ id: "p1", state: "waiting_for_human" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "orchestrator", state: "waiting_for_human" });
+    const grand = makeSession({ id: "g1", parentSessionId: "c1", name: "verifier", state: "working" });
+    seedSessions([parent, child, grand]);
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const chip = screen.getByText("orchestrator").closest(".chat-subagent-row__item") as HTMLElement;
+    expect(chip.querySelector(".status-dot--waiting_for_human")).toBeTruthy();
+    expect(chip.querySelector(".status-spinner")).toBeNull();
+    // Not nested inside the role=button chip.
+    expect(chip.querySelector(".chat-subagent-row__below")).toBeNull();
+    const badge = screen.getByRole("button", { name: "1 working below orchestrator, open verifier" });
+    expect(badge).toHaveTextContent("1 working below");
+    // The grandchild is not listed as a direct child chip.
+    expect(screen.queryByText("verifier")).not.toBeInTheDocument();
+  });
+
+  it("clicking the badge opens the working descendant, not the child", async () => {
+    const parent = makeSession({ id: "p1", state: "waiting_for_human" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "orchestrator", state: "waiting_for_human" });
+    const g1 = makeSession({ id: "g1", parentSessionId: "c1", name: "older", lastActivityAt: "2026-01-01T00:00:00Z" });
+    const g2 = makeSession({ id: "g2", parentSessionId: "g1", name: "newer", lastActivityAt: "2026-01-02T00:00:00Z" });
+    seedSessions([parent, child, g1, g2]);
+    const onOpen = vi.fn();
+    render(<SubagentRow session={parent} onOpen={onOpen} />);
+    await userEvent.click(screen.getByRole("button", { name: /^2 working below orchestrator, open newer$/ }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen.mock.calls[0]![0].id).toBe("g2");
+  });
+
+  it("follows live sessionStates: the badge appears and disappears without re-seeding", () => {
+    const parent = makeSession({ id: "p1", state: "waiting_for_human" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "orchestrator", state: "waiting_for_human" });
+    const grand = makeSession({ id: "g1", parentSessionId: "c1", name: "verifier", state: "waiting_for_human" });
+    seedSessions([parent, child, grand]);
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    expect(document.querySelector(".chat-subagent-row__below")).toBeNull();
+    act(() => useWorkspaceStore.setState({ sessionStates: { g1: "working" } }));
+    expect(screen.getByRole("button", { name: /1 working below orchestrator/ })).toBeInTheDocument();
+    act(() => useWorkspaceStore.setState({ sessionStates: { g1: "waiting_for_human" } }));
+    expect(document.querySelector(".chat-subagent-row__below")).toBeNull();
+  });
+
+  it("no badge for a cross-worktree child or when only terminals are below", () => {
+    const parent = makeSession({ id: "p1" });
+    const far = makeSession({ id: "c1", parentSessionId: "p1", name: "far", worktreeId: "wt-2" });
+    const farGrand = makeSession({ id: "g1", parentSessionId: "c1", worktreeId: "wt-2" });
+    const near = makeSession({ id: "c2", parentSessionId: "p1", name: "near", state: "waiting_for_human" });
+    const term = makeSession({ id: "t1", parentSessionId: "c2", type: "terminal" });
+    seedSessions([parent, far, farGrand, near, term]);
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    expect(document.querySelector(".chat-subagent-row__below")).toBeNull();
+  });
+});

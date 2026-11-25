@@ -47,7 +47,11 @@ import { SessionModeIcon } from "@/components/agent/SessionModeIcon";
 import { AccountBadge } from "@/components/accounts/AccountBadge";
 import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
-import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import {
+  worktreeRolledUpStatusDetail,
+  workingDriversDetail,
+  type WorktreeRolledUpStatus,
+} from "@/lib/worktreeStatus";
 import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
 import { renderDraftText } from "@/lib/mentions";
 import { pickNextDirectAgent, projectTabIds, isSupersededSession } from "@/lib/sessionVisibility";
@@ -1881,6 +1885,8 @@ export function LeftSidebar({
                     const proj = projectById[w.projectId];
                     const isActive = activeWorktreeId === w.id && location.pathname.startsWith("/worktree/");
                     const label = worktreeLabel(w);
+                    const wtSessions = sessionMap[w.id] ?? [];
+                    const rollup = worktreeRolledUpStatusDetail(wtSessions, sessionStates);
                     return (
                       <SortableRow key={`pinned-${w.id}`} id={w.id}>
                         {({ setNodeRef, style, attributes, listeners }) => (
@@ -1923,8 +1929,9 @@ export function LeftSidebar({
                               />
                               <span className="wt-leading-slot pinned-row__leading">
                                 <StatusDot
-                                  status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
-                                  pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
+                                  status={rollup.status}
+                                  pr={worktreePrStatus(wtSessions, w.branch)}
+                                  detail={workingDriversDetail(rollup)}
                                 />
                               </span>
                               <div className="pinned-row__text">
@@ -2799,6 +2806,8 @@ export function LeftSidebar({
                           const label = worktreeLabel(w);
                           const bulkSelecting = bulkMode != null;
                           const bulkStatus = bulkStatusById?.get(w.id);
+                          const wtSessions = sessionMap[w.id] ?? [];
+                          const rollup = worktreeRolledUpStatusDetail(wtSessions, sessionStates);
                           return (
                             <SortableRow key={w.id} id={w.id}>
                               {({ setNodeRef, style, attributes, listeners }) => (
@@ -2856,8 +2865,9 @@ export function LeftSidebar({
                                       {!collapsed ? (
                                         <span className="wt-leading-slot">
                                           <StatusDot
-                                            status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
-                                            pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
+                                            status={rollup.status}
+                                            pr={worktreePrStatus(wtSessions, w.branch)}
+                                            detail={workingDriversDetail(rollup)}
                                           />
                                         </span>
                                       ) : null}
@@ -2900,10 +2910,7 @@ export function LeftSidebar({
                                         <BulkRowTrail
                                           label={label}
                                           checked={bulkSelecting ? bulkSelected.has(w.id) : null}
-                                          running={
-                                            worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates) ===
-                                            "working"
-                                          }
+                                          running={rollup.status === "working"}
                                           diffStat={<WorktreeDiffStatBadge worktreeId={w.id} />}
                                           jobStatus={bulkStatus}
                                           jobAction={bulkJob?.action}

@@ -25,6 +25,20 @@ describe("StatusDot (5.T5 — one indicator, D17/D18)", () => {
     expect(getByLabelText("status: waiting_for_human")).toBeInTheDocument();
   });
 
+  it("detail names the working agents in title AND aria-label", () => {
+    const { container, getByLabelText } = render(<StatusDot status="working" pr={null} detail="a, b +2" />);
+    expect(getByLabelText("status: working: a, b +2")).toBeInTheDocument();
+    expect(container.querySelector(".status-spinner")).toHaveAttribute("title", "working: a, b +2");
+  });
+
+  it("detail is ignored unless the resolved class is working (a PR colour must not name waiting agents)", () => {
+    const { container, getByLabelText } = render(
+      <StatusDot status="waiting_for_human" pr={pr("open")} detail="someone" />,
+    );
+    expect(getByLabelText("status: pr-open")).toBeInTheDocument();
+    expect(container.querySelector(".status-dot")).toHaveAttribute("title", "pr-open");
+  });
+
   it("working renders a circular spinner element", () => {
     const { container, getByLabelText } = render(<StatusDot status="working" pr={null} />);
     expect(container.querySelector(".status-spinner")).toBeInTheDocument();
