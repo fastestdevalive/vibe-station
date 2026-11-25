@@ -655,6 +655,8 @@ export function createMockApi(seed: MockSeed = {}) {
     }
   }
   let mockTurnSeq = 0;
+  /** `sessionId:clientMessageId` → the first send's result (daemon-style idempotency). */
+  const sentByClientId = new Map<string, SendChatResponse>();
   let mockTaskRev = 0;
 
   const mockComments = createMockComments(emit, (scopeId) => {
@@ -2508,7 +2510,13 @@ export function createMockApi(seed: MockSeed = {}) {
       _queue?: boolean,
       mentions?: Mention[],
       reviewCommentIds?: string[],
+      clientMessageId?: string,
     ): Promise<SendChatResponse> {
+      // Mirrors the daemon: a repeat of (session, clientMessageId) returns the
+      // original result and emits nothing.
+      const dedupeKey = clientMessageId ? `${sessionId}:${clientMessageId}` : null;
+      const seen = dedupeKey ? sentByClientId.get(dedupeKey) : undefined;
+      if (seen) return seen;
       const turnId = `turn-${++mockTurnSeq}`;
       let review: ReviewRecord | undefined;
       if (reviewCommentIds?.length) {
@@ -2530,10 +2538,13 @@ export function createMockApi(seed: MockSeed = {}) {
           : {}),
         ...(mentions?.length ? { mentions } : {}),
         ...(review ? { review } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
       };
       api.__test.pushChatEvent(sessionId, userEvent);
       emit({ type: "session:message", sessionId, event: userEvent });
-      return { turnId, queuePosition: 0 };
+      const result: SendChatResponse = { turnId, queuePosition: 0 };
+      if (dedupeKey) sentByClientId.set(dedupeKey, result);
+      return result;
     },
 
     async stopChat(_sessionId: string, _turnId?: string): Promise<{ ok: true; stopped?: boolean }> {

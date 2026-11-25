@@ -1039,10 +1039,12 @@ describe("useChat mentions (1.T8)", () => {
       undefined,
       undefined,
       [{ kind: "file", id: "a.ts", label: "a.ts" }],
+      undefined,
+      expect.any(String),
     );
   });
 
-  it("send without mentions calls sendChat with exactly 4 args (regression)", async () => {
+  it("send without mentions calls sendChat with no mentions/review and a trailing clientMessageId (regression)", async () => {
     const api = makeApi();
     const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
 
@@ -1050,8 +1052,8 @@ describe("useChat mentions (1.T8)", () => {
       await result.current.send("hello world");
     });
 
-    expect(api.sendChat).toHaveBeenCalledWith("s1", "hello world", undefined, undefined);
-    expect(api.sendChat.mock.calls[0]?.length).toBe(4);
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "hello world", undefined, undefined, undefined, undefined, expect.any(String));
+    expect(api.sendChat.mock.calls[0]?.length).toBe(7);
   });
 
   it("saveEdit puts mentions in the resubmit body", async () => {
@@ -1099,7 +1101,7 @@ describe("useChat review comments (6.4 / 6.5)", () => {
     await act(async () => {
       await result.current.send("see these", [], undefined, { ids: ["c1", "c2"], summary: { count: 2, files: 1 } });
     });
-    expect(api.sendChat).toHaveBeenCalledWith("s1", "see these", [], true, undefined, ["c1", "c2"]);
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "see these", [], true, undefined, ["c1", "c2"], expect.any(String));
     expect(result.current.pending[0]).toMatchObject({ turnId: "t9", queued: true, review: { count: 2, files: 1 } });
   });
 
@@ -1109,7 +1111,7 @@ describe("useChat review comments (6.4 / 6.5)", () => {
     await act(async () => {
       await result.current.send("", [], undefined, { ids: ["c1"], summary: { count: 1, files: 1 } });
     });
-    expect(api.sendChat).toHaveBeenCalledWith("s1", "", [], true, undefined, ["c1"]);
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "", [], true, undefined, ["c1"], expect.any(String));
   });
 
   it("a plain send keeps its old call shape (no review argument)", async () => {
@@ -1118,7 +1120,33 @@ describe("useChat review comments (6.4 / 6.5)", () => {
     await act(async () => {
       await result.current.send("hi", []);
     });
-    expect(api.sendChat).toHaveBeenCalledWith("s1", "hi", [], undefined);
+    expect(api.sendChat).toHaveBeenCalledWith("s1", "hi", [], undefined, undefined, undefined, expect.any(String));
+  });
+
+  it("clientMessageId: a failed send re-sent with the same payload reuses its id; a changed payload or a success starts a new one", async () => {
+    const api = makeApi();
+    const ids = () => api.sendChat.mock.calls.map((c) => (c as unknown[])[6] as string);
+    api.sendChat.mockRejectedValueOnce(new Error("offline"));
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+    await act(async () => {
+      await result.current.send("hi").catch(() => undefined);
+    });
+    await act(async () => {
+      await result.current.send("hi"); // user re-clicks Send: same payload
+    });
+    expect(ids()[1]).toBe(ids()[0]);
+    await act(async () => {
+      await result.current.send("hi"); // the previous send succeeded: a genuinely new message
+    });
+    expect(ids()[2]).not.toBe(ids()[1]);
+    api.sendChat.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await result.current.send("one").catch(() => undefined);
+    });
+    await act(async () => {
+      await result.current.send("two");
+    });
+    expect(ids()[4]).not.toBe(ids()[3]);
   });
 
   it("editQueued keeps the held turn's review summary and saveEdit(.., false) tells the daemon to restore it", async () => {

@@ -77,9 +77,9 @@ describe("comments client methods (4.2)", () => {
     fetchMock.mockResolvedValue(res(202, { turnId: "t", id: "i", fireAt: "x" }));
     const api = createClientApi();
     await api.sendChat("s", "hi");
-    expect(body(0)).toEqual({ message: "hi" });
+    expect(body(0)).toEqual({ message: "hi", clientMessageId: expect.any(String) });
     await api.sendChat("s", "", undefined, true, undefined, ["a"]);
-    expect(body(1)).toEqual({ message: "", queue: true, reviewCommentIds: ["a"] });
+    expect(body(1)).toEqual({ message: "", queue: true, reviewCommentIds: ["a"], clientMessageId: expect.any(String) });
     await api.scheduleMessage("s", "", "2030-01-01T00:00:00Z", undefined, ["a", "b"]);
     expect(body(2)).toEqual({ message: "", fireAt: "2030-01-01T00:00:00Z", reviewCommentIds: ["a", "b"] });
     await api.scheduleMessage("s", "m", "2030-01-01T00:00:00Z");
