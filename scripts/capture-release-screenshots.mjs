@@ -24,9 +24,6 @@
  * artifacts list are injected for this browser only (REST + WS interception), so no real accounts are needed. The
  * review-comment shots (v0.0.4-beta 05/06) create real comments in the sandbox through the UI and delete exactly
  * those afterwards: point LIVE_URL at a throwaway sandbox, never at a daemon you use.
- *
- * v0.0.8-beta 01: the worktree dot's tooltip is a native `title`, which headless screenshots never show; the shot
- * draws that attribute's own text as an overlay below the pointer (app tokens), nothing else is added.
  */
 
 import { mkdir, writeFile, rm } from "node:fs/promises";
@@ -740,68 +737,30 @@ const SHOTS = [
   {
     release: "v0.0.8-beta",
     file: "01-working-below.png",
-    title: "status",
+    title: "subagents",
     async run(browser) {
-      // A grandchild agent is the only one working: the worktree dot says "working" while the main session's
-      // direct subagent waits. The family links and names are patched for this browser only (the seed already
-      // runs napi-1-a2 as working).
+      // A grandchild agent is the only one working: the main session's direct subagent waits, and its chip gets a
+      // "1 working below" button. The family links and names are patched for this browser only (the seed already
+      // runs napi-1-a2 as working). One crop of the real chat pane, nothing drawn on top.
       const patch = {
         "napi-1-a1": { parentSessionId: SESSION, name: "auth tests", nameSource: "user" },
         "napi-1-a2": { parentSessionId: "napi-1-a1", name: "token refresh", nameSource: "user" },
       };
       const { ctx, page } = await openApp(browser, { chats: { [SESSION]: CHAT_SCHEDULE }, inject: { patch } });
-      const below = page.locator(".chat-subagent-row__below").first();
-      await below.waitFor();
-      const dot = page.locator('.status-spinner[title^="working: "]').first();
-      await dot.waitFor();
-      const db = await box(dot);
-      await page.mouse.move(db.x + db.width / 2, db.y + db.height / 2);
-      // The dot's tooltip is its native `title`, which a headless screenshot cannot show: draw the same text,
-      // read from the attribute, where the browser puts it (below the pointer), in the app's own popover tokens.
-      const tip = await dot.evaluate((el) => {
-        const r = el.getBoundingClientRect();
-        const t = document.createElement("div");
-        t.id = "release-shot-tip";
-        t.textContent = el.getAttribute("title");
-        Object.assign(t.style, {
-          position: "fixed", left: `${r.left + 4}px`, top: `${r.bottom + 12}px`, zIndex: "10000",
-          padding: "3px 8px", whiteSpace: "nowrap", pointerEvents: "none",
-          background: "var(--bg-elevated)", color: "var(--fg-primary)", fontSize: "var(--font-size-xs)",
-          border: "var(--border-width) solid var(--border-default)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-md)",
-        });
-        document.body.appendChild(t);
-        const b = t.getBoundingClientRect();
-        return { x: b.x, y: b.y, width: b.width, height: b.height };
-      });
-      await page.waitForTimeout(600);
-      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
-      // A: the worktree row (with its project heading) and the tooltip. B: the main session's subagent row and composer.
-      const row = await dot.evaluate((el) => {
-        let n = el;
-        while (n.parentElement && n.getBoundingClientRect().width < 160) n = n.parentElement;
-        const r = n.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      });
-      // The sidebar ends where the agent pane starts; from the project heading down past the next worktree row.
-      const sideW = (await box(page.locator(".agent-pane-slot").first())).x - 1;
-      const aTop = row.y - 50;
-      const aClip = inView({ x: 0, y: aTop, width: Math.max(sideW, tip.x + tip.width + 14), height: Math.max(tip.y + tip.height + 14, row.y + 3 * row.height + 8) - aTop });
-      await page.screenshot({ path: join(RAW_DIR, `a-${this.file}`), clip: aClip });
+      await page.locator(".chat-subagent-row__below").first().waitFor();
       await page.mouse.move(1300, 700);
-      await page.evaluate(() => document.getElementById("release-shot-tip")?.remove());
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(900);
+      if (process.env.FULL) await page.screenshot({ path: join(RAW_DIR, `full-${this.file}`) });
+      // The chat pane's footer: the subagent row (from its own top, below the footer's border) down to the composer's hint
+      // line, inside the pane's border.
       const pane = await box(page.locator(".agent-pane-slot").first());
       const sub = await box(page.locator(".chat-subagent-row").first());
       const c = await box(page.locator(".chat-composer").first());
-      const bottom = c.y + c.height + 2;
-      const top = sub.y - 6; // below the composer area's top border
-      const bClip = inView({ x: pane.x + 1, y: top, width: pane.width - 2, height: bottom - top });
-      await page.screenshot({ path: join(RAW_DIR, `b-${this.file}`), clip: bClip });
+      const top = sub.y;
+      const clip = inView({ x: pane.x + 1, y: top, width: pane.width - 2, height: c.y + c.height + 2 - top });
+      await page.screenshot({ path: join(RAW_DIR, this.file), clip });
       await closeCtx(ctx);
-      return sideBySide(browser, this.file, [
-        { file: `a-${this.file}`, w: aClip.width, h: aClip.height },
-        { file: `b-${this.file}`, w: bClip.width, h: bClip.height },
-      ]);
+      return clip;
     },
   },
   {
