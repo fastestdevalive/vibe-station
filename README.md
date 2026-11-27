@@ -14,7 +14,7 @@ A local-first orchestrator for parallel AI coding agents — Claude Code, Cursor
 [![Downloads](https://img.shields.io/github/downloads/fastestdevalive/vibe-station/total?label=downloads)](https://github.com/fastestdevalive/vibe-station/releases)
 [![Desktop Build](https://img.shields.io/github/actions/workflow/status/fastestdevalive/vibe-station/desktop-build.yml?branch=main&label=build)](https://github.com/fastestdevalive/vibe-station/actions/workflows/desktop-build.yml)
 
-[Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Docs](docs/) · [Architecture](#architecture)
+[Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Mobile app](#your-phone-in-your-pocket) · [Docs](docs/) · [Architecture](#architecture)
 
 <br />
 
@@ -58,7 +58,26 @@ Browse the working tree live as agents edit it, read diffs (`local` vs `HEAD`, o
 
 ### Your phone, in your pocket
 
-Turn on **Settings → Remote Access** and scan a QR code. The QR carries a short-lived one-time code; nothing leaves your machine unless you enable the tunnel.
+**Vibe Station: Mobile ADE** is a native Android and iOS app for the daemon you run. It is a viewer and remote control: the agents on your server write the code; from your phone you see every agent across your servers, chat with them, review diffs and Git changes, navigate the code, and drop into a terminal.
+
+<p align="center">
+  <a href="https://apps.apple.com/app/id6831024882"><img src="https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Download Vibe Station: Mobile ADE on the App Store" height="32" /></a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=ai.vibestation.mobile"><img src="https://img.shields.io/badge/Google_Play-Download-01875F?style=for-the-badge&logo=googleplay&logoColor=white" alt="Get Vibe Station: Mobile ADE on Google Play" height="32" /></a>
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center" width="25%"><img src="docs/screenshots/mobile/01-dashboard.jpg" width="200" alt="Mobile app dashboard listing every agent across servers, grouped into needs you, working and PR" /><br /><sub><b>Every agent, one glance</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/mobile/05-rich-chat-terminal.jpg" width="200" alt="An agent in Rich Chat next to the same agent in a terminal with an extra-keys row" /><br /><sub><b>Rich Chat or terminal</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/mobile/06-plan-review.jpg" width="200" alt="An agent's plan in chat and the resulting diff in the review pane" /><br /><sub><b>Plan it, then review it</b></sub></td>
+    <td align="center" width="25%"><img src="docs/screenshots/mobile/04-widgets.jpg" width="200" alt="Home screen widgets with pinned agents, a needs-you count and server status" /><br /><sub><b>Agents on your home screen</b></sub></td>
+  </tr>
+</table>
+
+Beyond what the browser UI gives you, the app adds home screen widgets (pinned agents, needs-you counts, plan usage limits), alerts when an agent needs you, a native terminal with an extra-keys row for Esc, Ctrl and the arrows, and a demo mode you can try without a server.
+
+**Prefer the browser?** The web UI works in a phone browser as is, and can be installed as a PWA (see [Mobile access](#mobile-access--pwa)). Turn on **Settings → Remote Access** and scan a QR code. The QR carries a short-lived one-time code; nothing leaves your machine unless you enable the tunnel.
 
 <p align="center">
   <img src="docs/screenshots/04-remote-access-qr.png" alt="Pairing a phone with a one-time QR code" width="860" />
@@ -80,9 +99,9 @@ Open any file from the worktree's file tree — Markdown renders inline, with mu
 
 <img src="docs/screenshots/07-markdown-file-tree.png" alt="Light-mode workspace with a Rich Chat agent, the file tree, file tabs and a rendered Markdown plan" width="900" />
 
-### Three front ends, one daemon
+### Four front ends, one daemon
 
-A native **desktop app** for daily use, the **browser UI** (and installable PWA) for any device, and the **`vst` CLI** for scripting, CI, and for agents driving other agents. All three are thin clients over the same daemon.
+A native **desktop app** for daily use, the **browser UI** (and installable PWA) for any device, the native **mobile app** for [Android](https://play.google.com/store/apps/details?id=ai.vibestation.mobile) and [iOS](https://apps.apple.com/app/id6831024882) to steer agents from your phone, and the **`vst` CLI** for scripting, CI, and for agents driving other agents. All four are thin clients over the same daemon.
 
 ---
 
@@ -165,6 +184,8 @@ A [Tauri v2](https://v2.tauri.app) shell (Rust + the system webview) around the 
 ---
 
 ## Mobile access & PWA
+
+On a phone, use the native app ([App Store](https://apps.apple.com/app/id6831024882) · [Google Play](https://play.google.com/store/apps/details?id=ai.vibestation.mobile)) or the browser UI / PWA; either way the phone has to reach your daemon:
 
 | Mode | How it works | When to use |
 |---|---|---|
@@ -288,6 +309,7 @@ flowchart LR
     direction TB
     cli["vst CLI<br/>scripting + automation"]
     browser["Browser / PWA<br/>desktop + mobile"]
+    mobile["Mobile app<br/>Android + iOS"]
   end
 
   subgraph daemonbox ["vst-daemon (Rust) — 127.0.0.1:7421"]
@@ -309,12 +331,14 @@ flowchart LR
   user --> desktop
   user --> cli
   user --> browser
+  user --> mobile
   shell -->|supervises| rest
   shell --- webview
   webview -->|HTTP + WS| rest
   cli -->|HTTP| rest
   browser -->|HTTP| rest
   browser <-->|WebSocket| ws
+  mobile -->|HTTP + WS| rest
   rest --- state
   rest --- tunnel
   rest -->|spawn / terminate| tmux
@@ -324,7 +348,7 @@ flowchart LR
 ```
 
 - **The daemon is the only stateful component.** It owns the SQLite database, spawns agents into tmux, and broadcasts terminal output, Rich Chat events and lifecycle changes over WebSocket.
-- **Desktop, browser and CLI are thin clients.** Every action is an HTTP call to the daemon.
+- **Desktop, browser, mobile app and CLI are thin clients.** Every action is an HTTP call to the daemon.
 - **Each worktree** is an isolated checkout with one or more sessions. Agents in different worktrees never see each other.
 - **Sessions outlive the daemon.** tmux sessions survive a restart and reattach; Claude sessions also resume their conversation.
 

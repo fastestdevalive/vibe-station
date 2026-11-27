@@ -44,6 +44,9 @@ them without recapturing. Scene times and the wallpaper live at the top of the s
 | `06-markdown-customization.png` | Settings → Markdown with live preview |
 | `07-markdown-file-tree.png` | Light-mode workspace: Rich Chat agent with history, file tree, file tabs, rendered `.md` — captured from a running sandbox (`LIVE_URL`), on the dark `dusk` wallpaper |
 
+`mobile/*.jpg` are static, not generated: 660px-wide copies of the mobile app's store-listing marketing designs (from the
+`vibe-station-mobile` repo's `docs/readme/`), shown in the README's phone section; replace them by hand.
+
 ## Release-notes screenshots
 
 `docs/screenshots/release/<tag>/*.png` are the small framed crops embedded in a release's notes (see
