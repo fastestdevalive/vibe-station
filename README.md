@@ -14,15 +14,44 @@ A local-first orchestrator for parallel AI coding agents — Claude Code, Cursor
 [![Downloads](https://img.shields.io/github/downloads/fastestdevalive/vibe-station/total?label=downloads)](https://github.com/fastestdevalive/vibe-station/releases)
 [![Desktop Build](https://img.shields.io/github/actions/workflow/status/fastestdevalive/vibe-station/desktop-build.yml?branch=main&label=build)](https://github.com/fastestdevalive/vibe-station/actions/workflows/desktop-build.yml)
 
-[Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Mobile app](#your-phone-in-your-pocket) · [Docs](docs/) · [Architecture](#architecture)
-
-<br />
-
-<img src="docs/screenshots/01-dashboard.png" alt="vibe-station dashboard — every agent across every project on one board" width="900" />
+[Overview](#overview) · [Mobile apps](#mobile-apps) · [Features](#features) · [Install](#install) · [Quick start](#quick-start) · [Docs](docs/) · [Architecture](#architecture)
 
 </div>
 
+## Overview
+
+vibe-station runs several AI coding agents at once on your own machine. Each task gets its own git worktree and branch, and every agent, in every project, shows up on one board with its status: working, needs you, idle, or PR created. A local daemon does the work; the desktop app, the browser UI, the mobile apps and the `vst` CLI are clients of that daemon.
+
 Everything runs on your machine. No accounts, no cloud service, no telemetry.
+
+### Mobile apps
+
+**Vibe Station: Mobile ADE** is a native Android and iOS app for the daemon you run. It is a viewer and remote control: the agents on your server write the code, and from the phone you see every agent across your servers, answer the ones that need you in Rich Chat, review diffs and Git changes, and open a terminal. Pair it by scanning the QR code in **Settings → Remote Access** on your computer, or tap **Try demo** in the app to look around without a server.
+
+<p align="center">
+  <a href="https://apps.apple.com/app/id6831024882"><img src="https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Download Vibe Station: Mobile ADE on the App Store" height="32" /></a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=ai.vibestation.mobile"><img src="https://img.shields.io/badge/Google_Play-Download-01875F?style=for-the-badge&logo=googleplay&logoColor=white" alt="Get Vibe Station: Mobile ADE on Google Play" height="32" /></a>
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/01-home-widgets.jpg" width="260" alt="Android home screen with Vibe Station widgets: pinned agents, a count of three agents that need you, plan usage limits for Claude and Codex, and a project card listing its worktrees" /><br /><sub><b>Home screen widgets</b></sub></td>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/02-home-widgets-dark.jpg" width="260" alt="Android home screen in dark mode with Vibe Station widgets: server status with one machine offline, a worktree card, two single-agent cards and a needs-you count" /><br /><sub><b>More widgets, dark mode</b></sub></td>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/03-dashboard.jpg" width="260" alt="Mobile dashboard listing agents grouped into needs you, working, PR and idle, with Claude plan usage at the top" /><br /><sub><b>Who needs you</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/04-rich-chat.jpg" width="260" alt="Rich Chat with an agent: the user's request, the agent's file read and edit, a code block and its question back" /><br /><sub><b>Rich Chat</b></sub></td>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/05-review-diff.jpg" width="260" alt="Review pane showing the diff of auth.rs against HEAD, one of seven changed files" /><br /><sub><b>Review the diff</b></sub></td>
+    <td align="center" valign="top" width="33%"><img src="docs/screenshots/mobile/06-terminal.jpg" width="260" alt="Terminal in the agent's worktree after a test run and git status, with a row of Esc and Ctrl-C keys" /><br /><sub><b>Terminal</b></sub></td>
+  </tr>
+</table>
+
+Home screen widgets (Android and iOS) show pinned agents, needs-you counts, plan usage limits, single agents, worktrees and projects, and server status. The app also alerts you when an agent needs you, and its terminal has extra keys for Esc, Ctrl and the arrows. The phone has to reach your daemon over your network or a tunnel; see [Mobile access](#mobile-access--pwa).
+
+<p align="center">
+  <img src="docs/screenshots/01-dashboard.png" alt="vibe-station dashboard — every agent across every project on one board" width="900" />
+</p>
 
 ---
 
@@ -58,24 +87,7 @@ Browse the working tree live as agents edit it, read diffs (`local` vs `HEAD`, o
 
 ### Your phone, in your pocket
 
-**Vibe Station: Mobile ADE** is a native Android and iOS app for the daemon you run. It is a viewer and remote control: the agents on your server write the code; from your phone you see every agent across your servers, chat with them, review diffs and Git changes, navigate the code, and drop into a terminal.
-
-<p align="center">
-  <a href="https://apps.apple.com/app/id6831024882"><img src="https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Download Vibe Station: Mobile ADE on the App Store" height="32" /></a>
-  &nbsp;
-  <a href="https://play.google.com/store/apps/details?id=ai.vibestation.mobile"><img src="https://img.shields.io/badge/Google_Play-Download-01875F?style=for-the-badge&logo=googleplay&logoColor=white" alt="Get Vibe Station: Mobile ADE on Google Play" height="32" /></a>
-</p>
-
-<table align="center">
-  <tr>
-    <td align="center" width="25%"><img src="docs/screenshots/mobile/01-dashboard.jpg" width="200" alt="Mobile app dashboard listing every agent across servers, grouped into needs you, working and PR" /><br /><sub><b>Every agent, one glance</b></sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/mobile/05-rich-chat-terminal.jpg" width="200" alt="An agent in Rich Chat next to the same agent in a terminal with an extra-keys row" /><br /><sub><b>Rich Chat or terminal</b></sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/mobile/06-plan-review.jpg" width="200" alt="An agent's plan in chat and the resulting diff in the review pane" /><br /><sub><b>Plan it, then review it</b></sub></td>
-    <td align="center" width="25%"><img src="docs/screenshots/mobile/04-widgets.jpg" width="200" alt="Home screen widgets with pinned agents, a needs-you count and server status" /><br /><sub><b>Agents on your home screen</b></sub></td>
-  </tr>
-</table>
-
-Beyond what the browser UI gives you, the app adds home screen widgets (pinned agents, needs-you counts, plan usage limits), alerts when an agent needs you, a native terminal with an extra-keys row for Esc, Ctrl and the arrows, and a demo mode you can try without a server.
+On a phone you can use the native [mobile apps](#mobile-apps) described above, or the browser.
 
 **Prefer the browser?** The web UI works in a phone browser as is, and can be installed as a PWA (see [Mobile access](#mobile-access--pwa)). Turn on **Settings → Remote Access** and scan a QR code. The QR carries a short-lived one-time code; nothing leaves your machine unless you enable the tunnel.
 
@@ -101,7 +113,7 @@ Open any file from the worktree's file tree — Markdown renders inline, with mu
 
 ### Four front ends, one daemon
 
-A native **desktop app** for daily use, the **browser UI** (and installable PWA) for any device, the native **mobile app** for [Android](https://play.google.com/store/apps/details?id=ai.vibestation.mobile) and [iOS](https://apps.apple.com/app/id6831024882) to steer agents from your phone, and the **`vst` CLI** for scripting, CI, and for agents driving other agents. All four are thin clients over the same daemon.
+A native **desktop app** for daily use, the **browser UI** (and installable PWA) for any device, the native [mobile apps](#mobile-apps) for Android and iOS to steer agents from your phone, and the **`vst` CLI** for scripting, CI, and for agents driving other agents. All four are thin clients over the same daemon.
 
 ---
 

@@ -44,8 +44,41 @@ them without recapturing. Scene times and the wallpaper live at the top of the s
 | `06-markdown-customization.png` | Settings → Markdown with live preview |
 | `07-markdown-file-tree.png` | Light-mode workspace: Rich Chat agent with history, file tree, file tabs, rendered `.md` — captured from a running sandbox (`LIVE_URL`), on the dark `dusk` wallpaper |
 
-`mobile/*.jpg` are static, not generated: 660px-wide copies of the mobile app's store-listing marketing designs (from the
-`vibe-station-mobile` repo's `docs/readme/`), shown in the README's phone section; replace them by hand.
+## Mobile app screenshots
+
+`mobile/*.jpg` (README § Mobile apps) are real captures of the Android app (`vibe-station-mobile`, debug build) on a
+Pixel 7 emulator (1080x2400, API 36), framed by `scripts/mobile-screenshots.py` in the same visual language as the
+desktop shots: the `dusk` wallpaper (the same gradients as the capture script, ported to Python), the phone screen in a
+thin dark device with rounded corners, and the desktop's two-layer shadow. Every image is a 720x1380 JPEG of about 100 KB.
+
+| File | Shows |
+|---|---|
+| `mobile/01-home-widgets.jpg` | Home screen (light): Pinned agents, Needs you, Plan limits, Single project widgets |
+| `mobile/02-home-widgets-dark.jpg` | Home screen (dark): Server status, Single worktree, two Single agent, Needs you widgets |
+| `mobile/03-dashboard.jpg` | Dashboard in demo mode: needs you / working / PR / idle |
+| `mobile/04-rich-chat.jpg` | Rich Chat on the demo `fix-login` agent |
+| `mobile/05-review-diff.jpg` | Review → Changes → `auth.rs` diff (Wrap) |
+| `mobile/06-terminal.jpg` | Worktree terminal |
+
+Regenerate:
+
+1. Emulator: a fresh Pixel 7 AVD with a Google Play image, on its own port. Never pair the app to a real server.
+2. Wallpaper: `python scripts/mobile-screenshots.py wallpaper dusk-phone.png`, push it and set it from Photos
+   ("Set as wallpaper"). Remove the default home screen icons.
+3. Widget data: the debug build renders fixture snapshots on the real widgets. Write the fixture with
+   `python scripts/mobile-widget-fixture.py <mobile checkout>/androidApp/src/debug/assets/widget-fixtures/readme.json`,
+   build `:androidApp:assembleDebug`, install, then
+   `adb shell am broadcast -a com.vst.mobile.debug.WIDGET_FIXTURE -n ai.vibestation.mobile/com.vst.mobile.WidgetFixtureReceiver --es name readme`
+   (repeat right before each capture so the "as of" time is current).
+4. Widgets: add them from the launcher's widget picker in the order above (the launcher fills free cells in order;
+   page 1 under the date, page 2 below it). Capture page 1 with `cmd uimode night no` and page 2 with `night yes`.
+5. App screens: onboarding with the Dark theme, then **Try demo**. For `06`, the demo shell's placeholder output was
+   swapped for a test-run transcript in a local, uncommitted edit of `DemoScripts.kt` (`TERMINAL_SCRIPT`).
+6. Status bar: SystemUI demo mode (`settings put global sysui_demo_allowed 1`, then `com.android.systemui.demo`
+   broadcasts for `clock`, `battery`, `network`, `notifications`), with the clock set to the device time.
+7. Capture each screen with `adb exec-out screencap -p > raw/<name>.png` using the names in `SHOTS` at the top of the
+   script (`widgets-light`, `widgets-dark`, `dashboard`, `rich-chat`, `review`, `terminal`), then
+   `python scripts/mobile-screenshots.py frame raw/` (Pillow + numpy, e.g. in a venv) writes `mobile/*.jpg`.
 
 ## Release-notes screenshots
 
